@@ -59,8 +59,7 @@ class ChapterHtmlSlimParser {
   // Boxes nest: openBoxes[0] is the outermost, a fixed array so opening one never allocates.
   struct OpenBox {
     int depth = -1;
-    uint8_t borderSpec = 0;  // summary: edge mask, dotted/dashed/solid style and 1..4px width
-    uint8_t sides[4] = {};   // per-side specs (top, right, bottom, left) the frame is drawn with
+    uint8_t sides[4] = {};  // per-side CssStyle border specs (top, right, bottom, left), 0 = no line
     int16_t startY = 0;
     int16_t emptyAdvance = 0;
     int16_t left = 0;  // frame x extent; the outermost box spans the viewport

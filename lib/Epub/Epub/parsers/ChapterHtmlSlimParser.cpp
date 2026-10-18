@@ -843,21 +843,7 @@ void ChapterHtmlSlimParser::openBox(const int elementDepth, const CssStyle& cssS
                                     const BlockStyle& ownStyle) {
   OpenBox box;
   box.depth = elementDepth;
-  box.borderSpec = cssStyle.borderEdges;
-  bool anySide = false;
-  for (size_t i = 0; i < 4; ++i) {
-    box.sides[i] = cssStyle.borderSides[i];
-    anySide = anySide || box.sides[i] != 0;
-  }
-  if (!anySide) {
-    // A style with only the summary spec draws every edge in that one style.
-    for (size_t i = 0; i < 4; ++i) {
-      const uint8_t bit = CssStyle::BORDER_SIDE_BITS[i];
-      if (cssStyle.borderEdges & bit) {
-        box.sides[i] = CssStyle::makeBorderSpec(bit, cssStyle.borderLineStyle(), cssStyle.borderLineWidth());
-      }
-    }
-  }
+  for (size_t i = 0; i < 4; ++i) box.sides[i] = cssStyle.borderSides[i];
   box.emptyAdvance = emptyAdvance;
   box.shrinkToContent = cssStyle.display == CssDisplay::InlineBlock;
   box.awaitingFirstLine = true;
@@ -865,23 +851,44 @@ void ChapterHtmlSlimParser::openBox(const int elementDepth, const CssStyle& cssS
   if (openBoxCount == 0) {
     box.left = 2;
     box.right = static_cast<int16_t>(viewportWidth - 3);
-  } else {
-    // A nested frame sits at its element's margin edge, and always a gap inside the frame around it.
-    OpenBox& parent = openBoxes[openBoxCount - 1];
-    const int16_t gap = nestedFrameGap();
-    const int outerLeft = blockStyleStack.empty() ? 0 : blockStyleStack.back().leftInset();
-    const int outerRight = blockStyleStack.empty() ? 0 : blockStyleStack.back().rightInset();
-    box.left = static_cast<int16_t>(std::max<int>(parent.left + gap, outerLeft + ownStyle.marginLeft));
-    box.right =
-        static_cast<int16_t>(std::min<int>(parent.right - gap, viewportWidth - outerRight - ownStyle.marginRight));
-    if (box.right - box.left < 4 * gap) return;  // too narrow to frame; its text stays in the parent
-    // The parent's top edge goes above this one, not on it: pin it here and step down. Skipped when
-    // no line fits below, or the parent would leave an empty frame at the foot of this page.
+    openBoxes[openBoxCount++] = box;
+    return;
+  }
+  // A nested frame sits at its element's margin edge, and always a gap inside the frame around it.
+  OpenBox& parent = openBoxes[openBoxCount - 1];
+  const int16_t gap = nestedFrameGap();
+  const int outerLeft = blockStyleStack.empty() ? 0 : blockStyleStack.back().leftInset();
+  const int outerRight = blockStyleStack.empty() ? 0 : blockStyleStack.back().rightInset();
+  box.left = static_cast<int16_t>(std::max<int>(parent.left + gap, outerLeft + ownStyle.marginLeft));
+  box.right =
+      static_cast<int16_t>(std::min<int>(parent.right - gap, viewportWidth - outerRight - ownStyle.marginRight));
+  if (box.right - box.left < 4 * gap) return;  // too narrow to frame; its text stays in the parent
+
+  // The parent has no line yet, so its top edge would land on this one: place it now, a gap above.
+  // Its own pending top spacing sits above its frame, as for a box whose first child is text, and
+  // is taken off the empty block so it is not added a second time.
+  if (parent.awaitingFirstLine) {
+    if (!currentPage) {
+      currentPage.reset(new (std::nothrow) Page());
+      if (!currentPage) LOG_ERR("EHP", "OOM: page for nested box");
+    }
+    int above = 0;
+    if (currentTextBlock && currentTextBlock->isEmpty()) {
+      BlockStyle& pending = currentTextBlock->getBlockStyle();
+      above = pending.marginTop + pending.paddingTop;
+      pending.marginTop = pending.paddingTop = 0;
+    }
+    // Room for the nested box's first line, or the parent would frame nothing at this page's foot.
     const int lineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
-    if (parent.awaitingFirstLine && currentPage && currentPageNextY + gap + lineHeight <= viewportHeight) {
-      parent.startY = currentPageNextY;
+    const bool forcedBreak = cssStyle.pageBreakBefore() == CssPageBreak::Always;
+    if (forcedBreak || currentPageNextY + above + gap + ownStyle.topInset() + lineHeight > viewportHeight) {
+      breakPage();
+      above = 0;  // top spacing dies with the page boundary
+    }
+    if (currentPage) {
+      parent.startY = static_cast<int16_t>(currentPageNextY + above);
       parent.awaitingFirstLine = false;
-      currentPageNextY = static_cast<int16_t>(currentPageNextY + gap);
+      currentPageNextY = static_cast<int16_t>(parent.startY + gap);
     }
   }
   openBoxes[openBoxCount++] = box;
@@ -893,10 +900,10 @@ void ChapterHtmlSlimParser::fitStyleInsideBox(BlockStyle& accumulated) const {
   const OpenBox& box = openBoxes[openBoxCount - 1];
   const int16_t gap = nestedFrameGap();
   const int textLeft = accumulated.leftInset();
-  if (textLeft < box.left + gap)
+  if (box.sides[3] != 0 && textLeft < box.left + gap)
     accumulated.paddingLeft = static_cast<int16_t>(accumulated.paddingLeft + box.left + gap - textLeft);
   const int textRight = viewportWidth - accumulated.rightInset();
-  if (textRight > box.right - gap) {
+  if (box.sides[1] != 0 && textRight > box.right - gap) {
     accumulated.paddingRight = static_cast<int16_t>(accumulated.paddingRight + textRight - (box.right - gap));
   }
 }
@@ -1002,7 +1009,7 @@ void ChapterHtmlSlimParser::closeBoxBlock() {
   // Full boxes need a little clearance after their closing edge. Partial publisher rules already
   // carry their own margin/padding; adding the old box clearance here doubled the space after
   // headings, quotes and worksheet lines.
-  if (CssStyle::edgeMaskOf(box.borderSpec) == CssStyle::BORDER_ALL) {
+  if (box.sides[0] != 0 && box.sides[1] != 0 && box.sides[2] != 0 && box.sides[3] != 0) {
     const int lineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
     currentPageNextY =
         static_cast<int16_t>(currentPageNextY + std::max(2, lineHeight / 12) + std::max(4, lineHeight / 2));
@@ -2398,6 +2405,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // across page breaks and lets bottom-only heading/worksheet rules render at all.
   if (self->openBoxCount < MAX_OPEN_BOXES && cssStyle.hasBorder() && cssStyle.borderEdgeMask() != 0 &&
       isHeaderOrBlock(name) && self->tableDepth == 0) {
+    // Text running straight into the box ("Intro<div class=box>") belongs before it, not in it.
+    if (self->partWordBufferIndex > 0) self->flushPartWordBuffer();
     self->flushPendingBlockLayout();
     // Adjacent CSS vertical margins collapse. For an empty worksheet paragraph, advancing by the
     // sum makes each ruled row roughly twice as tall as the publisher intended.

@@ -13,10 +13,10 @@
 
 namespace {
 
-// A vertical edge thickens toward `inward` (+1 right, -1 left) so it stays inside its box:
-// GfxRenderer::drawLine's width only stacks lines downward, which leaves a vertical line 1px wide.
+// GfxRenderer::drawLine's width stacks lines downward, so a vertical edge is drawn as parallel
+// lines instead, thickening to the right just as a horizontal one thickens downward.
 void drawPatternedLine(GfxRenderer& renderer, const int x1, const int y1, const int x2, const int y2,
-                       const uint8_t borderSpec, const int inward = 1) {
+                       const uint8_t borderSpec) {
   const uint8_t thickness = CssStyle::lineWidthOf(borderSpec);
   const CssBorderLineStyle style = CssStyle::lineStyleOf(borderSpec);
   const bool horizontal = y1 == y2;
@@ -26,7 +26,7 @@ void drawPatternedLine(GfxRenderer& renderer, const int x1, const int y1, const 
       renderer.drawLine(x1 + a, y1, x1 + b, y1, width, true);
       return;
     }
-    for (int i = 0; i < width; ++i) renderer.drawLine(x1 + i * inward, y1 + a, x1 + i * inward, y1 + b, 1, true);
+    for (int i = 0; i < width; ++i) renderer.drawLine(x1 + i, y1 + a, x1 + i, y1 + b, 1, true);
   };
   const int length = horizontal ? std::abs(x2 - x1) + 1 : std::abs(y2 - y1) + 1;
   if (style == CssBorderLineStyle::Solid || style == CssBorderLineStyle::Double) {
@@ -167,7 +167,7 @@ void PageBox::render(GfxRenderer& renderer, const int fontId, const int xOffset,
           drawPatternedLine(renderer, x, y + d, right, y + d, spec);
           break;
         case 1:
-          drawPatternedLine(renderer, right - d, y, right - d, bottom, spec, -1);
+          drawPatternedLine(renderer, right - d, y, right - d, bottom, spec);
           break;
         case 2:
           drawPatternedLine(renderer, x, bottom - d, right, bottom - d, spec);
@@ -212,7 +212,11 @@ std::unique_ptr<PageBox> PageBox::deserialize(HalFile& file) {
     if (!(sides[i] & CssStyle::BORDER_SIDE_BITS[i])) sides[i] = 0;
   }
   auto box = std::unique_ptr<PageBox>(new (std::nothrow) PageBox(width, height, sides, xPos, yPos));
-  if (box) box->fill = fill;
+  if (!box) {
+    LOG_ERR("PGE", "OOM: PageBox");
+    return nullptr;
+  }
+  box->fill = fill;
   return box;
 }
 

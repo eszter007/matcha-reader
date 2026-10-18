@@ -303,6 +303,8 @@ struct CssStyle {
   static constexpr uint8_t BORDER_STYLE_MASK = 0x30;
   static constexpr uint8_t BORDER_WIDTH_SHIFT = 6;
   static constexpr uint8_t BORDER_WIDTH_MASK = 0xC0;
+  // Summary of the border: which edges, and the style and width last declared. The vertical engine
+  // and tables read it; borderSides below holds each side's own. A border property sets both.
   uint8_t borderEdges = 0;
   [[nodiscard]] static constexpr uint8_t makeBorderSpec(const uint8_t edges, const CssBorderLineStyle style,
                                                         const uint8_t width) {
