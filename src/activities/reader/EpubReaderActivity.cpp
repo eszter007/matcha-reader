@@ -1788,6 +1788,8 @@ void EpubReaderActivity::dropSectionsKeepingPosition() {
   // still be inside its (multi-second, section-touching) warm tail when this result
   // lands, and freeing the section under it is a use-after-free.
   RenderLock lock(*this);
+  // Already dropped: the position recorded then is still the one to restore.
+  if (!section && !verticalSection) return;
   // Carry the reading position across the mode change; the rebuild on the other side has
   // nothing else to resume from. A page NUMBER does not survive: the two modes paginate the
   // same chapter differently. Two things that do are recorded here, in order of preference:
@@ -2038,6 +2040,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
 
   switch (action) {
     case EpubReaderMenuActivity::MenuAction::READER_SETTINGS: {
+      // Free the layout before the settings screens allocate; the next render reloads or rebuilds
+      // it. Toolbar style only: the list menu reopens before that render and needs the section.
+      if (usesToolbarMenu()) dropSectionsKeepingPosition();
       // Push settings opened on the Reader tab; Back pops straight back into the book. Font or
       // margin changes are picked up on return: the SD font system reloads to the new selection
       // and the next render's section-cache parameter check rebuilds the layout if needed.
@@ -2064,7 +2069,13 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
             // applyOrientation(menu.orientation)): pick up a change the same way onEnter()
             // does, or it would silently wait for the book's next full open to take effect.
             ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
-            // Return to the reader MENU (where the user came from), not the page.
+            // Return to the reader MENU (where the user came from), not the page. The list menu
+            // is built before the next render and reads the section, so after a switch from the
+            // toolbar style dropped it, go back to the page instead.
+            if (!usesToolbarMenu() && !section && !verticalSection) {
+              requestUpdate();
+              return;
+            }
             openReaderMenu();
           });
       break;
@@ -6370,6 +6381,7 @@ void EpubReaderActivity::handleOverlayInput() {
           RenderLock lock;  // the picker paints the framebuffer next
           settleOverlayRefresh();
         }
+        dropSectionsKeepingPosition();  // room for the picker; reloaded on return
         startActivityForResult(
             std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
                                                    TextSettingsActivity::Tab::Family, bookScript(), useVerticalText()),
