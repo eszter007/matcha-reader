@@ -72,6 +72,8 @@ class CssParser {
   //      stylesheets (path + the index whose rules an identical copy shares), so a chapter applies
   //      only the stylesheets it links.
   // v25: white-space (pre / pre-wrap / break-spaces) is stored: defined bit 29, value in textFlags.
+  //      Records are written in source order (selector-pool position), which the cascade uses
+  //      to break specificity ties; a v24 cache holds them in selector order.
   static constexpr uint8_t CSS_CACHE_VERSION = 25;
 
   // The stylesheets one chapter links, as indices into the book's stylesheet list. A record from a
@@ -347,6 +349,7 @@ class CssParser {
   [[nodiscard]] size_t lowerBound(const std::string_view* pieces, size_t count, bool& exact) const;
   // Lookup over a run of pieces (a simple selector is a run of one).
   [[nodiscard]] const CssStyle* findStyle(const std::string_view* pieces, size_t count) const;
+  [[nodiscard]] std::unique_ptr<uint16_t[]> sourceOrder() const;
   [[nodiscard]] std::string_view selectorAt(size_t index) const;
   [[nodiscard]] const CssStyle& styleAt(size_t index) const;
   PoolResult ensureEntryCapacity(size_t needed);

@@ -1443,24 +1443,23 @@ CssStyle CssParser::resolveStyle(const std::string_view tagName, const std::stri
   // than MAX_CANDIDATES rules has never been observed, and the overflow path drops the
   // LOWEST-specificity match, which is the one the rest would have overridden anyway.
   //
-  // Deviation from the real cascade: CSS breaks a specificity tie by document order, which
-  // this rule table does not preserve (the map is unordered, and the cache is written in map
-  // order and merged per selector on load). A tie therefore resolves to the last match in
-  // enumeration order -- simple before compound, outer ancestor before inner, descendant
-  // before child -- i.e. the more narrowly scoped rule wins. Same-selector rules from
-  // anywhere in the stylesheet(s) are still merged in source order by applyOver at parse and
-  // cache-load time, so the common `p {...} ... p {...}` case is unaffected.
+  // A specificity tie is broken by source order, as in CSS. A selector's position in the
+  // append-only selector pool is the order it first appeared (the cache is written in that
+  // order, so it survives a reload); a repeated selector is merged into its first occurrence,
+  // so it ranks there. An "h|" twin ranks after every unscoped rule of its specificity, since it
+  // restates its unscoped form for the horizontal engine.
   struct Candidate {
     const CssStyle* style;
     uint8_t spec;
+    uint32_t order;
   };
   constexpr size_t MAX_CANDIDATES = 16;
   Candidate candidates[MAX_CANDIDATES];
   size_t candidateCount = 0;
 
-  const auto addCandidate = [&](const CssStyle* style, const uint8_t spec) {
+  const auto addCandidate = [&](const CssStyle* style, const uint8_t spec, const uint32_t order) {
     if (candidateCount < MAX_CANDIDATES) {
-      candidates[candidateCount++] = Candidate{style, spec};
+      candidates[candidateCount++] = Candidate{style, spec, order};
       return;
     }
     size_t weakest = 0;
@@ -1469,24 +1468,24 @@ CssStyle CssParser::resolveStyle(const std::string_view tagName, const std::stri
     }
     if (candidates[weakest].spec >= spec) return;  // nothing to gain by swapping
     for (size_t i = weakest; i + 1 < candidateCount; ++i) candidates[i] = candidates[i + 1];
-    candidates[candidateCount - 1] = Candidate{style, spec};
+    candidates[candidateCount - 1] = Candidate{style, spec, order};
   };
 
   // A simple selector also has a "h|"-scoped twin (the EBPAJ template's `.hltr X`
   // horizontal-mode variant), which applies over its unscoped form at the same specificity:
   // this resolver feeds the HORIZONTAL layout engine, which renders exactly what those rules
   // describe. The vertical engine reads the "v|" scope through collectVerticalStyles().
+  constexpr uint32_t SCOPED_ORDER = 1u << 31;
   const auto emit = [&](const std::string_view* pieces, const size_t count, const uint8_t spec, const bool simple) {
-    if (const CssStyle* style = findStyle(pieces, count)) {
-      addCandidate(style, spec);
-    }
+    bool exact = false;
+    size_t index = lowerBound(pieces, count, exact);
+    if (exact) addCandidate(&stylePool_[entries_[index].styleIndex], spec, entries_[index].offset);
     if (!simple) return;
     std::string_view scoped[CssSelector::MAX_KEY_PIECES + 1];
     scoped[0] = "h|";
     for (size_t i = 0; i < count; ++i) scoped[i + 1] = pieces[i];
-    if (const CssStyle* style = findStyle(scoped, count + 1)) {
-      addCandidate(style, spec);
-    }
+    index = lowerBound(scoped, count + 1, exact);
+    if (exact) addCandidate(&stylePool_[entries_[index].styleIndex], spec, SCOPED_ORDER | entries_[index].offset);
   };
 
   // The ancestor walk is skipped entirely unless the table actually holds a compound rule,
@@ -1497,11 +1496,12 @@ CssStyle CssParser::resolveStyle(const std::string_view tagName, const std::stri
       CssSelector::ElementRef{tagName, classAttr}, [path](const size_t i) { return path->ancestor(i); }, ancestorCount,
       walkAncestors && path->parentRecorded(), hasDescendantRules_, hasChildRules_, emit);
 
-  // Stable insertion sort, ascending specificity: equal specificities keep emission order.
+  // Insertion sort, ascending (specificity, source order): later rules apply over earlier ones.
   for (size_t i = 1; i < candidateCount; ++i) {
     const Candidate v = candidates[i];
     size_t j = i;
-    while (j > 0 && candidates[j - 1].spec > v.spec) {
+    while (j > 0 && (candidates[j - 1].spec > v.spec ||
+                     (candidates[j - 1].spec == v.spec && candidates[j - 1].order > v.order))) {
       candidates[j] = candidates[j - 1];
       --j;
     }
@@ -1614,10 +1614,12 @@ bool CssParser::saveToCache() const {
   // written without one and applies to every chapter.
   file.write(static_cast<uint8_t>(0));
 
-  // Write each rule: selector string + CssStyle fields. entries_ is sorted, so records go out
-  // in selector order -- stable across runs, unlike the map's bucket order.
+  // Records go out in source order, so a reload re-inserts them in that order and the selector
+  // pool positions the cascade breaks ties with survive the round trip.
+  const auto order = sourceOrder();
   for (uint16_t i = 0; i < entryCount_; ++i) {
-    writeRuleRecord(file, SOURCE_UNKNOWN, selectorAt(i), styleAt(i));
+    const uint16_t entry = order ? order[i] : i;
+    writeRuleRecord(file, SOURCE_UNKNOWN, selectorAt(entry), styleAt(entry));
   }
 
   LOG_DBG("CSS", "Saved %u rules to cache", storedRules);
@@ -2019,14 +2021,31 @@ CssParser::StylesheetFilter CssParser::stylesheetFilterFor(const std::vector<std
   return matched;
 }
 
+// Entry indices sorted by selector-pool position (source order). Null on OOM: the caller then
+// writes in selector order, which only loses tie-breaking, never rules.
+std::unique_ptr<uint16_t[]> CssParser::sourceOrder() const {
+  auto order = makeUniqueNoThrow<uint16_t[]>(entryCount_ > 0 ? entryCount_ : 1);
+  if (!order) {
+    LOG_ERR("CSS", "OOM: source order for %u rules", static_cast<unsigned>(entryCount_));
+    return order;
+  }
+  for (uint16_t i = 0; i < entryCount_; ++i) order[i] = i;
+  const SelectorEntry* entries = entries_.get();
+  std::sort(order.get(), order.get() + entryCount_,
+            [entries](const uint16_t a, const uint16_t b) { return entries[a].offset < entries[b].offset; });
+  return order;
+}
+
 bool CssParser::appendRulesToCache() {
   if (!cacheAppendActive_) return false;
+  const auto order = sourceOrder();
   for (uint16_t i = 0; i < entryCount_; ++i) {
     if (appendedRuleCount_ >= MAX_CACHED_RULES) {
       LOG_DBG("CSS", "Reached max cached rules limit (%zu), dropping remainder", MAX_CACHED_RULES);
       break;
     }
-    writeRuleRecord(cacheAppendFile_, currentSource_, selectorAt(i), styleAt(i));
+    const uint16_t entry = order ? order[i] : i;
+    writeRuleRecord(cacheAppendFile_, currentSource_, selectorAt(entry), styleAt(entry));
     ++appendedRuleCount_;
   }
   return true;

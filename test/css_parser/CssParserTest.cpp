@@ -437,4 +437,27 @@ TEST_F(CssParserTest, PreservedWhitespaceSurvivesCacheAndNormalOverridesIt) {
   EXPECT_FALSE(reader.resolveStyle("div", "odd").hasWhiteSpace());
 }
 
+TEST_F(CssParserTest, EqualSpecificityUsesSourceOrderAndSurvivesCache) {
+  {
+    CssParser writer(cachePath());
+    ASSERT_TRUE(loadCss(writer, ".zeta { text-align: right; }\n.alpha { text-align: center; }\n"
+                                ".late { font-weight: bold; }\n.early { font-weight: normal; }\n"));
+    // Later rule wins the tie, whatever the selectors' alphabetical order.
+    EXPECT_EQ(writer.resolveStyle("p", "alpha zeta").textAlign, CssTextAlign::Center);
+    EXPECT_EQ(writer.resolveStyle("p", "late early").fontWeight, CssFontWeight::Normal);
+    ASSERT_TRUE(writer.saveToCache());
+  }
+  CssParser reader(cachePath());
+  ASSERT_TRUE(reader.loadFromCache());
+  EXPECT_EQ(reader.resolveStyle("p", "alpha zeta").textAlign, CssTextAlign::Center);
+  EXPECT_EQ(reader.resolveStyle("p", "zeta alpha").textAlign, CssTextAlign::Center);
+  EXPECT_EQ(reader.resolveStyle("p", "late early").fontWeight, CssFontWeight::Normal);
+}
+
+TEST_F(CssParserTest, HigherSpecificityStillBeatsLaterSource) {
+  CssParser parser(cachePath());
+  ASSERT_TRUE(loadCss(parser, "p.note { text-align: right; }\n.note { text-align: center; }\n"));
+  EXPECT_EQ(parser.resolveStyle("p", "note").textAlign, CssTextAlign::Right);
+}
+
 }  // namespace
