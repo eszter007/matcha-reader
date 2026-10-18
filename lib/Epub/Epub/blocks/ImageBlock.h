@@ -24,7 +24,6 @@ class ImageBlock final : public Block {
   }
   bool isRotated() const { return rotated; }
 
-  bool imageExists() const;
   bool hasValidCache() const;
   bool needsDecode() const;
   void renderPlaceholder(GfxRenderer& renderer, int x, int y) const;
