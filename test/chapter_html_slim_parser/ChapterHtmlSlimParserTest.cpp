@@ -1257,3 +1257,456 @@ TEST(XhtmlDoctypeTest, FeedsADoctypeWhereTheChapterNamesNoDtd) {
   EXPECT_FALSE(patch("<!DOCTYPE html").inject);
   EXPECT_FALSE(patch("  \n").inject);
 }
+
+namespace {
+
+// Drives the parser through its real element callbacks with a stylesheet and collects the words
+// of every finished page, for layout behaviours that only show across page boundaries.
+class ChapterPagingTest : public ::testing::Test {
+ protected:
+  std::string filepath = "unused.xhtml";
+  GfxRenderer renderer;
+  CssParser cssParser{cssCacheDir()};
+  std::unique_ptr<ChapterHtmlSlimParser> parser;
+  std::vector<std::vector<std::string>> pages;
+  std::vector<std::unique_ptr<Page>> pageObjects;
+
+  std::string caseDir() const {
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("matcha-paging-" + std::string(::testing::UnitTest::GetInstance()->current_test_info()->name()));
+    std::filesystem::create_directories(dir);
+    return dir.string();
+  }
+
+  void makeParser(const std::string& css, const uint16_t viewportHeight = 800) {
+    if (!css.empty()) {
+      const auto path = std::filesystem::path(caseDir()) / "paging.css";
+      std::FILE* f = std::fopen(path.string().c_str(), "wb");
+      ASSERT_NE(f, nullptr);
+      std::fwrite(css.data(), 1, css.size(), f);
+      std::fclose(f);
+      HalFile file;
+      ASSERT_TRUE(file.open(path.string().c_str(), "rb"));
+      ASSERT_TRUE(cssParser.loadFromStream(file));
+    }
+    auto onPage = [this](std::unique_ptr<Page> page, uint16_t, uint16_t, uint32_t) {
+      std::vector<std::string> words;
+      for (const auto& element : page->elements) {
+        if (element->getTag() != TAG_PageLine) continue;
+        const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+        for (uint16_t i = 0; i < block.wordCount(); ++i) words.emplace_back(block.wordText(i));
+      }
+      pages.push_back(std::move(words));
+      pageObjects.push_back(std::move(page));
+    };
+    parser = std::make_unique<ChapterHtmlSlimParser>(
+        nullptr, filepath, renderer, 0, 1.0f, false, static_cast<uint8_t>(CssTextAlign::Left),
+        static_cast<uint16_t>(renderer.getScreenWidth()), viewportHeight, false, false, false, onPage, true, "", "", 0,
+        std::vector<std::string>{}, std::function<void()>{}, &cssParser);
+    parser->currentTextBlock = std::make_unique<ParsedText>(false);
+    parser->blockStyleStack.push_back(BlockStyle{});
+    parser->insideBody = true;
+  }
+
+  void open(const char* tag, const char* classAttr = nullptr) {
+    if (classAttr != nullptr) {
+      const XML_Char* attributes[] = {"class", classAttr, nullptr};
+      ChapterHtmlSlimParser::startElement(parser.get(), tag, attributes);
+    } else {
+      const XML_Char* attributes[] = {nullptr};
+      ChapterHtmlSlimParser::startElement(parser.get(), tag, attributes);
+    }
+  }
+  void text(const char* s) { ChapterHtmlSlimParser::characterData(parser.get(), s, static_cast<int>(strlen(s))); }
+  void close(const char* tag) { ChapterHtmlSlimParser::endElement(parser.get(), tag); }
+  void para(const char* s, const char* classAttr = nullptr) {
+    open("p", classAttr);
+    text(s);
+    close("p");
+  }
+  void finish() { ASSERT_TRUE(parser->finishParse()); }
+
+  // Index of the page holding `word`, or -1.
+  int pageOf(const std::string& word) const {
+    for (size_t p = 0; p < pages.size(); ++p) {
+      if (std::find(pages[p].begin(), pages[p].end(), word) != pages[p].end()) return static_cast<int>(p);
+    }
+    return -1;
+  }
+};
+
+TEST_F(ChapterPagingTest, BreakBeforeStartsNewPage) {
+  makeParser(".chapter { page-break-before: always; }\n");
+  para("one");
+  para("two", "chapter");
+  finish();
+  ASSERT_EQ(pages.size(), 2u);
+  EXPECT_EQ(pageOf("one"), 0);
+  EXPECT_EQ(pageOf("two"), 1);
+}
+
+TEST_F(ChapterPagingTest, BreakAfterAppliesToFollowingContent) {
+  makeParser(".end { break-after: page; }\n");
+  para("one", "end");
+  para("two");
+  finish();
+  EXPECT_EQ(pageOf("one"), 0);
+  EXPECT_EQ(pageOf("two"), 1);
+}
+
+TEST_F(ChapterPagingTest, EmptyBlockDoesNotConsumePendingBreak) {
+  makeParser(".chapter { page-break-before: always; }\n");
+  para("one");
+  open("div", "chapter");
+  close("div");
+  para("two");
+  finish();
+  EXPECT_EQ(pageOf("two"), 1);
+}
+
+TEST_F(ChapterPagingTest, TerminalBreakAfterDoesNotCreateEmptyPage) {
+  makeParser(".end { page-break-after: always; }\n");
+  para("one", "end");
+  finish();
+  EXPECT_EQ(pages.size(), 1u);
+}
+
+// Widow/orphan control. Each word is wider than half the 480 px viewport, so every word is one
+// line; 19 px per line (the stub's 18 px ink plus the gap floor), so 5 lines fill 95 px.
+class ChapterWidowOrphanTest : public ChapterPagingTest {
+ protected:
+  static constexpr uint16_t FIVE_LINES = 95;
+  static std::string lineWord(const char tag, const int n) {
+    std::string w(55, tag);
+    w[0] = static_cast<char>('0' + n);
+    return w;
+  }
+  void lines(const char* tag, const char tagChar, const int count) {
+    open(tag);
+    for (int n = 1; n <= count; ++n) {
+      const std::string w = lineWord(tagChar, n) + " ";
+      text(w.c_str());
+    }
+    close(tag);
+  }
+  int pageOfLine(const char tagChar, const int n) const { return pageOf(lineWord(tagChar, n)); }
+};
+
+TEST_F(ChapterWidowOrphanTest, LoneFirstLineMovesToNextPage) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 4);
+  lines("p", 'b', 3);
+  finish();
+  EXPECT_EQ(pageOfLine('a', 4), 0);
+  EXPECT_EQ(pageOfLine('b', 1), 1);
+  EXPECT_EQ(pageOfLine('b', 2), 1);
+}
+
+TEST_F(ChapterWidowOrphanTest, LoneLastLineTakesALineAlong) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 2);
+  lines("p", 'b', 4);
+  finish();
+  EXPECT_EQ(pageOfLine('b', 2), 0);
+  EXPECT_EQ(pageOfLine('b', 3), 1);
+  EXPECT_EQ(pageOfLine('b', 4), 1);
+}
+
+TEST_F(ChapterWidowOrphanTest, TwoLineParagraphMovesWhole) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 3);
+  lines("p", 'b', 3);
+  finish();
+  EXPECT_EQ(pageOfLine('a', 3), 0);
+  EXPECT_EQ(pageOfLine('b', 1), 1);
+}
+
+TEST_F(ChapterWidowOrphanTest, HeadingMovesWithTheParagraphAfterIt) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 4);
+  lines("h2", 'h', 1);
+  lines("p", 'b', 3);
+  finish();
+  EXPECT_EQ(pageOfLine('a', 4), 0);
+  EXPECT_EQ(pageOfLine('h', 1), 1);
+  EXPECT_EQ(pageOfLine('b', 1), 1);
+}
+
+TEST_F(ChapterWidowOrphanTest, HeadingStaysWhenFollowedOnItsPage) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 1);
+  lines("h2", 'h', 1);
+  lines("p", 'b', 6);
+  finish();
+  EXPECT_EQ(pageOfLine('h', 1), 0);
+  EXPECT_EQ(pageOfLine('b', 3), 0);
+  EXPECT_EQ(pageOfLine('b', 4), 1);
+}
+
+TEST_F(ChapterWidowOrphanTest, AnOrdinaryBreakIsUnchanged) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 8);
+  finish();
+  EXPECT_EQ(pageOfLine('a', 5), 0);
+  EXPECT_EQ(pageOfLine('a', 6), 1);
+}
+
+// Words of every PageLine, one vector per line, across all pages.
+class ChapterWhitespaceTest : public ChapterPagingTest {
+ protected:
+  std::vector<std::vector<std::string>> allLines() const {
+    std::vector<std::vector<std::string>> out;
+    for (const auto& page : pageObjects) {
+      for (const auto& element : page->elements) {
+        if (element->getTag() != TAG_PageLine) continue;
+        const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+        std::vector<std::string> words;
+        for (uint16_t i = 0; i < block.wordCount(); ++i) words.emplace_back(block.wordText(i));
+        out.push_back(std::move(words));
+      }
+    }
+    return out;
+  }
+};
+
+TEST_F(ChapterWhitespaceTest, PreElementKeepsLinesAndIndentationWithoutLeaking) {
+  makeParser("");
+  open("pre");
+  text("\nline one\n  two");
+  close("pre");
+  para("x   y");
+  finish();
+  const auto lines = allLines();
+  ASSERT_EQ(lines.size(), 3u);
+  EXPECT_EQ(lines[0], (std::vector<std::string>{"line", "one"}));
+  EXPECT_EQ(lines[1], (std::vector<std::string>{" ", " ", "two"}));
+  EXPECT_EQ(lines[2], (std::vector<std::string>{"x", "y"}));
+}
+
+TEST_F(ChapterWhitespaceTest, PreWrapKeepsSpaceRunsAcrossCallbacks) {
+  makeParser(".code { white-space: pre-wrap; }\n");
+  open("div", "code");
+  text("a ");
+  text("  b\n");
+  text("c");
+  close("div");
+  finish();
+  const auto lines = allLines();
+  ASSERT_EQ(lines.size(), 2u);
+  EXPECT_EQ(lines[0], (std::vector<std::string>{"a", " ", " ", "b"}));
+  EXPECT_EQ(lines[1], (std::vector<std::string>{"c"}));
+}
+
+TEST_F(ChapterWhitespaceTest, NormalOverridesInheritedPre) {
+  makeParser(".plain { white-space: normal; }\n");
+  open("pre");
+  open("span", "plain");
+  text("a   b\nc");
+  close("span");
+  close("pre");
+  finish();
+  const auto lines = allLines();
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_EQ(lines[0], (std::vector<std::string>{"a", "b", "c"}));
+}
+
+TEST_F(ChapterPagingTest, ShadedBlockGetsALightGrayPanelBehindEachLine) {
+  makeParser(".note { background-color: #e0e0e0; }\n");
+  para("before");
+  para("shaded text", "note");
+  finish();
+  ASSERT_EQ(pageObjects.size(), 1u);
+  int grayPanels = 0;
+  bool panelPrecedesShadedLine = false;
+  const auto& elements = pageObjects[0]->elements;
+  for (size_t i = 0; i < elements.size(); ++i) {
+    if (elements[i]->getTag() != TAG_PageBox) continue;
+    if (static_cast<const PageBox&>(*elements[i]).fillKind() != PageBox::FILL_LIGHT_GRAY) continue;
+    ++grayPanels;
+    if (i + 1 < elements.size() && elements[i + 1]->getTag() == TAG_PageLine) {
+      const auto& block = *static_cast<const PageLine&>(*elements[i + 1]).getBlock();
+      panelPrecedesShadedLine = block.wordCount() > 0 && std::string(block.wordText(0)) == "shaded";
+    }
+  }
+  EXPECT_EQ(grayPanels, 1);
+  EXPECT_TRUE(panelPrecedesShadedLine);
+}
+
+class ChapterTableBorderTest : public ChapterPagingTest {
+ protected:
+  void table(const char* borderAttr, const char* tableClass = nullptr) {
+    const XML_Char* bordered[] = {"border", borderAttr, nullptr};
+    const XML_Char* classed[] = {"class", tableClass, nullptr};
+    const XML_Char* none[] = {nullptr};
+    ChapterHtmlSlimParser::startElement(parser.get(), "table", borderAttr ? bordered : (tableClass ? classed : none));
+    open("tr");
+    open("td");
+    text("left");
+    close("td");
+    open("td");
+    text("right");
+    close("td");
+    close("tr");
+    close("table");
+  }
+  int count(const PageElementTag tag) const {
+    int n = 0;
+    for (const auto& page : pageObjects) {
+      for (const auto& element : page->elements) n += element->getTag() == tag;
+    }
+    return n;
+  }
+};
+
+TEST_F(ChapterTableBorderTest, BorderAttributeFramesEveryCell) {
+  makeParser("");
+  table("1");
+  finish();
+  EXPECT_EQ(count(TAG_PageBox), 2);
+  EXPECT_EQ(count(TAG_PageHorizontalRule), 0);
+  EXPECT_EQ(pageOf("left"), 0);
+  EXPECT_EQ(pageOf("right"), 0);
+}
+
+TEST_F(ChapterTableBorderTest, CssTableBorderFramesEveryCell) {
+  makeParser(".grid { border: 1px solid black; }\n");
+  table(nullptr, "grid");
+  finish();
+  EXPECT_EQ(count(TAG_PageBox), 2);
+}
+
+TEST_F(ChapterTableBorderTest, UnborderedTableKeepsRowRule) {
+  makeParser("");
+  table(nullptr);
+  finish();
+  EXPECT_EQ(count(TAG_PageBox), 0);
+  EXPECT_EQ(count(TAG_PageHorizontalRule), 1);
+}
+
+TEST_F(ChapterPagingTest, NestedEmSpansCompoundTheirSizes) {
+  makeParser(".s { font-size: 0.75em; }\n.r { font-size: 0.75rem; }\n");
+  open("p");
+  open("span", "s");
+  text("outer ");
+  open("span", "s");
+  text("inner ");
+  close("span");
+  open("span", "r");
+  text("rooted");
+  close("span");
+  close("span");
+  close("p");
+  finish();
+  ASSERT_EQ(pageObjects.size(), 1u);
+  std::vector<std::pair<std::string, uint16_t>> fonts;
+  for (const auto& element : pageObjects[0]->elements) {
+    if (element->getTag() != TAG_PageLine) continue;
+    const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+    for (uint16_t w = 0; w < block.wordCount(); ++w) fonts.emplace_back(block.wordText(w), block.wordFontScale(w));
+  }
+  ASSERT_EQ(fonts.size(), 3u);
+  EXPECT_EQ(fonts[0].second, 192);  // 0.75 of the body
+  EXPECT_EQ(fonts[1].second, 160);  // 0.75 x 0.75 = 0.5625, snapped to the nearest 1/8
+  EXPECT_EQ(fonts[2].second, 192);  // rem ignores the sized ancestor
+}
+
+// <br> section breaks: y position of the first line holding `word`.
+class ChapterBreakSpacingTest : public ChapterPagingTest {
+ protected:
+  int yOf(const std::string& word) const {
+    for (const auto& page : pageObjects) {
+      for (const auto& element : page->elements) {
+        if (element->getTag() != TAG_PageLine) continue;
+        const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+        for (uint16_t i = 0; i < block.wordCount(); ++i) {
+          if (word == block.wordText(i)) return element->yPos;
+        }
+      }
+    }
+    return -1;
+  }
+  void br() {
+    const XML_Char* none[] = {nullptr};
+    ChapterHtmlSlimParser::startElement(parser.get(), "br", none);
+    ChapterHtmlSlimParser::endElement(parser.get(), "br");
+  }
+};
+
+TEST_F(ChapterBreakSpacingTest, LeadingBreakDoesNotAddBlankSpace) {
+  makeParser("");
+  open("div");
+  br();
+  text("first");
+  close("div");
+  finish();
+  EXPECT_EQ(yOf("first"), 0);
+}
+
+TEST_F(ChapterBreakSpacingTest, RepeatedSectionBreaksEachAddOneLine) {
+  makeParser("");
+  open("div");
+  text("a");
+  br();
+  text("b");
+  br();
+  br();
+  text("c");
+  br();
+  br();
+  br();
+  text("d");
+  close("div");
+  finish();
+  const int line = yOf("b") - yOf("a");
+  const int gap = yOf("c") - yOf("b") - line;  // the one blank line two <br>s leave
+  ASSERT_GT(line, 0);
+  ASSERT_GT(gap, 0);
+  EXPECT_EQ(yOf("d") - yOf("c"), line + 2 * gap);
+}
+
+// A lone first line that carries a footnote link is NOT moved: its link rectangle and footnote
+// were recorded against this page, so it gets an ordinary break and both stay consistent.
+TEST_F(ChapterWidowOrphanTest, OrphanWithFootnoteLinkIsNotCarried) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 4);
+  open("p");
+  const XML_Char* link[] = {"href", "notes.xhtml#n1", nullptr};
+  ChapterHtmlSlimParser::startElement(parser.get(), "a", link);
+  text(lineWord('b', 1).c_str());
+  close("a");
+  for (int n = 2; n <= 3; ++n) text((" " + lineWord('b', n)).c_str());
+  close("p");
+  finish();
+  EXPECT_EQ(pageOfLine('b', 1), 0);  // stayed: the carry refused a line with a link
+  EXPECT_EQ(pageOfLine('b', 2), 1);
+  ASSERT_GE(pageObjects.size(), 2u);
+  ASSERT_EQ(pageObjects[0]->links.size(), 1u);
+  EXPECT_LT(pageObjects[0]->links[0].y, FIVE_LINES);
+  ASSERT_EQ(pageObjects[0]->footnotes.size(), 1u);
+  EXPECT_EQ(pageObjects[1]->footnotes.size(), 0u);
+  ASSERT_EQ(parser->sectionFootnoteData.size(), 1u);
+  EXPECT_EQ(parser->sectionFootnoteData[0].first, 0);  // recorded on the page its anchor is on
+}
+
+// A link higher up the page does not block carrying the plain lines below it, and its rectangle
+// stays on the page it was drawn on.
+TEST_F(ChapterWidowOrphanTest, LinkAboveTheCarryStaysOnItsPage) {
+  makeParser("", FIVE_LINES);
+  open("p");
+  const XML_Char* link[] = {"href", "notes.xhtml#n1", nullptr};
+  ChapterHtmlSlimParser::startElement(parser.get(), "a", link);
+  text(lineWord('a', 1).c_str());
+  close("a");
+  for (int n = 2; n <= 4; ++n) text((" " + lineWord('a', n)).c_str());
+  close("p");
+  lines("p", 'b', 3);
+  finish();
+  EXPECT_EQ(pageOfLine('b', 1), 1);  // orphan carried
+  ASSERT_GE(pageObjects.size(), 2u);
+  ASSERT_EQ(pageObjects[0]->links.size(), 1u);
+  EXPECT_EQ(pageObjects[1]->links.size(), 0u);
+  ASSERT_EQ(parser->sectionFootnoteData.size(), 1u);
+  EXPECT_EQ(parser->sectionFootnoteData[0].first, 0);
+}
+
+}  // namespace

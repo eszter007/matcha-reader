@@ -95,6 +95,15 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 102 (fork numbering)
+
+Absorbs upstream's version 57 and the layout parts of upstream #3891 that Matcha ports. The framing
+is unchanged except for `PageBox`: its final byte, previously a `filled` bool, is now a fill kind
+(0 none, 1 black under an inverted block, 2 light gray under a shaded block). Pagination changes
+with widow/orphan control, headings kept with the following block, forced CSS page breaks,
+preformatted text, nested `em` font sizes, repeated `<br>` lines and bordered table cells, so older
+sections are rebuilt; book metadata and progress are kept.
+
 ### Version 99 (fork numbering)
 
 Absorbs upstream's versions 52 to 55. Each TextBlock arena starts with one 8-byte source range per
@@ -291,7 +300,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 101
+#define EXPECTED_VERSION 102
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256

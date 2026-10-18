@@ -10,6 +10,8 @@ namespace BidiUtils {
 enum class BidiBaseDir : signed char { AUTO = -1, LTR = 0, RTL = 1 };
 }
 
+enum Color : uint8_t { Clear = 0x00, White = 0x01, LightGray = 0x05, DarkGray = 0x0A, Black = 0x10 };
+
 class GfxRenderer {
  public:
   enum class TextMeasureMode { Layout, Rendered };
@@ -27,6 +29,7 @@ class GfxRenderer {
   void drawLine(int, int, int, int, int, bool) const {}
   // Filled panel backgrounds (PageBox with filled=true); drawing is not what these tests assert.
   void fillRect(int, int, int, int, bool) const {}
+  void fillRectDither(int, int, int, int, Color) const {}
   // Signatures mirror the real renderer, trailing defaults included: TextBlock::render() calls
   // these with and without letterSpacing, and the scaled variants carry the fork's per-word
   // scaling (ruby and mixed-size runs).

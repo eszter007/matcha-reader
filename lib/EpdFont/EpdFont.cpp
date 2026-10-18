@@ -223,6 +223,9 @@ const EpdGlyph* EpdFont::getGlyph(const uint32_t cp) const {
     if (loaded) return loaded;
   }
 
+  // The turned comma (Hawaiian ʻokina) takes the left quotation mark's shape when absent.
+  if (cp == 0x02BB && hasCodepoint(0x2018)) return getGlyph(0x2018);
+
   if (cp != REPLACEMENT_GLYPH) {
     return getGlyph(REPLACEMENT_GLYPH);
   }
