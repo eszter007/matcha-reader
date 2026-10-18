@@ -153,19 +153,20 @@ void TextSettingsActivity::rebuildFamilyList() {
     const auto& families = registry_->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
       // The CJK extension families (NotoSansJP/SC/TC and the serifs) are the CJK half of
-      // the built-in Noto Serif/Sans entries, not fonts in their own right: listing
-      // them would show many Noto rows instead of two, and selecting one directly
-      // makes it the reader font for Latin books too, bypassing the coverage-driven
-      // companion logic in SdCardFontSystem::ensureCjkFallback(). Hidden here for the
-      // same reason the settings picker hides them -- see isBuiltinCjkExtension.
-      if (SdCardFontSystem::isBuiltinCjkExtension(families[i].name)) continue;
+      // the Noto Serif/Sans rows, not fonts in their own right: listing them would show
+      // many Noto rows instead of two, and selecting one directly makes it the reader font
+      // for Latin books too, bypassing the coverage-driven companion logic in
+      // SdCardFontSystem::ensureCjkFallback(). One sans cut stands in for a missing NotoSans
+      // family so the Noto Sans row stays -- see isHiddenCjkExtension.
+      if (SdCardFontSystem::isHiddenCjkExtension(families[i].name, registry_)) continue;
       // Same reasoning for a wider-coverage cut of a family already on this list
       // (NotoSerifExtended over Noto Serif): one typeface is one row, and the base row's
       // selection resolves to whichever of the two suits the book being opened.
       if (SdCardFontSystem::isCoverageVariant(families[i].name, registry_)) continue;
       // settingIndex stays the REGISTRY index (what sdFontFamilyName resolves against);
       // the list position is separate now that the list is filtered.
-      fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i)});
+      fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i),
+                        SdCardFontSystem::pickerLabel(families[i].name, registry_)});
     }
   }
   fonts_.push_back({I18N.get(StrId::STR_MANAGE_FONTS), false, MANAGE_FONTS_ROW});
@@ -194,7 +195,7 @@ void TextSettingsActivity::rebuildRowItems() {
     }
     switch (tab_) {
       case Tab::Family:
-        item.label = fonts_[i].name.c_str();
+        item.label = fonts_[i].displayName();
         break;
       case Tab::Size:
         item.label = sizes_[i - pr].name.c_str();
@@ -378,7 +379,7 @@ void TextSettingsActivity::drawChrome() {
   GUI.drawHeader(renderer, Rect{0, metrics_.topPadding, pageWidth, metrics_.headerHeight}, tr(STR_TEXT_SETTINGS));
 
   const char* familyName = (currentFamilyIndex_ >= 0 && currentFamilyIndex_ < static_cast<int>(fonts_.size()))
-                               ? fonts_[currentFamilyIndex_].name.c_str()
+                               ? fonts_[currentFamilyIndex_].displayName()
                                : "";
   const char* sizeName = (currentSizeIndex_ >= 0 && currentSizeIndex_ < static_cast<int>(sizes_.size()))
                              ? sizes_[currentSizeIndex_].name.c_str()

@@ -26,9 +26,11 @@ class TextSettingsActivity final : public UiTabListActivity {
   // take it: the displayed list hides the JP extension families, so a family's list
   // position no longer matches its registry index and has to be looked up by name.
   struct FontEntry {
-    std::string name;
+    std::string name;  // the label for built-in rows, the family name for SD rows
     bool isBuiltin;
     uint8_t settingIndex;
+    std::string label;  // shown instead of name when set
+    const char* displayName() const { return label.empty() ? name.c_str() : label.c_str(); }
   };
 
   TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const SdCardFontRegistry* registry,

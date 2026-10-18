@@ -780,7 +780,8 @@ Artwork along one edge, as below, keeps most of the page readable.
 Noto Sans is an optional SD card font. Install the `NotoSans` family to use the former built-in
 sans-serif. On upgrade, an existing Noto Sans selection uses `NotoSans` if installed; otherwise
 the reader uses Noto Serif. A Noto Sans JP, SC, TC or HK font pairs with the `NotoSans` family
-the same way the Noto Serif ones pair with the built-in serif.
+the same way the Noto Serif ones pair with the built-in serif. Without `NotoSans` on the card,
+the first of them installed (JP, then SC, then TC/HK) takes its place as **Noto Sans**.
 
 CrossPoint loads additional fonts from the SD card. Custom fonts can add Chinese, Japanese, Korean, and other scripts that the built-in reader fonts lack. If your device have external RAM, you can copy `.ttf`, `.otf`, and `.ttc` files directly. Otherwise, use `.cpfont` files made from those fonts. 
 

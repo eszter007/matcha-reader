@@ -151,17 +151,14 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
     registry_.discover();
   }
 
-  // A CJK extension family must never be the SELECTED reader font: it is the
-  // CJK half of a built-in Noto entry and is hidden from both pickers, so a
-  // selection carried over from an older build would be stuck and would render
-  // Latin books in the CJK face. Revert it to the matching built-in and let
+  // A hidden CJK extension family must never be the SELECTED reader font: it is
+  // the CJK half of a Noto row and is hidden from both pickers, so a selection
+  // carried over from an older build would be stuck and would render Latin books
+  // in the CJK face. Revert it to the matching built-in and let
   // ensureCjkFallback() bring the extension back as the companion where needed.
-  if (SETTINGS.sdFontFamilyName[0] != '\0' && isBuiltinCjkExtension(SETTINGS.sdFontFamilyName)) {
+  if (SETTINGS.sdFontFamilyName[0] != '\0' && isHiddenCjkExtension(SETTINGS.sdFontFamilyName, &registry_)) {
     const bool sans = normalizedFamilyKey(SETTINGS.sdFontFamilyName).rfind("notosans", 0) == 0;
-    const SdCardFontFamilyInfo* sansRow = nullptr;
-    for (const auto& fam : registry_.getFamilies()) {
-      if (sans && normalizedFamilyKey(fam.name) == "notosans") sansRow = &fam;
-    }
+    const SdCardFontFamilyInfo* sansRow = sans ? notoSansRowFamily(&registry_) : nullptr;
     LOG_INF("SDFS", "Reverting hidden CJK extension selection '%s' to its Noto row", SETTINGS.sdFontFamilyName);
     SETTINGS.fontFamily = CrossPointSettings::NOTOSERIF;
     if (sansRow) {
@@ -558,6 +555,40 @@ bool SdCardFontSystem::isBuiltinCjkExtension(const std::string& familyName) {
   return extensionScript(familyName) != CjkScript::None;
 }
 
+const SdCardFontFamilyInfo* SdCardFontSystem::notoSansRowFamily(const SdCardFontRegistry* registry) {
+  if (registry == nullptr) return nullptr;
+  const SdCardFontFamilyInfo* best = nullptr;
+  int bestRank = 0;
+  for (const auto& fam : registry->getFamilies()) {
+    const std::string key = normalizedFamilyKey(fam.name);
+    if (key == "notosans") return &fam;
+    if (key.rfind("notosans", 0) != 0) continue;
+    const CjkScript script = extensionScript(fam.name);
+    const int rank = script == CjkScript::Japanese             ? 1
+                     : script == CjkScript::SimplifiedChinese  ? 2
+                     : script == CjkScript::TraditionalChinese ? 3
+                                                               : 0;
+    if (rank != 0 && (best == nullptr || rank < bestRank)) {
+      best = &fam;
+      bestRank = rank;
+    }
+  }
+  return best;
+}
+
+bool SdCardFontSystem::isHiddenCjkExtension(const std::string& familyName, const SdCardFontRegistry* registry) {
+  if (!isBuiltinCjkExtension(familyName)) return false;
+  if (normalizedFamilyKey(familyName).rfind("notoserif", 0) == 0) return true;
+  const SdCardFontFamilyInfo* row = notoSansRowFamily(registry);
+  return row == nullptr || normalizedFamilyKey(row->name) != normalizedFamilyKey(familyName);
+}
+
+std::string SdCardFontSystem::pickerLabel(const std::string& familyName, const SdCardFontRegistry* registry) {
+  const SdCardFontFamilyInfo* row = notoSansRowFamily(registry);
+  if (row != nullptr && normalizedFamilyKey(row->name) == normalizedFamilyKey(familyName)) return tr(STR_NOTO_SANS);
+  return familyName;
+}
+
 uint8_t SdCardFontSystem::readerStandInFamilies(const SdCardFontRegistry* registry, const char* sdFamilyName,
                                                 const uint8_t /*fontFamily*/, const SdCardFontFamilyInfo** out,
                                                 const uint8_t cap) {
@@ -655,7 +686,22 @@ std::string SdCardFontSystem::resolveSelectedFamily() const {
   // to load carries this book's text, so standing a coverage variant in here would only make it
   // the second resident SD font -- the pairing that does not reliably fit this heap. Leaving the
   // base built-in also keeps its `preferSans` ranking working, which reads an empty selection.
-  if (cjkFallbackNeeded()) return selected;
+  if (cjkFallbackNeeded()) {
+    // A Noto Sans CJK cut standing in for a missing NotoSans family covers every CJK book well
+    // enough that no companion is loaded, so it would set a Chinese book in Japanese forms. The
+    // cut for the book's own script takes over when it is installed.
+    const CjkScript selectedScript = extensionScript(selected);
+    const CjkScript bookScript = activeCjkScript();
+    if (selectedScript != CjkScript::None && selectedScript != bookScript &&
+        normalizedFamilyKey(selected).rfind("notosans", 0) == 0) {
+      for (const auto& fam : registry_.getFamilies()) {
+        if (extensionScript(fam.name) == bookScript && normalizedFamilyKey(fam.name).rfind("notosans", 0) == 0) {
+          return fam.name;
+        }
+      }
+    }
+    return selected;
+  }
   const std::string base = selected.empty() ? BUILTIN_FAMILY_DIR_NAME : selected;
   const auto* variant = findCoverageVariant(&registry_, base);
   const std::string resolved = variant ? variant->name : selected;

@@ -110,6 +110,16 @@ class SdCardFontSystem {
   /// NotoSerifJP, and the SC/TC Chinese cuts): hidden from font pickers and used automatically
   /// as the CJK glyph fallback instead of being selected directly.
   static bool isBuiltinCjkExtension(const std::string& familyName);
+  /// The family behind the single Noto Sans picker row: the NotoSans family when installed,
+  /// otherwise the first sans CJK cut (JP, then SC, then TC/HK). Null when there is neither.
+  static const SdCardFontFamilyInfo* notoSansRowFamily(const SdCardFontRegistry* registry);
+  /// True when an extension is hidden from the pickers because a Noto row stands for it: every
+  /// serif cut (Noto Serif is built in) and every sans cut except one standing in for a missing
+  /// NotoSans family.
+  static bool isHiddenCjkExtension(const std::string& familyName, const SdCardFontRegistry* registry);
+  /// The label a picker shows for an SD family: "Noto Sans" for the family behind that row,
+  /// whichever folder it is, otherwise the family's own name.
+  static std::string pickerLabel(const std::string& familyName, const SdCardFontRegistry* registry);
   /// Which script an extension family is cut for (None for any other family).
   static CjkScript extensionScript(const std::string& familyName);
 
