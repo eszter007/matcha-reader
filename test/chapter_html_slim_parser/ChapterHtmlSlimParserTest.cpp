@@ -1534,4 +1534,56 @@ TEST_F(ChapterPagingTest, ShadedBlockGetsALightGrayPanelBehindEachLine) {
   EXPECT_TRUE(panelPrecedesShadedLine);
 }
 
+class ChapterTableBorderTest : public ChapterPagingTest {
+ protected:
+  void table(const char* borderAttr, const char* tableClass = nullptr) {
+    const XML_Char* bordered[] = {"border", borderAttr, nullptr};
+    const XML_Char* classed[] = {"class", tableClass, nullptr};
+    const XML_Char* none[] = {nullptr};
+    ChapterHtmlSlimParser::startElement(parser.get(), "table",
+                                        borderAttr ? bordered : (tableClass ? classed : none));
+    open("tr");
+    open("td");
+    text("left");
+    close("td");
+    open("td");
+    text("right");
+    close("td");
+    close("tr");
+    close("table");
+  }
+  int count(const PageElementTag tag) const {
+    int n = 0;
+    for (const auto& page : pageObjects) {
+      for (const auto& element : page->elements) n += element->getTag() == tag;
+    }
+    return n;
+  }
+};
+
+TEST_F(ChapterTableBorderTest, BorderAttributeFramesEveryCell) {
+  makeParser("");
+  table("1");
+  finish();
+  EXPECT_EQ(count(TAG_PageBox), 2);
+  EXPECT_EQ(count(TAG_PageHorizontalRule), 0);
+  EXPECT_EQ(pageOf("left"), 0);
+  EXPECT_EQ(pageOf("right"), 0);
+}
+
+TEST_F(ChapterTableBorderTest, CssTableBorderFramesEveryCell) {
+  makeParser(".grid { border: 1px solid black; }\n");
+  table(nullptr, "grid");
+  finish();
+  EXPECT_EQ(count(TAG_PageBox), 2);
+}
+
+TEST_F(ChapterTableBorderTest, UnborderedTableKeepsRowRule) {
+  makeParser("");
+  table(nullptr);
+  finish();
+  EXPECT_EQ(count(TAG_PageBox), 0);
+  EXPECT_EQ(count(TAG_PageHorizontalRule), 1);
+}
+
 }  // namespace

@@ -245,6 +245,10 @@ class ChapterHtmlSlimParser {
   bool tableRowRtl = false;
   uint16_t tableRowsSpannedRemaining = 0;
   size_t tableCellTextBytes = 0;
+  // Border spec (CssStyle::makeBorderSpec) framing every grid cell: from <table border="N"> or a
+  // CSS border on the table or a cell. 0 keeps the plain rule under each row.
+  uint8_t tableBorderSpec = 0;
+  void emitTableCellBoxes(size_t columnCount, uint16_t cellWidth, int16_t top, int16_t bottom);
   std::vector<std::unique_ptr<ParsedText>> tableRowCells;
   std::array<std::vector<std::unique_ptr<TextBlock>>, MAX_GRID_TABLE_COLUMNS> tableCellLines;
   std::vector<uint32_t> tableLineVisibleOffsets;

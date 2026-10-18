@@ -744,7 +744,7 @@ uint8_t ChapterHtmlSlimParser::linesToCarry() const {
 }
 
 bool ChapterHtmlSlimParser::canCarry(const uint8_t count) const {
-  if (count == 0 || count > recentLineCount || !currentPage) return false;
+  if (count == 0 || count > recentLineCount || !currentPage || tableDepth > 0) return false;
   if (boxDepth >= 0) return false;
   const size_t elements = currentPage->elements.size();
   // Never the whole page, and only when the page's tail is exactly the recorded lines.
@@ -1218,6 +1218,22 @@ void ChapterHtmlSlimParser::addTableRowSeparator() {
   currentPageNextY += TABLE_ROW_SEPARATOR_GAP;
 }
 
+void ChapterHtmlSlimParser::emitTableCellBoxes(const size_t columnCount, const uint16_t cellWidth, const int16_t top,
+                                               const int16_t bottom) {
+  if (!currentPage || bottom <= top) return;
+  for (size_t column = 0; column < columnCount; ++column) {
+    const auto x = static_cast<int16_t>(column * cellWidth);
+    // The last cell's right edge stays inside the viewport.
+    const auto width = static_cast<int16_t>(column + 1 == columnCount ? viewportWidth - x - 1 : cellWidth);
+    auto box = makeUniqueNoThrow<PageBox>(width, static_cast<int16_t>(bottom - top), tableBorderSpec, x, top);
+    if (!box) {
+      LOG_ERR("EHP", "OOM: table cell box");
+      return;
+    }
+    currentPage->elements.push_back(std::move(box));
+  }
+}
+
 void ChapterHtmlSlimParser::finishTableRow() {
   closeTableCell();
 
@@ -1287,6 +1303,11 @@ void ChapterHtmlSlimParser::finishTableRow() {
     tableLineVisibleOffsets.clear();
   };
 
+  // Cell frames: one set of boxes per page the row lands on, around the row's slice there. Text
+  // keeps a small gap from the frame above and below it.
+  const bool bordered = tableBorderSpec != 0;
+  constexpr int16_t CELL_FRAME_GAP = 3;
+  int16_t segmentTop = -1;
   for (size_t lineIndex = 0; lineIndex < maxLineCount; ++lineIndex) {
     const uint32_t lineVisibleOffset =
         lineIndex < tableLineVisibleOffsets.size() ? tableLineVisibleOffsets[lineIndex] : visibleTextOffset;
@@ -1299,10 +1320,14 @@ void ChapterHtmlSlimParser::finishTableRow() {
       }
     }
 
-    const bool pageFull =
-        currentPage && !currentPage->elements.empty() && currentPageNextY + rowLineHeight > viewportHeight;
+    const bool pageFull = currentPage && !currentPage->elements.empty() &&
+                          currentPageNextY + rowLineHeight + (bordered ? CELL_FRAME_GAP : 0) > viewportHeight;
     if (!currentPage || pageFull) {
       if (pageFull) {
+        if (bordered && segmentTop >= 0) {
+          emitTableCellBoxes(columnCount, cellWidth, segmentTop, static_cast<int16_t>(currentPageNextY + CELL_FRAME_GAP));
+        }
+        segmentTop = -1;
         setCurrentPageVisibleOffset(lineVisibleOffset);
         completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
         completedPageCount++;
@@ -1315,8 +1340,13 @@ void ChapterHtmlSlimParser::finishTableRow() {
       }
       currentPageNextY = 0;
       currentPageVisibleOffsetSet = false;
+      resetRecentLines();
     }
 
+    if (bordered && segmentTop < 0) {
+      segmentTop = currentPageNextY;
+      currentPageNextY = static_cast<int16_t>(currentPageNextY + CELL_FRAME_GAP);
+    }
     const int16_t rowY = currentPageNextY;
     const size_t requiredCapacity = currentPage->elements.size() + columnCount;
     if (currentPage->elements.capacity() < requiredCapacity) {
@@ -1344,7 +1374,14 @@ void ChapterHtmlSlimParser::finishTableRow() {
     currentPageNextY = static_cast<int16_t>(rowY + rowLineHeight);
   }
 
-  addTableRowSeparator();
+  if (bordered) {
+    if (segmentTop >= 0) {
+      currentPageNextY = static_cast<int16_t>(currentPageNextY + CELL_FRAME_GAP);
+      emitTableCellBoxes(columnCount, cellWidth, segmentTop, currentPageNextY);
+    }
+  } else {
+    addTableRowSeparator();
+  }
   tableRowStacked = false;
   clearLayoutLines();
 }
@@ -1523,6 +1560,18 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->tableRowRtl = cssStyle.hasDirection() && cssStyle.direction == CssTextDirection::Rtl;
     self->tableRowsSpannedRemaining = 0;
     self->tableCellTextBytes = 0;
+    self->tableBorderSpec = 0;
+    if (const char* borderAttr = getAttribute(atts, "border")) {
+      const int width = atoi(borderAttr);
+      if (width > 0) {
+        self->tableBorderSpec = CssStyle::makeBorderSpec(CssStyle::BORDER_ALL, CssBorderLineStyle::Solid,
+                                                         static_cast<uint8_t>(std::min(width, 4)));
+      }
+    }
+    if (cssStyle.hasBorder() && cssStyle.borderEdgeMask() != 0) {
+      self->tableBorderSpec =
+          CssStyle::makeBorderSpec(CssStyle::BORDER_ALL, cssStyle.borderLineStyle(), cssStyle.borderLineWidth());
+    }
     self->tableRowCells.clear();
     self->tableRowCells.reserve(MAX_GRID_TABLE_COLUMNS);
     self->depth += 1;
@@ -1556,6 +1605,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
     self->currentTextBlock.reset();
 
+    // A cell's own CSS border frames the grid when the table itself declared none.
+    if (self->tableBorderSpec == 0 && cssStyle.hasBorder() && cssStyle.borderEdgeMask() != 0) {
+      self->tableBorderSpec =
+          CssStyle::makeBorderSpec(CssStyle::BORDER_ALL, cssStyle.borderLineStyle(), cssStyle.borderLineWidth());
+    }
     const uint16_t columnSpan = parseTableSpan(getAttribute(atts, "colspan"));
     const uint16_t rowSpan = parseTableSpan(getAttribute(atts, "rowspan"));
     if (columnSpan > 1 || rowSpan > 1) {
@@ -3043,6 +3097,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->tableRowStacked = false;
     self->tableRowsSpannedRemaining = 0;
     self->tableCellTextBytes = 0;
+    self->tableBorderSpec = 0;
     self->tableRowCells.clear();
     self->nextWordContinues = false;
     self->currentCssStyle.reset();
