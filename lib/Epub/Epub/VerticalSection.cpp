@@ -101,7 +101,10 @@ namespace {
 // v146: no format change. A column squeezed twice (……？) took a second half em from the same
 // marks, swallowing a 　 and drawing the next character over a 。, and pushing ？ out split ……
 // across columns; cached pages carry either.
-constexpr uint8_t VSECTION_FILE_VERSION = 146;
+// v147: no format change. That second squeeze still took from 。、, measured from their ink
+// rather than their cell, and drew the next character over them; oidashi now carries the
+// character before a group that may not head a column (た。……, 者……).
+constexpr uint8_t VSECTION_FILE_VERSION = 147;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
