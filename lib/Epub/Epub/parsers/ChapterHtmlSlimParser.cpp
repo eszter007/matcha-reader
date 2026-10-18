@@ -955,16 +955,20 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       // open. Merge those into the new style so the first child in a container inherits
       // the container's vertical spacing.
       const auto style = currentTextBlock->getBlockStyle();
-      BlockStyle incoming = blockStyle;
+      const BlockStyle& incoming = blockStyle;
+      BlockStyle combined = style.getCombinedBlockStyle(incoming, BlockStyle::CombineAxis::Vertical);
       if (style.fromBrElement) {
         // The empty block was created by a <br> section separator. Inject a full line of
         // blank space before the following paragraph so the scene/section break is visible.
         // This only fires when the <br> block stayed empty (i.e. no inline text was added).
+        // Added AFTER the vertical merge, which collapses margins: added before it, a second
+        // blank line would be swallowed by the first.
         const int16_t lineHeight = static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression));
-        incoming.marginTop = static_cast<int16_t>(incoming.marginTop + lineHeight);
+        combined.marginTop = static_cast<int16_t>(combined.marginTop + lineHeight);
       }
-
-      currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(incoming, BlockStyle::CombineAxis::Vertical));
+      // Another <br> on a still-empty <br> block: keep the mark, so each further <br> adds a line.
+      if (incoming.fromBrElement) combined.fromBrElement = true;
+      currentTextBlock->setBlockStyle(combined);
       currentBlockIsHeading = false;
 
       flushPendingAnchor();

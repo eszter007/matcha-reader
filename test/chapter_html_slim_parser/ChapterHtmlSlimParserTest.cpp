@@ -1613,4 +1613,58 @@ TEST_F(ChapterPagingTest, NestedEmSpansCompoundTheirSizes) {
   EXPECT_EQ(fonts[2].second, 192);  // rem ignores the sized ancestor
 }
 
+// <br> section breaks: y position of the first line holding `word`.
+class ChapterBreakSpacingTest : public ChapterPagingTest {
+ protected:
+  int yOf(const std::string& word) const {
+    for (const auto& page : pageObjects) {
+      for (const auto& element : page->elements) {
+        if (element->getTag() != TAG_PageLine) continue;
+        const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+        for (uint16_t i = 0; i < block.wordCount(); ++i) {
+          if (word == block.wordText(i)) return element->yPos;
+        }
+      }
+    }
+    return -1;
+  }
+  void br() {
+    const XML_Char* none[] = {nullptr};
+    ChapterHtmlSlimParser::startElement(parser.get(), "br", none);
+    ChapterHtmlSlimParser::endElement(parser.get(), "br");
+  }
+};
+
+TEST_F(ChapterBreakSpacingTest, LeadingBreakDoesNotAddBlankSpace) {
+  makeParser("");
+  open("div");
+  br();
+  text("first");
+  close("div");
+  finish();
+  EXPECT_EQ(yOf("first"), 0);
+}
+
+TEST_F(ChapterBreakSpacingTest, RepeatedSectionBreaksEachAddOneLine) {
+  makeParser("");
+  open("div");
+  text("a");
+  br();
+  text("b");
+  br();
+  br();
+  text("c");
+  br();
+  br();
+  br();
+  text("d");
+  close("div");
+  finish();
+  const int line = yOf("b") - yOf("a");
+  const int gap = yOf("c") - yOf("b") - line;  // the one blank line two <br>s leave
+  ASSERT_GT(line, 0);
+  ASSERT_GT(gap, 0);
+  EXPECT_EQ(yOf("d") - yOf("c"), line + 2 * gap);
+}
+
 }  // namespace
