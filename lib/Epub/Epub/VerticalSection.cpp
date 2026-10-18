@@ -107,7 +107,9 @@ namespace {
 // v148: no format change. A chapter applies the stylesheets its linked ones @import (EBPAJ boxes,
 // rules and indents), a block holding only an image no longer swallows the styled blocks after it,
 // and styled elements nested in a block before its first text merge into it.
-constexpr uint8_t VSECTION_FILE_VERSION = 148;
+// v149: no format change. Content after a merged nested element continues in a block of its own
+// with the outer element's params, so a sibling after an inner box is no longer framed with it.
+constexpr uint8_t VSECTION_FILE_VERSION = 149;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -142,8 +144,8 @@ struct ParagraphSink {
   // Styled-block boundaries -- a block element whose CSS carries vertical layout parameters
   // (border box, start offset, hanging indent, centering, before/after gaps).
   virtual void onBlockStyleStart(const VerticalBlockParams& /*params*/) {}
-  // A styled element nested in the open block before any of its text: its params join the block's.
-  virtual void onBlockStyleMerge(const VerticalBlockParams& /*params*/) {}
+  // The open block, before any of its text, takes these params (a nested element merged in or out).
+  virtual void onBlockStyleSet(const VerticalBlockParams& /*params*/) {}
   virtual void onBlockStyleEnd() {}
 };
 
@@ -184,6 +186,11 @@ struct TextExtractor {
   // Whether the open styled block has had any text yet. Until it has, styled elements nested in it
   // (EBPAJ wraps a rule in indent divs: start-1em > k-solid-top > start-1em) merge into it.
   bool boxHasText = false;
+  // The open block's params as merged so far, and as they were before the first merge. When the
+  // first merged element closes, its siblings continue in a block with the outer params again.
+  VerticalBlockParams openParams;
+  VerticalBlockParams preMergeParams;
+  int mergedAtDepth = -1;
 
   // Ruby parsing state
   bool inRuby = false;
@@ -546,7 +553,12 @@ struct TextExtractor {
            params.borderEdges != 0)) {
         LOG_DBG("VSC", "styled block merge: <%s> start=%.1f hang=%.1f edges=0x%X", name, params.startEm, params.hangEm,
                 params.borderEdges);
-        if (self->sink) self->sink->onBlockStyleMerge(params);
+        if (self->mergedAtDepth < 0) {
+          self->preMergeParams = self->openParams;
+          self->mergedAtDepth = self->elementDepth;
+        }
+        mergeBlockParams(self->openParams, params);
+        if (self->sink) self->sink->onBlockStyleSet(self->openParams);
       }
     } else if (self->boxOpenedAtDepth < 0) {
       VerticalBlockParams params;
@@ -559,6 +571,8 @@ struct TextExtractor {
         if (self->sink) self->sink->onBlockStyleStart(params);
         self->boxOpenedAtDepth = self->elementDepth;
         self->boxHasText = false;
+        self->openParams = params;
+        self->mergedAtDepth = -1;
       }
     }
     if (isBlockTag(name)) {
@@ -671,10 +685,28 @@ struct TextExtractor {
     // </body> occupies no visible position, and the two counters only mean the same thing while
     // they agree on where the body ends.
     if (strcasecmp(name, "body") == 0) self->insideBody = false;
+    if (self->mergedAtDepth >= 0 && self->elementDepth == self->mergedAtDepth - 1) {
+      // The merged element closes: what follows belongs to the outer element alone.
+      self->mergedAtDepth = -1;
+      self->openParams = self->preMergeParams;
+      if (self->boxHasText) {
+        self->flushParagraph();
+        VerticalBlockParams rest = self->preMergeParams;
+        rest.beforeEm = 0;  // the same element continuing, not a new block to set apart
+        if (self->sink) {
+          self->sink->onBlockStyleEnd();
+          self->sink->onBlockStyleStart(rest);
+        }
+        self->boxHasText = false;
+      } else if (self->sink) {
+        self->sink->onBlockStyleSet(self->openParams);
+      }
+    }
     if (self->boxOpenedAtDepth >= 0 && self->elementDepth == self->boxOpenedAtDepth - 1) {
       self->flushParagraph();
       if (self->sink) self->sink->onBlockStyleEnd();
       self->boxOpenedAtDepth = -1;
+      self->mergedAtDepth = -1;
     }
     if (strcasecmp(name, "rp") == 0) {
       self->inRp = false;
@@ -1121,7 +1153,7 @@ struct LayoutPageSink final : ParagraphSink {
   std::vector<RubyGlossary::Pair> rubyHarvest;
 
   void onBlockStyleStart(const VerticalBlockParams& params) override { layout.markBlockStart(params); }
-  void onBlockStyleMerge(const VerticalBlockParams& params) override { layout.mergeIntoOpenBlock(params); }
+  void onBlockStyleSet(const VerticalBlockParams& params) override { layout.setOpenBlockParams(params); }
   void onBlockStyleEnd() override { layout.markBlockEnd(); }
 
   // ~1-2 screens of text per layout batch. A batch boundary lands between paragraphs, which

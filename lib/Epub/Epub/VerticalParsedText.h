@@ -126,6 +126,17 @@ struct VerticalBlockParams {
   uint8_t borderEdges = 0;  // CSS physical TOP/RIGHT/BOTTOM/LEFT bits (match DRAW_* order)
 };
 
+// Joins a nested styled element's params to its block's: indents add up as nested margins do, and
+// the border edges and gaps combine.
+inline void mergeBlockParams(VerticalBlockParams& into, const VerticalBlockParams& nested) {
+  into.startEm += nested.startEm;
+  into.beforeEm = std::max(into.beforeEm, nested.beforeEm);
+  into.afterEm = std::max(into.afterEm, nested.afterEm);
+  if (nested.hangEm > 0) into.hangEm = nested.hangEm;
+  into.alignCenter = into.alignCenter || nested.alignCenter;
+  into.borderEdges = static_cast<uint8_t>(into.borderEdges | nested.borderEdges);
+}
+
 struct VerticalPage {
   // Codepoint index, within the chapter's visible character data, of this page's first
   // character -- the vertical counterpart of Page::visibleTextOffset, counted by the same rule
@@ -299,19 +310,13 @@ class VerticalParsedText {
     blockParamsQueue_.push_back(params);
     blockOpen_ = true;
   }
-  // Joins a nested styled element's params to the open block, still queued (it has no text yet):
-  // indents add up as nested margins do, and the border edges and gaps combine.
-  // ponytail: the block still closes only at the outer element, so a sibling after a merged inner
-  // box shares its frame; true nesting needs a block stack here, if a book ever needs it.
-  void mergeIntoOpenBlock(const VerticalBlockParams& params) {
+  // Replaces the params of the open block, still queued because it has no text yet: a nested
+  // styled element merged into it, or that merge undone when the element closed empty.
+  // ponytail: one block at a time, so two bordered blocks nested draw one after the other rather
+  // than one inside the other; that needs a block stack here, if a book ever needs it.
+  void setOpenBlockParams(const VerticalBlockParams& params) {
     if (!blockOpen_ || blockParamsQueue_.empty()) return;
-    VerticalBlockParams& open = blockParamsQueue_.back();
-    open.startEm += params.startEm;
-    open.beforeEm = std::max(open.beforeEm, params.beforeEm);
-    open.afterEm = std::max(open.afterEm, params.afterEm);
-    if (params.hangEm > 0) open.hangEm = params.hangEm;
-    open.alignCenter = open.alignCenter || params.alignCenter;
-    open.borderEdges = static_cast<uint8_t>(open.borderEdges | params.borderEdges);
+    blockParamsQueue_.back() = params;
   }
   void markBlockEnd() {
     // A block that holds no text (a figure with only a page image) ends where it starts. The
