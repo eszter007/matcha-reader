@@ -396,7 +396,10 @@ class CssParser {
   // Reads the header's stylesheet table and returns `requested` widened to the stylesheets its
   // linked ones @import (transitively) and share rules with. The file must be positioned just
   // after the rule count.
-  static bool readStylesheetTable(HalFile& file, const StylesheetFilter* requested, StylesheetFilter& effective);
+  // `heapShort`, when given, is set and false returned if the import masks could not be
+  // allocated; without it the table falls back to applying every stylesheet.
+  static bool readStylesheetTable(HalFile& file, const StylesheetFilter* requested, StylesheetFilter& effective,
+                                  bool* heapShort = nullptr);
   // Fixed-size style body in the cache record's byte order; `out` must hold RULE_FIXED_BYTES.
   static void encodeStyleWire(const CssStyle& style, uint8_t* out);
 

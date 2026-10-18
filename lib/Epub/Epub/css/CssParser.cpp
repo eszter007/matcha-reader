@@ -95,6 +95,24 @@ constexpr char asciiToLower(const char c) { return (c >= 'A' && c <= 'Z') ? stat
 // The stylesheet path an @import target names, relative to the importing sheet at `from`, with
 // "." and ".." segments resolved -- the normalised form the stylesheet table stores.
 std::string resolveImportPath(const std::string& from, std::string_view target) {
+  // %XX escapes decoded, as Epub.cpp decodes a chapter's stylesheet links before normalising them.
+  std::string decoded;
+  decoded.reserve(target.size());
+  const auto hex = [](const char c) {
+    return c >= '0' && c <= '9'   ? c - '0'
+           : c >= 'a' && c <= 'f' ? c - 'a' + 10
+           : c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                  : -1;
+  };
+  for (size_t i = 0; i < target.size(); ++i) {
+    if (target[i] == '%' && i + 2 < target.size() && hex(target[i + 1]) >= 0 && hex(target[i + 2]) >= 0) {
+      decoded.push_back(static_cast<char>(hex(target[i + 1]) * 16 + hex(target[i + 2])));
+      i += 2;
+    } else {
+      decoded.push_back(target[i]);
+    }
+  }
+  target = decoded;
   std::string joined;
   if (!target.empty() && target.front() == '/') {
     joined.assign(target.substr(1));
@@ -1393,7 +1411,8 @@ bool CssParser::loadFromStream(HalFile& source) {
 
   bool inAtRule = false;
   int atDepth = 0;
-  // Top-level at-rule text up to its ';' or '{': only @import is read from it.
+  // Top-level at-rule text up to its ';' or '{': only @import is read from it. A longer prelude is
+  // cut short, so its path matches no stylesheet and the import is skipped (logged).
   char atPrelude[96];
   size_t atPreludeLen = 0;
 
@@ -2068,12 +2087,17 @@ bool CssParser::beginCacheAppend(const std::vector<std::string>* sources, const 
   appendImports_.reset();
   if (count > 0) {
     appendImports_ = makeUniqueNoThrow<uint64_t[]>(count);
-    if (appendImports_) {
-      for (size_t i = 0; i < count; ++i) appendImports_[i] = 0;
-    } else {
-      // Imports stay unrecorded: a chapter then gets only the sheets it links directly.
-      LOG_ERR("CSS", "OOM: %u import masks", static_cast<unsigned>(count));
+    if (!appendImports_) {
+      // A cache written without them would record "imports nothing" for good; parse uncached and
+      // retry the cache on the next open instead.
+      LOG_ERR("CSS", "OOM: %u import masks; not caching", static_cast<unsigned>(count));
+      cacheAppendFile_.close();
+      Storage.remove((cachePath + rulesCacheTmp).c_str());
+      appendSources_ = nullptr;
+      appendSourceCount_ = 0;
+      return false;
     }
+    for (size_t i = 0; i < count; ++i) appendImports_[i] = 0;
   }
   cacheAppendActive_ = true;
   return true;
@@ -2091,7 +2115,8 @@ void CssParser::recordImport(const std::string_view target) {
   LOG_DBG("CSS", "@import %.*s not among the book's stylesheets", static_cast<int>(target.size()), target.data());
 }
 
-bool CssParser::readStylesheetTable(HalFile& file, const StylesheetFilter* requested, StylesheetFilter& effective) {
+bool CssParser::readStylesheetTable(HalFile& file, const StylesheetFilter* requested, StylesheetFilter& effective,
+                                    bool* heapShort) {
   uint8_t count = 0;
   if (file.read(&count, 1) != 1 || count > StylesheetFilter::MAX_TRACKED) return false;
   uint8_t aliases[StylesheetFilter::MAX_TRACKED];
@@ -2102,22 +2127,29 @@ bool CssParser::readStylesheetTable(HalFile& file, const StylesheetFilter* reque
       return false;
     }
   }
-  // Heap, not stack: 64 masks are twice this function's stack budget. Without them the chapter
-  // keeps just the sheets it links directly.
-  std::unique_ptr<uint64_t[]> imports = count > 0 ? makeUniqueNoThrow<uint64_t[]>(count) : nullptr;
-  if (count > 0 && !imports) LOG_ERR("CSS", "OOM: %u import masks; @imports not followed", count);
-  for (uint8_t i = 0; i < count; ++i) {
-    uint64_t mask = 0;
-    if (file.read(&mask, sizeof(mask)) != sizeof(mask)) return false;
-    if (imports) imports[i] = mask;
-  }
   effective = StylesheetFilter{};
-  if (requested == nullptr || requested->all) return true;
+  if (requested == nullptr || requested->all) {
+    return file.seekCur(static_cast<int64_t>(count) * static_cast<int64_t>(sizeof(uint64_t)));
+  }
+  // Heap, not stack: 64 masks are twice this function's stack budget.
+  std::unique_ptr<uint64_t[]> imports = count > 0 ? makeUniqueNoThrow<uint64_t[]>(count) : nullptr;
+  if (count > 0 && !imports) {
+    LOG_ERR("CSS", "OOM: %u import masks", count);
+    if (heapShort) {
+      *heapShort = true;
+      return false;
+    }
+    // No way to report it: apply every stylesheet, the same fallback stylesheetFilterFor uses.
+    return file.seekCur(static_cast<int64_t>(count) * static_cast<int64_t>(sizeof(uint64_t)));
+  }
+  for (uint8_t i = 0; i < count; ++i) {
+    if (file.read(&imports[i], sizeof(uint64_t)) != sizeof(uint64_t)) return false;
+  }
   effective.all = false;
   // A linked sheet brings in what it @imports, and so on down the chain. A copy shares its
   // original's imports, since only the original was parsed.
   uint64_t linked = requested->linked;
-  for (uint8_t pass = 0; imports && pass < count; ++pass) {
+  for (uint8_t pass = 0; pass < count; ++pass) {
     uint64_t grown = linked;
     for (uint8_t i = 0; i < count; ++i) {
       if (((linked >> i) & 1u) == 0) continue;
@@ -2287,8 +2319,10 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
     return false;
   }
   StylesheetFilter applied;
-  if (!readStylesheetTable(file, stylesheets, applied)) {
+  bool heapShort = false;
+  if (!readStylesheetTable(file, stylesheets, applied, &heapShort)) {
     clear();
+    cacheLoadFailedForHeap_ = heapShort;  // a valid cache; only this load ran short
     return false;
   }
 

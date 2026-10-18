@@ -216,6 +216,28 @@ TEST_F(CssParserTest, LinkedStylesheetBringsInWhatItImports) {
   EXPECT_EQ(vertical.size(), 2u) << "the vertical engine must see the imported box and indent rules";
 }
 
+TEST_F(CssParserTest, ImportPathIsPercentDecoded) {
+  {
+    CssParser writer(cachePath());
+    const std::vector<std::string> sources{"OPS/book.css", "OPS/my sheet.css"};
+    const uint8_t aliases[] = {0, 1};
+    ASSERT_TRUE(writer.beginCacheAppend(&sources, aliases));
+    writer.setSource(0);
+    ASSERT_TRUE(loadCss(writer, "@import \"my%20sheet.css\";\n"));
+    ASSERT_TRUE(writer.appendRulesToCache());
+    writer.clear();
+    writer.setSource(1);
+    ASSERT_TRUE(loadCss(writer, "p { font-weight: bold; }\n"));
+    ASSERT_TRUE(writer.appendRulesToCache());
+    writer.clear();
+    ASSERT_TRUE(writer.endCacheAppend(/*discard=*/false));
+  }
+  CssParser reader(cachePath());
+  const auto filter = reader.stylesheetFilterFor({"OPS/book.css"});
+  ASSERT_TRUE(reader.loadFromCache(nullptr, &filter));
+  EXPECT_TRUE(reader.resolveStyle("p", "").defined.fontWeight);
+}
+
 TEST_F(CssParserTest, ChapterWithNoKnownLinkKeepsEveryStylesheet) {
   {
     CssParser writer(cachePath());

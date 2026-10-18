@@ -847,10 +847,10 @@ void ChapterHtmlSlimParser::openBox(const int elementDepth, const CssStyle& cssS
   box.emptyAdvance = emptyAdvance;
   box.shrinkToContent = cssStyle.display == CssDisplay::InlineBlock;
   box.awaitingFirstLine = true;
-  box.firstElementIndex = currentPage ? currentPage->elements.size() : 0;
   if (openBoxCount == 0) {
     box.left = 2;
     box.right = static_cast<int16_t>(viewportWidth - 3);
+    box.firstElementIndex = currentPage ? currentPage->elements.size() : 0;
     openBoxes[openBoxCount++] = box;
     return;
   }
@@ -879,18 +879,28 @@ void ChapterHtmlSlimParser::openBox(const int elementDepth, const CssStyle& cssS
       pending.marginTop = pending.paddingTop = 0;
     }
     // Room for the nested box's first line, or the parent would frame nothing at this page's foot.
+    // A forced break -- the parent's, still pending, or this box's own -- is taken here for the same
+    // reason, and not raised again for this box.
     const int lineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
-    const bool forcedBreak = cssStyle.pageBreakBefore() == CssPageBreak::Always;
-    if (forcedBreak || currentPageNextY + above + gap + ownStyle.topInset() + lineHeight > viewportHeight) {
+    const bool ownBreak = cssStyle.pageBreakBefore() == CssPageBreak::Always;
+    if (pendingForcedBreak || ownBreak ||
+        currentPageNextY + above + gap + ownStyle.topInset() + lineHeight > viewportHeight) {
       breakPage();
       above = 0;  // top spacing dies with the page boundary
+      pendingForcedBreak = false;
+      forcedBreakTaken = ownBreak;
     }
     if (currentPage) {
-      parent.startY = static_cast<int16_t>(currentPageNextY + above);
+      // emitBoxRect draws the top edge a third of a line above startY and clamps it at 0; at a page
+      // top the two edges would both clamp there, so keep the parent's edge on the page.
+      const int edgePad = std::max(2, lineHeight / 3);
+      parent.startY = static_cast<int16_t>(std::max(currentPageNextY + above, edgePad));
       parent.awaitingFirstLine = false;
       currentPageNextY = static_cast<int16_t>(parent.startY + gap);
     }
   }
+  // After any break above, so a shrink-to-content box scans this page's elements, not the last's.
+  box.firstElementIndex = currentPage ? currentPage->elements.size() : 0;
   openBoxes[openBoxCount++] = box;
 }
 
@@ -2467,7 +2477,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->currentBlockIsHeading = true;
     // AFTER startNewTextBlock: that call flushes the PREVIOUS block, which must stay on the page
     // it was already on. The break is spent by the first block laid out from here on.
-    if (cssStyle.pageBreakBefore() == CssPageBreak::Always) self->pendingForcedBreak = true;
+    if (cssStyle.pageBreakBefore() == CssPageBreak::Always && !self->forcedBreakTaken) self->pendingForcedBreak = true;
+    self->forcedBreakTaken = false;
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, BLOCK_TAGS, std::size(BLOCK_TAGS))) {
@@ -2515,7 +2526,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       // paragraph, and the stack is what every nested and sibling block inherits from.
       self->applyDropCap(name, classAttr);
       // See the header branch above: raised only once the previous block has been flushed.
-      if (cssStyle.pageBreakBefore() == CssPageBreak::Always) self->pendingForcedBreak = true;
+      if (cssStyle.pageBreakBefore() == CssPageBreak::Always && !self->forcedBreakTaken) {
+        self->pendingForcedBreak = true;
+      }
+      self->forcedBreakTaken = false;
       self->updateEffectiveInlineStyle();
 
       if (strcmp(name, "ol") == 0 || strcmp(name, "ul") == 0) {

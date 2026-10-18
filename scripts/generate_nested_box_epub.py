@@ -21,6 +21,7 @@ p { margin: 0.4em 0; }
 .mixedinner { border-left: 4px solid black; border-top: 1px dotted black; border-right: 1px dotted black;
   border-bottom: 1px dotted black; padding: 0.4em; margin: 0.4em; }
 .thick td { border: 3px solid black; padding: 0.2em; }
+.newpage { page-break-before: always; }
 """
 
 FILLER = "The quick brown fox jumps over the lazy dog while the reader turns the page."
@@ -60,6 +61,9 @@ MAIN = [
      '<div class="override">' + para("A solid box whose bottom is overridden to thick dashes.") + "</div>" +
      '<div class="box">' + para("Outer box.") + '<div class="mixedinner">' +
      para("Nested box with a thick left bar and dotted other sides.") + "</div>" + "</div>"),
+    ("Forced break on the outer box", para("Text before a box that starts a new page.") +
+     '<div class="box newpage"><div class="inner">' + para("Inner box, first child of an outer box that "
+     "starts a new page.") + "</div></div>"),
     ("Thick table", '<table class="thick" border="2"><tr><td>A1</td><td>B1</td></tr>'
      "<tr><td>A2</td><td>B2</td></tr></table>"),
     ("Across a page break", '<div class="box">' + para("Outer box before a long inner box.") +
@@ -71,7 +75,8 @@ MAIN = [
 CHAPTER_START = first_child_box("Chapter start") + para("After the boxes.")
 
 # The same box after growing amounts of filler, so some copies open near the foot of a page.
-PAGE_FOOT = "".join("".join(para(FILLER) for _ in range(n)) + first_child_box(f"After {n} paragraphs")
+PAGE_FOOT = "".join("".join(para(FILLER) for _ in range(n)) + first_child_box(f"After {n} paragraphs") +
+                    para(FILLER) + '<div class="box"><div class="chip">chip</div>' + para("A chip first.") + "</div>"
                     for n in range(1, 9))
 
 

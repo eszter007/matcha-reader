@@ -543,6 +543,13 @@ if (parsedSize != fileSize) {
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
 
+### Versions 144 to 148
+
+No format change; each rebuilds the cached pages once for a layout fix. In 148, a chapter applies
+the stylesheets its linked ones `@import` (EBPAJ boxes, rules and indents), a block holding only an
+image no longer hides the styled blocks after it, and styled elements nested in a block before its
+first text merge into it.
+
 ### Version 143
 
 The page index (`pageCount` × `u32` file offsets) is followed by the **anchor table**, which lets

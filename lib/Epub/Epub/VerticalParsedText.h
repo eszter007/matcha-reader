@@ -301,6 +301,8 @@ class VerticalParsedText {
   }
   // Joins a nested styled element's params to the open block, still queued (it has no text yet):
   // indents add up as nested margins do, and the border edges and gaps combine.
+  // ponytail: the block still closes only at the outer element, so a sibling after a merged inner
+  // box shares its frame; true nesting needs a block stack here, if a book ever needs it.
   void mergeIntoOpenBlock(const VerticalBlockParams& params) {
     if (!blockOpen_ || blockParamsQueue_.empty()) return;
     VerticalBlockParams& open = blockParamsQueue_.back();

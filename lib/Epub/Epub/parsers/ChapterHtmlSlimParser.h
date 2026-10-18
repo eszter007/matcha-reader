@@ -101,6 +101,7 @@ class ChapterHtmlSlimParser {
   // style is reused for every text block it opens, so reading it per block would break a page
   // before every paragraph in the container instead of once.
   bool pendingForcedBreak = false;
+  bool forcedBreakTaken = false;  // openBox already broke for this element's page-break-before
   // `inside: avoid` / `after: avoid`: the block's lines are buffered instead of being placed, so
   // the block can move to the next page as a UNIT once its total height is known (streaming
   // layout means the height is not knowable before the last line). Buffering stops the moment

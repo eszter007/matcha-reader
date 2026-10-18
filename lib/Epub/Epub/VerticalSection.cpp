@@ -769,6 +769,7 @@ struct TextExtractor {
       self->appendChecked(self->rubyAnnotation, s, static_cast<size_t>(len));
     } else if (self->inRuby) {
       self->anchorsPending = 0;
+      if (self->boxOpenedAtDepth >= 0) self->boxHasText = true;  // a ruby word is the block's text too
       if (self->rubyBase.empty()) self->rubyBaseOffset = offsetOfThisRun;
       self->appendChecked(self->rubyBase, s, static_cast<size_t>(len));
     } else {
