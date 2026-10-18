@@ -65,7 +65,7 @@ constexpr const char* HEADER_TAGS[] = {"h1", "h2", "h3", "h4", "h5", "h6"};
 // publishers hang block CSS on them (e.g. <aside class="box"> with border+padding for call-out
 // boxes). Treating them as inline dropped their margins, borders and text-align entirely.
 constexpr const char* BLOCK_TAGS[] = {"p",  "li",    "div",     "br",      "blockquote", "ol",
-                                      "ul", "aside", "section", "article", "figure",     "figcaption"};
+                                      "ul", "aside", "section", "article", "figure",     "figcaption", "pre"};
 
 // UTF-8 mark glyph for a text-emphasis style (JP bouten), nullptr for none.
 const char* emphasisMarkUtf8(const CssTextEmphasis e) {
@@ -684,6 +684,38 @@ void ChapterHtmlSlimParser::breakPage() {
   // Pending top spacing dies with the boundary: a block that starts a page starts it at the top.
   currentPageNextY = 0;
   resetRecentLines();
+}
+
+void ChapterHtmlSlimParser::emitPreservedSpaces(const uint32_t visibleOffset) {
+  const bool lineStart = !currentTextBlock || currentTextBlock->isEmpty();
+  // Mid-line, one space of the run is the ordinary (breakable) gap before the next word.
+  const int tokens = lineStart ? preSpaceRun : preSpaceRun - 1;
+  preSpaceRun = 0;
+  for (int k = 0; k < tokens; ++k) {
+    partWordBuffer[0] = ' ';
+    partWordBuffer[1] = '\0';
+    partWordBufferIndex = 1;
+    partWordVisibleOffset = visibleOffset;
+    nextWordContinues = true;
+    flushPartWordBuffer();
+  }
+  nextWordContinues = lineStart && tokens > 0;
+}
+
+void ChapterHtmlSlimParser::preservedLineBreak() {
+  if (currentTextBlock && currentTextBlock->isEmpty()) {
+    // A blank line keeps its height: it becomes top spacing on the line that follows it.
+    BlockStyle style = currentTextBlock->getBlockStyle();
+    style.marginTop = static_cast<int16_t>(style.marginTop + renderer.getLineHeight(fontId, lineCompression));
+    currentTextBlock->setBlockStyle(style);
+    return;
+  }
+  BlockStyle lineStyle = blockStyleStack.empty() ? BlockStyle() : blockStyleStack.back();
+  lineStyle = lineStyle.withoutTop().withoutBottom();
+  lineStyle.alignment = CssTextAlign::Left;
+  lineStyle.textIndent = 0;
+  lineStyle.textIndentDefined = true;
+  startNewTextBlock(lineStyle);
 }
 
 void ChapterHtmlSlimParser::resetRecentLines() {
@@ -1419,6 +1451,17 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // headings, captions and small print keep their intended relationship to the body text.
   if (strcasecmp(name, "body") == 0 || strcasecmp(name, "html") == 0) {
     cssStyle.defined.fontSize = 0;
+  }
+
+  // white-space is inherited: open a scope when this element sets it (or is a <pre>).
+  {
+    const bool isPre = strcasecmp(name, "pre") == 0;
+    if ((cssStyle.hasWhiteSpace() || isPre) && self->whitespaceScopeCount < MAX_WHITESPACE_SCOPES) {
+      const bool preserve = cssStyle.hasWhiteSpace() ? cssStyle.preserveWhitespace() : true;
+      self->whitespaceScopes[self->whitespaceScopeCount++] = {static_cast<uint16_t>(self->cssPath.depth()), preserve};
+      self->preSpaceRun = 0;
+      self->preJustOpened = isPre;
+    }
   }
 
   // HTML hidden attribute overrides CSS display.
@@ -2312,8 +2355,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->startNewTextBlock(brStyle);
     } else {
       self->currentCssStyle = cssStyle;
-      const auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
-                                                                                  BlockStyle::CombineAxis::Horizontal);
+      auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
+                                                                            BlockStyle::CombineAxis::Horizontal);
+      if (self->preserveWhitespaceActive()) {
+        // Preformatted text is laid out as written: no justification, no first-line indent.
+        accumulated.alignment = CssTextAlign::Left;
+        accumulated.textIndent = 0;
+        accumulated.textIndentDefined = true;
+      }
       self->blockStyleStack.push_back(accumulated);
       self->startNewTextBlock(accumulated.withoutBottom());
       // On the block itself, never on the style stack: a drop cap belongs to this one
@@ -2616,6 +2665,27 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       nextCodepointOffset++;
     }
 
+    if (isWhitespace(s[i]) && self->preserveWhitespaceActive()) {
+      if (self->partWordBufferIndex > 0) {
+        self->flushPartWordBuffer();
+      }
+      if (s[i] == '\n') {
+        self->preSpaceRun = 0;
+        if (self->preJustOpened) {
+          self->preJustOpened = false;
+        } else {
+          self->preservedLineBreak();
+        }
+      } else if (s[i] == '\t') {
+        self->preSpaceRun = static_cast<uint8_t>(std::min(255, self->preSpaceRun + 4));
+      } else if (s[i] == ' ') {
+        self->preSpaceRun = static_cast<uint8_t>(std::min(255, self->preSpaceRun + 1));
+      }
+      continue;
+    }
+    if (self->preSpaceRun > 0) self->emitPreservedSpaces(codepointOffset);
+    self->preJustOpened = false;
+
     if (isWhitespace(s[i])) {
       // Currently looking at whitespace, if there's anything in the partWordBuffer, flush it
       if (self->partWordBufferIndex > 0) {
@@ -2776,6 +2846,13 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
   if (self->nonVisibleTextDepth > 0) {
     self->nonVisibleTextDepth--;
+  }
+
+  if (self->whitespaceScopeCount > 0 &&
+      self->whitespaceScopes[self->whitespaceScopeCount - 1].pathDepth == self->cssPath.depth()) {
+    self->whitespaceScopeCount--;
+    self->preSpaceRun = 0;
+    self->preJustOpened = false;
   }
 
   // Close this element on the CSS ancestor chain FIRST, pairing with the single push at the

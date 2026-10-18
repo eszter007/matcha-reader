@@ -881,6 +881,17 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.setHyphensNone(false);
       style.defined.hyphens = 1;
     }
+  } else if (iequalsAscii(name, "white-space")) {
+    // Only the values that keep spaces and line breaks matter; nowrap/pre-line read as normal.
+    const std::string_view wsValue = stripTrailingImportant(value);
+    if (iequalsAscii(wsValue, "pre") || iequalsAscii(wsValue, "pre-wrap") || iequalsAscii(wsValue, "break-spaces")) {
+      style.setPreserveWhitespace(true);
+      style.defined.whiteSpace = 1;
+    } else if (iequalsAscii(wsValue, "normal") || iequalsAscii(wsValue, "nowrap") ||
+               iequalsAscii(wsValue, "pre-line")) {
+      style.setPreserveWhitespace(false);
+      style.defined.whiteSpace = 1;
+    }
   } else if (iequalsAscii(name, "hyphenate-limit-chars") || iequalsAscii(name, "hyphenate-limit-lines") ||
              iequalsAscii(name, "hyphenate-limit-zone") || iequalsAscii(name, "hyphenate-limit-last") ||
              iequalsAscii(name, "hyphenate-limit-before") || iequalsAscii(name, "hyphenate-limit-after") ||
@@ -1696,6 +1707,7 @@ void CssParser::encodeStyleWire(const CssStyle& style, uint8_t* out) {
   if (style.defined.textTransform) definedBits |= 1 << 26;
   if (style.defined.hyphens) definedBits |= 1 << 27;
   if (style.defined.letterSpacing) definedBits |= 1 << 28;
+  if (style.defined.whiteSpace) definedBits |= 1 << 29;
   memcpy(out + at, &definedBits, sizeof(definedBits));
   at += sizeof(definedBits);
 
@@ -2293,7 +2305,8 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
       clear();
       return false;
     }
-    style.textFlags = static_cast<uint8_t>(textFlagsVal & (CSS_TEXT_TRANSFORM_MASK | CSS_HYPHENS_NONE_BIT));
+    style.textFlags =
+        static_cast<uint8_t>(textFlagsVal & (CSS_TEXT_TRANSFORM_MASK | CSS_HYPHENS_NONE_BIT | CSS_PRESERVE_WHITESPACE_BIT));
 
     // Read defined flags
     uint32_t definedBits = 0;
@@ -2330,6 +2343,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
     style.defined.textTransform = (definedBits & 1 << 26) != 0;
     style.defined.hyphens = (definedBits & 1 << 27) != 0;
     style.defined.letterSpacing = (definedBits & 1 << 28) != 0;
+    style.defined.whiteSpace = (definedBits & 1 << 29) != 0;
 
     // Vertical-scoped rules ("v|...") are consumed exclusively through the streaming
     // collectVerticalStyles() -- loadFromCache feeds the HORIZONTAL layout engine only.

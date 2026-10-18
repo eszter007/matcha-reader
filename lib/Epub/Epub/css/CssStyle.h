@@ -151,8 +151,10 @@ constexpr uint8_t cssPageBreakWith(const uint8_t packed, const CssPageBreakSlot 
 // so a byte per property costs twice as much for no extra information.
 //   bits 0-1  CssTextTransform
 //   bit  2    hyphens: none  (the ONLY hyphens value that changes anything -- see hyphensNone())
+//   bit  3    white-space: pre / pre-wrap / break-spaces (spaces and line breaks kept)
 constexpr uint8_t CSS_TEXT_TRANSFORM_MASK = 0x03;
 constexpr uint8_t CSS_HYPHENS_NONE_BIT = 1 << 2;
+constexpr uint8_t CSS_PRESERVE_WHITESPACE_BIT = 1 << 3;
 
 // Bitmask for tracking which properties have been explicitly set
 struct CssPropertyFlags {
@@ -185,6 +187,7 @@ struct CssPropertyFlags {
   uint16_t textTransform : 1;
   uint16_t hyphens : 1;
   uint16_t letterSpacing : 1;
+  uint16_t whiteSpace : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -215,7 +218,8 @@ struct CssPropertyFlags {
         lineHeight(0),
         textTransform(0),
         hyphens(0),
-        letterSpacing(0) {}
+        letterSpacing(0),
+        whiteSpace(0) {}
 
   // EVERY flag above must appear in both anySet() and clearAll(). An omission is silent and
   // total: anySet() gates processRuleBlockWithStyle's first line, so a rule that defines only
@@ -225,7 +229,8 @@ struct CssPropertyFlags {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
            imageWidth || display || direction || verticalAlign || border || textEmphasis || fontVariant ||
-           listStyleType || fontSize || inkMode || pageBreak || lineHeight || textTransform || hyphens || letterSpacing;
+           listStyleType || fontSize || inkMode || pageBreak || lineHeight || textTransform || hyphens || letterSpacing ||
+           whiteSpace;
   }
 
   void clearAll() {
@@ -234,7 +239,7 @@ struct CssPropertyFlags {
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = border = 0;
     textEmphasis = fontVariant = listStyleType = fontSize = inkMode = pageBreak = lineHeight = 0;
-    textTransform = hyphens = letterSpacing = 0;
+    textTransform = hyphens = letterSpacing = whiteSpace = 0;
   }
 };
 
@@ -353,6 +358,11 @@ struct CssStyle {
     textFlags = static_cast<uint8_t>(value ? (textFlags | CSS_HYPHENS_NONE_BIT)
                                            : (textFlags & static_cast<uint8_t>(~CSS_HYPHENS_NONE_BIT)));
   }
+  [[nodiscard]] bool preserveWhitespace() const { return (textFlags & CSS_PRESERVE_WHITESPACE_BIT) != 0; }
+  void setPreserveWhitespace(const bool value) {
+    textFlags = static_cast<uint8_t>(value ? (textFlags | CSS_PRESERVE_WHITESPACE_BIT)
+                                           : (textFlags & static_cast<uint8_t>(~CSS_PRESERVE_WHITESPACE_BIT)));
+  }
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
 
@@ -470,6 +480,10 @@ struct CssStyle {
       setHyphensNone(base.hyphensNone());
       defined.hyphens = 1;
     }
+    if (base.hasWhiteSpace()) {
+      setPreserveWhitespace(base.preserveWhitespace());
+      defined.whiteSpace = 1;
+    }
     if (base.hasInkMode()) {
       inkMode = base.inkMode;
       defined.inkMode = 1;
@@ -528,6 +542,7 @@ struct CssStyle {
   // `letter-spacing: normal` leaves this clear; 0 and unset render identically, but the flag
   // still lets an explicit `normal` stop the cascade from inheriting a parent's tracking.
   [[nodiscard]] bool hasLetterSpacing() const { return defined.letterSpacing; }
+  [[nodiscard]] bool hasWhiteSpace() const { return defined.whiteSpace; }
 
   void reset() {
     textAlign = CssTextAlign::Left;

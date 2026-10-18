@@ -417,4 +417,24 @@ TEST_F(CssParserTest, ScopedFirstLetterRuleDoesNotLeakIntoTheElementCascade) {
   EXPECT_FLOAT_EQ(size.value, 300.0f);
 }
 
+TEST_F(CssParserTest, PreservedWhitespaceSurvivesCacheAndNormalOverridesIt) {
+  {
+    CssParser writer(cachePath());
+    ASSERT_TRUE(loadCss(writer, ".code { white-space: pre-wrap; }\n.plain { white-space: normal; }\n"
+                                ".wrap { white-space: break-spaces; }\n.odd { white-space: inherit; }\n"));
+    ASSERT_TRUE(writer.saveToCache());
+  }
+  CssParser reader(cachePath());
+  ASSERT_TRUE(reader.loadFromCache());
+  const CssStyle code = reader.resolveStyle("div", "code");
+  EXPECT_TRUE(code.hasWhiteSpace());
+  EXPECT_TRUE(code.preserveWhitespace());
+  EXPECT_TRUE(reader.resolveStyle("div", "wrap").preserveWhitespace());
+  const CssStyle plain = reader.resolveStyle("div", "plain");
+  EXPECT_TRUE(plain.hasWhiteSpace());
+  EXPECT_FALSE(plain.preserveWhitespace());
+  // An unsupported value leaves the property unset, so an inherited value keeps applying.
+  EXPECT_FALSE(reader.resolveStyle("div", "odd").hasWhiteSpace());
+}
+
 }  // namespace

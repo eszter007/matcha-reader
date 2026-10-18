@@ -103,6 +103,24 @@ class ChapterHtmlSlimParser {
   // addLineToPage so content positions survive the keep-together delay.
   std::vector<std::pair<std::unique_ptr<TextBlock>, uint32_t>> keepBuffer;
   void breakPage();
+  // white-space: pre / pre-wrap and <pre>. An inherited property, scoped by the element's depth on
+  // the CSS ancestor chain (pushed and popped exactly once per element). Inside it a newline
+  // breaks the line, a blank line keeps its height, and runs of spaces are kept: the first space
+  // between two words stays an ordinary breakable gap, the rest become visible space tokens.
+  struct WhitespaceScope {
+    uint16_t pathDepth;
+    bool preserve;
+  };
+  static constexpr uint8_t MAX_WHITESPACE_SCOPES = 8;
+  WhitespaceScope whitespaceScopes[MAX_WHITESPACE_SCOPES] = {};
+  uint8_t whitespaceScopeCount = 0;
+  uint8_t preSpaceRun = 0;
+  bool preJustOpened = false;  // HTML drops the newline directly after <pre>
+  [[nodiscard]] bool preserveWhitespaceActive() const {
+    return whitespaceScopeCount > 0 && whitespaceScopes[whitespaceScopeCount - 1].preserve;
+  }
+  void emitPreservedSpaces(uint32_t visibleOffset);
+  void preservedLineBreak();
   // Widow/orphan control: a paragraph's lone first line, or its lone last line, moves to the next
   // page with company instead of being stranded, and a heading's lines move with the first line
   // of the block after it. Only plain trailing text lines move -- a line that brought a link, a

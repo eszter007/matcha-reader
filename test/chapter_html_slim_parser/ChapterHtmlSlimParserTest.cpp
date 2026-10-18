@@ -1452,4 +1452,64 @@ TEST_F(ChapterWidowOrphanTest, AnOrdinaryBreakIsUnchanged) {
   EXPECT_EQ(pageOfLine('a', 6), 1);
 }
 
+
+// Words of every PageLine, one vector per line, across all pages.
+class ChapterWhitespaceTest : public ChapterPagingTest {
+ protected:
+  std::vector<std::vector<std::string>> allLines() const {
+    std::vector<std::vector<std::string>> out;
+    for (const auto& page : pageObjects) {
+      for (const auto& element : page->elements) {
+        if (element->getTag() != TAG_PageLine) continue;
+        const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+        std::vector<std::string> words;
+        for (uint16_t i = 0; i < block.wordCount(); ++i) words.emplace_back(block.wordText(i));
+        out.push_back(std::move(words));
+      }
+    }
+    return out;
+  }
+};
+
+TEST_F(ChapterWhitespaceTest, PreElementKeepsLinesAndIndentationWithoutLeaking) {
+  makeParser("");
+  open("pre");
+  text("\nline one\n  two");
+  close("pre");
+  para("x   y");
+  finish();
+  const auto lines = allLines();
+  ASSERT_EQ(lines.size(), 3u);
+  EXPECT_EQ(lines[0], (std::vector<std::string>{"line", "one"}));
+  EXPECT_EQ(lines[1], (std::vector<std::string>{" ", " ", "two"}));
+  EXPECT_EQ(lines[2], (std::vector<std::string>{"x", "y"}));
+}
+
+TEST_F(ChapterWhitespaceTest, PreWrapKeepsSpaceRunsAcrossCallbacks) {
+  makeParser(".code { white-space: pre-wrap; }\n");
+  open("div", "code");
+  text("a ");
+  text("  b\n");
+  text("c");
+  close("div");
+  finish();
+  const auto lines = allLines();
+  ASSERT_EQ(lines.size(), 2u);
+  EXPECT_EQ(lines[0], (std::vector<std::string>{"a", " ", " ", "b"}));
+  EXPECT_EQ(lines[1], (std::vector<std::string>{"c"}));
+}
+
+TEST_F(ChapterWhitespaceTest, NormalOverridesInheritedPre) {
+  makeParser(".plain { white-space: normal; }\n");
+  open("pre");
+  open("span", "plain");
+  text("a   b\nc");
+  close("span");
+  close("pre");
+  finish();
+  const auto lines = allLines();
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_EQ(lines[0], (std::vector<std::string>{"a", "b", "c"}));
+}
+
 }  // namespace

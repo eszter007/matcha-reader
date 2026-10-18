@@ -394,6 +394,7 @@ class CssElementPath {
   static constexpr size_t MAX_CLASS_LEN = 31;
 
   void clear() { depth_ = 0; }
+  [[nodiscard]] size_t depth() const { return depth_; }
 
   /** Open an element. Always call exactly once per start tag, before resolving its style. */
   void push(const char* tag) {
