@@ -22,9 +22,10 @@ static_assert(GrayLogo::SMALL_WIDTH == CAT_LOGO_SMALL_WIDTH && GrayLogo::SMALL_H
 namespace {
 
 constexpr char CUSTOM_LOGO_NAME[] = "logo.bmp";  // in the SD card's system folder
-// Every source row is read on every draw (boot decodes once, sleep twice), so cap the read at
-// roughly one screen.
-constexpr int CUSTOM_LOGO_MAX_SIDE = 800;
+// Every source row is read on each decode (once per boot and once per sleep screen), so the
+// source may be at most twice the logo box a side.
+constexpr int CUSTOM_LOGO_MAX_WIDTH = 2 * GrayLogo::WIDTH;
+constexpr int CUSTOM_LOGO_MAX_HEIGHT = 2 * GrayLogo::HEIGHT;
 constexpr uint8_t FOOTPRINT = 0x4;
 // White border kept around a custom logo; on the dark screen it becomes the sticker edge.
 constexpr int STICKER_EDGE = 4;
@@ -182,11 +183,12 @@ bool loadCustomArt(const GrayLogo::Size size, const bool invertedScreen, Art& ar
     return false;
   }
 
-  if (bitmap.getWidth() > CUSTOM_LOGO_MAX_SIDE || bitmap.getHeight() > CUSTOM_LOGO_MAX_SIDE) {
-    LOG_ERR("LOGO", "%s is %dx%d, over %d px a side", path.c_str(), bitmap.getWidth(), bitmap.getHeight(),
-            CUSTOM_LOGO_MAX_SIDE);
+  if (bitmap.getWidth() > CUSTOM_LOGO_MAX_WIDTH || bitmap.getHeight() > CUSTOM_LOGO_MAX_HEIGHT) {
+    LOG_ERR("LOGO", "%s is %dx%d, over %dx%d", path.c_str(), bitmap.getWidth(), bitmap.getHeight(),
+            CUSTOM_LOGO_MAX_WIDTH, CUSTOM_LOGO_MAX_HEIGHT);
     return false;
   }
+  bitmap.setEvenLevels(true);
 
   const int boxW = (size == GrayLogo::Size::Regular ? GrayLogo::WIDTH : GrayLogo::SMALL_WIDTH) - 2 * STICKER_EDGE;
   const int boxH = (size == GrayLogo::Size::Regular ? GrayLogo::HEIGHT : GrayLogo::SMALL_HEIGHT) - 2 * STICKER_EDGE;
@@ -207,8 +209,8 @@ bool loadCustomArt(const GrayLogo::Size size, const bool invertedScreen, Art& ar
   // The art canvas adds the white border on every side.
   const int canvasW = w + 2 * STICKER_EDGE;
   const int canvasH = h + 2 * STICKER_EDGE;
-  // Packed art: at most 230 * 324 / 4 = 18,630 bytes. Rows: one 2-bit output row plus one raw row
-  // (at most 800 px * 4 bytes). Both live only for this draw.
+  // Packed art: at most 230 * 324 / 4 = 18,630 bytes, kept until the gray passes. Rows: one 2-bit
+  // output row plus one raw row (at most 460 px * 4 bytes), freed before drawing.
   const size_t packedSize = (static_cast<size_t>(canvasW) * canvasH + 3) / 4;
   const size_t outRowSize = (srcW + 3) / 4;
   art.owned = makeUniqueNoThrow<uint8_t[]>(packedSize);
@@ -277,26 +279,35 @@ bool loadBuiltinArt(const GrayLogo::Size size, Art& art) {
   return true;
 }
 
-// What drawBase drew, so flushGrayPasses nudges the same art.
-bool baseIsCustom = false;
-
-// The custom logo when logo.bmp loads, the cat otherwise. Nothing is remembered between draws, so
-// a logo that failed once is tried again next time.
+// The custom logo when logo.bmp loads, the cat otherwise. A failed load is not remembered, so
+// the next draw tries again.
 bool loadArt(const GrayLogo::Size size, const bool invertedScreen, Art& art) {
   if (loadCustomArt(size, invertedScreen, art)) return true;
   art = Art{};
   return loadBuiltinArt(size, art);
 }
 
+// The art drawBase drew, kept for flushGrayPasses so it nudges the same pixels without decoding
+// or building the footprint a second time. Released when the gray passes end.
+struct BaseArt {
+  Art art;
+  GrayLogo::Size size = GrayLogo::Size::Regular;
+  bool invertedScreen = false;
+  bool valid = false;
+};
+BaseArt baseArt;
+
 }  // namespace
 
 namespace GrayLogo {
 
 void drawBase(const GfxRenderer& renderer, const int x, const int y, const bool invertedScreen, const Size size) {
-  Art art;
-  baseIsCustom = false;
+  baseArt = BaseArt{};
+  Art& art = baseArt.art;
   if (!loadArt(size, invertedScreen, art)) return;
-  baseIsCustom = art.packed != nullptr;
+  baseArt.size = size;
+  baseArt.invertedScreen = invertedScreen;
+  baseArt.valid = true;
   LogoCursor logo(art);
   const int artX = x + art.offsetX;
   const int artY = y + art.offsetY;
@@ -335,12 +346,15 @@ void drawBw(const GfxRenderer& renderer, const int x, const int y) {
 
 void flushGrayPasses(GfxRenderer& renderer, const int x, const int y, const bool invertedScreen, const Size size) {
   Art art;
-  // Planes for other art would land on this base, so a load failure leaves the BW base as it is.
-  if (!(baseIsCustom ? loadCustomArt(size, invertedScreen, art) : loadBuiltinArt(size, art))) {
+  if (baseArt.valid && baseArt.size == size && baseArt.invertedScreen == invertedScreen) {
+    art = std::move(baseArt.art);
+  } else if (!loadArt(size, invertedScreen, art)) {
     LOG_ERR("LOGO", "Logo art unavailable for the gray passes");
+    baseArt = BaseArt{};
     renderer.setRenderMode(GfxRenderer::BW);
     return;
   }
+  baseArt = BaseArt{};
   const int artX = x + art.offsetX;
   const int artY = y + art.offsetY;
   // Plane semantics (identical to GfxRenderer::drawBitmap's grayscale modes): buffer cleared

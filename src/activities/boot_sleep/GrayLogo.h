@@ -19,7 +19,7 @@ class GfxRenderer;
 //   if (inverted) renderer.invertScreen();
 //   renderer.displayGrayscaleBase(<refresh fallback>);
 //   GrayLogo::flushGrayPasses(renderer, x, y, inverted);   // ends back in BW render mode
-// flushGrayPasses nudges the art the last drawBase drew, so call the two as a pair.
+// drawBase keeps the decoded art until flushGrayPasses uses and frees it, so call the two as a pair.
 //
 // invertedScreen: pass true when the caller invertScreen()s the frame before display (dark
 // sleep mode). The artwork is not inverted with the screen: inside its footprint (the cat, the

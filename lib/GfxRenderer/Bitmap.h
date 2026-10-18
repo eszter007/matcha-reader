@@ -86,6 +86,9 @@ class Bitmap {
   int getRowBytes() const { return rowBytes; }
   bool is1Bit() const { return bpp == 1; }
   uint16_t getBpp() const { return bpp; }
+  // Map every pixel to the nearest of the four levels by luminance (the native-palette path)
+  // instead of the photo thresholds, which turn light grays white. For line art such as a logo.
+  void setEvenLevels(const bool enabled) { evenLevels = enabled; }
 
  private:
   static uint16_t readLE16(HalFile& f);
@@ -101,6 +104,7 @@ class Bitmap {
   uint16_t bpp = 0;
   uint32_t colorsUsed = 0;
   bool nativePalette = false;  // true if all palette entries map to native gray levels
+  bool evenLevels = false;
   int rowBytes = 0;
   uint8_t paletteLum[256] = {};
 
