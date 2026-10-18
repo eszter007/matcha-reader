@@ -30,18 +30,22 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   std::vector<StrId> enumValues = {StrId::STR_NOTO_SERIF};
   // Runtime string labels for SD card fonts
   std::vector<std::string> enumStringValues;
+  // Family names in the same order: what the setting stores, where a row's label may differ.
+  std::vector<std::string> sdFamilyNames;
 
   // Reserve: first CrossPointSettings::BUILTIN_FONT_COUNT entries use StrId, rest use strings
   if (registry) {
     const auto& families = registry->getFamilies();
     enumStringValues.reserve(families.size());
+    sdFamilyNames.reserve(families.size());
     for (const auto& f : families) {
-      // Hidden everywhere the picker hides them -- see SdCardFontSystem::isBuiltinCjkExtension.
-      if (SdCardFontSystem::isBuiltinCjkExtension(f.name)) continue;
+      // Hidden everywhere the picker hides them -- see SdCardFontSystem::isHiddenCjkExtension.
+      if (SdCardFontSystem::isHiddenCjkExtension(f.name, registry)) continue;
       // Likewise for a wider-coverage cut of a family already listed: the base row stands for
       // both -- see SdCardFontSystem::isCoverageVariant.
       if (SdCardFontSystem::isCoverageVariant(f.name, registry)) continue;
-      enumStringValues.push_back(f.name);
+      enumStringValues.push_back(SdCardFontSystem::pickerLabel(f.name, registry));
+      sdFamilyNames.push_back(f.name);
     }
   }
 
@@ -66,9 +70,6 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   s.key = "fontFamily";
   s.category = StrId::STR_CAT_READER;
   s.inTextSettings = true;  // matches the static font-family entry it replaces
-
-  // Capture registry families by copy for the lambdas
-  std::vector<std::string> sdFamilyNames = enumStringValues;  // same filtered list, same order
 
   s.valueGetter = [sdFamilyNames]() -> uint8_t {
     // If an SD card font is selected, find its index

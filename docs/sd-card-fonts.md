@@ -116,7 +116,7 @@ The Fonts page can delete families stored in subfolders.
 
 ## Paired CJK fonts (Noto Sans / Noto Serif)
 
-Some folder names pair a font with an entry that is already in the list instead of adding one of their own: `NotoSansJP` / `NotoSerifJP`, `NotoSansSC` / `NotoSerifSC` and `NotoSansTC` / `NotoSerifTC` (or `…HK`) become the Japanese, simplified-Chinese and traditional-Chinese halves of **Noto Sans** / **Noto Serif**, picked by the book's language, and a `…Extended` name widens the font it is named after. A paired font's sizes are offered on the entry it pairs with, so a book that font carries can be read at any size you install — put `NotoSansJP_20.cpfont` on the card and 20 pt appears under Noto Sans. A book it does not carry (an English one, for a Japanese font) renders at the nearest size the main font ships instead.
+Some folder names pair a font with an entry that is already in the list instead of adding one of their own: `NotoSansJP` / `NotoSerifJP`, `NotoSansSC` / `NotoSerifSC` and `NotoSansTC` / `NotoSerifTC` (or `…HK`) become the Japanese, simplified-Chinese and traditional-Chinese halves of **Noto Sans** / **Noto Serif**, picked by the book's language, and a `…Extended` name widens the font it is named after. The sans halves pair with a `NotoSans` family; without one, the first installed (JP, then SC, then TC/HK) is listed as **Noto Sans** itself. A paired font's sizes are offered on the entry it pairs with, so a book that font carries can be read at any size you install — put `NotoSansJP_20.cpfont` on the card and 20 pt appears under Noto Sans. A book it does not carry (an English one, for a Japanese font) renders at the nearest size the main font ships instead.
 
 ## CJK in the User Interface
 
