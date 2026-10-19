@@ -245,14 +245,13 @@ inline SettingInfo buildLongPressMenuSetting() {
 // Bookmark, Sync and Reader Menu are offered only on touch boards without a Home key, which
 // have no other button for them.
 inline std::vector<uint8_t> shortPowerButtonOrder() {
-  std::vector<uint8_t> order = {CrossPointSettings::IGNORE,        CrossPointSettings::PWR_PREV_PAGE,
-                                CrossPointSettings::PAGE_TURN,     CrossPointSettings::SLEEP,
-                                CrossPointSettings::FORCE_REFRESH, CrossPointSettings::FOOTNOTES,
-                                CrossPointSettings::WORD_LOOKUP,   CrossPointSettings::CREATE_CLIPPING,
-                                CrossPointSettings::PWR_CONFIRM};
+  std::vector<uint8_t> order = {
+      CrossPointSettings::IGNORE,      CrossPointSettings::PWR_PREV_PAGE,   CrossPointSettings::PAGE_TURN,
+      CrossPointSettings::SLEEP,       CrossPointSettings::FORCE_REFRESH,   CrossPointSettings::FOOTNOTES,
+      CrossPointSettings::WORD_LOOKUP, CrossPointSettings::CREATE_CLIPPING, CrossPointSettings::PWR_CONFIRM};
   if (BoardConfig::hasTouch() && !BoardConfig::hasHomeKey()) {
-    order.insert(order.end(), {CrossPointSettings::PWR_BOOKMARK, CrossPointSettings::PWR_SYNC,
-                               CrossPointSettings::PWR_READER_MENU});
+    order.insert(order.end(),
+                 {CrossPointSettings::PWR_BOOKMARK, CrossPointSettings::PWR_SYNC, CrossPointSettings::PWR_READER_MENU});
   }
   return order;
 }
@@ -508,12 +507,12 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
           // Labels stay indexed BY STORED VALUE; withEnumOrder() only decides what the menu offers
           // first. Previous Page sits at 7 because appending was the only safe place for it, and
           // reading it seven rows below Next Page was confusing -- so the two are offered together.
-          SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
-                            {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_NEXT_PAGE_OPT, StrId::STR_FORCE_REFRESH,
-                             StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_CONFIRM, StrId::STR_PREVIOUS_PAGE,
-                             StrId::STR_SAVE_CLIPPING, StrId::STR_BOOKMARK_OPTION, StrId::STR_KOSYNC,
-                             StrId::STR_READER_MENU},
-                            "shortPwrBtn", StrId::STR_CAT_SHORTCUTS)
+          SettingInfo::Enum(
+              StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
+              {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_NEXT_PAGE_OPT, StrId::STR_FORCE_REFRESH,
+               StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_CONFIRM, StrId::STR_PREVIOUS_PAGE,
+               StrId::STR_SAVE_CLIPPING, StrId::STR_BOOKMARK_OPTION, StrId::STR_KOSYNC, StrId::STR_READER_MENU},
+              "shortPwrBtn", StrId::STR_CAT_SHORTCUTS)
               .withEnumOrder(shortPowerButtonOrder()),
           // Erased below unless the QMI8658 IMU is present (X3).
           SettingInfo::Enum(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn,
