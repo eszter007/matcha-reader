@@ -6,8 +6,10 @@
 
 #include "Arduino.h"
 #include "EpdFont.h"
+#include "EpdFontFamily.h"
 #include "FontAlloc.h"
 #include "FontDecompressor.h"
+#include "builtinFonts/notosansjp_joyo_12_regular.h"
 #include "builtinFonts/notoserif_14_regular.h"
 #include "builtinFonts/ubuntu_10_bold.h"
 #include "builtinFonts/ubuntu_10_regular.h"
@@ -148,4 +150,19 @@ TEST_F(FontDecompressorTest, UiPrewarmLeavesAllReaderStyleSlotsAvailable) {
   for (int i = 0; i < FontDecompressor::MAX_PAGE_SLOTS; ++i) {
     EXPECT_EQ(decoder.prewarmCache(&notoserif_14_regular, "Reader"), 0);
   }
+}
+
+TEST(EpdFontFamilyTest, JoyoVariantDrawsAsTheFormTheFontCarries) {
+  EpdFont joyo(&notosansjp_joyo_12_regular);
+  const EpdFontFamily family(&joyo);
+  // The subset has 叱 and 塡 but not 𠮟 or 填: each is drawn as its partner, glyph and data alike.
+  for (const auto [missing, carried] : {std::pair<uint32_t, uint32_t>{0x20B9F, 0x53F1}, {0x586B, 0x5861}}) {
+    ASSERT_FALSE(joyo.hasCodepoint(missing));
+    ASSERT_NE(joyo.getGlyph(carried), nullptr);
+    EXPECT_EQ(family.getGlyph(missing), joyo.getGlyph(carried));
+    EXPECT_EQ(family.getGlyphResident(missing), joyo.getGlyph(carried));
+    EXPECT_EQ(family.getDataForGlyph(missing), joyo.data);
+  }
+  // A kanji with no partner still falls through to the missing-glyph path.
+  EXPECT_NE(family.getGlyph(0x20B9E), joyo.getGlyph(0x53F1));
 }
