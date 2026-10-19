@@ -40,8 +40,9 @@ class SdCardFontSystem {
   /// Also re-discovers if the registry has been marked dirty (e.g. by web upload).
   void ensureLoaded(GfxRenderer& renderer);
 
-  /// Resolve an SD card font ID from family name + reader point size.
-  /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
+  /// The font ID of the resident reader font: the selected family, or what stands in for it
+  /// (ensureSelectedLoaded()). The arguments are the saved selection, which that already resolved.
+  /// Returns 0 when nothing is resident. Used by CrossPointSettings::getReaderFontId().
   int resolveFontId(const char* familyName, uint8_t pointSize) const;
 
   /// Declare which CJK script the current reading context needs rendered properly (a Japanese
@@ -132,6 +133,14 @@ class SdCardFontSystem {
   /// Writes up to `cap` entries into `out` and returns how many. Static and registry-driven so
   /// the settings UI can ask without owning a font system.
   static constexpr uint8_t MAX_STAND_INS = 2;
+
+  /// The family a book in `bookScript` renders with when `selected` is chosen: the Noto Sans cut
+  /// for that script when `selected` is another script's cut standing in for the Noto Sans row
+  /// (NotoSansSC for a saved NotoSansJP), otherwise `selected`.
+  static std::string bookScriptCut(const SdCardFontRegistry* registry, const std::string& selected,
+                                   CjkScript bookScript);
+  /// The reader sizes the size pickers offer for a book in `bookScript` (None outside a book).
+  static std::vector<uint8_t> selectablePointSizes(const SdCardFontRegistry* registry, CjkScript bookScript);
   static uint8_t readerStandInFamilies(const SdCardFontRegistry* registry, const char* sdFamilyName, uint8_t fontFamily,
                                        const SdCardFontFamilyInfo** out, uint8_t cap);
 
@@ -222,6 +231,12 @@ class SdCardFontSystem {
   void lendCompanionToUiFonts(GfxRenderer& renderer, int sdFontId, uint8_t pointSize);
 
   SdCardFontManager fallbackManager_;
+  // The other Chinese script's cut, loaded for a dictionary session (see loadLookupVariant).
+  SdCardFontManager variantManager_;
+  bool lookupVariantTried_ = false;  // this dictionary session already tried to load it
+  void loadLookupVariant(GfxRenderer& renderer, uint8_t pointSize);
+  void unloadLookupVariant(GfxRenderer& renderer);
+  void ensureWordLookupFonts(GfxRenderer& renderer, int primaryFontId, uint8_t pointSize);
   const EpdFontFamily* defaultGlobalFallback_ = nullptr;
   // Script of the open book (None = a Latin book: no companion wanted).
   CjkScript cjkScript_ = CjkScript::None;

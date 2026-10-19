@@ -27,10 +27,10 @@ class EpdFontFamily {
   void getTextDimensions(const char* string, int* w, int* h, Style style = REGULAR) const;
   const EpdFontData* getData(Style style = REGULAR) const;
   const EpdGlyph* getGlyph(uint32_t cp, Style style = REGULAR) const;
-  // Like getGlyph() but never triggers an SD font's on-demand glyphMissHandler: resolves only
-  // flash-resident and already-loaded glyphs. For MEASUREMENT (layout/indexing) -- getGlyph's
-  // miss handler does a seek+read per glyph, which turned chapter indexing into thousands of
-  // SD transactions once fallback fonts entered the measurement path.
+  // Like getGlyph() but never triggers an SD font's on-demand glyphMissHandler (the dictionary
+  // variant excepted): resolves only flash-resident and already-loaded glyphs. For MEASUREMENT (layout/indexing) --
+  // getGlyph's miss handler does a seek+read per glyph, which turned chapter indexing into thousands of SD transactions
+  // once fallback fonts entered the measurement path.
   const EpdGlyph* getGlyphResident(uint32_t cp, Style style = REGULAR) const;
   const EpdFontData* getDataForGlyph(uint32_t cp, Style style = REGULAR) const;
   // getGlyph(), except that a solid block the font lacks becomes a synthetic glyph. Everything
@@ -65,9 +65,18 @@ class EpdFontFamily {
 
   static void setGlobalFallback(const EpdFontFamily* fb) { globalFallback_ = fb; }
   static const EpdFontFamily* getGlobalFallback() { return globalFallback_; }
+  // The last stops, tried after the global fallback: first the other Chinese script's cut,
+  // loaded for a dictionary session so a Simplified book's entry can show the traditional form
+  // beside the headword (說 / 说), then a built-in face, so a glyph an SD font lacks still draws when
+  // that SD font is itself the global fallback (a subset NotoSansSC without 淨). The variant also
+  // loads glyphs for getGlyphResident(); see EpdFontFamily.cpp.
+  static void setVariantFallback(const EpdFontFamily* fb) { variantFallback_ = fb; }
+  static void setBuiltinFallback(const EpdFontFamily* fb) { builtinFallback_ = fb; }
 
  private:
   static inline const EpdFontFamily* globalFallback_ = nullptr;
+  static inline const EpdFontFamily* builtinFallback_ = nullptr;
+  static inline const EpdFontFamily* variantFallback_ = nullptr;
   const EpdFont* regular;
   const EpdFont* bold;
   const EpdFont* italic;
@@ -78,6 +87,7 @@ class EpdFontFamily {
   static const EpdGlyph* missingCjkGlyph(const EpdFont* f, uint32_t cp);
   // The fallback's font when it, not this family, supplies cp (see setFallback); else null.
   const EpdFont* nonCjkFallbackFont(uint32_t cp, Style style) const;
+  const EpdFont* lastResortFont(uint32_t cp, Style style, const EpdGlyph** glyph) const;
 
   const EpdFont* getFont(Style style) const;
 };

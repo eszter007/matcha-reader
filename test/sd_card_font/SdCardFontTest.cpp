@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <new>
 #include <string>
+#include <vector>
 
 namespace {
 size_t failNextArraySize = 0;
@@ -397,4 +398,164 @@ TEST(SdCardFontTest, LigatureRequestsServedFromAKernFreeMiniGetLigatures) {
   ASSERT_EQ(0, font.prewarm("AEF", 1, false, false, false));  // kern-free prewarm, e.g. a UI string
   ASSERT_EQ(0, font.prewarm("EF", 1, false, true, false));
   EXPECT_EQ(static_cast<uint32_t>('A'), font.getEpdFont()->getLigature('E', 'F'));
+}
+
+namespace {
+struct Run {
+  uint32_t first;
+  uint32_t length;
+};
+
+// The shape of a frequency-subset CJK font: hundreds of short runs, so its BMP table is packed.
+// Gaps and lengths cover one-, two- and three-byte varints.
+std::vector<Run> sparseRuns() {
+  std::vector<Run> runs;
+  uint32_t cp = 0x21;
+  for (uint32_t i = 0; i < 400; ++i) {
+    const uint32_t length = i % 17 == 0 ? 150 : 1 + i % 3;
+    runs.push_back({cp, length});
+    cp += length + (i == 200 ? 20000 : i % 11 == 0 ? 130 : i % 5);
+  }
+  runs.push_back({0xFFFD, 1});
+  return runs;
+}
+
+uint32_t sparseGlyphIndex(const std::vector<Run>& runs, uint32_t cp) {
+  uint32_t index = 0;
+  for (const auto& run : runs) {
+    if (cp >= run.first && cp < run.first + run.length) return index + cp - run.first;
+    index += run.length;
+  }
+  return UINT32_MAX;
+}
+
+constexpr uint16_t SPARSE_BITMAP_BYTES = 8;
+
+void makeSparseFont(uint8_t styles) {
+  const auto runs = sparseRuns();
+  uint32_t glyphs = 0;
+  for (const auto& run : runs) glyphs += run.length;
+  const size_t styleBytes = runs.size() * 12 + glyphs * sizeof(EpdGlyph) + glyphs * SPARSE_BITMAP_BYTES;
+  const size_t dataStart = 32 + 32 * styles;
+  sdFontTestFile.assign(dataStart + styleBytes * styles, 0);
+  std::memcpy(sdFontTestFile.data(), "CPFONT\0\0", 8);
+  put16(8, CPFONT_VERSION);
+  sdFontTestFile[12] = styles;
+  for (uint8_t style = 0; style < styles; ++style) {
+    const size_t toc = 32 + 32 * style;
+    const size_t base = dataStart + styleBytes * style;
+    sdFontTestFile[toc] = style;
+    put32(toc + 4, runs.size());
+    put32(toc + 8, glyphs);
+    sdFontTestFile[toc + 12] = 32;
+    put16(toc + 13, 32);
+    put32(toc + 24, base);
+    uint32_t offset = 0;
+    for (size_t i = 0; i < runs.size(); ++i) {
+      put32(base + i * 12, runs[i].first);
+      put32(base + i * 12 + 4, runs[i].first + runs[i].length - 1);
+      put32(base + i * 12 + 8, offset);
+      offset += runs[i].length;
+    }
+    const size_t glyphAt = base + runs.size() * 12;
+    const size_t bitmapAt = glyphAt + glyphs * sizeof(EpdGlyph);
+    for (uint32_t i = 0; i < glyphs; ++i) {
+      EpdGlyph glyph{};
+      glyph.width = 8;
+      glyph.height = 8;
+      glyph.advanceX = 8 << 4;
+      glyph.top = 8;
+      glyph.dataLength = SPARSE_BITMAP_BYTES;
+      glyph.dataOffset = i * SPARSE_BITMAP_BYTES;
+      std::memcpy(sdFontTestFile.data() + glyphAt + i * sizeof(glyph), &glyph, sizeof(glyph));
+      std::memset(sdFontTestFile.data() + bitmapAt + glyph.dataOffset, i % 251, SPARSE_BITMAP_BYTES);
+    }
+  }
+}
+
+std::string utf8(const std::vector<uint32_t>& cps) {
+  std::string text;
+  for (const uint32_t cp : cps) {
+    if (cp < 0x80) {
+      text.push_back(static_cast<char>(cp));
+    } else if (cp < 0x800) {
+      text.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+      text.push_back(static_cast<char>(0x80 | (cp & 63)));
+    } else {
+      text.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+      text.push_back(static_cast<char>(0x80 | ((cp >> 6) & 63)));
+      text.push_back(static_cast<char>(0x80 | (cp & 63)));
+    }
+  }
+  return text;
+}
+
+void expectSparseLookups(SdCardFont& font, uint8_t style) {
+  const auto runs = sparseRuns();
+  for (uint32_t cp = 0; cp <= 0xFFFF; ++cp) {
+    ASSERT_EQ(sparseGlyphIndex(runs, cp) != UINT32_MAX, font.coversCodepoint(cp, style)) << std::hex << cp;
+  }
+  // Each run's ends, after the long gap included, resolve to the right glyph.
+  std::vector<uint32_t> sample;
+  for (size_t i = 0; i < runs.size(); i += 9) {
+    sample.push_back(runs[i].first);
+    sample.push_back(runs[i].first + runs[i].length - 1);
+  }
+  sample.push_back(runs[201].first);
+  font.clearCache();
+  ASSERT_EQ(0, font.prewarm(utf8(sample).c_str(), 1u << style, false, false, false));
+  const auto* data = font.getEpdFont(style)->data;
+  for (const uint32_t cp : sample) {
+    const EpdGlyph* glyph = nullptr;
+    for (uint32_t i = 0; i < data->intervalCount; ++i) {
+      const auto& interval = data->intervals[i];
+      if (cp >= interval.first && cp <= interval.last) glyph = data->glyph + interval.offset + cp - interval.first;
+    }
+    ASSERT_NE(nullptr, glyph) << std::hex << cp;
+    EXPECT_EQ(sparseGlyphIndex(runs, cp) % 251, data->bitmap[glyph->dataOffset]) << std::hex << cp;
+  }
+}
+}  // namespace
+
+TEST(SdCardFontTest, SparseTablesAnswerEveryCodepointFromThePackedIndex) {
+  makeSparseFont(1);
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  expectSparseLookups(font, 0);
+}
+
+TEST(SdCardFontTest, StylesShareOnePackedIndex) {
+  makeSparseFont(2);
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  expectSparseLookups(font, 0);
+  expectSparseLookups(font, 1);
+}
+
+TEST(SdCardFontTest, ACorruptGlyphEntryDrawsAsMissing) {
+  makeFont();
+  // Glyph 3 claims more bytes than its pixels need, as a corrupt .cpfont does.
+  constexpr size_t GLYPH_OFFSET = 64 + 24;
+  EpdGlyph glyph{};
+  std::memcpy(&glyph, sdFontTestFile.data() + GLYPH_OFFSET + 3 * sizeof(glyph), sizeof(glyph));
+  glyph.dataLength = 49335;
+  std::memcpy(sdFontTestFile.data() + GLYPH_OFFSET + 3 * sizeof(glyph), &glyph, sizeof(glyph));
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  ASSERT_EQ(0, font.prewarm(page(FIRST, 5).c_str(), 1, false, false, false));
+  const auto* data = font.getEpdFont()->data;
+  for (uint32_t cp = FIRST; cp < FIRST + 5; ++cp) {
+    const EpdGlyph* found = nullptr;
+    for (uint32_t i = 0; i < data->intervalCount; ++i) {
+      const auto& interval = data->intervals[i];
+      if (cp >= interval.first && cp <= interval.last) found = data->glyph + interval.offset + cp - interval.first;
+    }
+    ASSERT_NE(nullptr, found);
+    if (cp == FIRST + 3) {
+      EXPECT_EQ(0, found->dataLength);
+      EXPECT_EQ(0, found->width);
+    } else {
+      EXPECT_EQ(BITMAP_BYTES, found->dataLength);
+    }
+  }
 }

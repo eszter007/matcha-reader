@@ -29,6 +29,25 @@ static_assert(sizeof(EpdKernClassEntry) == 3, "EpdKernClassEntry must be 3 bytes
 static_assert(sizeof(EpdLigaturePair) == 8, "EpdLigaturePair must be 8 bytes to match .cpfont file layout");
 
 namespace {
+// Varints for the packed interval table: 7 bits per byte, low bits first. Its values are BMP
+// codepoint gaps and run lengths, so never more than 3 bytes.
+uint32_t varintSize(const uint32_t v) { return v < 0x80 ? 1 : v < 0x4000 ? 2 : 3; }
+uint8_t* writeVarint(uint8_t* p, uint32_t v) {
+  while (v >= 0x80) {
+    *p++ = static_cast<uint8_t>(v | 0x80);
+    v >>= 7;
+  }
+  *p++ = static_cast<uint8_t>(v);
+  return p;
+}
+uint32_t readVarint(const uint8_t*& p) {
+  uint32_t v = 0;
+  for (uint32_t shift = 0;; shift += 7) {
+    const uint8_t b = *p++;
+    v |= static_cast<uint32_t>(b & 0x7F) << shift;
+    if ((b & 0x80) == 0) return v;
+  }
+}
 
 // FNV-1a hash for content-based font ID generation
 constexpr uint32_t FNV_OFFSET = 2166136261u;
@@ -190,9 +209,16 @@ void SdCardFont::freeStyleAll(PerStyle& s) {
     // allocator (psramNewArray), the 16-bit BMP form through new[]. Crossing them is undefined.
     psramDeleteArray(s.fullIntervals);
     delete[] s.bmpIntervals;
+    delete[] s.packedIntervals;
+    delete[] s.packBlocks;
   }
   s.fullIntervals = nullptr;
   s.bmpIntervals = nullptr;
+  s.packedIntervals = nullptr;
+  s.packBlocks = nullptr;
+  s.packBlockCount = 0;
+  s.packedBytes = 0;
+  s.intervalsArePacked = false;
   s.intervalsShared = false;
   s.intervalsAreBmp16 = false;
   s.residentIntervalCount = 0;
@@ -565,7 +591,7 @@ void SdCardFont::applyGlyphMissCallback(uint8_t styleIdx) {
 bool SdCardFont::onCoverageQuery(void* ctx, const uint32_t codepoint) {
   const auto* octx = static_cast<OverflowContext*>(ctx);
   const PerStyle& s = octx->self->styles_[octx->styleIdx];
-  if (!s.fullIntervals && !s.bmpIntervals) return false;  // coverage index freed/never loaded
+  if (!s.hasCoverageIndex()) return false;  // coverage index freed/never loaded
   return octx->self->findGlobalGlyphIndex(s, codepoint) >= 0;
 }
 
@@ -598,6 +624,8 @@ bool SdCardFont::load(const char* path) {
     LOG_ERR("SDCF", "Failed to open .cpfont: %s", path);
     return false;
   }
+  fileSize_ = static_cast<uint32_t>(file.fileSize());
+  corruptGlyphsLogged_ = 0;
 
   // Read and validate global header
   uint8_t headerBuf[HEADER_SIZE];
@@ -712,7 +740,9 @@ bool SdCardFont::load(const char* path) {
     bool canUseBmp16 = s.header.glyphCount <= UINT16_MAX;
     uint32_t expectedOffset = 0;
     uint32_t prevLast = 0;
+    uint32_t packedBytes = 0;
     EpdUnicodeInterval iv{};
+    PerStyle::PackCursor shareCursors[MAX_STYLES] = {};
 
     // Regular/bold/italic weights of the same family almost always cover the identical codepoint
     // set, so a later style's table is usually a byte-for-byte copy of an earlier one's. Sharing
@@ -726,7 +756,7 @@ bool SdCardFont::load(const char* path) {
     for (uint8_t k = 0; k < i; k++) {
       const auto& owner = styles_[k];
       if (!owner.present || owner.header.intervalCount != s.header.intervalCount) continue;
-      if (!owner.bmpIntervals && !owner.fullIntervals) continue;
+      if (!owner.hasCoverageIndex()) continue;
       shareCandidates |= static_cast<uint8_t>(1u << k);
     }
     for (uint32_t j = 0; j < s.header.intervalCount; ++j) {
@@ -759,18 +789,16 @@ bool SdCardFont::load(const char* path) {
       if (iv.first > UINT16_MAX) {
         if (s.tailIntervalCount == 0) s.residentIntervalCount = j;
         s.tailIntervalCount++;
-      } else if (iv.last > UINT16_MAX || iv.offset > UINT16_MAX) {
-        canUseBmp16 = false;
+      } else {
+        if (iv.last > UINT16_MAX || iv.offset > UINT16_MAX) canUseBmp16 = false;
+        packedBytes += varintSize(iv.first - (j == 0 ? 0 : prevLast + 1)) + varintSize(span - 1);
       }
       for (uint8_t k = 0; k < i && shareCandidates != 0; k++) {
         if ((shareCandidates & (1u << k)) == 0) continue;
-        const auto& owner = styles_[k];
-        // Compared by value, so an above-BMP record never equals a compact one and drops out here.
-        const bool same = owner.intervalsAreBmp16
-                              ? (owner.bmpIntervals[j].first == iv.first && owner.bmpIntervals[j].last == iv.last &&
-                                 owner.bmpIntervals[j].offset == iv.offset)
-                              : (owner.fullIntervals[j].first == iv.first && owner.fullIntervals[j].last == iv.last &&
-                                 owner.fullIntervals[j].offset == iv.offset);
+        // An above-BMP record is past the owner's resident runs, so it never matches here.
+        EpdUnicodeInterval rec{};
+        const bool same = residentRecord(styles_[k], j, shareCursors[k], rec) && rec.first == iv.first &&
+                          rec.last == iv.last && rec.offset == iv.offset;
         if (!same) shareCandidates &= static_cast<uint8_t>(~(1u << k));
       }
       expectedOffset += span;
@@ -779,6 +807,10 @@ bool SdCardFont::load(const char* path) {
     if (s.tailIntervalCount == 0) s.residentIntervalCount = s.header.intervalCount;
     s.tailIntervalFileOffset =
         s.intervalsFileOffset + s.residentIntervalCount * static_cast<uint32_t>(sizeof(EpdUnicodeInterval));
+    const uint32_t packBlockCount = (s.residentIntervalCount + PerStyle::PACK_BLOCK - 1) / PerStyle::PACK_BLOCK;
+    const bool usePacked = canUseBmp16 && s.residentIntervalCount > PerStyle::PACK_BLOCK * 4 &&
+                           packedBytes <= UINT16_MAX &&
+                           packedBytes + packBlockCount * sizeof(PerStyle::PackBlock) < s.residentIntervalCount * 6u;
 
     // Survived every record: alias the earlier style's table instead of allocating a copy.
     // freeStyleAll() releases the table through its owning style.
@@ -787,10 +819,15 @@ bool SdCardFont::load(const char* path) {
       auto& owner = styles_[k];
       // Identical content can still be held in the other resident form when the two styles
       // disagree on glyph count; aliasing across forms would misread the table.
-      if (owner.intervalsAreBmp16 != canUseBmp16) continue;
+      if (owner.intervalsAreBmp16 != canUseBmp16 || owner.intervalsArePacked != usePacked) continue;
       s.bmpIntervals = owner.bmpIntervals;
       s.fullIntervals = owner.fullIntervals;
       s.intervalsAreBmp16 = owner.intervalsAreBmp16;
+      s.packedIntervals = owner.packedIntervals;
+      s.packBlocks = owner.packBlocks;
+      s.packBlockCount = owner.packBlockCount;
+      s.packedBytes = owner.packedBytes;
+      s.intervalsArePacked = owner.intervalsArePacked;
       s.intervalsShared = true;
       LOG_DBG("SDCF", "Style %u: sharing style %u's %u-interval table (%u B not allocated)", i, k,
               s.header.intervalCount,
@@ -816,13 +853,14 @@ bool SdCardFont::load(const char* path) {
     for (uint8_t k = 0; k < i && !s.intervalsShared; k++) {
       auto& owner = styles_[k];
       if (!owner.present || owner.residentIntervalCount != s.residentIntervalCount) continue;
-      if (owner.intervalsAreBmp16 != canUseBmp16) continue;
-      if (!owner.bmpIntervals && !owner.fullIntervals) continue;
+      if (owner.intervalsAreBmp16 != canUseBmp16 || owner.intervalsArePacked != usePacked) continue;
+      if (!owner.hasCoverageIndex()) continue;
 
       // Streamed in small batches: the whole point is to not need a second table's worth of
       // heap, so the comparison buffer stays on the stack and well inside the task's budget.
       static constexpr uint32_t CMP_BATCH = 16;
       EpdUnicodeInterval cmp[CMP_BATCH];
+      PerStyle::PackCursor cursor;
       bool identical = true;
       for (uint32_t done = 0; done < s.residentIntervalCount && identical;) {
         const uint32_t batch = std::min(CMP_BATCH, s.residentIntervalCount - done);
@@ -834,11 +872,9 @@ bool SdCardFont::load(const char* path) {
         for (uint32_t b = 0; b < batch; ++b) {
           const EpdUnicodeInterval& f = cmp[b];
           const uint32_t at = done + b;
-          const bool same = canUseBmp16
-                                ? (owner.bmpIntervals[at].first == f.first && owner.bmpIntervals[at].last == f.last &&
-                                   owner.bmpIntervals[at].offset == f.offset)
-                                : (owner.fullIntervals[at].first == f.first && owner.fullIntervals[at].last == f.last &&
-                                   owner.fullIntervals[at].offset == f.offset);
+          EpdUnicodeInterval rec{};
+          const bool same = residentRecord(owner, at, cursor, rec) && rec.first == f.first && rec.last == f.last &&
+                            rec.offset == f.offset;
           if (!same) {
             identical = false;
             break;
@@ -851,6 +887,11 @@ bool SdCardFont::load(const char* path) {
         s.bmpIntervals = owner.bmpIntervals;
         s.fullIntervals = owner.fullIntervals;
         s.intervalsAreBmp16 = owner.intervalsAreBmp16;
+        s.packedIntervals = owner.packedIntervals;
+        s.packBlocks = owner.packBlocks;
+        s.packBlockCount = owner.packBlockCount;
+        s.packedBytes = owner.packedBytes;
+        s.intervalsArePacked = owner.intervalsArePacked;
         s.intervalsShared = true;
         LOG_DBG("SDCF", "Style %u: sharing style %u's %u-interval table (%u B not allocated)", i, k,
                 s.residentIntervalCount,
@@ -866,6 +907,48 @@ bool SdCardFont::load(const char* path) {
 
     if (s.intervalsShared) {
       // Fall through to the per-style stub/metadata setup below without touching the table.
+    } else if (usePacked) {
+      s.packedIntervals = new (std::nothrow) uint8_t[packedBytes];
+      s.packBlocks = new (std::nothrow) PerStyle::PackBlock[packBlockCount];
+      if (!s.packedIntervals || !s.packBlocks) {
+        LOG_ERR("SDCF", "Failed to allocate packed intervals for style %u: %u + %u B (free=%u largest=%u)", i,
+                packedBytes, static_cast<unsigned>(packBlockCount * sizeof(PerStyle::PackBlock)),
+                static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+                static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+        freeAll();
+        return false;
+      }
+      uint8_t* w = s.packedIntervals;
+      uint32_t nextCp = 0;
+      uint32_t glyph = 0;
+      for (uint32_t j = 0; j < s.residentIntervalCount; ++j) {
+        if (file.read(reinterpret_cast<uint8_t*>(&iv), sizeof(iv)) != sizeof(iv)) {
+          LOG_ERR("SDCF", "Failed to read packed interval %u for style %u", j, i);
+          freeAll();
+          return false;
+        }
+        const uint32_t span = iv.last - iv.first + 1;
+        if (j % PerStyle::PACK_BLOCK == 0) {
+          s.packBlocks[j / PerStyle::PACK_BLOCK] = {static_cast<uint16_t>(iv.first), static_cast<uint16_t>(glyph),
+                                                    static_cast<uint16_t>(w - s.packedIntervals)};
+        }
+        // The validation pass sized the buffer from these same records; stop rather than overrun
+        // if the file changed under us.
+        if (iv.first < nextCp || iv.last < iv.first || iv.last > UINT16_MAX ||
+            static_cast<uint32_t>(w - s.packedIntervals) + varintSize(iv.first - nextCp) + varintSize(span - 1) >
+                packedBytes) {
+          LOG_ERR("SDCF", "Style %u: packed intervals overran %u B", i, packedBytes);
+          freeAll();
+          return false;
+        }
+        w = writeVarint(w, iv.first - nextCp);
+        w = writeVarint(w, span - 1);
+        nextCp = iv.last + 1;
+        glyph += span;
+      }
+      s.packBlockCount = packBlockCount;
+      s.packedBytes = packedBytes;
+      s.intervalsArePacked = true;
     } else if (canUseBmp16) {
       s.bmpIntervals = new (std::nothrow) PerStyle::BmpInterval16[s.residentIntervalCount];
       if (!s.bmpIntervals) {
@@ -906,11 +989,13 @@ bool SdCardFont::load(const char* path) {
         return false;
       }
     }
-    if (s.tailIntervalCount > 0) {
-      LOG_DBG("SDCF", "Style %u: %u resident intervals (%u bytes), %u above-BMP intervals stay on card", i,
-              s.residentIntervalCount,
-              s.residentIntervalCount * (s.intervalsAreBmp16 ? 6u : static_cast<uint32_t>(sizeof(EpdUnicodeInterval))),
-              s.tailIntervalCount);
+    if (s.tailIntervalCount > 0 || s.intervalsArePacked) {
+      const uint32_t residentBytes =
+          s.intervalsArePacked ? s.packedBytes + s.packBlockCount * static_cast<uint32_t>(sizeof(PerStyle::PackBlock))
+                               : s.residentIntervalCount *
+                                     (s.intervalsAreBmp16 ? 6u : static_cast<uint32_t>(sizeof(EpdUnicodeInterval)));
+      LOG_DBG("SDCF", "Style %u: %u resident intervals (%u bytes%s), %u above-BMP intervals stay on card", i,
+              s.residentIntervalCount, residentBytes, s.intervalsArePacked ? ", packed" : "", s.tailIntervalCount);
     }
 
     // Initialize stub data
@@ -971,6 +1056,8 @@ int32_t SdCardFont::findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) 
     return -1;
   }
 
+  if (s.intervalsArePacked) return findPackedGlyphIndex(s, codepoint);
+
   int left = 0;
   int right = static_cast<int>(s.residentIntervalCount) - 1;
   while (left <= right) {
@@ -987,6 +1074,84 @@ int32_t SdCardFont::findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) 
     }
   }
   return -1;
+}
+
+int32_t SdCardFont::findPackedGlyphIndex(const PerStyle& s, const uint32_t codepoint) {
+  // The last block starting at or before the codepoint.
+  int left = 0;
+  int right = static_cast<int>(s.packBlockCount) - 1;
+  int block = -1;
+  while (left <= right) {
+    const int mid = left + (right - left) / 2;
+    if (s.packBlocks[mid].firstCp <= codepoint) {
+      block = mid;
+      left = mid + 1;
+    } else {
+      right = mid - 1;
+    }
+  }
+  if (block < 0) return -1;
+  const PerStyle::PackBlock& b = s.packBlocks[block];
+  const uint8_t* p = s.packedIntervals + b.byteOffset;
+  const uint32_t runs = std::min<uint32_t>(
+      PerStyle::PACK_BLOCK, s.residentIntervalCount - static_cast<uint32_t>(block) * PerStyle::PACK_BLOCK);
+  uint32_t first = b.firstCp;
+  uint32_t glyph = b.glyphIndex;
+  for (uint32_t r = 0; r < runs; ++r) {
+    const uint32_t gap = readVarint(p);
+    const uint32_t len = readVarint(p) + 1;
+    if (r > 0) first += gap;
+    if (codepoint < first) return -1;
+    if (codepoint < first + len) return static_cast<int32_t>(glyph + (codepoint - first));
+    glyph += len;
+    first += len;
+  }
+  return -1;
+}
+
+bool SdCardFont::residentRecord(const PerStyle& o, const uint32_t j, PerStyle::PackCursor& cursor,
+                                EpdUnicodeInterval& out) {
+  if (j >= o.residentIntervalCount) return false;
+  if (o.intervalsArePacked) {
+    const uint8_t* p = o.packedIntervals + cursor.byte;
+    const uint32_t gap = readVarint(p);
+    const uint32_t len = readVarint(p) + 1;
+    cursor.byte = static_cast<uint32_t>(p - o.packedIntervals);
+    out.first = cursor.nextCp + gap;
+    out.last = out.first + len - 1;
+    out.offset = cursor.glyph;
+    cursor.nextCp = out.last + 1;
+    cursor.glyph += len;
+    return true;
+  }
+  if (o.intervalsAreBmp16) {
+    out.first = o.bmpIntervals[j].first;
+    out.last = o.bmpIntervals[j].last;
+    out.offset = o.bmpIntervals[j].offset;
+    return true;
+  }
+  out = o.fullIntervals[j];
+  return true;
+}
+
+bool SdCardFont::glyphEntryValid(const PerStyle& s, const EpdGlyph& glyph, const uint32_t codepoint) {
+  const uint32_t pixels = static_cast<uint32_t>(glyph.width) * glyph.height;
+  const uint32_t packed = s.header.is2Bit ? (pixels + 3) / 4 : (pixels + 7) / 8;
+  const uint64_t end = static_cast<uint64_t>(s.bitmapFileOffset) + glyph.dataOffset + glyph.dataLength;
+  if (glyph.dataLength == packed && end <= fileSize_) return true;
+  if (corruptGlyphsLogged_ < 3) {
+    corruptGlyphsLogged_++;
+    LOG_ERR("SDCF", "Corrupt glyph for U+%04X in %s (%ux%u, %u bytes at %u); drawing it as missing",
+            static_cast<unsigned>(codepoint), filePath_, glyph.width, glyph.height, glyph.dataLength,
+            static_cast<unsigned>(glyph.dataOffset));
+  }
+  return false;
+}
+
+EpdGlyph SdCardFont::blankGlyph(const uint8_t styleIdx) const {
+  EpdGlyph glyph = {};
+  glyph.advanceX = fullWidthAdvance_[styleIdx];
+  return glyph;
 }
 
 // --- Prewarm ---
@@ -1421,6 +1586,9 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       freeStyleMiniData(s);
       return static_cast<int>(cpCount);
     }
+    if (!glyphEntryValid(s, s.miniGlyphs[mapIdx], mappings[mapIdx].codepoint)) {
+      s.miniGlyphs[mapIdx] = blankGlyph(styleIdx);
+    }
     lastReadIndex = gIdx;
   }
 
@@ -1818,7 +1986,8 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
       }
       lastReadIndex = gIdx;
       staged[fetched].codepoint = mappings[i].codepoint;
-      staged[fetched].advanceX = tempGlyph.advanceX;
+      staged[fetched].advanceX =
+          glyphEntryValid(s, tempGlyph, mappings[i].codepoint) ? tempGlyph.advanceX : fullWidthAdvance_[si];
       fetched++;
     }
     file.close();
@@ -2005,7 +2174,7 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
 
   if (!self->loaded_ || styleIdx >= MAX_STYLES || !self->styles_[styleIdx].present) return nullptr;
   const auto& s = self->styles_[styleIdx];
-  if (!s.fullIntervals && !s.bmpIntervals) return nullptr;
+  if (!s.hasCoverageIndex()) return nullptr;
 
   // Check overflow cache first (matching both codepoint and style)
   for (uint32_t i = 0; i < self->overflowCount_; i++) {
@@ -2054,6 +2223,7 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
     file.close();
     return nullptr;
   }
+  if (!self->glyphEntryValid(s, tempGlyph, codepoint)) tempGlyph = self->blankGlyph(styleIdx);
 
   // Read bitmap data into temporary (if any)
   uint8_t* tempBitmap = nullptr;

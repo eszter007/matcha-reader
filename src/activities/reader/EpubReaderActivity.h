@@ -275,6 +275,9 @@ class EpubReaderActivity final : public ReaderActivity {
   static constexpr uint32_t NO_IMAGE_REFINE = UINT32_MAX;
   std::atomic<uint32_t> pendingImageRefine_{NO_IMAGE_REFINE};
   std::atomic<uint32_t> requestedImageRefine_{NO_IMAGE_REFINE};
+  // The page last redrawn in full because its B/W pass could not decode an image (readerLoop).
+  std::atomic<uint32_t> imageRetryKey_{NO_IMAGE_REFINE};
+  std::atomic<bool> imageRetryRequested_{false};  // the next image-page render is that redraw
   // A grayscale refine is waiting for the render task: the chapter-wide image warm yields to it.
   bool imageRefinePending() const {
     return pendingImageRefine_.load(std::memory_order_relaxed) != NO_IMAGE_REFINE ||

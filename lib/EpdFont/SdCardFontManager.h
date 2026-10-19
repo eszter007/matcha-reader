@@ -38,6 +38,12 @@ class SdCardFontManager {
 
   // Unload everything, unregister from renderer.
   void unloadAll(GfxRenderer& renderer);
+  // unloadAll() without clearing the renderer's UI fallback mappings, for a manager whose fonts
+  // no mapping points at.
+  void unloadFonts(GfxRenderer& renderer);
+  // Unload every size but the family's reader size (loadFamilyExtraSize() loads the others).
+  void unloadExtras(GfxRenderer& renderer);
+  size_t extraCount() const { return loaded_.empty() ? 0 : loaded_.size() - 1; }
 
   // Look up the font ID for the loaded family. Returns 0 if nothing loaded
   // or familyName doesn't match.

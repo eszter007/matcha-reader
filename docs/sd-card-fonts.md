@@ -116,7 +116,7 @@ The Fonts page can delete families stored in subfolders.
 
 ## Paired CJK fonts (Noto Sans / Noto Serif)
 
-Some folder names pair a font with an entry that is already in the list instead of adding one of their own: `NotoSansJP` / `NotoSerifJP`, `NotoSansSC` / `NotoSerifSC` and `NotoSansTC` / `NotoSerifTC` (or `…HK`) become the Japanese, simplified-Chinese and traditional-Chinese halves of **Noto Sans** / **Noto Serif**, picked by the book's language, and a `…Extended` name widens the font it is named after. The sans halves pair with a `NotoSans` family; without one, the first installed (JP, then SC, then TC/HK) is listed as **Noto Sans** itself. A paired font's sizes are offered on the entry it pairs with, so a book that font carries can be read at any size you install — put `NotoSansJP_20.cpfont` on the card and 20 pt appears under Noto Sans. A book it does not carry (an English one, for a Japanese font) renders at the nearest size the main font ships instead.
+Some folder names pair a font with an entry that is already in the list instead of adding one of their own: `NotoSansJP` / `NotoSerifJP`, `NotoSansSC` / `NotoSerifSC` and `NotoSansTC` / `NotoSerifTC` (or `…HK`) become the Japanese, simplified-Chinese and traditional-Chinese halves of **Noto Sans** / **Noto Serif**, picked by the book's language, and a `…Extended` name widens the font it is named after. The sans halves pair with a `NotoSans` family; without one, the first installed (JP, then SC, then TC/HK) is listed as **Noto Sans** itself. A paired font's sizes are offered on the entry it pairs with, so a book that font carries can be read at any size you install — put `NotoSansJP_20.cpfont` on the card and 20 pt appears under Noto Sans. A book it does not carry (an English one, for a Japanese font) renders at the nearest size the main font ships instead. When no `NotoSans` family is installed, **Noto Sans** is made of its CJK halves, and while a book is open the size list shows the sizes of the half that book uses: a Chinese book offers the `NotoSansSC` sizes, even if `NotoSansJP` has more.
 
 ## CJK in the User Interface
 
@@ -142,6 +142,13 @@ replacement boxes even though the book itself renders fine.** Any missing UI
 size keeps showing boxes for that script at that size. Direct TTF/OTF/TTC
 families use the same file at all three UI sizes.
 
+A CJK family (one with Chinese, Japanese or Korean characters) is the exception.
+Each loaded size of a CJK font costs several KB to tens of KB of RAM, so the UI draws it at the
+reading size, scaled down to each UI size, instead of loading three more sizes.
+A CJK family does not need 8, 10 and 12 pt files; installed ones only add
+reading sizes to the list. The 8, 10 and 12 pt advice still applies to fonts
+for other scripts, such as Greek or Cyrillic.
+
 These UI sizes only take effect if the reader-size font also matches one of
 CrossPoint's built-in fallback-detection codepoints — see `kFallbackProbes` in
 `src/SdCardFontSystem.cpp` for the current list. A script outside that list
@@ -153,12 +160,12 @@ sizes are not hidden from the list. Reading at 8 pt is your call; if you would
 rather not see the small sizes there, convert two families (one with the UI
 sizes for fallback, one with only the reading sizes you want).
 
-When converting your own font, include the UI sizes:
+When converting your own CJK font, the reading sizes are enough:
 
     python3 lib/EpdFont/scripts/fontconvert_sdcard.py \
       MyCJKFont-Regular.otf \
       --intervals cjk \
-      --sizes 8,10,12,14,16,18 \
+      --sizes 12,14,16,18 \
       --style regular \
       --name MyCJKFont \
       --output-dir ./MyCJKFont/
@@ -217,8 +224,8 @@ To make `.cpfont` files for any device, convert your TrueType/OpenType fonts:
       --output-dir ./MyFont/
 
 > **Using this font for non-Latin UI fallback too?** The examples above only
-> include the reader sizes (12–18). To also get fallback for this font's
-> script in the library, headers, and file browser (see
+> include the reader sizes (12–18). For a non-CJK script, to also get fallback
+> for this font's script in the library, headers, and file browser (see
 > [Non-Latin Scripts Fallback in the User Interface](#non-latin-scripts-fallback-in-the-user-interface)),
 > add the UI sizes: `--sizes 8,10,12,14,16,18`.
 

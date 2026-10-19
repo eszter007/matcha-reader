@@ -142,7 +142,10 @@ void DictionaryDefinitionActivity::onExit() {
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->releaseAllFontMemory();
   }
-  sdFontSystem.releaseWordLookupFallback(renderer);
+  {
+    RenderLock lock;  // it frees fonts the render task may still be drawing with
+    sdFontSystem.releaseWordLookupFallback(renderer);
+  }
 }
 
 DictionaryDefinitionActivity::BodyArea DictionaryDefinitionActivity::bodyArea() const {

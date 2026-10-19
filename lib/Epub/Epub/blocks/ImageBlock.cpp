@@ -83,6 +83,8 @@ bool imageFailedThisRender(const std::string& path) {
 }
 
 bool deferredDecode = false;
+// A decoder ran and failed in this render (heap, mostly): another render may succeed.
+bool decodeFailedThisRender = false;
 
 void rememberImageFailure(const std::string& path) {
   if (failedImageCount == MAX_RENDER_IMAGE_FAILURES || imageFailedThisRender(path)) return;
@@ -354,7 +356,12 @@ bool ImageBlock::hasValidCache() const {
 
 bool ImageBlock::needsDecode() const { return !imageFailedThisRender(imagePath) && !hasValidCache(); }
 
-void ImageBlock::clearRenderFailures() { failedImageCount = 0; }
+void ImageBlock::clearRenderFailures() {
+  failedImageCount = 0;
+  decodeFailedThisRender = false;
+}
+
+bool ImageBlock::renderHadDecodeFailure() { return decodeFailedThisRender; }
 
 bool ImageBlock::needsFramebufferLoanToDecode() const {
   return FsHelpers::hasPngExtension(imagePath) && !PngToFramebufferConverter::decoderFitsHeap() && !hasValidCache();
@@ -540,6 +547,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   if (!success) {
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
     rememberImageFailure(imagePath);
+    decodeFailedThisRender = true;
     renderPlaceholderAt(renderer, drawX, drawY, drawW, drawH);
     return;
   }
