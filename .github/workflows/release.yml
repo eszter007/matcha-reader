@@ -55,6 +55,10 @@ jobs:
           - pio_env: eego_a4-gh_release
             debug_env: eego_a4
             asset: eego_a4-firmware.bin
+          # Picco has no second app slot and no OTA; this one is flashed over USB.
+          - pio_env: picco-gh_release
+            debug_env: picco
+            asset: picco-firmware.bin
     steps:
       - uses: actions/checkout@v6
         with:
@@ -182,11 +186,11 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          # Exactly the names OtaUpdater asks for; a missing one means some device would
-          # see no update, so fail loudly rather than publish a half-updatable release.
+          # Exactly the names OtaUpdater asks for, plus Picco's USB image; a missing one means some
+          # device would see no update, so fail loudly rather than publish a half-updatable release.
           for asset in x4old-x3-firmware.bin x4c-firmware.bin sticky-firmware.bin \
                        x4pro-firmware.bin papermono-firmware.bin metalio_eink4-firmware.bin \
-                       eego_a4-firmware.bin; do
+                       eego_a4-firmware.bin picco-firmware.bin; do
             path="$(find dist -type f -name "$asset" | head -1)"
             if [ -z "$path" ]; then
               echo "No $asset among the built artifacts" >&2
