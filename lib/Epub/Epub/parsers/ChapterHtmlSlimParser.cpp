@@ -1571,6 +1571,26 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
   }
 
+  // Resolve explicit inheritance after the cascade, before this element changes the active style.
+  switch (cssStyle.fontWeight) {
+    case CssFontWeight::Normal:
+    case CssFontWeight::Bold:
+      break;
+    case CssFontWeight::Inherit:
+      cssStyle.fontWeight =
+          (self->effectiveBold || self->boldUntilDepth < self->depth) ? CssFontWeight::Bold : CssFontWeight::Normal;
+      break;
+  }
+  switch (cssStyle.fontStyle) {
+    case CssFontStyle::Normal:
+    case CssFontStyle::Italic:
+      break;
+    case CssFontStyle::Inherit:
+      cssStyle.fontStyle =
+          (self->effectiveItalic || self->italicUntilDepth < self->depth) ? CssFontStyle::Italic : CssFontStyle::Normal;
+      break;
+  }
+
   // A font-size on <html>/<body> is the book restating the size its body text should have --
   // and that base is the READER's font here, because every font-size resolves against it
   // (cssBlockFontId, ReaderFontScale.cpp) rather than against a fixed 16px. Applying a root

@@ -38,6 +38,23 @@ class CssParserTest : public ::testing::Test {
   std::filesystem::path dir_;
 };
 
+TEST_F(CssParserTest, FontInheritIsKeptThroughTheCascade) {
+  CssParser parser(cachePath());
+  ASSERT_TRUE(loadCss(parser,
+                      "p { font-weight:bold; font-style:italic; }"
+                      ".last { font-weight:bold; font-weight:inherit; font-style:italic; font-style:INHERIT; }"
+                      ".normal { font-weight:inherit; font-weight:normal; font-style:inherit; font-style:normal; }"));
+  const CssStyle last = parser.resolveStyle("p", "last");
+  EXPECT_EQ(last.fontWeight, CssFontWeight::Inherit);
+  EXPECT_EQ(last.fontStyle, CssFontStyle::Inherit);
+  const CssStyle normal = parser.resolveStyle("p", "normal");
+  EXPECT_EQ(normal.fontWeight, CssFontWeight::Normal);
+  EXPECT_EQ(normal.fontStyle, CssFontStyle::Normal);
+  const CssStyle inlineStyle = CssParser::parseInlineStyle("font-weight:bold;font-weight:inherit;font-style:inherit");
+  EXPECT_EQ(inlineStyle.fontWeight, CssFontWeight::Inherit);
+  EXPECT_EQ(inlineStyle.fontStyle, CssFontStyle::Inherit);
+}
+
 TEST_F(CssParserTest, ResolvesTagAndClassRules) {
   CssParser parser(cachePath());
   ASSERT_TRUE(loadCss(parser, "p { text-align: center; }\n.lead { font-weight: bold; }\n"));

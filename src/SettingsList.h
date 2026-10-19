@@ -242,6 +242,21 @@ inline SettingInfo buildLongPressMenuSetting() {
                                   setLongPressMenuFromDisplayValue, "longPressMenuFunction", StrId::STR_CAT_SHORTCUTS);
 }
 
+// Bookmark, Sync and Reader Menu are offered only on touch boards without a Home key, which
+// have no other button for them.
+inline std::vector<uint8_t> shortPowerButtonOrder() {
+  std::vector<uint8_t> order = {CrossPointSettings::IGNORE,        CrossPointSettings::PWR_PREV_PAGE,
+                                CrossPointSettings::PAGE_TURN,     CrossPointSettings::SLEEP,
+                                CrossPointSettings::FORCE_REFRESH, CrossPointSettings::FOOTNOTES,
+                                CrossPointSettings::WORD_LOOKUP,   CrossPointSettings::CREATE_CLIPPING,
+                                CrossPointSettings::PWR_CONFIRM};
+  if (BoardConfig::hasTouch() && !BoardConfig::hasHomeKey()) {
+    order.insert(order.end(), {CrossPointSettings::PWR_BOOKMARK, CrossPointSettings::PWR_SYNC,
+                               CrossPointSettings::PWR_READER_MENU});
+  }
+  return order;
+}
+
 inline std::vector<StrId> homeThemeValues() {
   static constexpr StrId VALUES[] = {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
                                      StrId::STR_THEME_ROUNDEDRAFF, StrId::STR_THEME_COVER_GRID};
@@ -496,13 +511,10 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
           SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
                             {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_NEXT_PAGE_OPT, StrId::STR_FORCE_REFRESH,
                              StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_CONFIRM, StrId::STR_PREVIOUS_PAGE,
-                             StrId::STR_SAVE_CLIPPING},
+                             StrId::STR_SAVE_CLIPPING, StrId::STR_BOOKMARK_OPTION, StrId::STR_KOSYNC,
+                             StrId::STR_READER_MENU},
                             "shortPwrBtn", StrId::STR_CAT_SHORTCUTS)
-              .withEnumOrder({CrossPointSettings::IGNORE, CrossPointSettings::PWR_PREV_PAGE,
-                              CrossPointSettings::PAGE_TURN, CrossPointSettings::SLEEP,
-                              CrossPointSettings::FORCE_REFRESH, CrossPointSettings::FOOTNOTES,
-                              CrossPointSettings::WORD_LOOKUP, CrossPointSettings::CREATE_CLIPPING,
-                              CrossPointSettings::PWR_CONFIRM}),
+              .withEnumOrder(shortPowerButtonOrder()),
           // Erased below unless the QMI8658 IMU is present (X3).
           SettingInfo::Enum(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn,
                             {StrId::STR_STATE_OFF, StrId::STR_NORMAL, StrId::STR_INVERTED}, "tiltPageTurn",
@@ -835,6 +847,13 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     v.erase(std::remove_if(v.begin(), v.end(),
                            [](const SettingInfo& s) { return s.nameId == StrId::STR_RESTORE_LIGHT_ON_WAKE; }),
             v.end());
+  }
+  // Tilt page turn needs an IMU with a gyroscope. UI-only, like the frontlight
+  // entry: a failed probe on one boot must not drop the saved value.
+  if (!halTiltSensor.isAvailable()) {
+    v.erase(
+        std::remove_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.nameId == StrId::STR_TILT_PAGE_TURN; }),
+        v.end());
   }
   if (registry && registry->getFamilyCount() > 0) {
     auto it = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.nameId == StrId::STR_FONT_FAMILY; });

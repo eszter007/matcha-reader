@@ -1420,7 +1420,7 @@ void CrossPointWebServer::handleDelete() const {
     // Credential stores stay on the device whatever the listing shows, and so does the folder
     // they live in: deleting it would take them along.
     if (protectedpaths::isSensitiveOrHoldsOne(itemPath.c_str())) {
-      failedItems += itemPath + " (hidden/system file); ";
+      failedItems += itemPath + " (protected file); ";
       allSuccess = false;
       continue;
     }

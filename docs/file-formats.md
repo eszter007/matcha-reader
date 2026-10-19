@@ -95,6 +95,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 106 (fork numbering)
+
+Upstream merge (their versions 63 and 64). The layout is unchanged. Static GIF images are laid out
+like JPEG and PNG instead of being skipped, and `font-weight: inherit` / `font-style: inherit` keep
+the parent's emphasis. CSS cache version 27 stores `inherit` as value 2 in the existing font-style
+and font-weight bytes, so older CSS caches are rebuilt too.
+
 ### Version 105 (fork numbering)
 
 `PageBox` stores one border spec per side, top, right, bottom and left, in place of its single
@@ -318,7 +325,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 102
+#define EXPECTED_VERSION 106
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
@@ -543,13 +550,14 @@ if (parsedSize != fileSize) {
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
 
-### Versions 144 to 149
+### Versions 144 to 150
 
 No format change; each rebuilds the cached pages once for a layout fix. In 148, a chapter applies
 the stylesheets its linked ones `@import` (EBPAJ boxes, rules and indents), a block holding only an
 image no longer hides the styled blocks after it, and styled elements nested in a block before its
 first text merge into it. In 149, what follows a merged element continues with the outer element's
-params alone, so it is not framed with the element before it.
+params alone, so it is not framed with the element before it. In 150, a GIF page stores the image's own size
+instead of the full-page placeholder, since static GIFs are now decoded.
 
 ### Version 143
 

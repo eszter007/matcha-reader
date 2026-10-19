@@ -10,6 +10,7 @@
 #include "ReaderUtils.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
+#include "util/SlideSwitch.h"
 
 namespace fui = freeink::ui;
 
@@ -111,7 +112,7 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     items.push_back({MenuAction::VIEW_CLIPPINGS, StrId::STR_VIEW_CLIPPINGS});
   }
   items.push_back({MenuAction::NIGHT_MODE, StrId::STR_NIGHT_MODE});
-  if (Frontlight.present()) {
+  if (Frontlight.present() && !slideSwitchOwnsLight()) {
     items.push_back({MenuAction::FRONTLIGHT, StrId::STR_FRONTLIGHT});
   }
   if (bleturner::status().compiledIn) {
