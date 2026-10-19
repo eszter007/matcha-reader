@@ -26,13 +26,17 @@ class EpdFontFamily {
   ~EpdFontFamily() = default;
   void getTextDimensions(const char* string, int* w, int* h, Style style = REGULAR) const;
   const EpdFontData* getData(Style style = REGULAR) const;
-  const EpdGlyph* getGlyph(uint32_t cp, Style style = REGULAR) const;
+  // A jōyō kanji nothing can draw is drawn as its other standard form instead (𠮟 as 叱, 填 as 塡):
+  // books print either one, and each font carries only one of the pair. tryVariant is that step's
+  // recursion guard; getGlyph, getGlyphResident and getDataForGlyph all take it, so they agree.
+  const EpdGlyph* getGlyph(uint32_t cp, Style style = REGULAR, bool tryVariant = true) const;
   // Like getGlyph() but never triggers an SD font's on-demand glyphMissHandler (the dictionary
-  // variant excepted): resolves only flash-resident and already-loaded glyphs. For MEASUREMENT (layout/indexing) --
-  // getGlyph's miss handler does a seek+read per glyph, which turned chapter indexing into thousands of SD transactions
-  // once fallback fonts entered the measurement path.
-  const EpdGlyph* getGlyphResident(uint32_t cp, Style style = REGULAR) const;
-  const EpdFontData* getDataForGlyph(uint32_t cp, Style style = REGULAR) const;
+  // variant excepted): resolves only
+  // flash-resident and already-loaded glyphs. For MEASUREMENT (layout/indexing) -- getGlyph's
+  // miss handler does a seek+read per glyph, which turned chapter indexing into thousands of
+  // SD transactions once fallback fonts entered the measurement path.
+  const EpdGlyph* getGlyphResident(uint32_t cp, Style style = REGULAR, bool tryVariant = true) const;
+  const EpdFontData* getDataForGlyph(uint32_t cp, Style style = REGULAR, bool tryVariant = true) const;
   // getGlyph(), except that a solid block the font lacks becomes a synthetic glyph. Everything
   // else resolves through the fallback chain like getGlyph(), so it pairs with getDataForGlyph():
   // asking only the primary font handed callers one font's glyph with another font's data, and

@@ -37,28 +37,30 @@ from cpfont_version import CPFONT_VERSION
 # --- Unicode interval presets ---
 
 
-def _jisx0213_plane2_ranges():
-    """Ranges for the CJK Ext B kanji that JIS X 0213 plane 2 encodes (277 codepoints).
+def _jisx0213_non_bmp_ranges():
+    """Ranges for the CJK Ext B kanji that JIS X 0213 encodes (26 in plane 1, 277 in plane 2).
 
     Rare kanji in classic Japanese texts live outside the BMP -- Ogai's Vita Sexualis
     spells a character's name 𣵀麻 (U+23D40) -- and rendered as missing-glyph boxes while
-    the charset stopped at the BMP. Taking ALL of CJK Ext B is not an option: the Japanese
-    Noto fonts cover it so sparsely that it costs 1614 intervals (against ~65 today), and
-    any non-BMP codepoint also forces the reader's interval table from its packed 6-byte
-    form to 12 bytes -- ~80KB of tables on a 220KB heap. JIS X 0213 plane 2 is the curated
-    subset actually used in Japanese typography and costs 263 intervals instead.
+    the charset stopped at the BMP. Plane 1 holds a few too, among them 𠮟 (U+20B9F), the
+    jōyō form of 叱 that current publishers print in 𠮟る. Taking ALL of CJK Ext B is not an
+    option: the Japanese Noto fonts cover it so sparsely that it costs 1614 intervals
+    (against ~65 today), and any non-BMP codepoint also forces the reader's interval table
+    from its packed 6-byte form to 12 bytes -- ~80KB of tables on a 220KB heap. JIS X 0213
+    is the curated subset actually used in Japanese typography and costs ~290 intervals.
 
     Derived from the stdlib euc_jis_2004 codec rather than a checked-in table, so it stays
-    correct by construction: plane 2 is reached with the SS3 (0x8F) prefix.
+    correct by construction: plane 1 is two bytes, plane 2 is reached with the SS3 (0x8F) prefix.
     """
     codepoints = set()
-    for byte1 in range(0xA1, 0xFF):
-        for byte2 in range(0xA1, 0xFF):
-            try:
-                decoded = bytes((0x8F, byte1, byte2)).decode("euc_jis_2004")
-            except UnicodeDecodeError:
-                continue
-            codepoints.update(ord(c) for c in decoded if ord(c) > 0xFFFF)
+    for prefix in (b"", b"\x8f"):
+        for byte1 in range(0xA1, 0xFF):
+            for byte2 in range(0xA1, 0xFF):
+                try:
+                    decoded = (prefix + bytes((byte1, byte2))).decode("euc_jis_2004")
+                except UnicodeDecodeError:
+                    continue
+                codepoints.update(ord(c) for c in decoded if ord(c) > 0xFFFF)
     ranges = []
     for cp in sorted(codepoints):
         if ranges and cp == ranges[-1][1] + 1:
@@ -68,7 +70,7 @@ def _jisx0213_plane2_ranges():
     return ranges
 
 
-JISX0213_PLANE2 = _jisx0213_plane2_ranges()
+JISX0213_NON_BMP = _jisx0213_non_bmp_ranges()
 
 INTERVAL_PRESETS = {
     "ascii":       [(0x0020, 0x007E)],
@@ -111,7 +113,7 @@ INTERVAL_PRESETS = {
                     (0xF900, 0xFAFF),   # CJK Compatibility Ideographs
                     (0xFE30, 0xFE4F),   # CJK Compatibility Forms
                     (0xFF00, 0xFFEF),   # Halfwidth and Fullwidth Forms
-                    ] + JISX0213_PLANE2,  # rare kanji outside the BMP (𣵀 in Vita Sexualis)
+                    ] + JISX0213_NON_BMP,  # rare kanji outside the BMP (𠮟, 𣵀)
     "hangul":      [(0xAC00, 0xD7AF), (0x1100, 0x11FF), (0x3130, 0x318F)],
     "cherokee":    [(0x13A0, 0x13FF), (0xAB70, 0xABBF)],
     "tifinagh":    [(0x2D30, 0x2D7F)],
