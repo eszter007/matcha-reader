@@ -15,8 +15,7 @@ clean_word = "const char* cleanWordStart" + source.split("const char* cleanWordS
 build_text = "bool ClipSelectionActivity::buildSelectedText" + source.split(
     "bool ClipSelectionActivity::buildSelectedText", 1
 )[1].split("void ClipSelectionActivity::confirmSelection", 1)[0]
-confirm_source = source.split("void ClipSelectionActivity::confirmSelection", 1)[1]
-memory_guard = "  const auto heap = HalMemory::getDefaultHeap();" + confirm_source.split(
+memory_guard = "  const auto heap = HalMemory::getDefaultHeap();" + source.split(
     "  const auto heap = HalMemory::getDefaultHeap();", 1
 )[1].split("  if (lowMemory ||", 1)[0]
 
@@ -42,7 +41,6 @@ harness = r"""
 #include <cstdio>
 #include <memory>
 #include <set>
-#include <span>
 #include <string>
 #include <vector>
 #include <BidiUtils.h>
@@ -155,7 +153,7 @@ struct Renderer {
 };
 struct Theme {
   void drawSelectionHandle(const Renderer&, Rect, bool) const {}
-  void drawSelectionActions(const Renderer&, Rect, int = 3) const {}
+  void drawSelectionActions(const Renderer&, Rect) const {}
 } GUI;
 struct Input { bool hasTouch() const { return false; } };
 using GfxRenderer = Renderer;
@@ -194,14 +192,9 @@ struct ClipSelectionActivity {
 """ + word_box + r"""
   std::unique_ptr<WordBox[]> words = makeUniqueNoThrow<WordBox[]>(240);
   static constexpr size_t MAX_SELECTABLE_WORDS = 240;
-  enum class Mode { Clip, Lookup, DefinitionLookup };
-  Mode mode = Mode::Clip;
   Renderer renderer;
   Input mappedInput;
   std::vector<std::unique_ptr<Page>> pages;
-  std::span<const std::unique_ptr<Page>> borrowedPages;
-  size_t pageCount() const { return borrowedPages.empty() ? pages.size() : borrowedPages.size(); }
-  const Page& pageAt(size_t i) const { return *(borrowedPages.empty() ? pages[i] : borrowedPages[i]); }
   size_t wordCount = 0;
   uint16_t rowCount = 0;
   int fontId = 0, lineHeight = 16, marginLeft = 0, marginTop = 0;
@@ -289,14 +282,6 @@ int main() {
     assert(cold.words[0].pageOffset == 0);
     assert(cold.words[239].pageOffset == 1);
     assert(cold.renderer.coldMeasurements == 0);
-    cold.mode = ClipSelectionActivity::Mode::DefinitionLookup;
-    cold.borrowedPages = cold.pages;
-    HalMemory::stats = {1024 * 1024, 1024 * 1024};
-    assert(cold.extractWords());
-    assert(cold.wordCount == 360 && cold.words[359].pageOffset == 2);
-    assert(cold.pages[0] && cold.pages[1] && cold.pages[2]);
-    HalMemory::stats = {8192, 4096};
-    assert(!cold.extractWords());
   }
   HalMemory::stats = {5908, 3444};  // Physical X3 crash workload.
   assert(selectionLowMemory(0, 0));
