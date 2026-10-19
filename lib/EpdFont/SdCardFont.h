@@ -192,6 +192,29 @@ class SdCardFont {
     static_assert(sizeof(BmpInterval16) == 6, "BmpInterval16 must remain compact");
     BmpInterval16* bmpIntervals = nullptr;
     bool intervalsAreBmp16 = false;
+    // Packed form of a large BMP table (a sparse CJK subset: thousands of one- or two-glyph
+    // runs, 23 KB at 6 bytes each). Per run, a varint gap from the end of the previous run and a
+    // varint length minus one; no glyph offsets, since load() requires each run to start where
+    // the previous one ended. A directory entry every PACK_BLOCK runs bounds a lookup to one
+    // binary search plus one block decode, all in RAM.
+    static constexpr uint32_t PACK_BLOCK = 32;
+    struct PackBlock {
+      uint16_t firstCp;     // first codepoint of the block's first run
+      uint16_t glyphIndex;  // glyph index of that codepoint
+      uint16_t byteOffset;  // where the block's first run starts in packedIntervals
+    };
+    uint8_t* packedIntervals = nullptr;
+    PackBlock* packBlocks = nullptr;
+    uint32_t packBlockCount = 0;
+    uint32_t packedBytes = 0;
+    bool intervalsArePacked = false;
+    bool hasCoverageIndex() const { return fullIntervals || bmpIntervals || packedIntervals; }
+    // Reads a packed table front to back, one run per call.
+    struct PackCursor {
+      uint32_t byte = 0;
+      uint32_t nextCp = 0;
+      uint32_t glyph = 0;
+    };
     // True when bmpIntervals/fullIntervals above points at another style's table instead of
     // this style's own allocation (see the sharing check at the end of the interval-loading
     // loop in load()). Regular/bold/italic weights of the same family almost always cover the
@@ -387,6 +410,8 @@ class SdCardFont {
 
   Stats stats_;
   uint32_t contentHash_ = 0;
+  uint32_t fileSize_ = 0;  // bounds glyph bitmap offsets (glyphEntryValid)
+  uint8_t corruptGlyphsLogged_ = 0;
   bool loaded_ = false;
 
   // Per-style helpers
@@ -403,6 +428,15 @@ class SdCardFont {
   void applyKernLigaturePointers(PerStyle& s, EpdFontData& data) const;
   void applyGlyphMissCallback(uint8_t styleIdx);
   int32_t findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) const;
+  static int32_t findPackedGlyphIndex(const PerStyle& s, uint32_t codepoint);
+  // False for a glyph entry the file cannot back (a corrupt .cpfont): its data length must be the
+  // packed size of its pixels and its bitmap must lie inside the file. Logs the first few per font.
+  bool glyphEntryValid(const PerStyle& s, const EpdGlyph& glyph, uint32_t codepoint);
+  // A corrupt entry, drawn as nothing at the font's full-width advance.
+  EpdGlyph blankGlyph(uint8_t styleIdx) const;
+  // Resident run `j` of `o`'s table. A packed table is read in order through `cursor`, so callers
+  // ask for j = 0, 1, 2, ... False past the resident runs.
+  static bool residentRecord(const PerStyle& o, uint32_t j, PerStyle::PackCursor& cursor, EpdUnicodeInterval& out);
   int fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCount, uint8_t styleMask);
   int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly, bool loadKernLig,
                    bool accumulate);

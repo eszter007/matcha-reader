@@ -643,6 +643,7 @@ void setupDisplayAndFonts(bool seamless = false) {
   // fonts (and any other font without a per-family fallback) can still render
   // symbols that are in the built-in CJK font but not in the .cpfont file.
   EpdFontFamily::setGlobalFallback(&cjk12FontFamily);
+  EpdFontFamily::setBuiltinFallback(&cjk12FontFamily);
 
   // Discover and load SD card fonts
   sdFontSystem.begin(renderer);

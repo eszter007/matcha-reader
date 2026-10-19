@@ -46,6 +46,28 @@ const EpdFont* EpdFontFamily::nonCjkFallbackFont(const uint32_t cp, const Style 
   return fbFont->hasGlyph(cp) ? fbFont : nullptr;
 }
 
+// The last stops, after the global fallback: the variant cut (Chinese forms, loaded only for a
+// Chinese dictionary session), then the built-in Japanese subset. The variant loads a glyph it covers
+// but has not got resident, even for getGlyphResident(): it exists only during a lookup, for a few
+// characters, and pricing them at zero width would overlap the entry's text.
+const EpdFont* EpdFontFamily::lastResortFont(const uint32_t cp, const Style style, const EpdGlyph** glyph) const {
+  for (const EpdFontFamily* b : {variantFallback_, builtinFallback_}) {
+    if (b == nullptr || b == this || b == fallbackFamily || b == globalFallback_) continue;
+    const EpdFont* bf = b->getFont(style);
+    if (bf->hasGlyph(cp)) {
+      *glyph = bf->getGlyph(cp);
+      return bf;
+    }
+    if (bf->data->glyphMissHandler) {
+      if (const EpdGlyph* loaded = bf->data->glyphMissHandler(bf->data->glyphMissCtx, cp)) {
+        *glyph = loaded;
+        return bf;
+      }
+    }
+  }
+  return nullptr;
+}
+
 const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style, const bool tryVariant) const {
   if (const EpdFont* first = nonCjkFallbackFont(cp, style)) return first->getGlyph(cp);
   const EpdFont* f = getFont(style);
@@ -74,6 +96,8 @@ const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style, co
       if (loaded) return loaded;
     }
   }
+  const EpdGlyph* lastResort = nullptr;
+  if (lastResortFont(cp, style, &lastResort)) return lastResort;
   if (const uint32_t variant = tryVariant ? joyoVariant(cp) : 0) return getGlyph(variant, style, false);
   if (const EpdGlyph* own = f->getGlyph(cp)) return own;
   return missingCjkGlyph(f, cp);
@@ -103,6 +127,8 @@ const EpdGlyph* EpdFontFamily::getGlyphResident(const uint32_t cp, const Style s
     if (gf->hasCodepoint(cp)) return nullptr;
   }
   if (f->hasCodepoint(cp)) return nullptr;
+  const EpdGlyph* lastResort = nullptr;
+  if (lastResortFont(cp, style, &lastResort)) return lastResort;
   if (const uint32_t variant = tryVariant ? joyoVariant(cp) : 0) return getGlyphResident(variant, style, false);
   // Nothing anywhere can draw cp, so getGlyph() will hand back this font's replacement glyph:
   // measure that, or a title of undrawable characters is centred as if it were empty.
@@ -139,6 +165,8 @@ const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style
       if (loaded) return gf->data;
     }
   }
+  const EpdGlyph* lastResort = nullptr;
+  if (const EpdFont* bf = lastResortFont(cp, style, &lastResort)) return bf->data;
   if (const uint32_t variant = tryVariant ? joyoVariant(cp) : 0) return getDataForGlyph(variant, style, false);
   // Mirror getGlyph()'s last resort exactly: it returns f->getGlyph(cp) (f's replacement
   // glyph), so the data MUST be f's too. Returning fallbackFamily's data here was the one

@@ -111,6 +111,10 @@ bool SdCardFontManager::hasSize(const uint8_t pointSize) const {
                      [pointSize](const LoadedFont& lf) { return lf.size == pointSize; });
 }
 
+void SdCardFontManager::unloadExtras(GfxRenderer& renderer) {
+  while (loaded_.size() > 1) unloadExtra(loaded_.back().fontId, renderer);
+}
+
 void SdCardFontManager::unloadExtra(const int fontId, GfxRenderer& renderer) {
   for (size_t i = 1; i < loaded_.size(); i++) {
     if (loaded_[i].fontId != fontId) continue;
@@ -138,6 +142,10 @@ void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
   // sdCardFonts_ streaming entry for each id this manager owns.
   // Drop UI CJK fallbacks before the SD fonts they point at are freed.
   renderer.clearFallbackFonts();
+  unloadFonts(renderer);
+}
+
+void SdCardFontManager::unloadFonts(GfxRenderer& renderer) {
   for (auto& lf : loaded_) {
     renderer.removeFont(lf.fontId);
     // The companion slot (renderer and font cache) is re-pointed only by the caller's next

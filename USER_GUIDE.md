@@ -362,7 +362,7 @@ open a list when selected.
   - "Noto Serif" (default) - Google's serif font
   - Installed SD card families
 
-- **Reader Font Size**: Choose a point size. Built-in and direct TTF/OTF/TTC fonts offer 12, 14, 16, and 18 pt. A `.cpfont` family offers the sizes installed for that family.
+- **Reader Font Size**: Choose a point size. Built-in and direct TTF/OTF/TTC fonts offer 12, 14, 16, and 18 pt. A `.cpfont` family offers the sizes installed for that family. When **Noto Sans** is made of CJK cuts only (no `NotoSans` family installed), a book open offers the sizes of the cut that book uses, for example `NotoSansSC` for a simplified-Chinese book.
 
 - **Reader Line Spacing**: Adjust the spacing between lines; options are "Tight", "Normal" (default), "Wide", or "Extra Wide".
 

@@ -185,7 +185,7 @@ To convert your own, use the [browser tool](https://eszter007.github.io/matcha-r
 | Mandarin, simplified | `chinese-fonts-simplified.zip` | Noto Sans SC, Noto Serif SC |
 | Mandarin, traditional, and Cantonese | `chinese-fonts-traditional.zip` | Noto Sans TC, Noto Serif TC |
 
-The Chinese zips are attached from 1.7.0-nightly-1 on. To convert another font, use the [browser tool](https://eszter007.github.io/matcha-reader-tools/); details in [docs/sd-card-fonts.md](docs/sd-card-fonts.md).
+The Chinese zips are attached from 1.7.0-nightly-1 on. A dictionary entry also shows the other script's form of a word (說 next to 说); install both Chinese zips so it can be drawn. To convert another font, use the [browser tool](https://eszter007.github.io/matcha-reader-tools/); details in [docs/sd-card-fonts.md](docs/sd-card-fonts.md).
 
 **4. Copy your books** anywhere on the card and open them from the Library. Manga and comics are converted first, with the browser tool or as in [docs/manga-conversion.md](docs/manga-conversion.md).
 

@@ -219,16 +219,12 @@ void TextSettingsActivity::rebuildRowItems() {
   }
 }
 
-// The selectable sizes belong to the active family, so this runs on entry and
-// again after every family change. A family change goes through ensureLoaded(),
+// The selectable sizes belong to the active family (in a book, to the cut that book renders
+// with), so this runs on entry and again after every family change. A family change goes through ensureLoaded(),
 // which snaps SETTINGS.fontPointSize into the new family's set — but entry does
 // not, so the highlight is resolved by snapping rather than by exact match.
 void TextSettingsActivity::rebuildSizeList() {
-  const SdCardFontFamilyInfo* standIns[SdCardFontSystem::MAX_STAND_INS];
-  const uint8_t standInCount = SdCardFontSystem::readerStandInFamilies(
-      registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily, standIns, SdCardFontSystem::MAX_STAND_INS);
-  const std::vector<uint8_t> points =
-      readerFontPointSizes(registry_, SETTINGS.sdFontFamilyName, standIns, standInCount);
+  const std::vector<uint8_t> points = SdCardFontSystem::selectablePointSizes(registry_, bookScript_);
 
   // The stored size can still sit outside this family's set — e.g. the family
   // was deleted while selected, or the card was swapped. Highlight the size the

@@ -1025,6 +1025,14 @@ void EpubReaderActivity::readerLoop() {
     const uint32_t currentKey = (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(shownPage);
     if (pendingRefine == currentKey &&
         pendingImageRefine_.compare_exchange_strong(pendingRefine, NO_IMAGE_REFINE, std::memory_order_relaxed)) {
+      // A refine only adds gray tones to the picture already on the glass. When the B/W pass could
+      // not decode an image for lack of heap, there is none: draw the whole page again, once.
+      if (ImageBlock::renderHadDecodeFailure() && imageRetryKey_.load(std::memory_order_relaxed) != currentKey) {
+        imageRetryKey_.store(currentKey, std::memory_order_relaxed);
+        imageRetryRequested_.store(true, std::memory_order_relaxed);
+        requestUpdate();
+        return;
+      }
       requestedImageRefine_.store(currentKey, std::memory_order_relaxed);
       requestUpdate();
       return;
@@ -4939,7 +4947,12 @@ void EpubReaderActivity::presentImagePage(const ImagePageSpec& spec, DrawPage&& 
   } else {
     renderer.displayBuffer(baseMode);
   }
-  if (grayTones && renderer.grayscaleCapabilities().supported()) {
+  // Only the retry's own render keeps the page from being retried again.
+  if (!imageRetryRequested_.exchange(false, std::memory_order_relaxed)) {
+    imageRetryKey_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
+  }
+  // A failed decode queues the idle step too, even without grays: readerLoop redraws the page then.
+  if ((grayTones && renderer.grayscaleCapabilities().supported()) || ImageBlock::renderHadDecodeFailure()) {
     pendingImageRefine_.store(imageRefineKey(spec.page), std::memory_order_relaxed);
   }
   // Gray charge in the image region needs the HALF ghost-cleanup on the next page (#2190). An image
@@ -5958,7 +5971,11 @@ std::string EpubReaderActivity::textRowValue(int row) const {
   row = textRowAt(row);
   switch (row) {
     case 0:
-      if (SETTINGS.sdFontFamilyName[0] != '\0') return SETTINGS.sdFontFamilyName;
+      // The same label as the font picker: the CJK cut standing in for the Noto Sans row reads
+      // "Noto Sans", whichever script cut the book then loads.
+      if (SETTINGS.sdFontFamilyName[0] != '\0') {
+        return SdCardFontSystem::pickerLabel(SETTINGS.sdFontFamilyName, &sdFontSystem.registry());
+      }
       return I18N.get(kFamily[SETTINGS.fontFamily % CrossPointSettings::FONT_FAMILY_COUNT]);
     case 1:
       return std::to_string(SETTINGS.fontPointSize) + " pt";
@@ -5990,13 +6007,8 @@ void EpubReaderActivity::applyTextSettingLive() {
 void EpubReaderActivity::showTextRowPopup(const int row) {
   switch (row) {
     case 1: {
-      // The point sizes this row can render: the active family's, plus its stand-ins'.
-      const SdCardFontFamilyInfo* standIns[SdCardFontSystem::MAX_STAND_INS];
-      const uint8_t standInCount =
-          SdCardFontSystem::readerStandInFamilies(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName,
-                                                  SETTINGS.fontFamily, standIns, SdCardFontSystem::MAX_STAND_INS);
-      const auto sizes =
-          readerFontPointSizes(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName, standIns, standInCount);
+      // The point sizes this book can render at with the selected row.
+      const auto sizes = SdCardFontSystem::selectablePointSizes(&sdFontSystem.registry(), fontScript());
       if (sizes.empty()) return;
       std::vector<std::string> labels;
       labels.reserve(sizes.size());

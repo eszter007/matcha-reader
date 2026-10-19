@@ -129,6 +129,9 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
       return sdFont->getOverflowBitmap(glyph);  // may be nullptr for zero-width glyphs
     }
   }
+  // An SD font whose page bitmaps could not be allocated (heap) has none: drop the glyph rather
+  // than index from a null base (device: load fault at 0x57b2c mid-chapter-build).
+  if (fontData->bitmap == nullptr) return nullptr;
   return &fontData->bitmap[glyph->dataOffset];
 }
 
@@ -3506,6 +3509,10 @@ void GfxRenderer::freeBwBufferChunks() {
  * Returns true if buffer was stored successfully, false if allocation failed.
  */
 bool GfxRenderer::storeBwBuffer(const size_t headroom) {
+  // A new store replaces any earlier copy, which is stale. Free it first: refused for want of the
+  // heap it held, the earlier copy stayed allocated while the caller's flag said nothing was stored,
+  // and 48 KB stayed out of reach until the reader exited.
+  freeBwBufferChunks();
   // Refuse up front when the copy cannot fit: every caller has a fallback (re-render, skip the
   // grays), while an attempt that fails at chunk N leaves N freed 8 KB holes behind.
   if (ESP.getFreeHeap() < frameBufferSize + headroom || ESP.getMaxAllocHeap() < BW_BUFFER_CHUNK_SIZE) {
@@ -3514,13 +3521,6 @@ bool GfxRenderer::storeBwBuffer(const size_t headroom) {
   }
   // Allocate and copy each chunk
   for (size_t i = 0; i < bwBufferChunks.size(); i++) {
-    // Check if any chunks are already allocated
-    if (bwBufferChunks[i]) {
-      LOG_ERR("GFX", "!! BW buffer chunk %zu already stored - this is likely a bug, freeing chunk", i);
-      free(bwBufferChunks[i]);
-      bwBufferChunks[i] = nullptr;
-    }
-
     const size_t offset = i * BW_BUFFER_CHUNK_SIZE;
     const size_t chunkSize = std::min(BW_BUFFER_CHUNK_SIZE, static_cast<size_t>(frameBufferSize - offset));
     bwBufferChunks[i] = static_cast<uint8_t*>(malloc(chunkSize));
