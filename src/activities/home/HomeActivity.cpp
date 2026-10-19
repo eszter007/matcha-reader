@@ -714,8 +714,6 @@ void HomeActivity::render(RenderLock&&) {
   renderer.displayBuffer(cleanInitialRefresh && firstPaint ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 }
 
-void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path, true); }
-
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
 
 void HomeActivity::onLibraryOpen() { activityManager.goToLibrary(); }
