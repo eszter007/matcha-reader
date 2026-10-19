@@ -26,13 +26,27 @@ void EpdFontFamily::getTextDimensions(const char* string, int* w, int* h, const 
 
 const EpdFontData* EpdFontFamily::getData(const Style style) const { return getFont(style)->data; }
 
+namespace {
+// The 2010 jōyō list made these the standard forms, and books print either member of each pair.
+// The built-in subset carries 叱 塡 剥 頰; SD fonts may lack the Ext B 𠮟 too.
+constexpr uint32_t JOYO_VARIANTS[][2] = {{0x20B9F, 0x53F1}, {0x5861, 0x586B}, {0x525D, 0x5265}, {0x9830, 0x982C}};
+
+uint32_t joyoVariant(const uint32_t cp) {
+  for (const auto& pair : JOYO_VARIANTS) {
+    if (pair[0] == cp) return pair[1];
+    if (pair[1] == cp) return pair[0];
+  }
+  return 0;
+}
+}  // namespace
+
 const EpdFont* EpdFontFamily::nonCjkFallbackFont(const uint32_t cp, const Style style) const {
   if (!fallbackFirstForNonCjk || utf8IsCjkCodepoint(cp)) return nullptr;
   const EpdFont* fbFont = fallbackFamily->getFont(style);
   return fbFont->hasGlyph(cp) ? fbFont : nullptr;
 }
 
-const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style) const {
+const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style, const bool tryVariant) const {
   if (const EpdFont* first = nonCjkFallbackFont(cp, style)) return first->getGlyph(cp);
   const EpdFont* f = getFont(style);
   if (f->hasGlyph(cp)) return f->getGlyph(cp);
@@ -60,6 +74,7 @@ const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style) co
       if (loaded) return loaded;
     }
   }
+  if (const uint32_t variant = tryVariant ? joyoVariant(cp) : 0) return getGlyph(variant, style, false);
   if (const EpdGlyph* own = f->getGlyph(cp)) return own;
   return missingCjkGlyph(f, cp);
 }
@@ -72,7 +87,7 @@ const EpdGlyph* EpdFontFamily::missingCjkGlyph(const EpdFont* f, const uint32_t 
   return utf8IsCjkCodepoint(cp) && f->hasGlyph('?') ? f->getGlyph('?') : nullptr;
 }
 
-const EpdGlyph* EpdFontFamily::getGlyphResident(const uint32_t cp, const Style style) const {
+const EpdGlyph* EpdFontFamily::getGlyphResident(const uint32_t cp, const Style style, const bool tryVariant) const {
   if (const EpdFont* first = nonCjkFallbackFont(cp, style)) return first->getGlyph(cp);
   const EpdFont* f = getFont(style);
   if (f->hasGlyph(cp)) return f->getGlyph(cp);
@@ -88,13 +103,14 @@ const EpdGlyph* EpdFontFamily::getGlyphResident(const uint32_t cp, const Style s
     if (gf->hasCodepoint(cp)) return nullptr;
   }
   if (f->hasCodepoint(cp)) return nullptr;
+  if (const uint32_t variant = tryVariant ? joyoVariant(cp) : 0) return getGlyphResident(variant, style, false);
   // Nothing anywhere can draw cp, so getGlyph() will hand back this font's replacement glyph:
   // measure that, or a title of undrawable characters is centred as if it were empty.
   if (const EpdGlyph* own = f->getGlyph(cp)) return own;
   return missingCjkGlyph(f, cp);
 }
 
-const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style style) const {
+const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style style, const bool tryVariant) const {
   if (const EpdFont* first = nonCjkFallbackFont(cp, style)) return first->data;  // mirrors getGlyph()
   const EpdFont* f = getFont(style);
   if (f->hasGlyph(cp)) return f->data;
@@ -123,6 +139,7 @@ const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style
       if (loaded) return gf->data;
     }
   }
+  if (const uint32_t variant = tryVariant ? joyoVariant(cp) : 0) return getDataForGlyph(variant, style, false);
   // Mirror getGlyph()'s last resort exactly: it returns f->getGlyph(cp) (f's replacement
   // glyph), so the data MUST be f's too. Returning fallbackFamily's data here was the one
   // step of the pair that was never mirrored -- it hands the caller a glyph from f paired
