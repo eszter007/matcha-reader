@@ -7,6 +7,7 @@
  */
 #pragma once
 #include "EpdFontData.h"
+#include "SharedFontTables.h"
 
 static const uint8_t notosansjp_joyo_12_regularBitmaps[285738] = {
     0xAD, 0x58, 0x3F, 0x6C, 0xDC, 0xD6, 0x19, 0xFF, 0x91, 0x94, 0xCC, 0xC6, 0x84, 0x45, 0x0F, 0x51,
@@ -23680,13 +23681,6 @@ static const int8_t notosansjp_joyo_12_regularKernSparseValues[] = {
      -24,  -24,  -24,  -12,  -16,  -20,
 };
 
-static const EpdLigaturePair notosansjp_joyo_12_regularLigaturePairs[] = {
-    { 0x00660066, 0xFB00 }, // f f -> U+FB00
-    { 0x00660069, 0xFB01 }, // f i -> U+FB01
-    { 0x0066006C, 0xFB02 }, // f l -> U+FB02
-    { 0xFB000069, 0xFB03 }, // U+FB00 i -> U+FB03
-    { 0xFB00006C, 0xFB04 }, // U+FB00 l -> U+FB04
-};
 
 static const EpdFontData notosansjp_joyo_12_regular = {
     notosansjp_joyo_12_regularBitmaps,
@@ -23714,7 +23708,7 @@ static const EpdFontData notosansjp_joyo_12_regular = {
     442,
     210,
     190,
-    notosansjp_joyo_12_regularLigaturePairs,
+    builtinFontTable_88b4b98df5116330,
     5,
     nullptr,  // glyphMissHandler
     nullptr,  // glyphMissCtx
