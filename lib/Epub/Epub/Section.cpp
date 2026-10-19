@@ -289,7 +289,10 @@ namespace {
 //      outer one, and the content around it moves to make room. The framing is unchanged.
 // v105: a PageBox stores one border spec per side (four bytes where it stored one), so each edge
 //      keeps its own CSS style and width.
-constexpr uint8_t SECTION_FILE_VERSION = 105;
+// v106: upstream merge (their v63/v64): static GIF images are laid out like JPEG and PNG instead
+//       of being skipped, and `font-weight`/`font-style: inherit` keep the parent's emphasis
+//       instead of resetting it, so lines holding either move. The framing is unchanged.
+constexpr uint8_t SECTION_FILE_VERSION = 106;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

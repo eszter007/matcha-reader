@@ -171,8 +171,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     REFRESH_FREQUENCY_COUNT
   };
 
-  // Short power button press actions. PWR_CONFIRM is only offered on touch
-  // boards (see SettingsList.h).
+  // Short power button press actions. Touch boards get PWR_CONFIRM in place of
+  // CREATE_CLIPPING; touch boards without a home key also get the reader
+  // shortcuts (see SettingsList.h). Persisted by index: append only.
   enum SHORT_PWRBTN {
     IGNORE = 0,
     SLEEP = 1,
@@ -189,6 +190,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     PWR_PREV_PAGE = 7,
     // Save Clipping (upstream's 6) is appended after the fork's own entries, like the two above.
     CREATE_CLIPPING = 8,
+    // Upstream's short-press shortcuts for touch boards without a Home key (Picco), appended
+    // after the fork's own entries for the same reason.
+    PWR_BOOKMARK = 9,
+    PWR_SYNC = 10,
+    PWR_READER_MENU = 11,
     SHORT_PWRBTN_COUNT
   };
 
@@ -521,6 +527,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Restore the saved on/off state after a normal boot or wake. Brightness and
   // warmth are always remembered even when this is disabled.
   uint8_t frontlightRestoreOnWake = 1;
+  // What the slide switch controls (boards with one): frontlight on/off or
+  // night mode. The switch's position is applied at boot and on each change.
+  enum SLIDE_SWITCH_ACTION : uint8_t {
+    SLIDE_SWITCH_FRONTLIGHT = 0,
+    SLIDE_SWITCH_NIGHT_MODE = 1,
+    SLIDE_SWITCH_TOUCH_CONTROLS = 2,
+  };
+  uint8_t slideSwitchAction = SLIDE_SWITCH_FRONTLIGHT;
   // Language setting (Language enum index, default 0 = EN)
   uint8_t language = 0;
   // Keyboard layouts the user can reach, using keyboard_layouts::ALL table bits.

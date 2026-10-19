@@ -11,7 +11,7 @@ It includes everything in upstream CrossPoint. You can try it in the [simulator]
   <img src="docs/images/screenshots/insights.png" width="200" alt="Reading stats, split by language across the tabs">
 </p>
 
-**Runs on:** Xteink X4, X3, X4 Pro and X4 Classic, Seeed reTerminal Sticky, M5PaperMono, Metalio 3.97", EEGO A4.
+**Runs on:** Xteink X4, X3, X4 Pro and X4 Classic, Seeed reTerminal Sticky, M5PaperMono, Metalio 3.97", EEGO A4, BOOX Picco.
 
 This page is the short version. How to use everything is in the [User Guide](USER_GUIDE.md).
 
@@ -157,11 +157,14 @@ You need a computer, a USB-C cable and the device's SD card. Files go onto the c
    | X4 Pro | `x4pro-firmware.bin` |
    | Sticky | `sticky-firmware.bin` |
    | Papermono | `papermono-firmware.bin` |
+   | BOOX Picco | `picco-firmware.bin` |
 
 2. Connect the device by USB-C and wake it.
 3. Open the [CrossPoint flash tool](https://crosspointreader.com/#flash-tools), select your device, click **Custom .bin** and choose the file.
 
 Some units bought from third-party stores are USB-locked and must be unlocked first. See [USB-locked devices](https://github.com/crosspoint-reader/crosspoint-reader#usb-locked-devices-xteink-unlocker) upstream. After the first flash, **Settings → System → Check for updates** installs new Matcha releases over Wi-Fi.
+
+The BOOX Picco has no Wi-Fi updates: flash each new release over USB, with the stock web flasher's **OTA update** mode or `pio run -e picco -t upload`. Both keep the stock bootloader and recovery partition.
 
 **2. Install a dictionary** for each language you read. The book's language picks the folder by itself.
 

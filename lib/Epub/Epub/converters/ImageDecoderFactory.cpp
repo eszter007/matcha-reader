@@ -1,11 +1,13 @@
 #include "ImageDecoderFactory.h"
 
 #include <Logging.h>
+#include <Memory.h>
 
 #include <cctype>
 #include <string>
 
 #include "BmpToFramebufferConverter.h"
+#include "GifToFramebufferConverter.h"
 #include "JpegToFramebufferConverter.h"
 #include "PngToFramebufferConverter.h"
 
@@ -16,6 +18,7 @@ namespace {
 JpegToFramebufferConverter jpegDecoder;
 PngToFramebufferConverter pngDecoder;
 BmpToFramebufferConverter bmpDecoder;
+GifToFramebufferConverter gifDecoder;
 
 // Lower-cased file extension (including the dot), or "" if none. Shared by getDecoder() and
 // isFormatSupported() so both agree on what a "supported format" is.
@@ -34,6 +37,7 @@ ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string& im
   if (JpegToFramebufferConverter::supportsFormat(ext)) return &jpegDecoder;
   if (PngToFramebufferConverter::supportsFormat(ext)) return &pngDecoder;
   if (BmpToFramebufferConverter::supportsFormat(ext)) return &bmpDecoder;
+  if (GifToFramebufferConverter::supportsFormat(ext)) return &gifDecoder;
 
   LOG_ERR("DEC", "No decoder found for image: %s", imagePath.c_str());
   return nullptr;
@@ -42,5 +46,5 @@ ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string& im
 bool ImageDecoderFactory::isFormatSupported(const std::string& imagePath) {
   const std::string ext = lowerExtension(imagePath);
   return JpegToFramebufferConverter::supportsFormat(ext) || PngToFramebufferConverter::supportsFormat(ext) ||
-         BmpToFramebufferConverter::supportsFormat(ext);
+         BmpToFramebufferConverter::supportsFormat(ext) || GifToFramebufferConverter::supportsFormat(ext);
 }

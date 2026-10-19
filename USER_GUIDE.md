@@ -399,7 +399,7 @@ open a list when selected.
 
 - **Text Anti-Aliasing**: Whether to show smooth grey edges (anti-aliasing) on text in reading mode, horizontal and vertical (Japanese) text alike, furigana included. Note this slows down page turns slightly: the grey edges follow the black-and-white page about half a second later, and a page turn before then skips them. Images inside vertical text turn grayscale once you stay on the page, whether or not this is on.
 
-- **Images**: Whether to display embedded images (JPG/PNG) found in EPUB files; options are "ON" (default) or "OFF".
+- **Images**: Whether to display embedded images (JPG/PNG/GIF) found in EPUB files; options are "ON" (default) or "OFF". GIFs render only the first frame; interlaced GIFs are not supported.
 
 - **Focus Reading**: Bolds the first part of each word to create visual fixation points, similar to Bionic Reading. This can help improve reading speed and focus; options are "ON" or "OFF" (default).
 
@@ -874,7 +874,7 @@ or diagram among the columns of vertical text.
 
 ### Links and footnotes
 
-Internal EPUB links include chapter links, cross-references, and footnotes. Tap a link on a touchscreen device, or choose "Links and footnotes" from the Reader Menu to select a link. Press Back to return to the previous location.
+Internal EPUB links include chapter links, cross-references, and footnotes. Tap a link on a touchscreen device, or choose "Links and Footnotes" from the Reader Menu to select a link. Press Back to return to the previous location.
 
 If the device sleeps or you close the book after following a link, the book reopens on the page you were viewing. Back still returns you to where you followed the link. The reader keeps the three most recent return positions.
 
@@ -1506,7 +1506,7 @@ Below are up to three books from the same folder and **Go to Home**. A short pre
 Please note that this firmware is currently in active development. The following features are **not yet supported** but are planned for future updates:
 
 * **Cover Images:** Large cover images embedded into EPUB require several seconds (~10s for ~2000 pixel tall image) to convert for sleep screen and home screen thumbnail. Consider optimizing the EPUB with e.g. https://github.com/bigbag/epub-to-xtc-converter to speed this up.
-* **Unsupported Image Formats:** Most JPG and PNG images in EPUBs render correctly. GIFs are not supported and fall back to an `[Image]` placeholder. Progressive JPEGs do render, but only their DC coefficients are decoded: a preview at one-eighth resolution, scaled back up, so fine detail is lost. The one variant that is refused outright is a progressive JPEG that both splits its DC coefficients across one scan per component *and* uses chroma subsampling; re-encode those as baseline (`jpegtran -copy none -optimize`, or run the page through the manga converter).
+* **Image Support:** Most JPG, PNG and non-interlaced GIF images in EPUBs render correctly, including book covers. Animated GIFs show only their first frame, and interlaced GIFs fall back to an image placeholder. Progressive JPEGs do render, but only their DC coefficients are decoded: a preview at one-eighth resolution, scaled back up, so fine detail is lost. The one variant that is refused outright is a progressive JPEG that both splits its DC coefficients across one scan per component *and* uses chroma subsampling; re-encode those as baseline (`jpegtran -copy none -optimize`, or run the page through the manga converter).
 
 ---
 

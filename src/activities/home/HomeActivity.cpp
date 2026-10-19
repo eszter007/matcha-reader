@@ -672,7 +672,7 @@ void HomeActivity::render(RenderLock&&) {
     }
     return;
   }
-  bool bufferRestored = coverBufferStored && restoreCoverBuffer();
+  bool bufferRestored = coverRendered && coverBufferStored && restoreCoverBuffer();
 
   // Band spans topPadding..homeTopPadding: the cover tile starts at the fixed
   // homeTopPadding, so the height must shrink by topPadding or the band (and a
@@ -713,8 +713,6 @@ void HomeActivity::render(RenderLock&&) {
   // only a HALF pass scrubs it. FAST otherwise, which is what the bare call already defaulted to.
   renderer.displayBuffer(cleanInitialRefresh && firstPaint ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 }
-
-void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path, true); }
 
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
 

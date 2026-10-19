@@ -18,6 +18,7 @@
 #include "components/icons/listIcons.h"
 #include "components/icons/panelIcons.h"
 #include "fontIds.h"
+#include "util/SlideSwitch.h"
 
 namespace fui = freeink::ui;
 
@@ -113,7 +114,7 @@ void FrontlightPanelActivity::onBrightnessEvent(const fui::ActionEvent& event, v
   if (event.dragPermille < 0) return;
   self->brightness = std::max(MIN_BRIGHTNESS, percentFromPermille(event.dragPermille));
   Frontlight.setBrightness(self->brightness);
-  if (!self->lightOn) {
+  if (!self->lightOn && !slideSwitchOwnsLight()) {
     self->lightOn = true;
     self->lightOnChanged = true;
     Frontlight.setOn(true);
@@ -202,7 +203,7 @@ void FrontlightPanelActivity::adjustBrightness(const int delta) {
   if (next == brightness) return;
   brightness = static_cast<uint8_t>(next);
   Frontlight.setBrightness(brightness);
-  if (!lightOn) {
+  if (!lightOn && !slideSwitchOwnsLight()) {
     lightOn = true;
     lightOnChanged = true;
     Frontlight.setOn(true);
@@ -221,6 +222,7 @@ void FrontlightPanelActivity::adjustWarmth(const int delta) {
 }
 
 void FrontlightPanelActivity::toggleLight() {
+  if (slideSwitchOwnsLight()) return;  // the slide switch turns the light on and off
   lightOn = !lightOn;
   lightOnChanged = true;
   Frontlight.setOn(lightOn);
@@ -279,7 +281,7 @@ void FrontlightPanelActivity::loop() {
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    toggleLight();
+    if (!slideSwitchOwnsLight()) toggleLight();
     return;
   }
 
@@ -415,7 +417,7 @@ void FrontlightPanelActivity::buildPanelScreen(UiScreen& screen) {
     // No lamp button on the row: the light switch is one of the quick buttons below, so the
     // panel has a single place that turns it on and off.
     addSliderRow(screen, PanelBrightnessIcon, brightness, ACTION_BRIGHTNESS, ACTION_BRIGHTNESS_STEP,
-                 /*showToggle=*/!mappedInput.hasTouch());
+                 /*showToggle=*/!mappedInput.hasTouch() && !slideSwitchOwnsLight());
     if (Frontlight.hasColorTemperature()) {
       addSliderRow(screen, PanelWarmthIcon, warmth, ACTION_WARMTH, ACTION_WARMTH_STEP, /*showToggle=*/false);
     }

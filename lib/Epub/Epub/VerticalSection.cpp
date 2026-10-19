@@ -109,7 +109,9 @@ namespace {
 // and styled elements nested in a block before its first text merge into it.
 // v149: no format change. Content after a merged nested element continues in a block of its own
 // with the outer element's params, so a sibling after an inner box is no longer framed with it.
-constexpr uint8_t VSECTION_FILE_VERSION = 149;
+// v150: no format change. Upstream merge: static GIF images are decoded, so a GIF page stores
+// the image's own size (and rotation) instead of the full-page placeholder.
+constexpr uint8_t VSECTION_FILE_VERSION = 150;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.

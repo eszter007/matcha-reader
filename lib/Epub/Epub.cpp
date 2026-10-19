@@ -4,6 +4,9 @@
 #include <BufferedFile.h>
 #include <BuildScratch.h>
 #include <FsHelpers.h>
+#include <GifImageLayout.h>
+#include <GifLimitedWriter.h>
+#include <GifToBmpConverter.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
@@ -11,11 +14,14 @@
 #include <Txt.h>
 #include <Utf8.h>
 #include <ZipFile.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 #include <vector>
 
 #include "Epub/parsers/ContainerParser.h"
@@ -280,9 +286,9 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
           const auto endPos = coverPageHtml.find('"', pos);
           if (endPos != std::string::npos) {
             const auto ref = std::string_view{coverPageHtml}.substr(pos, endPos - pos);
-            // Cover BMP generation supports JPG/PNG only; skip GIF so an unsupported wrapper image
-            // does not block a later supported cover reference.
-            if (FsHelpers::hasPngExtension(ref) || FsHelpers::hasJpgExtension(ref)) {
+            // Cover BMP generation supports JPG/PNG/GIF. Skip unsupported wrappers so a later
+            // supported raster image can still be selected.
+            if (FsHelpers::hasPngExtension(ref) || FsHelpers::hasJpgExtension(ref) || FsHelpers::hasGifExtension(ref)) {
               imageRef = ref;
               break;
             }
@@ -939,6 +945,78 @@ std::string Epub::getCoverBmpPath(bool cropped, bool originalThresholds) const {
   return cachePath + "/" + coverFileName + ".bmp";
 }
 
+namespace {
+StaticSemaphore_t gifGenerationMutexStorage;
+const SemaphoreHandle_t gifGenerationMutex = xSemaphoreCreateMutexStatic(&gifGenerationMutexStorage);
+
+void removeGifTemporaryFile(const std::string& path) {
+  if (!Storage.remove(path.c_str()) && Storage.exists(path.c_str())) {
+    LOG_ERR("EBP", "Failed to remove GIF temporary file: %s", path.c_str());
+  }
+}
+
+bool extractGifCover(const Epub& epub, const std::string& href, const std::string& path) {
+  HalFile file;
+  bool success = false;
+  const ScopedCleanup cleanup{[&]() {
+    file.close();
+    if (!success) removeGifTemporaryFile(path);
+  }};
+  if (!Storage.openFileForWrite("EBP", path, file)) {
+    LOG_ERR("EBP", "Failed to create GIF extraction file: %s", path.c_str());
+    return false;
+  }
+  GifLimitedWriter limited(file, GifCommon::MAX_FILE_BYTES);
+  success = epub.readItemContentsToStream(href, limited, 1024);
+  const bool closed = file.close();
+  success = success && closed;
+  if (!success) LOG_ERR("EBP", "GIF extraction failed, exceeded byte limit, or could not close: %s", path.c_str());
+  return success;
+}
+
+template <typename Convert>
+bool generateGifBmp(const Epub& epub, const std::string& href, const std::string& bmpPath, Convert convert) {
+  if (!gifGenerationMutex || xSemaphoreTake(gifGenerationMutex, portMAX_DELAY) != pdTRUE) {
+    LOG_ERR("EBP", "Failed to lock GIF cache generation");
+    return false;
+  }
+  const ScopedCleanup unlock{[]() { xSemaphoreGive(gifGenerationMutex); }};
+  // Another caller may have completed this cache while we waited.
+  if (Storage.exists(bmpPath.c_str())) return true;
+
+  const auto gifTempPath = epub.getCachePath() + "/.cover.gif";
+  const auto bmpTempPath = bmpPath + ".tmp";
+  if (!extractGifCover(epub, href, gifTempPath)) return false;
+
+  HalFile gifFile;
+  if (!Storage.openFileForRead("EBP", gifTempPath, gifFile)) {
+    LOG_ERR("EBP", "Failed to open extracted GIF: %s", gifTempPath.c_str());
+    removeGifTemporaryFile(gifTempPath);
+    return false;
+  }
+  HalFile bmpFile;
+  if (!Storage.openFileForWrite("EBP", bmpTempPath, bmpFile)) {
+    LOG_ERR("EBP", "Failed to create GIF BMP: %s", bmpPath.c_str());
+    gifFile.close();
+    removeGifTemporaryFile(gifTempPath);
+    removeGifTemporaryFile(bmpTempPath);
+    return false;
+  }
+
+  bool success = convert(gifFile, bmpFile);
+  const bool sourceClosed = gifFile.close();
+  const bool outputClosed = bmpFile.close();
+  success = success && sourceClosed && outputClosed;
+  removeGifTemporaryFile(gifTempPath);
+  if (success && !Storage.rename(bmpTempPath.c_str(), bmpPath.c_str())) {
+    LOG_ERR("EBP", "Failed to publish GIF BMP: %s", bmpPath.c_str());
+    success = false;
+  }
+  if (!success) removeGifTemporaryFile(bmpTempPath);
+  return success;
+}
+}  // namespace
+
 bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
   // Already generated, return true. Not exists(): openFileForWrite() creates the destination
   // before the conversion runs, so a reset or power loss in that window leaves a 0-byte or
@@ -1045,6 +1123,13 @@ bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
     }
 
     return true;
+  }
+
+  if (FsHelpers::hasGifExtension(coverImageHref)) {
+    return generateGifBmp(*this, coverImageHref, getCoverBmpPath(cropped, originalThresholds),
+                          [cropped, originalThresholds](HalFile& gif, Print& bmp) {
+                            return GifToBmpConverter::gifFileToBmpStream(gif, bmp, cropped, originalThresholds);
+                          });
   }
 
   LOG_ERR("EBP", "Cover image is not a supported format, skipping");
@@ -1232,6 +1317,11 @@ bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHre
     }
     Storage.remove(sourcePath.c_str());  // consumed
     return true;
+  } else if (FsHelpers::hasGifExtension(coverImageHref)) {
+    return generateGifBmp(*this, coverImageHref, getThumbBmpPath(height), [height](HalFile& gif, Print& bmp) {
+      // The 2:3 cover box the other formats fill; CoverWorker rejects a thumb of any other size.
+      return GifToBmpConverter::gifFileTo1BitBmpStreamWithSize(gif, bmp, (height * 2) / 3, height);
+    });
   } else {
     LOG_ERR("EBP", "Cover image is not a supported format, skipping thumbnail");
   }

@@ -625,6 +625,7 @@ CssTextAlign CssParser::interpretAlignment(std::string_view val) {
 CssFontStyle CssParser::interpretFontStyle(std::string_view val) {
   val = trimAsciiWhitespace(val);
 
+  if (iequalsAscii(val, "inherit")) return CssFontStyle::Inherit;
   if (iequalsAscii(val, "italic") || iequalsAscii(val, "oblique")) return CssFontStyle::Italic;
   return CssFontStyle::Normal;
 }
@@ -632,6 +633,7 @@ CssFontStyle CssParser::interpretFontStyle(std::string_view val) {
 CssFontWeight CssParser::interpretFontWeight(std::string_view val) {
   val = trimAsciiWhitespace(val);
 
+  if (iequalsAscii(val, "inherit")) return CssFontWeight::Inherit;
   // Named values
   if (iequalsAscii(val, "bold") || iequalsAscii(val, "bolder")) return CssFontWeight::Bold;
   if (iequalsAscii(val, "normal") || iequalsAscii(val, "lighter")) return CssFontWeight::Normal;

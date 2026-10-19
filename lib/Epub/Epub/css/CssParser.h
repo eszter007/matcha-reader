@@ -77,7 +77,9 @@ class CssParser {
   // v26: each border side keeps its own style and width: four spec bytes after textFlags. The
   //      stylesheet table is followed by one u64 per stylesheet: the stylesheets it @imports, so a
   //      chapter linking only an EBPAJ book-style.css also applies the sheets it imports.
-  static constexpr uint8_t CSS_CACHE_VERSION = 26;
+  // v27: upstream merge (their v19): `font-weight: inherit` and `font-style: inherit` are stored
+  //      as a third value instead of falling back to normal. Framing is unchanged.
+  static constexpr uint8_t CSS_CACHE_VERSION = 27;
 
   // The stylesheets one chapter links, as indices into the book's stylesheet list. A record from a
   // stylesheet the chapter does not link is skipped on load: an image-page stylesheet's
