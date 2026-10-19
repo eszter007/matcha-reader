@@ -42,7 +42,7 @@ class GfxRenderer {
   };
   // A font id drawn at a fixed scale (8.8 fixed point, 256 = as is): its own glyphs at `own`,
   // those it takes from its fallback family at `fallback`. Lets one bitmap face serve as a
-  // smaller UI size, and a CJK fallback cut serve beside a smaller Latin face.
+  // larger reader size, and makes a UI face draw what it borrows at its own size.
   struct FaceScale {
     uint16_t own = 256;
     uint16_t fallback = 256;
@@ -50,7 +50,8 @@ class GfxRenderer {
     // one from another font (an SD font at the reader's size). Off for reader faces, whose
     // global fallback is the book's own CJK font at the reader's size.
     bool sizeFallbacks = false;
-    bool identity() const { return own == 256 && fallback == 256; }
+    // A UI face at its own size still sizes what it borrows, so it is not an identity.
+    bool identity() const { return own == 256 && fallback == 256 && !sizeFallbacks; }
   };
   enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
 
@@ -305,7 +306,7 @@ class GfxRenderer {
   }
   // Draw and measure fontId at a fixed scale from now on (see FaceScale).
   void setFaceScale(int fontId, uint16_t own, uint16_t fallback, bool sizeFallbacks = false) {
-    if (own == 256 && fallback == 256) {
+    if (own == 256 && fallback == 256 && !sizeFallbacks) {
       faceScales_.erase(fontId);
     } else {
       faceScales_[fontId] = {own, fallback, sizeFallbacks};

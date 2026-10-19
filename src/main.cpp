@@ -109,17 +109,19 @@ EpdFontFamily notoserif12FontFamily(&notoserif12RegularFont, &notoserif12BoldFon
 // alongside everything else. No bold variant; EpdFontFamily::getFont() falls
 // back to regular when bold is null, which is fine for an occasional-use
 // fallback font.
-// One built-in CJK subset, 12pt. The UI's small and 10pt rows draw it at 8pt (FaceScale), where
-// a separate 8pt cut used to cost ~240 KB of flash. No .cpfont ships a UI size, so this is what
-// every device renders UI Japanese with -- not just the ones without an SD font.
+// Two built-in CJK subsets: 8pt for the UI's small and 10pt rows, 12pt for the 12pt row and
+// the reader. No .cpfont ships a UI size, so these are what every device renders UI Japanese
+// with -- not just the ones without an SD font.
+EpdFont cjk8RegularFont(&notosansjp_joyo_8_regular);
+EpdFontFamily cjk8FontFamily(&cjk8RegularFont);
 EpdFont cjk12RegularFont(&notosansjp_joyo_12_regular);
 EpdFontFamily cjk12FontFamily(&cjk12RegularFont);
 
 EpdFont ui10RegularFont(&ubuntu_10_regular);
 EpdFont ui10BoldFont(&ubuntu_10_bold);
 EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
-// The small UI size: the 10pt face drawn at 80% (FaceScale), in place of a separate 8pt font.
-EpdFontFamily smallFontFamily(&ui10RegularFont);
+EpdFont smallRegularFont(&ubuntu_8_regular);
+EpdFontFamily smallFontFamily(&smallRegularFont);
 
 EpdFont ui12RegularFont(&ubuntu_12_regular);
 EpdFont ui12BoldFont(&ubuntu_12_bold);
@@ -548,15 +550,15 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.setFaceScale(NOTOSERIF_18_FONT_ID, 18 * 256 / 14, 256);
 
 #endif  // OMIT_FONTS
-  ui10FontFamily.setFallback(&cjk12FontFamily);
+  ui10FontFamily.setFallback(&cjk8FontFamily);
   ui12FontFamily.setFallback(&cjk12FontFamily);
-  smallFontFamily.setFallback(&cjk12FontFamily);
+  smallFontFamily.setFallback(&cjk8FontFamily);
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
-  // The 12pt CJK cut at 8pt beside the 10pt and small UI faces; the small face itself at 80%.
-  renderer.setFaceScale(UI_10_FONT_ID, 256, 8 * 256 / 12, /*sizeFallbacks=*/true);
-  renderer.setFaceScale(SMALL_FONT_ID, 8 * 256 / 10, 8 * 256 / 12, /*sizeFallbacks=*/true);
+  // Native cuts, but a glyph from an SD font at another size is still drawn at the row's size.
+  renderer.setFaceScale(UI_10_FONT_ID, 256, 256, /*sizeFallbacks=*/true);
+  renderer.setFaceScale(SMALL_FONT_ID, 256, 256, /*sizeFallbacks=*/true);
 
   // Set the CJK built-in font as the global last-resort fallback so SD card
   // fonts (and any other font without a per-family fallback) can still render
