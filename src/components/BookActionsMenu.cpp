@@ -18,8 +18,7 @@ enum class Action : uint8_t { Stats, MarkRead, MarkUnread, Delete };
 
 void promptDelete(Activity& host, GfxRenderer& renderer, MappedInputManager& input, const std::string& path,
                   const std::string& title, const std::function<void(bool)>& onChanged) {
-  auto confirmation =
-      makeUniqueNoThrow<ConfirmationActivity>(renderer, input, tr(STR_DELETE) + std::string("? "), title);
+  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(renderer, input, tr(STR_DELETE_ITEM_CONFIRM), title);
   if (!confirmation) {
     LOG_ERR("BAM", "OOM: delete confirmation");
     return;
