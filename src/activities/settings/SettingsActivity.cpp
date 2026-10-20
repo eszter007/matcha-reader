@@ -20,6 +20,7 @@
 #include "ClearCacheActivity.h"
 #include "ClockSettingsActivity.h"
 #include "CrossPointSettings.h"
+#include "EnumSettingPopup.h"
 #include "FontDownloadActivity.h"
 #include "HomeButtonSettingsActivity.h"
 #include "KOReaderSettingsActivity.h"
@@ -288,22 +289,16 @@ void SettingsActivity::toggleSelectedSetting() {
     const bool currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = !currentValue;
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
-    const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
-    const auto enumLabels = setting.enumLabels();
-    if (enumLabels.size() > 2) {
-      const auto valuePtr = setting.valuePtr;
-      optionPopup.show(setting.nameId, enumLabels.data(), static_cast<int>(enumLabels.size()), currentValue,
-                       [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
-                         SETTINGS.*valuePtr = idx;
-                         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-                         SETTINGS.saveToFile();
-                         rebuildSettings();
-                         applyUiSettingChange(valuePtr);
-                       });
+    const auto valuePtr = setting.valuePtr;
+    if (editEnumSetting(optionPopup, setting, [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged] {
+          syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
+          SETTINGS.saveToFile();
+          rebuildSettings();
+          applyUiSettingChange(valuePtr);
+        })) {
       requestUpdate();
       return;
     }
-    SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(enumLabels.size());
   } else if (setting.type == SettingType::ENUM && setting.valueGetter && setting.valueSetter) {
     const uint8_t totalValues = setting.enumStringValues.empty()
                                     ? static_cast<uint8_t>(setting.enumLabels().size())
@@ -428,10 +423,15 @@ void SettingsActivity::toggleSelectedSetting() {
                                });
         break;
       case SettingAction::TextSettings:
+        // No book here, so the Size and Layout tabs offer Edit For: the Latin or the CJK profile.
         startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                                      TextSettingsActivity::Tab::Family),
+                                                                      TextSettingsActivity::Tab::Family,
+                                                                      CjkScript::None, /*verticalText=*/false,
+                                                                      /*profileChoice=*/true),
                                [this](const ActivityResult&) {
-                                 // TextSettingsActivity saves on each change; no save needed here.
+                                 // Not every row there saves, and leaving with the CJK profile on
+                                 // screen swaps the profiles back only in memory.
+                                 SETTINGS.saveToFile();
                                  rebuildSettings();
                                });
         break;

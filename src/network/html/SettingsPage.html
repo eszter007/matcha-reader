@@ -396,7 +396,8 @@
     const shortPwrBtnVal = getControlValue('shortPwrBtn');
     const pwrBtnFootnoteBackRow = document.getElementById('row-setting-pwrBtnFootnoteBack');
     if (pwrBtnFootnoteBackRow) {
-      if (shortPwrBtnVal === 4) {
+      // The API sends menu slots; Links and footnotes is the sixth entry of shortPowerButtonOrder().
+      if (shortPwrBtnVal === 5) {
         pwrBtnFootnoteBackRow.style.display = '';
       } else {
         pwrBtnFootnoteBackRow.style.display = 'none';

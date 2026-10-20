@@ -392,7 +392,7 @@ void TextSettingsActivity::drawChrome() {
                                                                    : CjkScript::None;
   textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing, afterHeader,
                               previewHeight, familyName, sizeName, sdFontSystem.effectiveReaderFontId(previewScript),
-                              editingCjk_);
+                              previewScript);
 }
 
 // Button hints live here rather than at the end of drawChrome(): UiListActivity draws the footer
