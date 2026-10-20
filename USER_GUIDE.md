@@ -479,6 +479,12 @@ open a list when selected.
 
 - **Tap For Reader Menu**: Opens the reader menu when you tap the centre of the screen. Only offered on devices with a Home key, where the menu stays reachable through the key's long-press function if you turn this off.
 
+- **Tap to look up** (no setting of its own): when neither page-turn gesture uses taps (both on a swipe, or off), a
+  short tap on a word in a book looks it up and a hold starts a clipping on it, with the finger still down to drag it
+  out. A tap on a link still follows it, and a tap on empty space (a margin, or between lines or columns) in the
+  centre opens the reader menu as before. With any tap page turn on, taps and holds work as before. Manga keeps its
+  hold-to-look-up in speech bubbles.
+
 - **Quick return from links**: Toggles on and off the quick return functionality from the footnotes. When the functionality it's active, a short press of the power button will act as the back button from the footnotes page.
 
 #### 3.6.4 System
@@ -890,7 +896,7 @@ tap outside the panel returns to the page.
 
 Words on the current page can be looked up in an offline StarDict dictionary stored on the SD card. Copy a dictionary to the `/dictionaries/` folder (or `/.dictionaries/`, see [6.7](#67-dictionary-files-and-language-selection)), select it in **Settings → Reader → Dictionary**, then start a lookup by choosing **Look Up** in the **[Reader Menu](#5-reader-menu)** (or by holding **Confirm**, if the **Long-press Menu** setting in **[Controls Settings](#363-controls)** is set to "Dictionary"). Use **Left/Right** to highlight a word and press **Confirm** to show its definition.
 
-On a touch device you can skip all of that: **long-press a word on the page** and its definition opens directly, with no setting to turn on first. A press between words opens ordinary word selection instead. The definition card pages by touch the way the reader is set to turn pages in **Touch Reader Controls**, and a tap outside it puts it away.
+On a touch device you can skip all of that: **long-press a word on the page** and its definition opens directly, with no setting to turn on first. A press between words opens ordinary word selection instead. When page turns use swipes only, a short tap opens the definition and a hold starts a clipping (see **Tap to look up** in [3.6.3](#363-controls)). The definition card pages by touch the way the reader is set to turn pages in **Touch Reader Controls**, and a tap outside it puts it away.
 
 See [docs/dictionary.md](docs/dictionary.md) for supported formats, setup, and where to find dictionaries.
 
@@ -967,7 +973,8 @@ Reader menu → **Create Clipping**. Move to the first word and press **Confirm*
 **Confirm** again to save the clipping. **Back** clears the selection, and a second **Back** leaves.
 
 On a touch device the quickest way in is the dictionary: hold a word, and its definition opens with a handle on each
-side of the word. Drag either handle to turn the lookup into a selection. You can also open selection from the reader
+side of the word. Drag either handle to turn the lookup into a selection. When page turns use swipes only, a hold
+starts the selection on the word directly (see **Tap to look up** in 3.6.3). You can also open selection from the reader
 menu. Drag the handles to adjust the range, then tap an action in the bar above it: **Look Up**, **Translate** (the
 selection, with Gemini; see [6.2](#62-page-translation)), **Clip** or **Bookmark**. Holding the end handle on the last
 word for a second extends the selection onto the next page; a selection can span up to three pages of one chapter.

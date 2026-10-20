@@ -109,6 +109,13 @@ inline bool gestureAllowsTap(const uint8_t gesture) {
          gesture == CrossPointSettings::INVERTED_TAP;
 }
 
+// No page-turn gesture uses taps, so a short tap on a word is free: it looks the word up and a hold
+// starts a clipping. A tap on empty space keeps the reader menu.
+inline bool tapLooksUp(const MappedInputManager& input) {
+  return input.hasTouch() && SETTINGS.touchReaderControls && !gestureAllowsTap(SETTINGS.pageTurnGesture) &&
+         !gestureAllowsTap(SETTINGS.previousPageGesture);
+}
+
 inline bool isRtlBookLanguage(std::string_view tag) {
   if (tag.size() < 2 || (tag.size() > 2 && tag[2] != '-' && tag[2] != '_')) return false;
   const auto first = std::tolower(static_cast<unsigned char>(tag[0]));

@@ -632,6 +632,8 @@ class EpubReaderActivity final : public ReaderActivity {
   // Result of a word-lookup panel: a drag on its word handles opens clip selection there.
   void onLookupPanelResult(const ActivityResult& result);
   int clippingAtPoint(const Page& page, int x, int y) const;
+  // True when (x, y) is on a word of the page on screen; a margin or the gap between lines is not.
+  bool textAtPoint(int x, int y);
   // Vertical pages: the same selection over character cells (ClipSelectionActivity, vertical form).
   void startVerticalClipSelection(int initialX, int initialY, int dragX, int dragY);
   int verticalClippingAtPoint(const VerticalPage& vpage, int x, int y) const;
