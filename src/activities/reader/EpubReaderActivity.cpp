@@ -1359,11 +1359,13 @@ void EpubReaderActivity::readerLoop() {
   // a hold never reads as the tap those handle. Japanese books go the same way
   // (#278): their own vertical panel opens on the word under the finger, which
   // segments rather than splitting on spaces.
+  const bool tapLooksUp = ReaderUtils::tapLooksUp(mappedInput);
   if (!atEndOfBook && mappedInput.hasTouch()) {
     int pressX = 0;
     int pressY = 0;
     if (mappedInput.wasScreenLongPress(pressX, pressY)) {
-      // A long press on highlighted text removes that clipping; anywhere else it looks the word up.
+      // A long press on highlighted text removes that clipping; anywhere else it looks the word up,
+      // or, when a tap already does that, starts a clipping with the finger still down.
       if (section && CLIPPINGS.hasClippings()) {
         auto page = section->loadPage(section->currentPage);
         if (page && clippingAtPoint(*page, pressX, pressY) >= 0) {
@@ -1383,7 +1385,11 @@ void EpubReaderActivity::readerLoop() {
           return;
         }
       }
-      openDictionaryWordSelect(/*pageOnScreen=*/true, pressX, pressY);
+      if (tapLooksUp) {
+        if (textAtPoint(pressX, pressY)) startClipSelection(pressX, pressY, pressX, pressY);
+      } else {
+        openDictionaryWordSelect(/*pageOnScreen=*/true, pressX, pressY);
+      }
       return;
     }
   }
@@ -1400,6 +1406,16 @@ void EpubReaderActivity::readerLoop() {
         haptic_feedback::touchAction();
         return;
       }
+    }
+  }
+
+  // A tap on a word looks it up, ahead of the menu's centre tap; a tap on empty space still opens the menu.
+  if (!atEndOfBook && tapLooksUp) {
+    int tapX = 0;
+    int tapY = 0;
+    if (mappedInput.wasScreenTapped(tapX, tapY) && textAtPoint(tapX, tapY)) {
+      openDictionaryWordSelect(/*pageOnScreen=*/true, tapX, tapY);
+      return;
     }
   }
 
@@ -5118,6 +5134,52 @@ int EpubReaderActivity::clippingAtPoint(const Page& page, const int x, const int
     }
   }
   return -1;
+}
+
+bool EpubReaderActivity::textAtPoint(const int x, const int y) {
+  int top, right, bottom, left;
+  renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
+  const int fontId = effectiveReaderFontId();
+  // Non-blocking: a chapter build holds the lock for seconds, and the input loop must not wait on it.
+  RenderLock lock{RenderLock::Try{}};
+  if (!lock.held()) return false;
+  if (verticalSection) {
+    struct Hit {
+      int x;
+      int y;
+      bool found;
+    } hit{x, y, false};
+    const VerticalPage* vpage = verticalSection->getPage();
+    if (!vpage) return false;
+    forEachVerticalClipCell(renderer, *vpage, fontId, left + SETTINGS.screenMargin, top + SETTINGS.screenMargin, &hit,
+                            [](void* ctx, const VerticalClipCell& cell) {
+                              auto& h = *static_cast<Hit*>(ctx);
+                              h.found = h.x >= cell.x && h.x < cell.x + cell.width && h.y >= cell.y &&
+                                        h.y < cell.y + cell.height;
+                              return !h.found;
+                            });
+    return hit.found;
+  }
+  if (!section) return false;
+  const auto page = section->loadPage(section->currentPage);
+  if (!page) return false;
+  for (const auto& element : page->elements) {
+    if (element->getTag() != TAG_PageLine) continue;
+    const auto& line = static_cast<const PageLine&>(*element);
+    const auto& block = line.getBlock();
+    if (!block || !block->valid()) continue;
+    for (uint16_t i = 0; i < block->wordCount(); ++i) {
+      const char* text = block->wordText(i);
+      if (!clippingText::hasVisibleText(text)) continue;
+      const auto style = static_cast<EpdFontFamily::Style>(block->wordStyle(i) & ~EpdFontFamily::UNDERLINE);
+      const int width = clippingWordWidth(renderer, clippingWordFont(*block, i, fontId), text, style);
+      if (width <= 0) continue;
+      const Rect rect =
+          clippingWordRect(renderer, fontId, line, i, top + SETTINGS.screenMargin, left + SETTINGS.screenMargin, width);
+      if (x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height) return true;
+    }
+  }
+  return false;
 }
 
 void EpubReaderActivity::drawClippingHighlights(const Page& page, const int fontId, const int orientedMarginTop,
