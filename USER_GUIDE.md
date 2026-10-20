@@ -425,14 +425,14 @@ open a list when selected.
 
 - **Haptic Intensity**: Low, Medium or High.
 
-- **Reversed page turn (Vertical & Manga)** (off by default): Flips which button turns the page forward, for the two things that are read right-to-left.
+- **Reversed page turn (Vertical & Manga)** (off by default): Flips which way the page turns forward, for the two things that are read right-to-left.
 - **Back Resumes Last Book** (off by default; X3, X4 and X4 Classic): On the Home screen, **Back** reopens the book you read last, and its button hint reads **Resume**.
 
   - In a **vertical (tategaki) Japanese book**, the button that normally goes back turns forward instead.
   - In **manga**, the left button advances (into the page's panels and on through the pages) and the right button goes back.
   - A horizontal book in any language is **not** affected, even if you leave the toggle on after reading a Japanese one.
 
-  It affects page turning only, on the front and side buttons together, and it is one setting for every book. Menus and Word Lookup keep their normal directions. Touch page turns have their own inverted modes under **Touch Reader Controls**.
+  It affects page turning only, on the front and side buttons, tap zones and swipes together, and it is one setting for every book. Menus and Word Lookup keep their normal directions. While it applies, an **Inverted Tap** or **Inverted Swipe** gesture has no extra effect, so the two never cancel out.
 
 - **Upper / Lower Side Button in Reader** (X3/X4 only, in Shortcuts): What the upper (Side Up) or lower (Side Down)
   button does while reading: Default (previous page on Upper, next page on Lower), Sleep, Previous Page, Next Page,
@@ -474,8 +474,8 @@ open a list when selected.
   - "Off" - The reading surface ignores touch entirely
   - "Tap" (default) - Tap the left third to go back, the right third to go forward
   - "Swipe" - Swipe horizontally to turn pages, leaving taps free for the reader menu
-  - "Inverted Tap" - As "Tap", with the sides reversed. Useful for vertical Japanese text, which reads right-to-left
-  - "Inverted Swipe" - As "Swipe", with the directions reversed, for the same reason
+  - "Inverted Tap" - As "Tap", with the sides reversed. For vertical books and manga, **Reversed page turn** already does this and also covers the buttons
+  - "Inverted Swipe" - As "Swipe", with the directions reversed. Same note as above
 
 - **Tap For Reader Menu**: Opens the reader menu when you tap the centre of the screen. Only offered on devices with a Home key, where the menu stays reachable through the key's long-press function if you turn this off.
 

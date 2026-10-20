@@ -1189,8 +1189,8 @@ void EpubReaderActivity::readerLoop() {
     pendingReadFolderMove = false;
   }
 
-  const auto touch =
-      ReaderUtils::detectTouchPageTurn(renderer, mappedInput, ReaderUtils::isRtlBookLanguage(epub->getLanguage()));
+  const auto touch = ReaderUtils::detectTouchPageTurn(
+      renderer, mappedInput, ReaderUtils::isRtlBookLanguage(epub->getLanguage()), useReversedPageTurn());
 
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
     showBookmarkMessage = false;

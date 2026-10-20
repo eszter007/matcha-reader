@@ -43,7 +43,7 @@ Set `--language` on every book. It splits your reading time by language, and it 
 
 Panels are found with a YOLO model trained on Manga109 ([leoxs22/manga-panel-detector-yolo26n](https://huggingface.co/leoxs22/manga-panel-detector-yolo26n)), falling back to a white-gutter heuristic without `ultralytics`. Gemini then reads and translates each panel.
 
-Western comics work too. Pass `--ltr` so panels within a row are walked left-to-right. The panel detector was trained on manga but handles strip layouts well; page turn direction is a device setting (Reverse page turn), not a conversion one.
+Western comics work too. Pass `--ltr` so panels within a row are walked left-to-right. The panel detector was trained on manga but handles strip layouts well; page turn direction is a device setting (Reversed page turn), not a conversion one.
 
 OCR follows `--language`, so it works on any of them. The prompt names the language it should expect, which is what stops the model hallucinating Japanese out of a German speech bubble, and a book already in English gets transcription without a pointless English-to-English translation. Set the tag even if you don't care about reading stats.
 

@@ -254,8 +254,10 @@ struct TouchPageTurn {
   unsigned long heldMs;
 };
 
+// `reversed` is the Reversed Page Turn toggle in effect for this book: it reverses taps and swipes
+// outright, so an Inverted Tap or Inverted Swipe gesture cannot cancel it out.
 inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const MappedInputManager& input,
-                                         const bool rtlBook = false) {
+                                         const bool rtlBook = false, const bool reversed = false) {
   TouchPageTurn result{false, false, 0};
   if (!SETTINGS.touchReaderControls || !input.hasTouch()) {
     return result;
@@ -266,8 +268,8 @@ inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const Mapp
   // rtlBook the same way the tap zones below do.
   const auto dir = input.wasSwipe();
   if (dir != MappedInputManager::SwipeDir::None) {
-    const bool nextInverted = gestureInvertsSwipe(SETTINGS.pageTurnGesture) != rtlBook;
-    const bool prevInverted = gestureInvertsSwipe(SETTINGS.previousPageGesture) != rtlBook;
+    const bool nextInverted = reversed || (gestureInvertsSwipe(SETTINGS.pageTurnGesture) != rtlBook);
+    const bool prevInverted = reversed || (gestureInvertsSwipe(SETTINGS.previousPageGesture) != rtlBook);
     result.next = dir == (nextInverted ? MappedInputManager::SwipeDir::Right : MappedInputManager::SwipeDir::Left) &&
                   gestureAllowsSwipe(SETTINGS.pageTurnGesture);
     result.prev = dir == (prevInverted ? MappedInputManager::SwipeDir::Left : MappedInputManager::SwipeDir::Right) &&
@@ -299,8 +301,8 @@ inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const Mapp
   // Give the whole page to the sole tap-enabled direction. When both accept
   // taps, split at the left third. RTL books and Inverted Tap each reverse
   // the shared zones.
-  const bool inverted = (SETTINGS.pageTurnGesture == CrossPointSettings::INVERTED_TAP ||
-                         SETTINGS.previousPageGesture == CrossPointSettings::INVERTED_TAP) != rtlBook;
+  const bool inverted = reversed || ((SETTINGS.pageTurnGesture == CrossPointSettings::INVERTED_TAP ||
+                                      SETTINGS.previousPageGesture == CrossPointSettings::INVERTED_TAP) != rtlBook);
   const bool nextZone = inverted ? x < (width * 2) / 3 : x >= width / 3;
   result.next = nextTaps && (!prevTaps || nextZone);
   result.prev = prevTaps && (!nextTaps || !nextZone);

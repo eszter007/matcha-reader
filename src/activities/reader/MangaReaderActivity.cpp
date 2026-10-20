@@ -606,7 +606,7 @@ void MangaReaderActivity::loop() {
         mappedInput.wasScreenLongPress(holdX, holdY) && !holdTarget(holdX, holdY, holdText, holdGlyph)) {
       holdGlyph = -1;
     }
-    touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+    touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput, false, SETTINGS.reversePageTurn != 0);
     touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
     if (rotateTouch) {
       renderer.setOrientation(baseOrientation);
@@ -681,7 +681,9 @@ void MangaReaderActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) &&
+  // The reading surface ignores the left-edge Back swipe, as ReaderUtils::handleBackNavigation
+  // does for the other readers: in swipe mode it turns the page.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && !mappedInput.wasBackGesture() &&
       mappedInput.getHeldTime() < ReaderUtils::GO_HOME_MS) {
     if (viewMode == ViewMode::PanelZoom) {
       if (currentPageHasImage && !panelsOnlyMode) {
