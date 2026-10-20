@@ -83,22 +83,20 @@ bool showOnDevice(const SettingInfo& setting) {
 
 // End = not a row here: other categories (KOReader Sync, Status Bar, ...)
 // only group the web UI; their rows live on their own sub-screens.
-// Sleep and Shortcuts belong to a section but open as a sub-screen from a row
-// in it (isSubScreenCategory); a new sub-screen category goes in both functions.
+// Shortcuts belongs to Controls but opens as a sub-screen from a row in it
+// (isSubScreenCategory); a new sub-screen category goes in both functions.
 SettingsSection sectionFor(const SettingInfo& setting) {
   if (setting.category == StrId::STR_CAT_DISPLAY) return SettingsSection::Display;
   if (setting.category == StrId::STR_CAT_READER) return SettingsSection::Reader;
   if (setting.category == StrId::STR_CAT_CONTROLS) return SettingsSection::Controls;
   if (setting.category == StrId::STR_CAT_SYSTEM) return SettingsSection::System;
   if (setting.category == StrId::STR_CAT_LIBRARY) return SettingsSection::Library;
-  if (setting.category == StrId::STR_CAT_SLEEP) return SettingsSection::Display;
+  if (setting.category == StrId::STR_CAT_SLEEP) return SettingsSection::Sleep;
   if (setting.category == StrId::STR_CAT_SHORTCUTS) return SettingsSection::Controls;
   return SettingsSection::End;
 }
 
-bool isSubScreenCategory(const StrId category) {
-  return category == StrId::STR_CAT_SLEEP || category == StrId::STR_CAT_SHORTCUTS;
-}
+bool isSubScreenCategory(const StrId category) { return category == StrId::STR_CAT_SHORTCUTS; }
 
 // Device-only action rows added per section, beyond the shared list (System has the most).
 constexpr size_t EXTRA_ROWS_PER_SECTION = 8;
@@ -159,7 +157,6 @@ void SettingsActivity::rebuildSettings() {
   };
 
   // Sub-screens and per-board configurators lead their section, above its own rows.
-  addAction(SettingsSection::Display, StrId::STR_CAT_SLEEP, SettingAction::SleepSettings);
   addAction(SettingsSection::Reader, StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings);
   addAction(SettingsSection::Controls, StrId::STR_CAT_SHORTCUTS, SettingAction::ShortcutsSettings);
   if (!BoardConfig::hasTouch()) {
@@ -345,11 +342,8 @@ void SettingsActivity::toggleSelectedSetting() {
     auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
 
     switch (setting.action) {
-      case SettingAction::SleepSettings:
       case SettingAction::ShortcutsSettings: {
-        const StrId category =
-            setting.action == SettingAction::SleepSettings ? StrId::STR_CAT_SLEEP : StrId::STR_CAT_SHORTCUTS;
-        auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, section, category);
+        auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, section, StrId::STR_CAT_SHORTCUTS);
         if (!activity) {
           LOG_ERR("SET", "OOM: settings sub-screen");
           return;

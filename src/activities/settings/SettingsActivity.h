@@ -13,8 +13,8 @@
 #include "components/OptionPopup.h"
 
 // The rows of one SettingsSection; activating a row toggles/cycles it, opens
-// its option popup, or launches its sub-screen. With a subCategory (Sleep,
-// Shortcuts) it lists only that category's rows, reached from a row in section.
+// its option popup, or launches its sub-screen. With a subCategory (Shortcuts)
+// it lists only that category's rows, reached from a row in section.
 class SettingsActivity final : public UiListActivity {
   const SettingsSection section;
   const StrId subCategory;

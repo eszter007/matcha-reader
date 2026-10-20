@@ -33,13 +33,14 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
     - [3.6 Settings](#36-settings)
       - [3.6.1 System](#361-system)
       - [3.6.2 Display](#362-display)
-      - [3.6.3 Library](#363-library)
-      - [3.6.4 Reader](#364-reader)
-      - [3.6.5 Controls](#365-controls)
-      - [3.6.6 Connectivity](#366-connectivity)
-      - [3.6.7 OPDS Servers (Multiple Libraries)](#367-opds-servers-multiple-libraries)
-      - [3.6.8 Web Settings (Wi-Fi + OPDS)](#368-web-settings-wi-fi--opds)
-      - [3.6.9 KOReader Sync Quick Setup](#369-koreader-sync-quick-setup)
+      - [3.6.3 Sleep](#363-sleep)
+      - [3.6.4 Library](#364-library)
+      - [3.6.5 Reader](#365-reader)
+      - [3.6.6 Controls](#366-controls)
+      - [3.6.7 Connectivity](#367-connectivity)
+      - [3.6.8 OPDS Servers (Multiple Libraries)](#368-opds-servers-multiple-libraries)
+      - [3.6.9 Web Settings (Wi-Fi + OPDS)](#369-web-settings-wi-fi--opds)
+      - [3.6.10 KOReader Sync Quick Setup](#3610-koreader-sync-quick-setup)
         - [Option A: CrossPoint Sync Server (`sync.crosspointreader.com`, default)](#option-a-crosspoint-sync-server-synccrosspointreadercom-default)
         - [Option B: Legacy Public KOReader Server (`sync.koreader.rocks`)](#option-b-legacy-public-koreader-server-synckoreaderrocks)
         - [Option C: Self-Hosted Server (Docker Compose)](#option-c-self-hosted-server-docker-compose)
@@ -89,7 +90,7 @@ The device utilises the standard buttons on the Xteink X4 (in the same layout as
 | **Bottom Edge** | **Back**, **Confirm**, **Left**, **Right**           |
 | **Right Side**  | **Power**, **Side Up**, **Side Down**, **Reset** |
 
-Button layout can be customized in the **[Controls Settings](#365-controls)**.
+Button layout can be customized in the **[Controls Settings](#366-controls)**.
 
 ### Taking a Screenshot
 
@@ -116,7 +117,7 @@ The X4 Pro and the M5Stack Paper Mono have a built-in frontlight. The X4 Pro has
 > [!NOTE]
 > Frontlight brightness and warmth are intentionally not listed in **[Display Settings](#362-display)**: the swipe panel is the only place to adjust them. The on/off state can also be toggled with the Power-button double-click above.
 
-If the frontlight doesn't come back on after the device wakes from sleep, check **Restore Light on Wake** in **Settings → Display → Sleep** (on by default). Turning it off is intentional if you'd rather have the light stay off on wake and switch it on yourself each time, but it's easy to forget you changed it.
+If the frontlight doesn't come back on after the device wakes from sleep, check **Restore Light on Wake** in **Settings → Sleep** (on by default). Turning it off is intentional if you'd rather have the light stay off on wake and switch it on yourself each time, but it's easy to forget you changed it.
 
 ---
 
@@ -125,7 +126,7 @@ If the frontlight doesn't come back on after the device wakes from sleep, check 
 ### Power On / Off
 
 To turn the device on or off, **press and hold the Power button for approximately half a second**.
-In the **[Controls Settings](#365-controls)** you can configure the power button to turn the device off with a short press instead of a long one.
+In the **[Controls Settings](#366-controls)** you can configure the power button to turn the device off with a short press instead of a long one.
 
 To reboot the device (for example after a firmware update or if it's frozen), press and release the Reset button, and then quickly press and hold the Power button for a few seconds.
 
@@ -279,8 +280,8 @@ Books cannot be removed from your device through Calibre. Use the web interface 
 
 ### 3.6 Settings
 
-The Settings screen allows you to configure the device's behavior. It lists six sections, **System**, **Display**,
-**Library**, **Reader**, **Controls** and **Connectivity**, and each opens its own screen with the settings below.
+The Settings screen allows you to configure the device's behavior. It lists seven sections, **System**, **Display**,
+**Sleep**, **Library**, **Reader**, **Controls** and **Connectivity**, and each opens its own screen with the settings below.
 While **Plugins** is switched on under System, a **Plugins** entry follows them and opens the installed plugins.
 
 Settings that are on or off show a switch on the right of their row instead of the words "ON" and "OFF".
@@ -313,10 +314,32 @@ list inside **Text Settings**.
 
 #### 3.6.2 Display
 
-- **Sleep**: Opens the sleep settings, gathered on one screen, in this order: Sleep Screen, Sleep Screen Cover Mode,
-  Sleep Screen Cover Filter, Quick Resume on Timeout, Time to Sleep, and Restore Light on Wake (described under
-  [Frontlight](#frontlight-x4-pro-only)). They live there rather than in the Display list itself; each is described
-  below.
+- **Status Bar**: Set up under **Reader Settings → Customise Status Bar**, piece by piece: the chapter page count, the book progress percentage, a progress bar (for the book, for the chapter, or hidden) and its thickness, the title, and the battery.
+  - **Time Left**: an estimate of the reading time left in the chapter or the book (default: hidden). It is shown before the page count, e.g. "12 min". It learns from how long you stay on each page as you turn forward, ignoring pages you skip past in under 2 seconds or leave open for more than 30 minutes. Each book keeps its own reading speed, and the estimate appears once about five pages have been timed.
+
+- **Hide Battery %**: Configure where to suppress the battery percentage display in the status bar; the battery icon will still be shown:
+  
+  - "Never" (default) - Always show battery percentage
+  - "In Reader" - Show battery percentage everywhere except in reading mode
+  - "Always" - Always hide battery percentage
+
+- **Refresh Frequency**: Set how often the screen does a full refresh while reading to reduce ghosting; options are every 1, 5, 10, 15, or 30 pages, or Never. In manga each panel step counts as a page.
+
+- **UI Theme**: Set which UI theme to use:
+  
+  - "Classic" - The original Crosspoint theme
+  - "Lyra" - The new theme for Crosspoint featuring rounded elements and menu icons
+  - "Lyra Extended" - Lyra, but displays 3 books instead of 1 on the **[Home Screen](#31-home-screen)**
+  - "RoundedRaff" - A rounded theme with additional visual styling
+  - "Cover Grid" - Home as a grid of covers, with a tab bar along the bottom (see [3.1.1](#311-tabs-and-button-navigation-cover-grid-theme)). Available on every device, buttons or touch; it is the default on touch devices, and the others start on Lyra
+
+- **Sunlight Fading Fix** (off by default): A software fix for white X4 models that fade in direct sunlight.
+
+- **Night Mode** (off by default): Inverts the whole display, white text on black, on every screen.
+
+- **Show Hidden Files** (off by default): Lists files and folders whose names start with `.` in the file browser.
+
+#### 3.6.3 Sleep
 
 - **Sleep Screen**: Which sleep screen to display when the device sleeps:
   
@@ -343,32 +366,9 @@ list inside **Text Settings**.
 
 - **Time to Sleep**: Set the duration of inactivity before the device automatically goes to sleep; from 1 to 30 minutes, or Never.
 
-- **Status Bar**: Set up under **Reader Settings → Customise Status Bar**, piece by piece: the chapter page count, the book progress percentage, a progress bar (for the book, for the chapter, or hidden) and its thickness, the title, and the battery.
-  - **Time Left**: an estimate of the reading time left in the chapter or the book (default: hidden). It is shown before the page count, e.g. "12 min". It learns from how long you stay on each page as you turn forward, ignoring pages you skip past in under 2 seconds or leave open for more than 30 minutes. Each book keeps its own reading speed, and the estimate appears once about five pages have been timed.
+- **Restore Light on Wake** (devices with a frontlight only): See [Frontlight](#frontlight-x4-pro-and-paper-mono).
 
-- **Hide Battery %**: Configure where to suppress the battery percentage display in the status bar; the battery icon will still be shown:
-  
-  - "Never" (default) - Always show battery percentage
-  - "In Reader" - Show battery percentage everywhere except in reading mode
-  - "Always" - Always hide battery percentage
-
-- **Refresh Frequency**: Set how often the screen does a full refresh while reading to reduce ghosting; options are every 1, 5, 10, 15, or 30 pages, or Never. In manga each panel step counts as a page.
-
-- **UI Theme**: Set which UI theme to use:
-  
-  - "Classic" - The original Crosspoint theme
-  - "Lyra" - The new theme for Crosspoint featuring rounded elements and menu icons
-  - "Lyra Extended" - Lyra, but displays 3 books instead of 1 on the **[Home Screen](#31-home-screen)**
-  - "RoundedRaff" - A rounded theme with additional visual styling
-  - "Cover Grid" - Home as a grid of covers, with a tab bar along the bottom (see [3.1.1](#311-tabs-and-button-navigation-cover-grid-theme)). Available on every device, buttons or touch; it is the default on touch devices, and the others start on Lyra
-
-- **Sunlight Fading Fix** (off by default): A software fix for white X4 models that fade in direct sunlight.
-
-- **Night Mode** (off by default): Inverts the whole display, white text on black, on every screen.
-
-- **Show Hidden Files** (off by default): Lists files and folders whose names start with `.` in the file browser.
-
-#### 3.6.3 Library
+#### 3.6.4 Library
 
 - **Library View**: Which screen the Library entry opens: "Matcha Covers" (default), the cover grid, or
   "CrossPoint List", the indexed title/author list described in [Library Screen](#34-library-screen)
@@ -383,7 +383,7 @@ selected, leaving Library View and Move finished books to Read: the index rebuil
 metadata toggle both feed the list's index, which the cover grid does not use, and the cover
 grid shows every book the card scan finds rather than a recent list.
 
-#### 3.6.4 Reader
+#### 3.6.5 Reader
 
 - **Reader Font Family**: Choose the font used for reading:
   
@@ -431,7 +431,7 @@ grid shows every book the card scan finds rather than a recent list.
 
 - **Focus Reading**: Bolds the first part of each word to create visual fixation points, similar to Bionic Reading. This can help improve reading speed and focus; options are "ON" or "OFF" (default).
 
-#### 3.6.5 Controls
+#### 3.6.6 Controls
 
 - **Shortcuts**: Opens the button-shortcut settings, gathered on one screen: **Home Button Gestures** first on devices with a
   Home key, then **Long-Press Button Behavior**,
@@ -512,7 +512,7 @@ grid shows every book the card scan finds rather than a recent list.
 
 - **Quick return from links**: Toggles on and off the quick return functionality from the footnotes. When the functionality it's active, a short press of the power button will act as the back button from the footnotes page.
 
-#### 3.6.6 Connectivity
+#### 3.6.7 Connectivity
 
 - **Wi-Fi Networks**: Connect to Wi-Fi networks for file transfers and firmware updates.
 
@@ -520,9 +520,9 @@ grid shows every book the card scan finds rather than a recent list.
 
 - **CrossPoint Sync**: Settings for syncing book progress with CrossPoint Sync or a compatible KOSync server. **Smart sync** is the default for new configurations and auto-resolves simple push/pull decisions. Existing credential files retain **Ask every time** when migrated; you can switch Sync Behavior at any time if you prefer manual confirmation.
 
-- **OPDS Servers**: Manage one or more OPDS [(Open Publication Distribution System)](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System) libraries for browsing and downloading books. See [OPDS Servers (Multiple Libraries)](#367-opds-servers-multiple-libraries) below.
+- **OPDS Servers**: Manage one or more OPDS [(Open Publication Distribution System)](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System) libraries for browsing and downloading books. See [OPDS Servers (Multiple Libraries)](#368-opds-servers-multiple-libraries) below.
 
-#### 3.6.7 OPDS Servers (Multiple Libraries)
+#### 3.6.8 OPDS Servers (Multiple Libraries)
 
 CrossPoint supports saving multiple OPDS servers and switching between them when browsing catalogs.
 
@@ -562,9 +562,9 @@ You can also manage OPDS servers from the web interface while in File Transfer m
 2. Open `http://<device-ip>/settings`.
 3. Use the **OPDS Servers** card to add, edit, or delete entries.
 
-For web-based Wi-Fi network management, see [Web Settings (Wi-Fi + OPDS)](#368-web-settings-wi-fi--opds).
+For web-based Wi-Fi network management, see [Web Settings (Wi-Fi + OPDS)](#369-web-settings-wi-fi--opds).
 
-#### 3.6.8 Web Settings (Wi-Fi + OPDS)
+#### 3.6.9 Web Settings (Wi-Fi + OPDS)
 
 While in **File Transfer** mode, the web settings page includes management cards for both **Wi-Fi Networks** and **OPDS Servers**.
 
@@ -579,7 +579,7 @@ Behavior notes:
 - Leaving Password blank while editing keeps the existing saved password unchanged.
 - The web UI can save hidden-network SSIDs, but connecting to hidden networks still depends on the device-side Wi-Fi connection flow.
 
-#### 3.6.9 KOReader Sync Quick Setup
+#### 3.6.10 KOReader Sync Quick Setup
 
 CrossPoint can sync reading progress with KOReader-compatible sync servers.
 It also interoperates with KOReader apps/devices when they use the same server and credentials.
@@ -864,7 +864,7 @@ If the **Short Power Button Click** setting is set to "Next Page", you can also 
 * **Next Chapter:** Press and **hold** the **Right** (or **Side Down**) button briefly, then release.
 * **Previous Chapter:** Press and **hold** the **Left** (or **Side Up**) button briefly, then release.
 
-This feature can be disabled in the **[Controls Settings](#365-controls)** to help avoid changing chapters by mistake.
+This feature can be disabled in the **[Controls Settings](#366-controls)** to help avoid changing chapters by mistake.
 
 ### Auto Page Turn
 
@@ -897,7 +897,7 @@ tap outside the panel returns to the page.
 
 ### Dictionary Lookup
 
-Words on the current page can be looked up in an offline StarDict dictionary stored on the SD card. Copy a dictionary to the `/dictionaries/` folder (or `/.dictionaries/`, see [6.7](#67-dictionary-files-and-language-selection)), select it in **Settings → Reader → Dictionary**, then start a lookup by choosing **Look Up** in the **[Reader Menu](#5-reader-menu)** (or by holding **Confirm**, if the **Long-press Menu** setting in **[Controls Settings](#365-controls)** is set to "Dictionary"). Use **Left/Right** to highlight a word and press **Confirm** to show its definition.
+Words on the current page can be looked up in an offline StarDict dictionary stored on the SD card. Copy a dictionary to the `/dictionaries/` folder (or `/.dictionaries/`, see [6.7](#67-dictionary-files-and-language-selection)), select it in **Settings → Reader → Dictionary**, then start a lookup by choosing **Look Up** in the **[Reader Menu](#5-reader-menu)** (or by holding **Confirm**, if the **Long-press Menu** setting in **[Controls Settings](#366-controls)** is set to "Dictionary"). Use **Left/Right** to highlight a word and press **Confirm** to show its definition.
 
 On a touch device you can skip all of that: **long-press a word on the page** and its definition opens directly, with no setting to turn on first. A press between words opens ordinary word selection instead. The definition card pages by touch the way the reader is set to turn pages in **Touch Reader Controls**, and a tap outside it puts it away.
 
@@ -908,7 +908,7 @@ See [docs/dictionary.md](docs/dictionary.md) for supported formats, setup, and w
 * **Return to Home:** Press the **Back** button to close the book and return to the **[Home](#31-home-screen)** screen.
 * **Return to Browse Files:** Press and hold the **Back** button to close the book and return to the **[Browse Files](#33-browse-files-screen)** screen.
 * **Reader Menu:** Press **Confirm** to open the **[Reader Menu](#5-reader-menu)**, which includes chapter navigation, reading options, and more.
-* **Long-press Confirm (configurable):** Holding **Confirm** runs the function chosen by the **Long-press Menu** setting in **[Controls Settings](#365-controls)**: "Bookmark" (default) drops a bookmark, "KOSync" launches KOReader Sync, "Dictionary" starts a word lookup, "Create Clipping" starts a text selection, "Disabled" does nothing. A short press always opens the Reader Menu.
+* **Long-press Confirm (configurable):** Holding **Confirm** runs the function chosen by the **Long-press Menu** setting in **[Controls Settings](#366-controls)**: "Bookmark" (default) drops a bookmark, "KOSync" launches KOReader Sync, "Dictionary" starts a word lookup, "Create Clipping" starts a text selection, "Disabled" does nothing. A short press always opens the Reader Menu.
 
 ### Supported Languages
 
@@ -941,7 +941,7 @@ Available options include:
 - **Take screenshot**: Save a screenshot of the current page to the `screenshots/` folder.
 - **Show page as QR**: Display a QR code encoding the current reading position.
 - **Go Home**: Close the book and return to the Home screen.
-- **Sync Progress**: Push or pull reading progress with a KOReader sync server (see [KOReader Sync Quick Setup](#369-koreader-sync-quick-setup)).
+- **Sync Progress**: Push or pull reading progress with a KOReader sync server (see [KOReader Sync Quick Setup](#3610-koreader-sync-quick-setup)).
 - **Delete Book Cache**: Clear the cached layout data for the current book, forcing a re-index on next open.
 
 Matcha adds **Word Lookup**, **Translate Page**, **Reader Settings**, **Toggle Bookmark** and **Night Mode** to the menu; see [§6](#6-language-learning-features).
