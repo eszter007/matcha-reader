@@ -315,7 +315,7 @@ list inside **Text Settings**.
 #### 3.6.2 Display
 
 - **Status Bar**: Set up under **Reader Settings → Customise Status Bar**, piece by piece: the chapter page count, the book progress percentage, a progress bar (for the book, for the chapter, or hidden) and its thickness, the title, and the battery.
-  - **Time Left**: an estimate of the reading time left in the chapter or the book (default: hidden). It is shown before the page count, e.g. "12 min". It learns from how long you stay on each page as you turn forward, ignoring pages you skip past in under 2 seconds or leave open for more than 30 minutes. Each book keeps its own reading speed, and the estimate appears once about five pages have been timed.
+  - **Time Left**: an estimate of the reading time left in the chapter or the book (default: hidden). It is shown before the page count, e.g. "12 min". It learns from how long you stay on each page as you turn forward, ignoring pages you skip past in under 2 seconds or leave open for more than 30 minutes. A page left open much longer than your usual pace counts as about three times your average. Each book keeps its own reading speed, measured against how much of the book's text you get through, so it stays right when you change the font size or margins. The estimate appears once about five pages have been timed.
 
 - **Hide Battery %**: Configure where to suppress the battery percentage display in the status bar; the battery icon will still be shown:
   

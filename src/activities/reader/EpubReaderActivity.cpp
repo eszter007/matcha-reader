@@ -4575,6 +4575,7 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   chapterSpanBuildActive = buildActive;
   chapterPagesBefore = 0;
   chapterPagesTotal = std::max(1, liveTotalPages);
+  chapterEndProgress = epub ? epub->calculateProgress(currentSpineIndex, 1.0f) : 1.0f;
   bookPagesBefore = 0;
   bookPagesTotal = 0;
   spinePagesEffective.clear();
@@ -4696,6 +4697,7 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   while (start > 0 && epub->getTocIndexForSpineIndex(start - 1) == tocIdx) start--;
   int end = currentSpineIndex;
   while (end + 1 < spineCount && epub->getTocIndexForSpineIndex(end + 1) == tocIdx) end++;
+  chapterEndProgress = epub->calculateProgress(end, 1.0f);
   if (start == end) return;
 
   int before = 0;
@@ -5561,12 +5563,20 @@ void EpubReaderActivity::renderStatusBar() const {
   // section is null in vertical mode (verticalSection owns the chapter there), and null again
   // between chapters -- upstream can't hit either case, so its call was unguarded.
   const bool building = section && section->isBuilding();
+  // Time left is measured in the same unit the pace learns from: the share of the book's text,
+  // from the top of the page on screen (it is still to be read). Pages are the fallback while the
+  // position is unknown.
   int timeLeftSeconds = -1;
-  if (sb.timeLeftMode == CrossPointSettings::TIME_LEFT_CHAPTER) {
-    // The page on screen counts: it is still to be read.
-    timeLeftSeconds = readingPace.secondsForPages(std::max(1, pageCount - currentPage + 1));
-  } else if (sb.timeLeftMode == CrossPointSettings::TIME_LEFT_BOOK) {
-    timeLeftSeconds = readingPace.secondsForProgress(std::max(0, 10000 - static_cast<int>(bookProgress * 100)));
+  if (sb.timeLeftMode != CrossPointSettings::TIME_LEFT_HIDE) {
+    const float here = textProgress();
+    if (here >= 0.0f) {
+      const float end = sb.timeLeftMode == CrossPointSettings::TIME_LEFT_CHAPTER ? chapterEndProgress : 1.0f;
+      timeLeftSeconds = readingPace.secondsForProgress(std::max(0.0f, end - here) * 10000.0f);
+    } else if (sb.timeLeftMode == CrossPointSettings::TIME_LEFT_CHAPTER) {
+      timeLeftSeconds = readingPace.secondsForPages(std::max(1, pageCount - currentPage + 1));
+    } else {
+      timeLeftSeconds = readingPace.secondsForProgress(std::max(0.0f, 10000.0f - bookProgress * 100.0f));
+    }
   }
   GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, true, currentPageBookmarked,
                     building, timeLeftSeconds);
@@ -7041,17 +7051,21 @@ ScreenshotInfo EpubReaderActivity::getScreenshotInfo() const {
   return info;
 }
 
-int EpubReaderActivity::getProgressBasisPoints() const {
-  if (isAtEndOfBook()) return 10000;
+float EpubReaderActivity::textProgress() const {
+  if (isAtEndOfBook()) return 1.0f;
   // chapterPosition() answers for the vertical and the horizontal section alike.
   const ChapterPosition position = chapterPosition();
-  if (!epub || (!section && !verticalSection) || !position.hasTotal() || epub->getBookSize() == 0) {
-    return getProgressPercent() * 100;
-  }
-  const float chapterProgress = static_cast<float>(position.pageIndex) / static_cast<float>(position.totalPages);
-  const int basisPoints =
-      static_cast<int>(epub->calculateProgress(currentSpineIndex, chapterProgress) * 10000.0f + 0.5f);
-  return std::clamp(basisPoints, 0, 10000);
+  if (!epub || (!section && !verticalSection) || !position.hasTotal() || epub->getBookSize() == 0) return -1.0f;
+  // A vertical chapter's page count covers only the pages laid out so far while it builds, which
+  // would put the page on screen near the chapter's end.
+  if (verticalSection && verticalBuildInProgress_.load(std::memory_order_relaxed)) return -1.0f;
+  return epub->calculateProgress(currentSpineIndex, position.chapterFraction());
+}
+
+int EpubReaderActivity::getProgressBasisPoints() const {
+  const float progress = textProgress();
+  if (progress < 0.0f) return getProgressPercent() * 100;
+  return std::clamp(static_cast<int>(progress * 10000.0f + 0.5f), 0, 10000);
 }
 
 CrossPointPosition EpubReaderActivity::getCurrentPosition() const {

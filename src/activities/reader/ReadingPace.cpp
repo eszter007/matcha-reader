@@ -4,13 +4,15 @@
 #include <Logging.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 
 namespace {
 constexpr char MAGIC[4] = {'P', 'A', 'C', '1'};
 }  // namespace
 
-void ReadingPace::addPage(const uint32_t seconds, const int progressDeltaBp) {
+void ReadingPace::addPage(uint32_t seconds, const int progressDeltaBp) {
+  if (pages_ >= MIN_PAGES) seconds = std::min(seconds, MAX_PAGE_FACTOR * seconds_ / pages_);
   pages_++;
   seconds_ += seconds;
   progressBp_ += static_cast<uint32_t>(std::max(0, progressDeltaBp));
@@ -26,9 +28,10 @@ int ReadingPace::secondsForPages(const int pages) const {
   return static_cast<int>(static_cast<uint64_t>(seconds_) * static_cast<uint64_t>(pages) / pages_);
 }
 
-int ReadingPace::secondsForProgress(const int bp) const {
-  if (pages_ < MIN_PAGES || progressBp_ == 0 || bp < 0) return -1;
-  return static_cast<int>(static_cast<uint64_t>(seconds_) * static_cast<uint64_t>(bp) / progressBp_);
+int ReadingPace::secondsForProgress(const float bp) const {
+  if (pages_ < MIN_PAGES || progressBp_ == 0 || bp < 0.0f) return -1;
+  const float seconds = static_cast<float>(seconds_) * bp / static_cast<float>(progressBp_);
+  return static_cast<int>(std::min(seconds, static_cast<float>(INT32_MAX / 2)) + 0.5f);
 }
 
 void ReadingPace::load(const std::string& path) {

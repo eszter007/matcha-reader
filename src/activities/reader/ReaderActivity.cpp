@@ -63,7 +63,12 @@ void ReaderActivity::markPageRendered() {
   // A forward page counts toward the reading speed when it was on screen between 2 s and 30 min,
   // the reading session's own bounds: shorter is skimming, longer is the reader away.
   const uint32_t now = millis();
-  if (paceForwardPending.exchange(false, std::memory_order_acq_rel) && paceHasAnchor) {
+  const bool forwardTurn = paceForwardPending.exchange(false, std::memory_order_acq_rel);
+  if (!hasTextProgress()) {
+    paceHasAnchor = false;
+    return;
+  }
+  if (forwardTurn && paceHasAnchor) {
     const uint32_t seconds = (now - paceAnchorMs) / 1000;
     if (seconds >= 2 && seconds <= 1800) readingPace.addPage(seconds, progressBp - paceAnchorBp);
   }
