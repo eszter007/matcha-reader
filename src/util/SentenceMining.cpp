@@ -3,12 +3,18 @@
 #include <HalClock.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 
 #include <cstdio>
 #include <ctime>
 
+#include "TaskWatchdog.h"
+
 namespace sentencemining {
 
+namespace {
+
+// False on any SD failure.
 bool append(const Card& card, std::string_view language) {
   const std::string path = exportPath(language);
   if (!Storage.ensureDirectoryExists(EXPORT_DIR)) {
@@ -36,6 +42,39 @@ bool append(const Card& card, std::string_view language) {
   file.flush();
   LOG_INF("MINE", "Saved \"%s\" to %s (%u bytes)", card.word.c_str(), path.c_str(), static_cast<unsigned>(row.size()));
   return true;
+}
+
+// True when the file for `language` already has a row for `card`. A failed check reads as
+// "not saved": a duplicate row is better than a lost save.
+bool hasRow(const Card& card, const std::string_view language) {
+  const std::string path = exportPath(language);
+  if (!Storage.exists(path.c_str())) return false;
+  HalFile file;
+  if (!Storage.openFileForRead("MINE", path.c_str(), file)) return false;
+  // Heap, not stack: big reads keep a long file to few SD round trips. Freed on return.
+  constexpr size_t CHUNK = 4096;
+  auto buf = makeUniqueNoThrow<char[]>(CHUNK);
+  if (!buf) {
+    LOG_ERR("MINE", "OOM: %u bytes for the duplicate check", static_cast<unsigned>(CHUNK));
+    return false;
+  }
+  GuidFinder finder(makeGuid(card.word, card.sentence));
+  int n;
+  while ((n = file.read(buf.get(), CHUNK)) > 0) {
+    if (finder.feed(std::string_view(buf.get(), static_cast<size_t>(n)))) return true;
+    resetTaskWatchdogIfSubscribed();  // a long file is many reads
+  }
+  return false;
+}
+
+}  // namespace
+
+SaveResult saveOnce(const Card& card, const std::string_view language) {
+  if (hasRow(card, language)) {
+    LOG_INF("MINE", "\"%s\" is already saved with this sentence", card.word.c_str());
+    return SaveResult::AlreadySaved;
+  }
+  return append(card, language) ? SaveResult::Saved : SaveResult::Failed;
 }
 
 std::string today() {

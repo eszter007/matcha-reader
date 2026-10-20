@@ -1,6 +1,7 @@
 #include "DictionaryPanel.h"
 
 #include <GfxRenderer.h>
+#include <I18n.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -42,6 +43,10 @@ constexpr int HEADWORD_FONT_ID = NOTOSERIF_12_FONT_ID;
 // The save-sentence button: the icon's size, and the extra reach around it a finger gets.
 constexpr int ADD_ICON_SIZE = 24;
 constexpr int ADD_TAP_SLOP = 12;
+// How long the save popup stays up.
+constexpr unsigned long SAVE_POPUP_MS = 1500;
+constexpr int POPUP_PADDING_X = 16;
+constexpr int POPUP_PADDING_Y = 8;
 // Space kept between the headword and the button, and between the footer label and the counter.
 constexpr int TITLE_GAP = 8;
 constexpr int FOOTER_GAP = 16;
@@ -139,7 +144,8 @@ void DictionaryPanel::clearButtonHints(const GfxRenderer& renderer) {
 }
 
 DictionaryPanel::Layout DictionaryPanel::draw(const GfxRenderer& renderer, const char* headword, const char* dictName,
-                                              const char* counter, const char* kind, const bool addButton) {
+                                              const char* counter, const char* kind, const bool addButton,
+                                              const bool saved) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Layout layout = compute(renderer);
   const int radius = panelRadius(metrics);
@@ -152,16 +158,17 @@ DictionaryPanel::Layout DictionaryPanel::draw(const GfxRenderer& renderer, const
   const int headwordY = layout.box.y + PADDING;
   const int rightEdge = layout.box.x + layout.box.width - PADDING;
   // The headword stops short of the save button rather than running under it.
-  const int headwordRight = addButton ? rightEdge - ADD_ICON_SIZE - TITLE_GAP : rightEdge;
+  const bool cornerIcon = addButton || saved;
+  const int headwordRight = cornerIcon ? rightEdge - ADD_ICON_SIZE - TITLE_GAP : rightEdge;
   if (headword && headword[0] != '\0') {
     char buf[128];
     ellipsize(renderer, HEADWORD_FONT_ID, headword, headwordRight - textX, buf, sizeof(buf), EpdFontFamily::BOLD);
     renderer.drawText(HEADWORD_FONT_ID, textX, headwordY, buf, true, EpdFontFamily::BOLD);
   }
-  if (addButton) {
+  if (cornerIcon) {
     const int iconX = rightEdge - ADD_ICON_SIZE;
     const int iconY = headwordY + (renderer.getLineHeight(HEADWORD_FONT_ID) - ADD_ICON_SIZE) / 2;
-    renderer.drawIcon(DictAddCardIcon, iconX, iconY, ADD_ICON_SIZE);
+    renderer.drawIcon(saved ? DictSavedCardIcon : DictAddCardIcon, iconX, iconY, ADD_ICON_SIZE);
   }
 
   const int dividerY = headwordY + renderer.getLineHeight(HEADWORD_FONT_ID) + HEADWORD_GAP + PADDING / 2;
@@ -190,4 +197,43 @@ DictionaryPanel::Layout DictionaryPanel::draw(const GfxRenderer& renderer, const
     renderer.drawText(SMALL_FONT_ID, textX, footerY, buf);
   }
   return layout;
+}
+
+void DictionaryPanel::drawPopup(const GfxRenderer& renderer, const Layout& layout, const char* text) {
+  if (!text || text[0] == '\0') return;
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, text, EpdFontFamily::BOLD);
+  const int w = std::min(textWidth + POPUP_PADDING_X * 2, layout.body.width);
+  const int h = renderer.getLineHeight(SMALL_FONT_ID) + POPUP_PADDING_Y * 2;
+  const int x = layout.body.x + (layout.body.width - w) / 2;
+  const int y = layout.body.y + (layout.body.height - h) / 2;
+  const int radius = panelRadius(metrics);
+  renderer.fillRoundedRect(x - FRAME_STROKE, y - FRAME_STROKE, w + FRAME_STROKE * 2, h + FRAME_STROKE * 2,
+                           radius + FRAME_STROKE, Color::White);
+  renderer.fillRoundedRect(x, y, w, h, radius, Color::Black);
+  renderer.drawText(SMALL_FONT_ID, x + (w - textWidth) / 2, y + POPUP_PADDING_Y, text, false, EpdFontFamily::BOLD);
+}
+
+void DictionaryPanel::MiningFeedback::record(const bool ok, const unsigned long now) {
+  failed = !ok;
+  if (ok) isSaved = true;
+  popupUntil = now + SAVE_POPUP_MS;
+  if (popupUntil == 0) popupUntil = 1;  // 0 means "no popup"
+}
+
+void DictionaryPanel::MiningFeedback::clear() {
+  isSaved = false;
+  failed = false;
+  popupUntil = 0;
+}
+
+const char* DictionaryPanel::MiningFeedback::popupText(const unsigned long now) const {
+  if (popupUntil == 0 || static_cast<long>(now - popupUntil) >= 0) return nullptr;
+  return failed ? tr(STR_MINING_SAVE_FAILED) : tr(STR_MINING_SAVED);
+}
+
+bool DictionaryPanel::MiningFeedback::popupExpired(const unsigned long now) {
+  if (popupUntil == 0 || static_cast<long>(now - popupUntil) < 0) return false;
+  popupUntil = 0;
+  return true;
 }

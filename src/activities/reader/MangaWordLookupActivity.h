@@ -7,6 +7,7 @@
 
 #include "WordSelectionScan.h"
 #include "activities/Activity.h"
+#include "components/DictionaryPanel.h"
 #include "util/ButtonNavigator.h"
 #include "util/SentenceMining.h"
 
@@ -67,9 +68,8 @@ class MangaWordLookupActivity final : public Activity {
   void runInitialBurst();
   void moveCursor(int delta);
   // Sentence mining: saves the shown entry with the sentence from its speech bubble.
-  enum class MiningStatus : uint8_t { None, Saved, Failed };
   sentencemining::BookContext mining_;
-  MiningStatus miningStatus_ = MiningStatus::None;
+  DictionaryPanel::MiningFeedback miningFeedback_;
   // Hashes of the headwords shown this session, so browsing back and forth counts each word
   // once; the total goes to BookStats in one write on exit.
   static constexpr size_t MAX_COUNTED_LOOKUPS = 256;
