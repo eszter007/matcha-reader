@@ -4,6 +4,8 @@
 #include <memory>
 #include <vector>
 
+#include "util/CjkScript.h"
+
 class GfxRenderer;
 class TextBlock;
 
@@ -23,7 +25,7 @@ struct PreviewKey {
   uint8_t wordSpacingPercent = 100;
   bool focusReading = false;
   bool hyphenation = false;
-  bool cjkSample = false;
+  CjkScript sampleScript = CjkScript::None;
   bool operator==(const PreviewKey&) const = default;
 };
 
@@ -40,8 +42,10 @@ struct PreviewLayout {
 // `fontId` is the caller's EFFECTIVE reader font, not SETTINGS.getReaderFontId(): for a book
 // whose script the selected face cannot carry, the page renders with a substitute, and a preview
 // that resolved its own font would promise a face and a size the page will not use.
-// cjkSample: lay out a Japanese sample instead of the UI language's, for the CJK text profile.
+// sampleScript: lay out a Japanese or Chinese sample instead of the UI language's, for a CJK book
+// or the CJK text profile.
 void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, int top,
-                   int height, const char* familyName, const char* sizeName, int fontId, bool cjkSample = false);
+                   int height, const char* familyName, const char* sizeName, int fontId,
+                   CjkScript sampleScript = CjkScript::None);
 
 }  // namespace textsettings

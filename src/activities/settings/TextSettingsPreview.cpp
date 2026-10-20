@@ -29,8 +29,23 @@ CssTextAlign toCssAlign(uint8_t align) {
   return static_cast<CssTextAlign>(align);
 }
 
+// Chinese faces carry no kana, so a Chinese book gets a Chinese sample in its own script.
+const char* sampleText(const CjkScript script) {
+  switch (script) {
+    case CjkScript::Japanese:
+      return I18N.get(StrId::STR_FONT_PREVIEW_TEXT_CJK);
+    case CjkScript::SimplifiedChinese:
+      return I18N.get(StrId::STR_FONT_PREVIEW_TEXT_ZH_HANS);
+    case CjkScript::TraditionalChinese:
+      return I18N.get(StrId::STR_FONT_PREVIEW_TEXT_ZH_HANT);
+    case CjkScript::None:
+      break;
+  }
+  return I18N.get(StrId::STR_FONT_PREVIEW_TEXT);
+}
+
 // Lay the sample text out through the reader engine into layout.lines
-void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, int textWidth, bool cjkSample) {
+void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, int textWidth, const char* text) {
   layout.lines.clear();
 
   BlockStyle style;
@@ -41,7 +56,6 @@ void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, in
                     SETTINGS.paragraphIndentSpaces);
 
   // Feed one space-separated word at a time; addWord handles NFC/CJK/RTL/focus splitting
-  const char* text = I18N.get(cjkSample ? StrId::STR_FONT_PREVIEW_TEXT_CJK : StrId::STR_FONT_PREVIEW_TEXT);
   std::string word;
   for (const char* p = text;; p++) {
     if (*p == ' ' || *p == '\0') {
@@ -64,7 +78,8 @@ void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, in
 }  // namespace
 
 void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, int top,
-                   int height, const char* familyName, const char* sizeName, const int fontId, const bool cjkSample) {
+                   int height, const char* familyName, const char* sizeName, const int fontId,
+                   const CjkScript sampleScript) {
   const int left = previewPadding;
   const int width = renderer.getScreenWidth() - (previewPadding * 2);
   if (width <= 0 || height <= 0) return;
@@ -91,8 +106,8 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
   const int paragraphGap = SETTINGS.extraParagraphSpacing ? lineAdvance / 2 : 0;
 
   // Re-lay-out (and re-prewarm glyphs) only when a layout-affecting setting or the
-  // geometry changed; else reuse the cache. The prewarm inputs are (fontId, constant
-  // sample text, styleMask<-focusReading), all of which are key fields, so a matching
+  // geometry changed; else reuse the cache. The prewarm inputs are (fontId, sample text
+  // <-sampleScript, styleMask<-focusReading), all of which are key fields, so a matching
   // key means an identical prewarm call. This relies on nothing else evicting the SD
   // glyph cache while this activity is up — true today: the only evictor is
   // FontCacheManager::PrewarmScope, used solely by the reader/dictionary activities.
@@ -108,12 +123,12 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
                        .wordSpacingPercent = SETTINGS.wordSpacing,
                        .focusReading = SETTINGS.focusReadingEnabled != 0,
                        .hyphenation = SETTINGS.hyphenationEnabled != 0,
-                       .cjkSample = cjkSample};
+                       .sampleScript = sampleScript};
   if (key != layout.key) {
     if (auto* fcm = renderer.getFontCacheManager()) {
-      fcm->prewarmCache(fontId, I18N.get(StrId::STR_FONT_PREVIEW_TEXT), SETTINGS.focusReadingEnabled ? 0x03 : 0x01);
+      fcm->prewarmCache(fontId, sampleText(sampleScript), SETTINGS.focusReadingEnabled ? 0x03 : 0x01);
     }
-    relayout(layout, renderer, fontId, textWidth, cjkSample);
+    relayout(layout, renderer, fontId, textWidth, sampleText(sampleScript));
     layout.key = key;
   }
 

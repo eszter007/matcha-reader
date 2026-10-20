@@ -171,9 +171,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     REFRESH_FREQUENCY_COUNT
   };
 
-  // Short power button press actions. Touch boards get PWR_CONFIRM in place of
-  // CREATE_CLIPPING; touch boards without a home key also get the reader
-  // shortcuts (see SettingsList.h). Persisted by index: append only.
+  // Short power button press actions. Touch boards also get PWR_CONFIRM; touch boards
+  // without a home key also get the reader shortcuts (see SettingsList.h). Persisted by
+  // index: append only.
   enum SHORT_PWRBTN {
     IGNORE = 0,
     SLEEP = 1,

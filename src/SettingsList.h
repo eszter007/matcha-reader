@@ -242,13 +242,15 @@ inline SettingInfo buildLongPressMenuSetting() {
                                   setLongPressMenuFromDisplayValue, "longPressMenuFunction", StrId::STR_CAT_SHORTCUTS);
 }
 
-// Bookmark, Sync and Reader Menu are offered only on touch boards without a Home key, which
-// have no other button for them.
+// Confirm is offered only on touch boards, where the power button stands in for it (button
+// boards have their own). Bookmark, Sync and Reader Menu are offered only on touch boards
+// without a Home key, which have no other button for them.
 inline std::vector<uint8_t> shortPowerButtonOrder() {
-  std::vector<uint8_t> order = {
-      CrossPointSettings::IGNORE,      CrossPointSettings::PWR_PREV_PAGE,   CrossPointSettings::PAGE_TURN,
-      CrossPointSettings::SLEEP,       CrossPointSettings::FORCE_REFRESH,   CrossPointSettings::FOOTNOTES,
-      CrossPointSettings::WORD_LOOKUP, CrossPointSettings::CREATE_CLIPPING, CrossPointSettings::PWR_CONFIRM};
+  std::vector<uint8_t> order = {CrossPointSettings::IGNORE,        CrossPointSettings::PWR_PREV_PAGE,
+                                CrossPointSettings::PAGE_TURN,     CrossPointSettings::SLEEP,
+                                CrossPointSettings::FORCE_REFRESH, CrossPointSettings::FOOTNOTES,
+                                CrossPointSettings::WORD_LOOKUP,   CrossPointSettings::CREATE_CLIPPING};
+  if (BoardConfig::hasTouch()) order.push_back(CrossPointSettings::PWR_CONFIRM);
   if (BoardConfig::hasTouch() && !BoardConfig::hasHomeKey()) {
     order.insert(order.end(),
                  {CrossPointSettings::PWR_BOOKMARK, CrossPointSettings::PWR_SYNC, CrossPointSettings::PWR_READER_MENU});
