@@ -327,7 +327,7 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
     [&]() __attribute__((noinline)) {
       append({
           // --- Sleep ---
-          // STR_CAT_SLEEP is not one of the four tabs: these rows are reached through the Sleep row
+          // STR_CAT_SLEEP is not one of the four sections: these rows are reached through the Sleep row
           // in Display, which opens SettingsActivity on this category alone. Listed in the order
           // they appear there.
           SettingInfo::Enum(StrId::STR_SLEEP_SCREEN, &CrossPointSettings::sleepScreen, std::move(sleepScreenValues),
@@ -488,7 +488,7 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
     [&]() __attribute__((noinline)) {
       append({
           // --- Shortcuts ---
-          // STR_CAT_SHORTCUTS is not one of the four tabs: these rows are reached through the
+          // STR_CAT_SHORTCUTS is not one of the four sections: these rows are reached through the
           // Shortcuts row in Controls, which opens SettingsActivity on this category alone.
           SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,
                             {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
@@ -559,7 +559,7 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
           // --- System ---
           SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
                               StrId::STR_CAT_DISPLAY),
-          // STR_CAT_LIBRARY is not one of the four tabs: these rows are reached through the
+          // STR_CAT_LIBRARY is not one of the four sections: these rows are reached through the
           // Library row in Display, which opens SettingsActivity on this category alone. Listed
           // in the order they appear there, with the Rebuild action injected after the first.
           // Which screen the Library entry opens; see CrossPointSettings::LIBRARY_VIEW.

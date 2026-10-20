@@ -6,8 +6,10 @@
 
 #include <algorithm>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "SettingsActivity.h"
+#include "activities/plugins/PluginCatalogActivity.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 
@@ -17,7 +19,7 @@ namespace {
 constexpr int16_t ICON_SIZE = 32;
 // Row icons, indexed by SettingsSection.
 constexpr const freeink::Icon* SECTION_ICONS[SETTINGS_SECTION_COUNT] = {
-    &icon_settings_32, &icon_smartphone_32, &icon_book_open_32, &icon_pointer_32, &icon_library_32, &icon_wifi_32,
+    &icon_settings_32, &icon_smartphone_32, &icon_library_32, &icon_book_open_32, &icon_pointer_32, &icon_wifi_32,
 };
 }  // namespace
 
@@ -54,18 +56,26 @@ void SettingsListActivity::rebuildRows() {
     item.icon = fui::bitmapFromIcon(*SECTION_ICONS[i]);
     item.actionValue = static_cast<int16_t>(i);
   }
+  auto& plugins = rowItems_[SETTINGS_SECTION_COUNT];
+  plugins.label = tr(STR_PLUGINS);
+  plugins.icon = fui::bitmapFromIcon(icon_blocks_32);
+  plugins.actionValue = static_cast<int16_t>(SETTINGS_SECTION_COUNT);
+}
+
+int SettingsListActivity::listCount() const {
+  return static_cast<int>(SETTINGS_SECTION_COUNT) + (SETTINGS.pluginsEnabled ? 1 : 0);
 }
 
 void SettingsListActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  // Content below the GUI.drawHeader band, above the button hints.
+  // Content below the GUI.drawHeader band, above the tab bar or button hints.
   screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
-                                                static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+                                                static_cast<int16_t>(HomeTabBar::bottomInset()), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   fui::ListProps props;
   props.items = rowItems_.data();
-  props.count = static_cast<uint16_t>(rowItems_.size());
+  props.count = static_cast<uint16_t>(listCount());
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   // Rows are as tall as a label plus a small second line, giving the icons air.
@@ -82,7 +92,22 @@ void SettingsListActivity::activateIndex(const int index) {
   // The section screen replaces this one; a lingering flash would gray an
   // unrelated element on return.
   app.clearTapFlash();
+  if (index == static_cast<int>(SETTINGS_SECTION_COUNT)) {
+    openPlugins();
+    return;
+  }
   openSection(static_cast<SettingsSection>(index));
+}
+
+// The catalog Home opens; in the Cover Grid theme Home has no Plugins entry.
+void SettingsListActivity::openPlugins() {
+  nav.selected = static_cast<int>(SETTINGS_SECTION_COUNT);
+  auto activity = makeUniqueNoThrow<PluginCatalogActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("SETTINGS", "OOM: PluginCatalogActivity");
+    return;
+  }
+  startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
 }
 
 void SettingsListActivity::openSection(const SettingsSection section) {
@@ -107,5 +132,5 @@ void SettingsListActivity::drawChrome() {
   // Version rides in the header's trailing label slot: the footer position
   // conflicts with button hints on non-touch devices.
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
-                 tr(STR_SETTINGS_TITLE), CROSSPOINT_VERSION);
+                 tr(STR_SETTINGS_TITLE), CROSSPOINT_VERSION, HomeTabBar::showsBackButton(hasTabBar()));
 }
