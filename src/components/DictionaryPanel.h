@@ -64,6 +64,7 @@ class MiningFeedback {
  private:
   bool isSaved = false;
   bool failed = false;
+  bool popupShown = false;
   unsigned long popupUntil = 0;
 };
 

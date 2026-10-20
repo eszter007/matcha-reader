@@ -217,23 +217,23 @@ void DictionaryPanel::drawPopup(const GfxRenderer& renderer, const Layout& layou
 void DictionaryPanel::MiningFeedback::record(const bool ok, const unsigned long now) {
   failed = !ok;
   if (ok) isSaved = true;
+  popupShown = true;
   popupUntil = now + SAVE_POPUP_MS;
-  if (popupUntil == 0) popupUntil = 1;  // 0 means "no popup"
 }
 
 void DictionaryPanel::MiningFeedback::clear() {
   isSaved = false;
   failed = false;
-  popupUntil = 0;
+  popupShown = false;
 }
 
 const char* DictionaryPanel::MiningFeedback::popupText(const unsigned long now) const {
-  if (popupUntil == 0 || static_cast<long>(now - popupUntil) >= 0) return nullptr;
+  if (!popupShown || static_cast<long>(now - popupUntil) >= 0) return nullptr;
   return failed ? tr(STR_MINING_SAVE_FAILED) : tr(STR_MINING_SAVED);
 }
 
 bool DictionaryPanel::MiningFeedback::popupExpired(const unsigned long now) {
-  if (popupUntil == 0 || static_cast<long>(now - popupUntil) < 0) return false;
-  popupUntil = 0;
+  if (!popupShown || static_cast<long>(now - popupUntil) < 0) return false;
+  popupShown = false;
   return true;
 }
