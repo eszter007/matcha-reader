@@ -320,7 +320,7 @@ void EpubReaderWordLookupActivity::onExit() {
 }
 
 void EpubReaderWordLookupActivity::moveCursor(int delta) {
-  miningStatus_ = MiningStatus::None;
+  miningFeedback_.clear();
   // Moving past the last already-discovered word while the background scan is still running:
   // scan forward just enough to reveal the next one (typically a few hundred ms), so early
   // rapid navigation works instead of clamping at a stale end.
@@ -1231,8 +1231,10 @@ void EpubReaderWordLookupActivity::saveSentence() {
   // Japanese, which is the only language the panel served before Chinese joined it.
   std::string language = sentencemining::languageForDictionary("", mining_.bookLanguage);
   if (language.empty()) language = sentencemining::JAPANESE;
-  miningStatus_ = sentencemining::append(card, language) ? MiningStatus::Saved : MiningStatus::Failed;
-  if (miningStatus_ == MiningStatus::Saved) BookStats::addCounts(mining_.bookPath.c_str(), 0, 1);
+  const auto result =
+      miningFeedback_.saved() ? sentencemining::SaveResult::AlreadySaved : sentencemining::saveOnce(card, language);
+  if (result == sentencemining::SaveResult::Saved) BookStats::addCounts(mining_.bookPath.c_str(), 0, 1);
+  miningFeedback_.record(result != sentencemining::SaveResult::Failed, millis());
   requestUpdate();
 }
 
@@ -1270,7 +1272,7 @@ void EpubReaderWordLookupActivity::prependBookReading(const std::string& surface
 }
 
 void EpubReaderWordLookupActivity::performLookup() {
-  miningStatus_ = MiningStatus::None;
+  miningFeedback_.clear();
   // Hold the rendering mutex while the result strings are rebuilt: the render task wraps and
   // draws resultDefinition/resultHeadword CONCURRENTLY on its own task, and mutating them
   // mid-render tears the string under the renderer -- confirmed crash_report: out_of_range
@@ -1615,6 +1617,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
 }
 
 void EpubReaderWordLookupActivity::loop() {
+  if (miningFeedback_.popupExpired(millis())) requestUpdate();
   // The word under the opening long press, as soon as the scan can name it. Before input, so a
   // page that segments mid-tick opens its definition on this tick rather than the next.
   if (openAtX >= 0 && mode == Mode::Select) {
@@ -1716,7 +1719,6 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
       const int target = std::clamp(scrollOffset + scroll * std::max(1, visibleCapacity), 0, maxScroll);
       if (hasResult && target != scrollOffset) {
         scrollOffset = target;
-        miningStatus_ = MiningStatus::None;
         requestUpdate();
       }
       return false;
@@ -1819,11 +1821,11 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
 }
 
 void EpubReaderWordLookupActivity::moveSection(const int delta) {
-  miningStatus_ = MiningStatus::None;
   const int count = static_cast<int>(sectionText.size());
   if (count <= 1) return;
   const int next = currentSection + delta;
   if (next < 0 || next >= count) return;  // ends are hard stops: the entry is a list, not a ring
+  miningFeedback_.clear();
   currentSection = next;
   scrollOffset = 0;  // a new source starts at its top
   requestUpdate();
@@ -2208,21 +2210,21 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
 
   // The panel is opaque and always covers the same rectangle, so a re-render overwrites the
   // previous one; the reader's page stays visible around it instead of being cleared away.
-  // A save's outcome takes the footer's label until the next move, in place of "kind | dictionary".
-  const bool showStatus = miningStatus_ != MiningStatus::None;
-  const char* statusText = miningStatus_ == MiningStatus::Saved ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE_FAILED);
-  const auto layout =
-      DictionaryPanel::draw(renderer, hasResult ? visibleHeadword() : "", showStatus ? nullptr : visibleLabel(),
-                            counterText.empty() ? nullptr : counterText.c_str(),
-                            showStatus ? statusText : visibleKind(), hasResult && mappedInput.hasTouch());
+  const auto layout = DictionaryPanel::draw(renderer, hasResult ? visibleHeadword() : "", visibleLabel(),
+                                            counterText.empty() ? nullptr : counterText.c_str(), visibleKind(),
+                                            hasResult && mappedInput.hasTouch(), hasResult && miningFeedback_.saved());
   renderContentArea(layout.body);
+  DictionaryPanel::drawPopup(renderer, layout, miningFeedback_.popupText(millis()));
 
   // Directional labels, not mapLabels: the hint has to name the direction the button moves the
   // selection ON THE ROTATED SCREEN. mapLabels only ever flipped a fixed left/right pair, so in
   // landscape the front buttons still read "Left"/"Right" while actually moving up and down.
   const auto labels =
-      mappedInput.mapDirectionalLabels(tr(STR_BACK), hasResult ? tr(STR_MINING_SAVE) : tr(STR_SELECT), tr(STR_DIR_LEFT),
-                                       tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+      mappedInput.mapDirectionalLabels(tr(STR_BACK),
+                                       !hasResult                ? tr(STR_SELECT)
+                                       : miningFeedback_.saved() ? tr(STR_MINING_SAVED)
+                                                                 : tr(STR_MINING_SAVE),
+                                       tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 

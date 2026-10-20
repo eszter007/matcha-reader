@@ -9,6 +9,7 @@
 
 #include "activities/Activity.h"
 #include "clippings/LookupClipHandles.h"
+#include "components/DictionaryPanel.h"
 #include "components/PanelTextPages.h"
 #include "util/ButtonNavigator.h"
 #include "util/SentenceMining.h"
@@ -43,8 +44,7 @@ class DictionaryDefinitionActivity final : public Activity {
 
  private:
   LookupClipHandles clipHandles;
-  enum class MiningStatus : uint8_t { None, Saved, Failed };
-  MiningStatus miningStatus_ = MiningStatus::None;
+  DictionaryPanel::MiningFeedback miningFeedback_;
   void saveSentence();
   const sentencemining::Draft& miningDraft() const { return entries[currentEntry].draft; }
 

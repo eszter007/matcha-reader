@@ -40,6 +40,24 @@ std::string htmlEscape(std::string_view text);
 // re-importing the growing file updates cards instead of duplicating them.
 std::string makeGuid(std::string_view word, std::string_view sentence);
 
+// Finds a saved card's row in a sentence file read in chunks of any size. A row starts with the
+// card's GUID as an unquoted first field, so "\n<guid>," marks it (the header lines come first).
+class GuidFinder {
+ public:
+  explicit GuidFinder(std::string_view guid);
+  // Feeds the next chunk; true once the row has been seen.
+  bool feed(std::string_view chunk);
+
+ private:
+  // Fixed buffers: a scan of a long file allocates nothing per chunk. A GUID is 17 characters.
+  static constexpr size_t MAX_NEEDLE = 24;
+  char needle[MAX_NEEDLE];
+  size_t needleLen = 0;
+  char tail[MAX_NEEDLE];  // the last needleLen - 1 bytes, for a match across two chunks
+  size_t tailLen = 0;
+  bool found = false;
+};
+
 // Anki splits tags on whitespace: a book title becomes one tag with spaces as underscores.
 std::string tagFromTitle(std::string_view title);
 

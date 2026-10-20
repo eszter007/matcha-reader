@@ -1081,12 +1081,14 @@ To save the word on screen, open its definition and:
 
 - **On a touch device** (X4 Pro, Papermono, Sticky): tap the **+** in the top-right corner of the definition panel,
   circled below.
-- **On a button device** (X4, X3, X4 Classic): press **Select**. The **+** is not shown there, since the button does the same.
+- **On a button device** (X4, X3, X4 Classic): press **Select**. The **+** is not shown there, since the button does the same, but the check appears after a save.
 
 <p align="center"><img src="docs/images/screenshots/sentence-mining.png" width="260" alt="A definition panel for 用意 over a vertical page of たのしいムーミン一家, with the save button in its top-right corner circled"></p>
 
-The footer shows **Saved** (or **Could not save** if the SD card refused the write) until you move to another word,
-page or entry.
+A short **Saved** popup confirms the save (or **Could not save** if the SD card refused the write), and the corner
+then shows a check until you move to another word or entry; on a button device the hint reads **Saved**. Each word
+is saved once per sentence: saving it again, also after reopening the panel later, adds nothing (the popup still reads **Saved**). The same word in
+another sentence is a new card and can be saved again.
 
 Saved words go into the **sentence-mining** folder on the SD card, one file per language: `sentences-ja.csv`,
 `sentences-zh.csv`, `sentences-yue.csv`, `sentences-en.csv` and so on. The language is the dictionary's (for manga, the comic's), so each file can go into

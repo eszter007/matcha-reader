@@ -108,7 +108,7 @@ void DictionaryDefinitionActivity::showEntry(const size_t index, const bool atLa
     dictLabel += place;
   }
   currentPage = atLastPage ? totalPages - 1 : 0;
-  miningStatus_ = MiningStatus::None;
+  miningFeedback_.clear();
 }
 
 bool DictionaryDefinitionActivity::stepPage(const int direction) {
@@ -131,7 +131,6 @@ bool DictionaryDefinitionActivity::stepPage(const int direction) {
       return false;
     }
   }
-  miningStatus_ = MiningStatus::None;
   requestUpdate();
   return true;
 }
@@ -181,12 +180,15 @@ void DictionaryDefinitionActivity::saveSentence() {
   auto& draft = entries[currentEntry].draft;
   if (!draft.valid()) return;
   draft.card.date = sentencemining::today();  // the day of the save, not of the lookup
-  miningStatus_ = sentencemining::append(draft.card, draft.language) ? MiningStatus::Saved : MiningStatus::Failed;
-  if (miningStatus_ == MiningStatus::Saved) BookStats::addCounts(draft.bookPath.c_str(), 0, 1);
+  const auto result = miningFeedback_.saved() ? sentencemining::SaveResult::AlreadySaved
+                                              : sentencemining::saveOnce(draft.card, draft.language);
+  if (result == sentencemining::SaveResult::Saved) BookStats::addCounts(draft.bookPath.c_str(), 0, 1);
+  miningFeedback_.record(result != sentencemining::SaveResult::Failed, millis());
   requestUpdate();
 }
 
 void DictionaryDefinitionActivity::loop() {
+  if (miningFeedback_.popupExpired(millis())) requestUpdate();
   // Back steps up to the word selection. The power click leaves the dictionary outright: from
   // the selection it opened this view, so from here it closes the whole flow -- two clicks in
   // and back out, without the reading hand moving.
@@ -257,11 +259,8 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   }
   const auto& entry = entries[currentEntry];
   clipHandles.draw(renderer);  // under the card, beside the word on the page
-  const bool showStatus = miningStatus_ != MiningStatus::None;
-  const char* statusText = miningStatus_ == MiningStatus::Saved ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE_FAILED);
-  const auto layout =
-      DictionaryPanel::draw(renderer, entry.headword.c_str(), showStatus ? nullptr : dictLabel.c_str(), counter,
-                            showStatus ? statusText : nullptr, miningDraft().valid() && mappedInput.hasTouch());
+  const auto layout = DictionaryPanel::draw(renderer, entry.headword.c_str(), dictLabel.c_str(), counter, nullptr,
+                                            miningDraft().valid() && mappedInput.hasTouch(), miningFeedback_.saved());
 
   // Body: two-pass draw inside a prewarm scope (same pattern as the reader's
   // renderContents) so SD-card font glyphs load from SD in one batch instead
@@ -272,11 +271,13 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   drawBody(fontId, layout.body.x, layout.body.y);  // scan pass: records codepoints only
   scope.endScanAndPrewarm();
   drawBody(fontId, layout.body.x, layout.body.y);
+  DictionaryPanel::drawPopup(renderer, layout, miningFeedback_.popupText(millis()));
 
   const bool hasPrev = currentPage > 0 || currentEntry > 0;
   const bool hasNext = currentPage + 1 < totalPages || currentEntry + 1 < entries.size();
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), miningDraft().valid() ? tr(STR_MINING_SAVE) : "",
-                                            hasPrev ? "<" : "", hasNext ? ">" : "");
+  const auto labels = mappedInput.mapLabels(
+      tr(STR_BACK), miningDraft().valid() ? (miningFeedback_.saved() ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE)) : "",
+      hasPrev ? "<" : "", hasNext ? ">" : "");
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();

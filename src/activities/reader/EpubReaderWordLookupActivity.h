@@ -15,6 +15,7 @@ class Page;
 #include "WordSelectionScan.h"
 #include "activities/Activity.h"
 #include "clippings/LookupClipHandles.h"
+#include "components/DictionaryPanel.h"
 #include "util/ButtonNavigator.h"
 #include "util/SentenceMining.h"
 
@@ -343,10 +344,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   bool scanHealAttempted = false;
   void moveCursor(int delta);
   // Sentence mining: saves the visible entry with its sentence (Select, or the panel's + button).
-  // The footer shows the outcome until the next move, so no timed repaint is needed.
-  enum class MiningStatus : uint8_t { None, Saved, Failed };
+  // The corner turns into a check once it is saved, and a short popup reports each save.
   MiningContext mining_;
-  MiningStatus miningStatus_ = MiningStatus::None;
+  DictionaryPanel::MiningFeedback miningFeedback_;
   // Hashes of the headwords shown this session, so browsing back and forth counts each word
   // once; the total goes to BookStats in one write on exit.
   static constexpr size_t MAX_COUNTED_LOOKUPS = 256;

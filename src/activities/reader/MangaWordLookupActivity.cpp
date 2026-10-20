@@ -185,13 +185,15 @@ void MangaWordLookupActivity::saveSentence() {
   // Japanese manga, which is what they were made for.
   std::string language = sentencemining::languageForDictionary("", mining_.bookLanguage);
   if (language.empty()) language = sentencemining::JAPANESE;
-  miningStatus_ = sentencemining::append(card, language) ? MiningStatus::Saved : MiningStatus::Failed;
-  if (miningStatus_ == MiningStatus::Saved) BookStats::addCounts(mining_.bookPath.c_str(), 0, 1);
+  const auto result =
+      miningFeedback_.saved() ? sentencemining::SaveResult::AlreadySaved : sentencemining::saveOnce(card, language);
+  if (result == sentencemining::SaveResult::Saved) BookStats::addCounts(mining_.bookPath.c_str(), 0, 1);
+  miningFeedback_.record(result != sentencemining::SaveResult::Failed, millis());
   requestUpdate();
 }
 
 void MangaWordLookupActivity::moveCursor(int delta) {
-  miningStatus_ = MiningStatus::None;
+  miningFeedback_.clear();
   // Moving past the last already-discovered word while the background scan is still running:
   // scan forward just enough to reveal the next one (see EpubReaderWordLookupActivity).
   if (delta > 0 && !scan.isDone() && cursorIndex + delta >= static_cast<int>(scan.selectableGlyphs.size())) {
@@ -237,7 +239,7 @@ std::string MangaWordLookupActivity::buildLookupText(size_t startIdx) const {
 }
 
 void MangaWordLookupActivity::performLookup() {
-  miningStatus_ = MiningStatus::None;
+  miningFeedback_.clear();
   // Serialize against the render task, which reads the result strings concurrently -- see
   // EpubReaderWordLookupActivity::performLookup() for the confirmed tear/abort.
   RenderLock lock;
@@ -453,6 +455,7 @@ void MangaWordLookupActivity::performLookupImpl() {
 }
 
 void MangaWordLookupActivity::loop() {
+  if (miningFeedback_.popupExpired(millis())) requestUpdate();
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput)) {
     ActivityResult result;
     result.isCancelled = true;
@@ -531,7 +534,6 @@ void MangaWordLookupActivity::loop() {
       const int target = std::clamp(scrollOffset + scroll * std::max(1, visibleCapacity), 0, maxScroll);
       if (hasResult && target != scrollOffset) {
         scrollOffset = target;
-        miningStatus_ = MiningStatus::None;
         requestUpdate();
       }
       return;
@@ -649,20 +651,20 @@ void MangaWordLookupActivity::render(RenderLock&&) {
   // The panel is opaque and always covers the same rectangle, so a re-render overwrites the
   // previous one; the manga page stays visible around it instead of being cleared away.
   const char* kind = resultSource == nullptr ? nullptr : I18N.get(dictsource::kind(resultDict));
-  // A save's outcome takes the footer's label until the next move, in place of "kind | dictionary".
-  const bool showStatus = miningStatus_ != MiningStatus::None;
-  const char* statusText = miningStatus_ == MiningStatus::Saved ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE_FAILED);
-  const auto layout =
-      DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", showStatus ? nullptr : dictionaryLabel(),
-                            counterText.empty() ? nullptr : counterText.c_str(), showStatus ? statusText : kind,
-                            hasResult && mappedInput.hasTouch());
+  const auto layout = DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", dictionaryLabel(),
+                                            counterText.empty() ? nullptr : counterText.c_str(), kind,
+                                            hasResult && mappedInput.hasTouch(), hasResult && miningFeedback_.saved());
   renderContentArea(layout.body);
+  DictionaryPanel::drawPopup(renderer, layout, miningFeedback_.popupText(millis()));
 
   // Directional labels for the same reason as the EPUB lookup panel: the hint must name the
   // direction on the rotated screen, which a fixed left/right pair cannot do.
   const auto labels =
-      mappedInput.mapDirectionalLabels(tr(STR_BACK), hasResult ? tr(STR_MINING_SAVE) : tr(STR_SELECT), tr(STR_DIR_LEFT),
-                                       tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+      mappedInput.mapDirectionalLabels(tr(STR_BACK),
+                                       !hasResult                ? tr(STR_SELECT)
+                                       : miningFeedback_.saved() ? tr(STR_MINING_SAVED)
+                                                                 : tr(STR_MINING_SAVE),
+                                       tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
