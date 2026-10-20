@@ -31,13 +31,16 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
       - [Uploading Books](#uploading-books)
       - [Removing a Book](#removing-a-book)
     - [3.6 Settings](#36-settings)
-      - [3.6.1 Display](#361-display)
-      - [3.6.2 Reader](#362-reader)
-      - [3.6.3 Controls](#363-controls)
-      - [3.6.4 System](#364-system)
-      - [3.6.5 OPDS Servers (Multiple Libraries)](#365-opds-servers-multiple-libraries)
-      - [3.6.6 Web Settings (Wi-Fi + OPDS)](#366-web-settings-wi-fi--opds)
-      - [3.6.7 KOReader Sync Quick Setup](#367-koreader-sync-quick-setup)
+      - [3.6.1 System](#361-system)
+      - [3.6.2 Display](#362-display)
+      - [3.6.3 Sleep](#363-sleep)
+      - [3.6.4 Library](#364-library)
+      - [3.6.5 Reader](#365-reader)
+      - [3.6.6 Controls](#366-controls)
+      - [3.6.7 Connectivity](#367-connectivity)
+      - [3.6.8 OPDS Servers (Multiple Libraries)](#368-opds-servers-multiple-libraries)
+      - [3.6.9 Web Settings (Wi-Fi + OPDS)](#369-web-settings-wi-fi--opds)
+      - [3.6.10 KOReader Sync Quick Setup](#3610-koreader-sync-quick-setup)
         - [Option A: CrossPoint Sync Server (`sync.crosspointreader.com`, default)](#option-a-crosspoint-sync-server-synccrosspointreadercom-default)
         - [Option B: Legacy Public KOReader Server (`sync.koreader.rocks`)](#option-b-legacy-public-koreader-server-synckoreaderrocks)
         - [Option C: Self-Hosted Server (Docker Compose)](#option-c-self-hosted-server-docker-compose)
@@ -87,7 +90,7 @@ The device utilises the standard buttons on the Xteink X4 (in the same layout as
 | **Bottom Edge** | **Back**, **Confirm**, **Left**, **Right**           |
 | **Right Side**  | **Power**, **Side Up**, **Side Down**, **Reset** |
 
-Button layout can be customized in the **[Controls Settings](#363-controls)**.
+Button layout can be customized in the **[Controls Settings](#366-controls)**.
 
 ### Taking a Screenshot
 
@@ -112,9 +115,9 @@ The X4 Pro and the M5Stack Paper Mono have a built-in frontlight. The X4 Pro has
 * **Quick toggle (X4 Pro only):** Double-click the **Power** button to turn the frontlight on or off instantly, without opening the panel.
 
 > [!NOTE]
-> Frontlight brightness and warmth are intentionally not listed in **[Display Settings](#361-display)**: the swipe panel is the only place to adjust them. The on/off state can also be toggled with the Power-button double-click above.
+> Frontlight brightness and warmth are intentionally not listed in **[Display Settings](#362-display)**: the swipe panel is the only place to adjust them. The on/off state can also be toggled with the Power-button double-click above.
 
-If the frontlight doesn't come back on after the device wakes from sleep, check **Restore Light on Wake** in **Settings → Display → Sleep** (on by default). Turning it off is intentional if you'd rather have the light stay off on wake and switch it on yourself each time, but it's easy to forget you changed it.
+If the frontlight doesn't come back on after the device wakes from sleep, check **Restore Light on Wake** in **Settings → Sleep** (on by default). Turning it off is intentional if you'd rather have the light stay off on wake and switch it on yourself each time, but it's easy to forget you changed it.
 
 ---
 
@@ -123,7 +126,7 @@ If the frontlight doesn't come back on after the device wakes from sleep, check 
 ### Power On / Off
 
 To turn the device on or off, **press and hold the Power button for approximately half a second**.
-In the **[Controls Settings](#363-controls)** you can configure the power button to turn the device off with a short press instead of a long one.
+In the **[Controls Settings](#366-controls)** you can configure the power button to turn the device off with a short press instead of a long one.
 
 To reboot the device (for example after a firmware update or if it's frozen), press and release the Reset button, and then quickly press and hold the Power button for a few seconds.
 
@@ -164,7 +167,7 @@ screen is reachable without leaving it:
 - **Up / Side Up** and **Down / Side Down** walk the ring: the screen's own tabs at the top (where it has them), then its
   rows or covers, then the bottom bar, and round again.
 - **Confirm** on a screen's own tabs steps to the next one (**Books**, **Shelves**, **OPDS**, **Files** in the Library, the
-  categories in Settings, the languages in Insights) and past the last one it moves the cursor into the bottom bar.
+  languages in Insights) and past the last one it moves the cursor into the bottom bar.
 - **Left** and **Right** on a screen's own tabs step to the previous or next one. Once the cursor is in the bottom bar
   they move between Home, Library, File Transfer, Insights and Settings. **Confirm** goes to the highlighted tab;
   **Confirm** on the tab you are already in hands the cursor back to the first tab at the top of the screen, closing
@@ -193,7 +196,7 @@ separate home entry, exactly as before.
 
 ### 3.4 Library Screen
 
-Matcha ships two Library screens and **Settings → Display → Library → Library View** chooses between them. **Matcha Covers**, the
+Matcha ships two Library screens and **Settings → Library → Library View** chooses between them. **Matcha Covers**, the
 default, is a grid of book covers described in the README. **CrossPoint List** is the indexed list documented below.
 Everything in this section applies to the list view.
 
@@ -214,7 +217,7 @@ On a button-only device:
 
 On a touch device, tap tabs, books, and the Search icon directly. Tap an active indexed tab again to reverse its sort direction. Swipe to scroll. Long-press a book in the Recent view to remove it from the list. Long-press a book in a Title or Author view to collapse to the group list, then tap a group to expand it. The **Added** view is not grouped; tapping or long-pressing a book opens it.
 
-The index is created automatically the first time the list view is opened. To pick up later file changes or updated metadata, use **Settings → Display → Library → Rebuild library index**. The **Use book metadata** setting in the same place controls whether the index reads titles and authors stored inside books.
+The index is created automatically the first time the list view is opened. To pick up later file changes or updated metadata, use **Settings → Library → Rebuild library index**. The **Use book metadata** setting in the same place controls whether the index reads titles and authors stored inside books.
 
 ### 3.5 File Transfer Screen
 
@@ -277,58 +280,39 @@ Books cannot be removed from your device through Calibre. Use the web interface 
 
 ### 3.6 Settings
 
-The Settings screen allows you to configure the device's behavior. There are a few settings you can adjust:
+The Settings screen allows you to configure the device's behavior. It lists seven sections, **System**, **Display**,
+**Sleep**, **Library**, **Reader**, **Controls** and **Connectivity**, and each opens its own screen with the settings below.
+While **Plugins** is switched on under System, a **Plugins** entry follows them and opens the installed plugins.
 
 Settings that are on or off show a switch on the right of their row instead of the words "ON" and "OFF".
 Selecting the row flips it in place. Settings with more than two choices still show their current value as text and
 open a list when selected.
 
-#### 3.6.1 Display
+#### 3.6.1 System
 
-- **Library**: Opens the library settings, gathered on one screen:
-  
-  - **Library View**: Which screen the Library entry opens: "Matcha Covers" (default), the cover grid, or
-    "CrossPoint List", the indexed title/author list described in [Library Screen](#34-library-screen)
-  - **Rebuild library index**: Re-scan the card to pick up file changes and updated metadata
-  - **Clear Read Books from Recent List**: Drop a book from the Recent tab once you finish it
-  - **Move finished books to Read**: Move a finished book into a `Read` folder
-  - **Use book metadata**: Read the title and author stored inside each book when the index is rebuilt.
-    When disabled or unavailable, the filename is used
-  
-  Three of those only affect the CrossPoint List screen and are hidden while Matcha Covers is
-  selected, leaving Library View and Move finished books to Read: the index rebuild and the
-  metadata toggle both feed the list's index, which the cover grid does not use, and the cover
-  grid shows every book the card scan finds rather than a recent list.
 
-- **Sleep**: Opens the sleep settings, gathered on one screen, in this order: Sleep Screen, Sleep Screen Cover Mode,
-  Sleep Screen Cover Filter, Quick Resume on Timeout, Time to Sleep, and Restore Light on Wake (described under
-  [Frontlight](#frontlight-x4-pro-only)). They live there rather than in the Display list itself; each is described
-  below.
+- **Clear Reading Cache**: Clear the internal SD card cache.
 
-- **Sleep Screen**: Which sleep screen to display when the device sleeps:
-  
-  - "Dark" (default) - The logo (or your own `logo.bmp`) on a dark background
-  - "Light" - The same default sleep screen, on a white background
-  - "Custom" - Custom images from the SD card; see [Sleep Screen](#37-sleep-screen) below for more information
-  - "Cover" - The book cover image (Note: this is experimental and may not work as expected)
-  - "None" - A blank screen
-  - "Cover + Custom" - The book cover image while actively reading, falls back to "Custom" behavior otherwise
-  - "Quick resume" - The text of the last page read will be displayed on the sleep screen and a moon icon is shown on the edge of the screen. Waking up the device will return to the same page of the opened book. This is useful for quickly resuming reading without waiting for the device to fully wake up and load the book.
-  - "Transparent" - A transparent overlay image drawn over the current screen; see [Sleep Screen](#37-sleep-screen) below for more information
-- **Sleep Screen Cover Mode**: How to display the book cover when "Cover" sleep screen is selected:
-  
-  - "Fit" (default) - Scale the image down to fit centered on the screen, padding with white borders as necessary
-  - "Crop" - Scale the image down and crop as necessary to try to fill the screen (Note: this is experimental and may not work as expected)
+- **Language**: Set the UI language. English, Japanese, Spanish, French and German are built into the firmware. The
+  rest (Czech, Brazilian Portuguese, Russian, Swedish, Romanian, Catalan, Ukrainian, Belarusian, Italian, Polish,
+  Finnish, Danish, Dutch, Turkish, Kazakh, Hungarian, Lithuanian, Slovenian, Valencian, Hebrew, Simplified and
+  Traditional Chinese and more) are listed too, but marked **Needs pack** until you install a language pack. See
+  [Language Packs (SD Card)](#39-language-packs-sd-card). A Chinese interface also needs a Chinese SD font (see
+  [§6.4](#64-chinese-books)): the built-in CJK glyphs are the Japanese set, so menus would show boxes without one.
 
-- **Sleep Screen Cover Filter**: What filter will be applied to the book cover when "Cover" sleep screen is selected:
-  
-  - "None" (default) - The cover image will be converted to a grayscale image and displayed as it is
-  - "Contrast" - The image will be displayed as a black & white image without grayscale conversion
-  - "Inverted" - The image will be inverted as in white & black and will be displayed without grayscale conversion
+- **Keyboard Layouts**: Choose which on-screen keyboard layouts are offered when typing.
 
-- **Quick Resume on Timeout**: Whether to enable the "Quick Resume" sleep screen when the device goes to sleep due to inactivity (Time to Sleep, below). This is useful for quickly resuming reading without waiting for the device to fully wake up and load the book. This overwrites the Sleep Screen Cover Mode when enabled.
+- **Plugins**: A switch that turns the plugins installed on the SD card on or off. A plugin is a folder
+  on the card; adding or updating one needs no firmware update. See [docs/sd-plugins.md](docs/sd-plugins.md).
 
-- **Time to Sleep**: Set the duration of inactivity before the device automatically goes to sleep; from 1 to 30 minutes, or Never.
+- **Check for updates**: Check for firmware updates over Wi-Fi. It reads this fork's releases and downloads the build for your device, so an update keeps the Matcha features. Pre-releases (nightlies) are never offered here; install those by flashing.
+
+- **SD Card Firmware Update**: Install firmware without a USB connection by placing a `firmware.bin` file on the SD card.
+
+**Rebuild library index** is under **Settings → Library**, and **Manage Fonts** is at the bottom of the font
+list inside **Text Settings**.
+
+#### 3.6.2 Display
 
 - **Status Bar**: Set up under **Reader Settings → Customise Status Bar**, piece by piece: the chapter page count, the book progress percentage, a progress bar (for the book, for the chapter, or hidden) and its thickness, the title, and the battery.
   - **Time Left**: an estimate of the reading time left in the chapter or the book (default: hidden). It is shown before the page count, e.g. "12 min". It learns from how long you stay on each page as you turn forward, ignoring pages you skip past in under 2 seconds or leave open for more than 30 minutes. Each book keeps its own reading speed, and the estimate appears once about five pages have been timed.
@@ -355,7 +339,51 @@ open a list when selected.
 
 - **Show Hidden Files** (off by default): Lists files and folders whose names start with `.` in the file browser.
 
-#### 3.6.2 Reader
+#### 3.6.3 Sleep
+
+- **Sleep Screen**: Which sleep screen to display when the device sleeps:
+  
+  - "Dark" (default) - The logo (or your own `logo.bmp`) on a dark background
+  - "Light" - The same default sleep screen, on a white background
+  - "Custom" - Custom images from the SD card; see [Sleep Screen](#37-sleep-screen) below for more information
+  - "Cover" - The book cover image (Note: this is experimental and may not work as expected)
+  - "None" - A blank screen
+  - "Cover + Custom" - The book cover image while actively reading, falls back to "Custom" behavior otherwise
+  - "Quick resume" - The text of the last page read will be displayed on the sleep screen and a moon icon is shown on the edge of the screen. Waking up the device will return to the same page of the opened book. This is useful for quickly resuming reading without waiting for the device to fully wake up and load the book.
+  - "Transparent" - A transparent overlay image drawn over the current screen; see [Sleep Screen](#37-sleep-screen) below for more information
+- **Sleep Screen Cover Mode**: How to display the book cover when "Cover" sleep screen is selected:
+  
+  - "Fit" (default) - Scale the image down to fit centered on the screen, padding with white borders as necessary
+  - "Crop" - Scale the image down and crop as necessary to try to fill the screen (Note: this is experimental and may not work as expected)
+
+- **Sleep Screen Cover Filter**: What filter will be applied to the book cover when "Cover" sleep screen is selected:
+  
+  - "None" (default) - The cover image will be converted to a grayscale image and displayed as it is
+  - "Contrast" - The image will be displayed as a black & white image without grayscale conversion
+  - "Inverted" - The image will be inverted as in white & black and will be displayed without grayscale conversion
+
+- **Quick Resume on Timeout**: Whether to enable the "Quick Resume" sleep screen when the device goes to sleep due to inactivity (Time to Sleep, below). This is useful for quickly resuming reading without waiting for the device to fully wake up and load the book. This overwrites the Sleep Screen Cover Mode when enabled.
+
+- **Time to Sleep**: Set the duration of inactivity before the device automatically goes to sleep; from 1 to 30 minutes, or Never.
+
+- **Restore Light on Wake** (devices with a frontlight only): See [Frontlight](#frontlight-x4-pro-and-paper-mono).
+
+#### 3.6.4 Library
+
+- **Library View**: Which screen the Library entry opens: "Matcha Covers" (default), the cover grid, or
+  "CrossPoint List", the indexed title/author list described in [Library Screen](#34-library-screen)
+- **Rebuild library index**: Re-scan the card to pick up file changes and updated metadata
+- **Clear Read Books from Recent List**: Drop a book from the Recent tab once you finish it
+- **Move finished books to Read**: Move a finished book into a `Read` folder
+- **Use book metadata**: Read the title and author stored inside each book when the index is rebuilt.
+  When disabled or unavailable, the filename is used
+
+Three of those only affect the CrossPoint List screen and are hidden while Matcha Covers is
+selected, leaving Library View and Move finished books to Read: the index rebuild and the
+metadata toggle both feed the list's index, which the cover grid does not use, and the cover
+grid shows every book the card scan finds rather than a recent list.
+
+#### 3.6.5 Reader
 
 - **Reader Font Family**: Choose the font used for reading:
   
@@ -403,9 +431,10 @@ open a list when selected.
 
 - **Focus Reading**: Bolds the first part of each word to create visual fixation points, similar to Bionic Reading. This can help improve reading speed and focus; options are "ON" or "OFF" (default).
 
-#### 3.6.3 Controls
+#### 3.6.6 Controls
 
-- **Shortcuts**: Opens the button-shortcut settings, gathered on one screen: **Long-Press Button Behavior**,
+- **Shortcuts**: Opens the button-shortcut settings, gathered on one screen: **Home Button Gestures** first on devices with a
+  Home key, then **Long-Press Button Behavior**,
   **Long-press Menu**, **Power + Up Syncs Clock**, **Short Power Button Click** and **Quick-return from footnotes**, plus **Upper Side Button
   in Reader** and **Lower Side Button in Reader** on the X3/X4, **Double-Click Power for Light** on the X4 Pro and
   **Tilt Page Turn** on the X3, with **Short Back to File Browser** last. Each is described
@@ -469,13 +498,15 @@ open a list when selected.
   - "Word Lookup" - A short press in reading mode opens word selection. A second press looks up the highlighted word, and a press in the definition view closes the dictionary and returns to the page.
   - "Confirm" - A short press acts as the Confirm button. Useful on touch devices, which have no front Confirm key.
 
-- **Touch Reader Controls**: How the touchscreen turns pages while reading (touch devices only):
-  
-  - "Off" - The reading surface ignores touch entirely
-  - "Tap" (default) - Tap the left third to go back, the right third to go forward
-  - "Swipe" - Swipe horizontally to turn pages, leaving taps free for the reader menu
-  - "Inverted Tap" - As "Tap", with the sides reversed. For vertical books and manga, **Reversed page turn** already does this and also covers the buttons
-  - "Inverted Swipe" - As "Swipe", with the directions reversed. Same note as above
+- **Touch Reader Controls** (on by default, touch devices only): Whether touching the page turns it while reading.
+  Off, the page ignores taps and swipes for page turns; the centre tap for the reader menu and long-pressing a word
+  still work. On, two more rows appear and set each direction:
+
+  - **Next Page** and **Previous Page**: "Tap & Swipe" (default), "Tap Only", "Swipe Only", "Inverted Tap",
+    "Inverted Swipe" or "Disabled". Taps use the left third of the page to go back and the rest to go forward,
+    keeping the centre free for the menu; when only one direction accepts taps, the whole page is its zone. Swipe
+    left to go forward and right to go back. The inverted choices reverse that. For vertical books and manga,
+    **Reversed page turn** already does this and also covers the buttons
 
 - **Tap For Reader Menu**: Opens the reader menu when you tap the centre of the screen. Only offered on devices with a Home key, where the menu stays reachable through the key's long-press function if you turn this off.
 
@@ -487,39 +518,17 @@ open a list when selected.
 
 - **Quick return from links**: Toggles on and off the quick return functionality from the footnotes. When the functionality it's active, a short press of the power button will act as the back button from the footnotes page.
 
-#### 3.6.4 System
-
+#### 3.6.7 Connectivity
 
 - **Wi-Fi Networks**: Connect to Wi-Fi networks for file transfers and firmware updates.
 
-- **Bluetooth Page Turner** (**Settings → System**, on boards with Bluetooth): Enable Bluetooth, then open **Scan for Remotes** to connect a page turner. **Paired Remotes** lists saved remotes; selecting a row marked **Forget** removes it. Once connected, open **Map Buttons**, choose a page, chapter, Confirm, Back, reader menu, or clipping action, and press the remote button within 15 seconds. Release the button within 15 seconds: a hold of at least 0.7 seconds is mapped separately from its tap. If the remote never reports a release, learning waits 15 seconds and saves the press as a tap. Hold Confirm on an action, or long-press its row, to clear it. Back cancels learning or returns to the Bluetooth menu. Mapping is optional: without custom mappings, the default remote controls remain available. Each button gesture maps to one action; assigning it again replaces its previous action. Confirm and Back act like the device buttons while reading and in the reader list menu. Next/Previous Page navigate items while a reader menu is open and turn pages when it is closed. Bluetooth can also be toggled from the reader list menu or the toolbar’s **More** menu.
+- **Bluetooth Page Turner** (**Settings → Connectivity**, on boards with Bluetooth): Enable Bluetooth, then open **Scan for Remotes** to connect a page turner. **Paired Remotes** lists saved remotes; selecting a row marked **Forget** removes it. Once connected, open **Map Buttons**, choose a page, chapter, Confirm, Back, reader menu, or clipping action, and press the remote button within 15 seconds. Release the button within 15 seconds: a hold of at least 0.7 seconds is mapped separately from its tap. If the remote never reports a release, learning waits 15 seconds and saves the press as a tap. Hold Confirm on an action, or long-press its row, to clear it. Back cancels learning or returns to the Bluetooth menu. Mapping is optional: without custom mappings, the default remote controls remain available. Each button gesture maps to one action; assigning it again replaces its previous action. Confirm and Back act like the device buttons while reading and in the reader list menu. Next/Previous Page navigate items while a reader menu is open and turn pages when it is closed. Bluetooth can also be toggled from the reader list menu or the toolbar’s **More** menu.
 
 - **CrossPoint Sync**: Settings for syncing book progress with CrossPoint Sync or a compatible KOSync server. **Smart sync** is the default for new configurations and auto-resolves simple push/pull decisions. Existing credential files retain **Ask every time** when migrated; you can switch Sync Behavior at any time if you prefer manual confirmation.
 
-- **OPDS Servers**: Manage one or more OPDS [(Open Publication Distribution System)](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System) libraries for browsing and downloading books. See [OPDS Servers (Multiple Libraries)](#365-opds-servers-multiple-libraries) below.
+- **OPDS Servers**: Manage one or more OPDS [(Open Publication Distribution System)](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System) libraries for browsing and downloading books. See [OPDS Servers (Multiple Libraries)](#368-opds-servers-multiple-libraries) below.
 
-- **Clear Reading Cache**: Clear the internal SD card cache.
-
-- **Language**: Set the UI language. English, Japanese, Spanish, French and German are built into the firmware. The
-  rest (Czech, Brazilian Portuguese, Russian, Swedish, Romanian, Catalan, Ukrainian, Belarusian, Italian, Polish,
-  Finnish, Danish, Dutch, Turkish, Kazakh, Hungarian, Lithuanian, Slovenian, Valencian, Hebrew, Simplified and
-  Traditional Chinese and more) are listed too, but marked **Needs pack** until you install a language pack. See
-  [Language Packs (SD Card)](#39-language-packs-sd-card). A Chinese interface also needs a Chinese SD font (see
-  [§6.4](#64-chinese-books)): the built-in CJK glyphs are the Japanese set, so menus would show boxes without one.
-
-- **Keyboard Layouts**: Choose which on-screen keyboard layouts are offered when typing.
-
-- **Plugins**: Lists the plugins installed on the SD card that have a screen on the device. A plugin is a folder
-  on the card; adding or updating one needs no firmware update. See [docs/sd-plugins.md](docs/sd-plugins.md).
-
-- **Check for updates**: Check for firmware updates over Wi-Fi. It reads this fork's releases and downloads the build for your device, so an update keeps the Matcha features. Pre-releases (nightlies) are never offered here; install those by flashing.
-
-- **SD Card Firmware Update**: Install firmware without a USB connection by placing a `firmware.bin` file on the SD card.
-
-Rebuilding the library index moved to **Settings → Display → Library**, and **Manage Fonts** is at the bottom of the
-font list inside **Text Settings**.
-
-#### 3.6.5 OPDS Servers (Multiple Libraries)
+#### 3.6.8 OPDS Servers (Multiple Libraries)
 
 CrossPoint supports saving multiple OPDS servers and switching between them when browsing catalogs.
 
@@ -534,7 +543,7 @@ entry reaches the Library tabs (**Left**/**Right** switch tab, **Confirm** goes 
 last entry reaches the bottom bar. On an error screen or an empty catalog, **Up** and **Down** go straight to the tabs
 and the bar.
 
-1. Open **Settings -> System -> OPDS Servers**.
+1. Open **Settings -> Connectivity -> OPDS Servers**.
 
 2. Select **Add Server** to create a new entry, or select an existing server to edit it.
 
@@ -559,9 +568,9 @@ You can also manage OPDS servers from the web interface while in File Transfer m
 2. Open `http://<device-ip>/settings`.
 3. Use the **OPDS Servers** card to add, edit, or delete entries.
 
-For web-based Wi-Fi network management, see [Web Settings (Wi-Fi + OPDS)](#366-web-settings-wi-fi--opds).
+For web-based Wi-Fi network management, see [Web Settings (Wi-Fi + OPDS)](#369-web-settings-wi-fi--opds).
 
-#### 3.6.6 Web Settings (Wi-Fi + OPDS)
+#### 3.6.9 Web Settings (Wi-Fi + OPDS)
 
 While in **File Transfer** mode, the web settings page includes management cards for both **Wi-Fi Networks** and **OPDS Servers**.
 
@@ -576,7 +585,7 @@ Behavior notes:
 - Leaving Password blank while editing keeps the existing saved password unchanged.
 - The web UI can save hidden-network SSIDs, but connecting to hidden networks still depends on the device-side Wi-Fi connection flow.
 
-#### 3.6.7 KOReader Sync Quick Setup
+#### 3.6.10 KOReader Sync Quick Setup
 
 CrossPoint can sync reading progress with KOReader-compatible sync servers.
 It also interoperates with KOReader apps/devices when they use the same server and credentials.
@@ -595,7 +604,7 @@ When **Sync Server URL** is left empty, CrossPoint uses the free CrossPoint sync
 
 1. On each CrossPoint device:
 
-   - Go to **Settings -> System -> CrossPoint Sync**.
+   - Go to **Settings -> Connectivity -> CrossPoint Sync**.
 
    - Set **Username** and **Password** (enter the plain password; CrossPoint computes MD5 internally, and use the same values on all devices).
 
@@ -613,7 +622,7 @@ Use this if you already sync KOReader devices against the official public server
 
 1. On each CrossPoint device:
 
-   - Go to **Settings -> System -> CrossPoint Sync**.
+   - Go to **Settings -> Connectivity -> CrossPoint Sync**.
 
    - Set **Sync Server URL** to `https://sync.koreader.rocks` (required; an empty URL now points at the CrossPoint server instead).
 
@@ -701,7 +710,7 @@ If this returns `HTTP 402` with `{"code":2002,"message":"Username is already reg
 
 4. On each CrossPoint device:
    
-   - Go to **Settings -> System -> CrossPoint Sync**.
+   - Go to **Settings -> Connectivity -> CrossPoint Sync**.
    
    - Set **Username** and **Password** (enter the plain password; CrossPoint computes MD5 internally, and use the same values on all devices).
    
@@ -715,7 +724,7 @@ If you use the HTTPS listener, use `https://<server-ip>:7200` (`curl -k` only fo
 
 ##### Syncing While Reading
 
-Once any of the options above is set up, press **Confirm** while reading to open the reader menu, then select **Sync Progress**. Alternatively, set **Settings -> Controls -> Long-press Menu** to **CrossPoint Sync** and hold Confirm to launch sync directly.
+Once any of the options above is set up, press **Confirm** while reading to open the reader menu, then select **Sync Progress**. Alternatively, set **Settings -> Controls -> Shortcuts -> Long-press Menu** to **CrossPoint Sync** and hold Confirm to launch sync directly.
 
 - **Sync Clippings** is off by default. Enable it only for a compatible CrossPoint Sync server; manual **Sync Progress** then uploads and downloads this book’s clippings too. Leave it off for ordinary KOSync servers.
 - With **Sync Behavior** set to **Ask every time**, choose **Apply Remote** to jump to remote progress or **Upload Local** to push current progress.
@@ -861,7 +870,7 @@ If the **Short Power Button Click** setting is set to "Next Page", you can also 
 * **Next Chapter:** Press and **hold** the **Right** (or **Side Down**) button briefly, then release.
 * **Previous Chapter:** Press and **hold** the **Left** (or **Side Up**) button briefly, then release.
 
-This feature can be disabled in the **[Controls Settings](#363-controls)** to help avoid changing chapters by mistake.
+This feature can be disabled in the **[Controls Settings](#366-controls)** to help avoid changing chapters by mistake.
 
 ### Auto Page Turn
 
@@ -894,7 +903,7 @@ tap outside the panel returns to the page.
 
 ### Dictionary Lookup
 
-Words on the current page can be looked up in an offline StarDict dictionary stored on the SD card. Copy a dictionary to the `/dictionaries/` folder (or `/.dictionaries/`, see [6.7](#67-dictionary-files-and-language-selection)), select it in **Settings → Reader → Dictionary**, then start a lookup by choosing **Look Up** in the **[Reader Menu](#5-reader-menu)** (or by holding **Confirm**, if the **Long-press Menu** setting in **[Controls Settings](#363-controls)** is set to "Dictionary"). Use **Left/Right** to highlight a word and press **Confirm** to show its definition.
+Words on the current page can be looked up in an offline StarDict dictionary stored on the SD card. Copy a dictionary to the `/dictionaries/` folder (or `/.dictionaries/`, see [6.7](#67-dictionary-files-and-language-selection)), select it in **Settings → Reader → Dictionary**, then start a lookup by choosing **Look Up** in the **[Reader Menu](#5-reader-menu)** (or by holding **Confirm**, if the **Long-press Menu** setting in **[Controls Settings](#366-controls)** is set to "Dictionary"). Use **Left/Right** to highlight a word and press **Confirm** to show its definition.
 
 On a touch device you can skip all of that: **long-press a word on the page** and its definition opens directly, with no setting to turn on first. A press between words opens ordinary word selection instead. When page turns use swipes only, a short tap opens the definition and a hold starts a clipping (see **Tap to look up** in [3.6.3](#363-controls)). The definition card pages by touch the way the reader is set to turn pages in **Touch Reader Controls**, and a tap outside it puts it away.
 
@@ -905,7 +914,7 @@ See [docs/dictionary.md](docs/dictionary.md) for supported formats, setup, and w
 * **Return to Home:** Press the **Back** button to close the book and return to the **[Home](#31-home-screen)** screen.
 * **Return to Browse Files:** Press and hold the **Back** button to close the book and return to the **[Browse Files](#33-browse-files-screen)** screen.
 * **Reader Menu:** Press **Confirm** to open the **[Reader Menu](#5-reader-menu)**, which includes chapter navigation, reading options, and more.
-* **Long-press Confirm (configurable):** Holding **Confirm** runs the function chosen by the **Long-press Menu** setting in **[Controls Settings](#363-controls)**: "Bookmark" (default) drops a bookmark, "KOSync" launches KOReader Sync, "Dictionary" starts a word lookup, "Create Clipping" starts a text selection, "Disabled" does nothing. A short press always opens the Reader Menu.
+* **Long-press Confirm (configurable):** Holding **Confirm** runs the function chosen by the **Long-press Menu** setting in **[Controls Settings](#366-controls)**: "Bookmark" (default) drops a bookmark, "KOSync" launches KOReader Sync, "Dictionary" starts a word lookup, "Create Clipping" starts a text selection, "Disabled" does nothing. A short press always opens the Reader Menu.
 
 ### Supported Languages
 
@@ -938,7 +947,7 @@ Available options include:
 - **Take screenshot**: Save a screenshot of the current page to the `screenshots/` folder.
 - **Show page as QR**: Display a QR code encoding the current reading position.
 - **Go Home**: Close the book and return to the Home screen.
-- **Sync Progress**: Push or pull reading progress with a KOReader sync server (see [KOReader Sync Quick Setup](#367-koreader-sync-quick-setup)).
+- **Sync Progress**: Push or pull reading progress with a KOReader sync server (see [KOReader Sync Quick Setup](#3610-koreader-sync-quick-setup)).
 - **Delete Book Cache**: Clear the cached layout data for the current book, forcing a re-index on next open.
 
 Matcha adds **Word Lookup**, **Translate Page**, **Reader Settings**, **Toggle Bookmark** and **Night Mode** to the menu; see [§6](#6-language-learning-features).

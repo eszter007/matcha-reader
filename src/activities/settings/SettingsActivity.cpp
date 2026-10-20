@@ -65,31 +65,41 @@ bool showOnDevice(const SettingInfo& setting) {
       SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
     return false;
   }
+  // The per-direction gestures only apply while Touch Reader Controls is on.
+  if ((setting.valuePtr == &CrossPointSettings::pageTurnGesture ||
+       setting.valuePtr == &CrossPointSettings::previousPageGesture) &&
+      SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_OFF) {
+    return false;
+  }
+  // Both only feed the CrossPoint list view: the cover grid keeps its own index and lists every
+  // book the card scan finds, so a book dropped from recents is simply found again.
+  if ((setting.valuePtr == &CrossPointSettings::libraryUseMetadata ||
+       setting.valuePtr == &CrossPointSettings::removeReadBooksFromRecents) &&
+      SETTINGS.libraryView != CrossPointSettings::LIBRARY_VIEW_LIST) {
+    return false;
+  }
   return true;
 }
 
 // End = not a row here: other categories (KOReader Sync, Status Bar, ...)
 // only group the web UI; their rows live on their own sub-screens.
+// Shortcuts belongs to Controls but opens as a sub-screen from a row in it
+// (isSubScreenCategory); a new sub-screen category goes in both functions.
 SettingsSection sectionFor(const SettingInfo& setting) {
-  if (setting.valuePtr == &CrossPointSettings::libraryUseMetadata ||
-      setting.valuePtr == &CrossPointSettings::removeReadBooksFromRecents ||
-      setting.valuePtr == &CrossPointSettings::moveFinishedToReadFolder) {
-    return SettingsSection::Library;
-  }
-  if (setting.valuePtr == &CrossPointSettings::sleepTimeoutMinutes) return SettingsSection::Display;
   if (setting.category == StrId::STR_CAT_DISPLAY) return SettingsSection::Display;
   if (setting.category == StrId::STR_CAT_READER) return SettingsSection::Reader;
   if (setting.category == StrId::STR_CAT_CONTROLS) return SettingsSection::Controls;
-  if (setting.category == StrId::STR_CAT_SYSTEM) return SettingsSection::General;
-  // The fork's own groups fold into the nearest section.
+  if (setting.category == StrId::STR_CAT_SYSTEM) return SettingsSection::System;
   if (setting.category == StrId::STR_CAT_LIBRARY) return SettingsSection::Library;
-  if (setting.category == StrId::STR_CAT_SLEEP) return SettingsSection::Display;
+  if (setting.category == StrId::STR_CAT_SLEEP) return SettingsSection::Sleep;
   if (setting.category == StrId::STR_CAT_SHORTCUTS) return SettingsSection::Controls;
   return SettingsSection::End;
 }
 
-// Device-only action rows added per section, beyond the shared list.
-constexpr size_t EXTRA_ROWS_PER_SECTION = 6;
+bool isSubScreenCategory(const StrId category) { return category == StrId::STR_CAT_SHORTCUTS; }
+
+// Device-only action rows added per section, beyond the shared list (System has the most).
+constexpr size_t EXTRA_ROWS_PER_SECTION = 8;
 }  // namespace
 
 void SettingsActivity::rebuildLibraryIndex() {
@@ -120,71 +130,87 @@ void SettingsActivity::rebuildSettings() {
   // reader activity ran — otherwise the font-family picker shows stale list.
   sdFontSystem.refreshIfDirty();
 
-  // Rescan /dictionaries on every rebuild: cheap (one directory listing) and
+  // Rescan /dictionaries on every rebuild of Reader: cheap (one directory listing) and
   // picks up dictionaries copied to the SD card since the last visit.
   std::vector<DictionaryEntry> dictionaries;
-  DictionaryRegistry::discover(dictionaries);
+  if (section == SettingsSection::Reader) DictionaryRegistry::discover(dictionaries);
 
-  auto all = getSettingsList(&sdFontSystem.registry(), &dictionaries);
+  // Copy only the rows of the one category shown here; each section's title is its category
+  // (Connectivity's matches none: it has only action rows).
+  const StrId category =
+      subCategory != StrId::STR_NONE_OPT ? subCategory : SETTINGS_SECTION_TITLES[static_cast<size_t>(section)];
+  auto all = getSettingsList(&sdFontSystem.registry(), &dictionaries, category);
 
-  const size_t count = std::count_if(all.begin(), all.end(), [this](const SettingInfo& setting) {
-    return sectionFor(setting) == section && showOnDevice(setting);
-  });
+  const auto belongsHere = [this](const SettingInfo& setting) {
+    if (!showOnDevice(setting)) return false;
+    if (subCategory != StrId::STR_NONE_OPT) return setting.category == subCategory;
+    return sectionFor(setting) == section && !isSubScreenCategory(setting.category);
+  };
+  const size_t count = std::count_if(all.begin(), all.end(), belongsHere);
   settings.clear();
   settings.reserve(count + EXTRA_ROWS_PER_SECTION);
 
   const auto addAction = [this](SettingsSection target, StrId name, SettingAction action) {
-    if (target == section) settings.push_back(SettingInfo::Action(name, action));
+    if (target == section && subCategory == StrId::STR_NONE_OPT) {
+      settings.push_back(SettingInfo::Action(name, action));
+    }
   };
 
-  // Language leads so a user stuck in an unfamiliar language finds it first.
-  addAction(SettingsSection::General, StrId::STR_LANGUAGE, SettingAction::Language);
-  addAction(SettingsSection::General, StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts);
+  // Sub-screens and per-board configurators lead their section, above its own rows.
   addAction(SettingsSection::Reader, StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings);
-  addAction(SettingsSection::Reader, StrId::STR_MANAGE_FONTS, SettingAction::DownloadFonts);
-  if (BoardConfig::hasHomeKey()) {
-    addAction(SettingsSection::Controls, StrId::STR_HOME_BUTTON, SettingAction::HomeButton);
-  }
+  addAction(SettingsSection::Controls, StrId::STR_CAT_SHORTCUTS, SettingAction::ShortcutsSettings);
   if (!BoardConfig::hasTouch()) {
     addAction(SettingsSection::Controls, StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons);
   }
+  // The Home key's gestures lead the Shortcuts sub-screen.
+  if (subCategory == StrId::STR_CAT_SHORTCUTS && BoardConfig::hasHomeKey()) {
+    settings.push_back(SettingInfo::Action(StrId::STR_HOME_BUTTON, SettingAction::HomeButton));
+  }
 
   for (auto& setting : all) {
-    if (sectionFor(setting) != section || !showOnDevice(setting)) continue;
+    if (!belongsHere(setting)) continue;
     settings.push_back(std::move(setting));
   }
 
-  // Clock configuration only exists where the RTC probe found hardware.
+  // Rebuild sits directly under the view picker. It rebuilds the CLX1 index, so it is offered
+  // only when that index is what the Library entry opens.
+  if (section == SettingsSection::Library && !settings.empty() &&
+      SETTINGS.libraryView == CrossPointSettings::LIBRARY_VIEW_LIST) {
+    settings.insert(settings.begin() + 1,
+                    SettingInfo::Action(StrId::STR_LIBRARY_REBUILD, SettingAction::RebuildLibraryIndex));
+  }
+
+  // No Manage Fonts row: it sits at the bottom of the font list inside Text Settings.
+  addAction(SettingsSection::Reader, StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar);
+
+  addAction(SettingsSection::System, StrId::STR_ABOUT, SettingAction::About);
   // On every board: Matcha keeps a system clock without an RTC, and the zone picked here decides
   // reading-stats day boundaries.
-  addAction(SettingsSection::General, StrId::STR_CLOCK, SettingAction::ClockSettings);
-  addAction(SettingsSection::Library, StrId::STR_LIBRARY_REBUILD, SettingAction::RebuildLibraryIndex);
-  addAction(SettingsSection::Reader, StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar);
-  addAction(SettingsSection::Reader, StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache);
-
-  addAction(SettingsSection::Network, StrId::STR_WIFI_NETWORKS, SettingAction::Network);
-  if (bleturner::status().compiledIn) {
-    addAction(SettingsSection::Network, StrId::STR_BT_PAGE_TURNER, SettingAction::Bluetooth);
-  }
-  addAction(SettingsSection::Network, StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync);
-  addAction(SettingsSection::Network, StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser);
-  addAction(SettingsSection::Network, StrId::STR_PLUGINS, SettingAction::Plugins);
-
-  // OTA fetches this board's own release asset (see OtaUpdater); boards whose
-  // asset isn't published yet just report no update available. The Picco's
-  // stock layout has one app slot (partitions_picco.csv), so it cannot update
-  // itself either way.
+  addAction(SettingsSection::System, StrId::STR_CLOCK, SettingAction::ClockSettings);
+  addAction(SettingsSection::System, StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache);
+  addAction(SettingsSection::System, StrId::STR_LANGUAGE, SettingAction::Language);
+  addAction(SettingsSection::System, StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts);
+  addAction(SettingsSection::System, StrId::STR_PLUGINS, SettingAction::Plugins);
+  // Firmware updates last: they replace the running image. OTA fetches this board's own release
+  // asset (see OtaUpdater). The Picco's stock layout has one app slot (partitions_picco.csv), so
+  // it cannot update itself either way.
   if (!BoardConfig::isPicco()) {
-    addAction(SettingsSection::General, StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates);
-    addAction(SettingsSection::General, StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate);
+    addAction(SettingsSection::System, StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates);
+    addAction(SettingsSection::System, StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate);
   }
-  addAction(SettingsSection::General, StrId::STR_ABOUT, SettingAction::About);
+
+  addAction(SettingsSection::Connectivity, StrId::STR_WIFI_NETWORKS, SettingAction::Network);
+  if (bleturner::status().compiledIn) {
+    addAction(SettingsSection::Connectivity, StrId::STR_BT_PAGE_TURNER, SettingAction::Bluetooth);
+  }
+  addAction(SettingsSection::Connectivity, StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync);
+  addAction(SettingsSection::Connectivity, StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser);
   rebuildRowItems();
 }
 
 SettingsActivity::SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                   const SettingsSection section)
-    : UiListActivity("Settings", renderer, mappedInput), section(section) {}
+                                   const SettingsSection section, const StrId subCategory)
+    : UiListActivity("Settings", renderer, mappedInput), section(section), subCategory(subCategory) {}
 
 void SettingsActivity::onEnter() {
   UiListActivity::onEnter();
@@ -214,6 +240,7 @@ void SettingsActivity::rebuildRowItems() {
 }
 
 const char* SettingsActivity::headerTitle() const {
+  if (subCategory != StrId::STR_NONE_OPT) return I18N.get(subCategory);
   return I18N.get(SETTINGS_SECTION_TITLES[static_cast<size_t>(section)]);
 }
 
@@ -315,6 +342,15 @@ void SettingsActivity::toggleSelectedSetting() {
     auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
 
     switch (setting.action) {
+      case SettingAction::ShortcutsSettings: {
+        auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, section, StrId::STR_CAT_SHORTCUTS);
+        if (!activity) {
+          LOG_ERR("SET", "OOM: settings sub-screen");
+          return;
+        }
+        startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
+        return;
+      }
       case SettingAction::HomeButton: {
         // Activities must outlive this call and are owned by the activity stack.
         auto activity = makeUniqueNoThrow<HomeButtonSettingsActivity>(renderer, mappedInput);
@@ -412,21 +448,15 @@ void SettingsActivity::toggleSelectedSetting() {
                                  rebuildSettings();
                                });
         break;
-      case SettingAction::Plugins: {
-        static constexpr StrId OPTIONS[] = {StrId::STR_ENABLED, StrId::STR_DISABLED, StrId::STR_CANCEL};
-        optionPopup.show(StrId::STR_PLUGINS, OPTIONS, 3, SETTINGS.pluginsEnabled ? 0 : 1, [this](const int idx) {
-          if (idx == 2) return;
-          SETTINGS.pluginsEnabled = idx == 0 ? 1 : 0;
-          // Turning plugins on brings back a dismissed Plugin Hub install row.
-          if (SETTINGS.pluginsEnabled) SETTINGS.pluginHubPromptHidden = 0;
-          SETTINGS.saveToFile();
-          // Applies to event delivery now, not after a reboot.
-          pluginevents::refreshSubscriptions();
-          rebuildSettings();
-        });
-        requestUpdate();
+      case SettingAction::Plugins:
+        // A switch row: flips in place.
+        SETTINGS.pluginsEnabled = SETTINGS.pluginsEnabled ? 0 : 1;
+        // Turning plugins on brings back a dismissed Plugin Hub install row.
+        if (SETTINGS.pluginsEnabled) SETTINGS.pluginHubPromptHidden = 0;
+        SETTINGS.saveToFile();
+        // Applies to event delivery now, not after a reboot.
+        pluginevents::refreshSubscriptions();
         return;
-      }
       case SettingAction::KeyboardLayouts:
         if (auto activity = makeUniqueNoThrow<KeyboardLayoutsActivity>(renderer, mappedInput)) {
           startActivityForResult(std::move(activity), nullptr);
@@ -499,7 +529,6 @@ void SettingsActivity::openSleepTimeoutPicker() {
 
 std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
   if (setting.action == SettingAction::HomeButton) return tr(STR_CONFIGURE);
-  if (setting.action == SettingAction::Plugins) return SETTINGS.pluginsEnabled ? tr(STR_ENABLED) : tr(STR_DISABLED);
   if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     // Guard like the valueGetter branch below: a corrupt/migrated settings
     // byte must not index past the enum table.
@@ -550,7 +579,10 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
     const bool checkbox = setting.type == SettingType::TOGGLE ||
                           (setting.type == SettingType::ENUM && setting.enumStringValues.empty() &&
                            labels.size() == 2 && labels[0] == StrId::STR_STATE_OFF && labels[1] == StrId::STR_STATE_ON);
-    if (checkbox && (setting.valuePtr || setting.valueGetter)) {
+    if (setting.action == SettingAction::Plugins) {
+      rowValues_[i].clear();
+      GUI.setCheckboxRow(rowItems_[i], SETTINGS.pluginsEnabled != 0);
+    } else if (checkbox && (setting.valuePtr || setting.valueGetter)) {
       const bool checked = setting.valuePtr ? SETTINGS.*(setting.valuePtr) != 0 : setting.valueGetter() != 0;
       rowValues_[i].clear();
       GUI.setCheckboxRow(rowItems_[i], checked);
@@ -579,7 +611,8 @@ void SettingsActivity::drawFooter() {
   const int selected = nav.selected;
   const bool picker =
       selected >= 0 && selected < static_cast<int>(settings.size()) &&
-      (settings[selected].type == SettingType::ACTION || settings[selected].nameId == StrId::STR_TIME_TO_SLEEP);
+      ((settings[selected].type == SettingType::ACTION && settings[selected].action != SettingAction::Plugins) ||
+       settings[selected].nameId == StrId::STR_TIME_TO_SLEEP);
   const auto labels =
       mappedInput.mapLabels(tr(STR_BACK), picker ? tr(STR_SELECT) : tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

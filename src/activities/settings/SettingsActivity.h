@@ -13,9 +13,11 @@
 #include "components/OptionPopup.h"
 
 // The rows of one SettingsSection; activating a row toggles/cycles it, opens
-// its option popup, or launches its sub-screen.
+// its option popup, or launches its sub-screen. With a subCategory (Shortcuts)
+// it lists only that category's rows, reached from a row in section.
 class SettingsActivity final : public UiListActivity {
   const SettingsSection section;
+  const StrId subCategory;
   std::vector<SettingInfo> settings;
 
   bool preserveQuickResumeTimeoutOn = false;
@@ -46,7 +48,8 @@ class SettingsActivity final : public UiListActivity {
   void drawFooter() override;
 
  public:
-  SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, SettingsSection section);
+  SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, SettingsSection section,
+                   StrId subCategory = StrId::STR_NONE_OPT);
   void onEnter() override;
   void render(RenderLock&& lock) override;
 };
