@@ -64,6 +64,9 @@ class ReaderActivity : public Activity {
   // EpubReaderActivity overrides getProgressBasisPoints() and falls back to it.
   int getProgressPercent() const { return getScreenshotInfo().progressPercent; }
   virtual int getProgressBasisPoints() const { return getProgressPercent() * 100; }
+  // False while getProgressBasisPoints() is only a page-count stand-in; the reading speed then
+  // takes no sample rather than a skewed one.
+  virtual bool hasTextProgress() const { return true; }
 
   // Entry points for a Bluetooth remote. A reader without them ignores the remote's turns.
   virtual bool pageTurn(bool /*isForward*/) { return false; }

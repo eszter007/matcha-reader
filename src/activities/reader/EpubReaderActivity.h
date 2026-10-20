@@ -719,6 +719,7 @@ class EpubReaderActivity final : public ReaderActivity {
   mutable bool chapterSpanBuildActive = false;
   mutable int chapterPagesBefore = 0;
   mutable int chapterPagesTotal = 0;
+  mutable float chapterEndProgress = 1.0f;            // book progress (0-1) where the ToC chapter on screen ends
   mutable std::vector<uint16_t> spinePagesReal;       // 0 = not indexed yet
   mutable std::vector<uint16_t> spinePagesEffective;  // real or byte-estimated, never 0
   mutable int bookPagesBefore = 0;
@@ -833,6 +834,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // clean re-open of the book.
   void beginLoanTimeSync();
   int getProgressBasisPoints() const override;
+  bool hasTextProgress() const override { return textProgress() >= 0.0f; }
+  // Book progress (0-1) at the top of the page on screen, by share of text; -1 while unknown.
+  float textProgress() const;
 
  public:
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
