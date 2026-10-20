@@ -93,9 +93,10 @@ struct SettingInfo {
 
   // Menu slot -> stored value, and back. Identity while enumOrder is empty. Both clamp, so a
   // corrupt or migrated byte lands on the first slot rather than indexing out of the table.
-  uint8_t storedFromSlot(const uint8_t slot) const {
-    if (enumOrder.empty()) return slot;
-    return slot < enumOrder.size() ? enumOrder[slot] : enumOrder[0];
+  uint8_t storedFromSlot(const uint8_t slot) const { return storedFromSlot(enumOrder, slot); }
+  static uint8_t storedFromSlot(const std::vector<uint8_t>& order, const uint8_t slot) {
+    if (order.empty()) return slot;
+    return slot < order.size() ? order[slot] : order[0];
   }
   uint8_t slotFromStored(const uint8_t stored) const {
     if (enumOrder.empty()) return stored;

@@ -20,6 +20,7 @@
 #include "ClearCacheActivity.h"
 #include "ClockSettingsActivity.h"
 #include "CrossPointSettings.h"
+#include "EnumSettingPopup.h"
 #include "FontDownloadActivity.h"
 #include "HomeButtonSettingsActivity.h"
 #include "KOReaderSettingsActivity.h"
@@ -547,28 +548,16 @@ void ReaderSettingsActivity::toggleCurrentSetting() {
     setting.valueSetter(setting.valueGetter() == 0 ? 1 : 0);
     return;
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
-    const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
-    // The popup works in MENU slots, which are stored values only when the row asked for no
-    // custom order -- see SettingInfo::enumOrder.
-    const auto orderedLabels = setting.orderedEnumLabels();
-    if (orderedLabels.size() > 2) {
-      const auto valuePtr = setting.valuePtr;
-      const auto order = setting.enumOrder;
-      optionPopup.show(setting.nameId, orderedLabels.data(), static_cast<int>(orderedLabels.size()),
-                       setting.slotFromStored(currentValue),
-                       [this, valuePtr, order, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
-                         SETTINGS.*valuePtr = order.empty() ? static_cast<uint8_t>(idx)
-                                                            : order[idx < static_cast<int>(order.size()) ? idx : 0];
-                         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-                         saveSettings();
-                         rebuildSettingsLists();
-                         applyUiSettingChange(valuePtr);
-                       });
+    const auto valuePtr = setting.valuePtr;
+    if (editEnumSetting(optionPopup, setting, [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged] {
+          syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
+          saveSettings();
+          rebuildSettingsLists();
+          applyUiSettingChange(valuePtr);
+        })) {
       requestUpdate();
       return;
     }
-    SETTINGS.*(setting.valuePtr) =
-        setting.storedFromSlot((setting.slotFromStored(currentValue) + 1) % static_cast<uint8_t>(orderedLabels.size()));
   } else if (setting.type == SettingType::ENUM && setting.valueGetter && setting.valueSetter) {
     const uint8_t totalValues = setting.enumStringValues.empty()
                                     ? static_cast<uint8_t>(setting.enumLabels().size())
