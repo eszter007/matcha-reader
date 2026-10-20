@@ -11,7 +11,7 @@ It includes everything in upstream CrossPoint. You can try it in the [simulator]
   <img src="docs/images/screenshots/insights.png" width="200" alt="Reading stats, split by language across the tabs">
 </p>
 
-**Runs on:** Xteink X4, X3, X4 Pro and X4 Classic, Seeed reTerminal Sticky, M5PaperMono, Metalio 3.97", EEGO A4, BOOX Picco.
+**Runs on:** Xteink X4, X3, X4 Pro and X4 Classic, Seeed reTerminal Sticky, M5PaperMono, Metalio 3.97", EEGO A4 (both variants), BOOX Picco.
 
 This page is the short version. How to use everything is in the [User Guide](USER_GUIDE.md).
 
