@@ -8,6 +8,7 @@
 #include <cstdio>
 
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "components/StatsWidgets.h"
 #include "components/UITheme.h"
 #include "components/icons/dictionaryIcons.h"
@@ -36,6 +37,8 @@ void formatMinutes(char* buf, const size_t size, const uint32_t minutes) {
 void BookStatsActivity::onEnter() {
   Activity::onEnter();
   stats.load(bookPath.c_str());
+  // A title with a rare kanji or Chinese characters needs the SD companion.
+  sdFontSystem.addUiCjkNeededFor(renderer, bookTitle.c_str());
   const StatsWidgets::Today today = StatsWidgets::getToday();
   calYear = today.year;
   calMonth = today.month;

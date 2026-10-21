@@ -12,6 +12,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "activities/reader/DictionaryDefinitionActivity.h"
 #include "components/CatalogScreens.h"
 #include "components/UITheme.h"
@@ -37,6 +38,10 @@ void DetailsActivity::onEnter() {
   app.on(ACTION_PRIMARY, &DetailsActivity::onPrimaryEvent, this);
   app.on(ACTION_MORE, &DetailsActivity::onMoreEvent, this);
   app.setScreen(&DetailsActivity::detailsScreen, this);
+  // A rare kanji or a Chinese character in the title, author or description needs the SD companion.
+  sdFontSystem.addUiCjkNeededFor(renderer, spec.title.c_str());
+  sdFontSystem.addUiCjkNeededFor(renderer, spec.author.c_str());
+  sdFontSystem.addUiCjkNeededFor(renderer, spec.description.c_str());
   requestUpdate();
 }
 

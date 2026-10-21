@@ -68,6 +68,26 @@ class SdCardFontSystem {
     }
     setUiCjkNeeded(renderer, script);
   }
+  /// The same for book lists, whose rows also show the author: a rare kanji in a name
+  /// (澤村御影) needs the companion even when every title fits the built-in subset.
+  template <typename Range, typename TitleOf, typename AuthorOf>
+  void setUiCjkNeededForBooks(GfxRenderer& renderer, const Range& items, TitleOf titleOf, AuthorOf authorOf) {
+    CjkScript script = CjkScript::None;
+    for (const auto& item : items) {
+      script = uiCjkScriptFor(titleOf(item));
+      if (script == CjkScript::None) script = uiCjkScriptFor(authorOf(item));
+      if (script != CjkScript::None) break;
+    }
+    setUiCjkNeeded(renderer, script);
+  }
+
+  /// For a screen pushed over a list (book details, book stats): loads the companion when this text
+  /// needs it, and never releases one the screen underneath still draws with, since that screen
+  /// does not re-check when it comes back.
+  void addUiCjkNeededFor(GfxRenderer& renderer, const char* utf8) {
+    const CjkScript script = uiCjkScriptFor(utf8);
+    if (script != CjkScript::None) setUiCjkNeeded(renderer, script);
+  }
 
   /// True when the built-in CJK subset (the floor every UI string falls back to) has the glyph.
   bool builtinCjkCovers(uint32_t cp) const;
