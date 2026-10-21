@@ -5,6 +5,7 @@
 #include <freertos/semphr.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -308,11 +309,15 @@ class SdCardFont {
 
     // The EpdFont whose data pointer we manage
     EpdFont epdFont{&stubData};
-
-    bool present = false;
   };
 
-  PerStyle styles_[MAX_STYLES] = {};
+  // One record per style the file has, allocated once per load: the EpdFont pointers handed to the
+  // renderer stay valid until the font is unloaded.
+  std::unique_ptr<PerStyle[]> styles_;
+  // Array slot plus one for each style id; zero means the file has no such style.
+  uint8_t styleSlots_[MAX_STYLES] = {};
+  PerStyle& styleData(uint8_t style) { return styles_[styleSlots_[style] - 1]; }
+  const PerStyle& styleData(uint8_t style) const { return styles_[styleSlots_[style] - 1]; }
   uint8_t styleCount_ = 0;
 
   char filePath_[128] = {};
