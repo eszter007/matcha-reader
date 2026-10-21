@@ -226,13 +226,21 @@ void ReadingStatsActivity::render(RenderLock&&) {
   // The tab bar replaces the hints at the bottom, so the scrollable area ends where it begins.
   if (HomeTabBar::enabled()) screen.height = HomeTabBar::top(renderer) - screen.y;
 
-  // The tab band sits in the fixed strip under the header, exactly as it does in Library and
-  // Settings, and the scrollable content starts below it.
+  // The first card sits 8px below headerBottom. Cover Grid's tab pills get it 18px under them, the
+  // same gap as above the calendar (the pills end 5px above the band's bottom); the full-width tab
+  // strips of the other themes keep the theme's spacing. Without tabs and without a header rule the
+  // card goes 16px under the title, inside the ~19px the header box leaves empty below it.
+  constexpr int HEADER_STRIP_BELOW_TITLE = 19;
+  constexpr int TAB_PILL_BOTTOM_INSET = 5;
   const int tabBarY = screen.y + metrics.topPadding + metrics.headerHeight;
   // With language stats hidden there is only the All tab, so the band is left out.
   const bool showTabs = tabLabels.size() > 1;
+  const bool headerRule = !UITheme::hasCoverGridHome() && metrics.headerUnderlineSize > 0;
   const int tabBarH = showTabs ? tabBandHeight(metrics, mappedInput.hasTouch()) : 0;
-  const int headerBottom = tabBarY + tabBarH + metrics.verticalSpacing;
+  int headerGap = metrics.verticalSpacing;
+  if (showTabs && HomeTabBar::enabled()) headerGap = 18 - TAB_PILL_BOTTOM_INSET - 8;
+  if (!showTabs && !headerRule) headerGap = 16 - HEADER_STRIP_BELOW_TITLE - 8;
+  const int headerBottom = tabBarY + tabBarH + headerGap;
   const int contentTop = headerBottom - scrollOffset;
 
   // Draw header AFTER content so it covers scrolled text underneath.
@@ -254,6 +262,15 @@ void ReadingStatsActivity::render(RenderLock&&) {
     READING_STATS_STORE.getWeekStatus(code, today.year, today.month, today.day, today.dow, weekDays);
   } else {
     READING_STATS_STORE.getWeekStatus(today.year, today.month, today.day, today.dow, weekDays);
+  }
+
+  // Without tabs the header goes first and the content is clipped below it instead of being
+  // painted over afterwards: the first card may overlap the bottom of the header box.
+  const auto savedClip = renderer.getClipRect();
+  if (!showTabs) {
+    GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
+                   tr(STR_STATS), nullptr, HomeTabBar::showsBackButton(true), -1);
+    renderer.setClipRect(0, headerBottom + 8, screen.width, renderer.getScreenHeight() - headerBottom - 8);
   }
 
   int y = contentTop + 8;
@@ -300,11 +317,13 @@ void ReadingStatsActivity::render(RenderLock&&) {
   if (maxScrollOffset < 0) maxScrollOffset = 0;
   scrollPageHeight = visibleHeight;
 
-  // Redraw header and band on top of scrolled content so text doesn't bleed through.
-  renderer.fillRect(0, 0, screen.width, headerBottom - metrics.verticalSpacing, false);
-  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                 tr(STR_STATS), nullptr, HomeTabBar::showsBackButton(true),
-                 showTabs && UiTabBand::drawsTopRule() ? 0 : -1);
+  renderer.setClipRect(savedClip[0], savedClip[1], savedClip[2], savedClip[3]);
+  if (showTabs) {
+    // Redraw header and band on top of scrolled content so text doesn't bleed through.
+    renderer.fillRect(0, 0, screen.width, headerBottom - headerGap, false);
+    GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
+                   tr(STR_STATS), nullptr, HomeTabBar::showsBackButton(true), UiTabBand::drawsTopRule() ? 0 : -1);
+  }
   // Kept for loop(), so a tap in the band's gaps is swallowed. Drawn focused while the cursor is
   // on the page: Confirm acts on the tabs there and nothing else.
   tabBar = Rect{0, tabBarY, screen.width, tabBarH};
