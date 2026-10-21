@@ -70,14 +70,16 @@ for size in ${UI_FONT_SIZES[@]}; do
   done
 done
 
-# The small UI face is Ubuntu too, so UI text stays in one family at every size.
+# The small UI face is Ubuntu too, so UI text stays in one family at every size. A higher 1-bit
+# threshold keeps its stems at 2 px: at the default the digits rounded to 3 and looked bold.
 python fontconvert.py ubuntu_8_regular 8 \
   ../builtinFonts/source/Ubuntu/Ubuntu-Regular.ttf \
   ../builtinFonts/source/NotoSans/NotoSans-Regular.ttf \
   ../builtinFonts/source/NotoSansHebrew/NotoSansHebrew-Regular.ttf \
   ../builtinFonts/source/NotoSansArabic/NotoSansArabic-Regular.ttf \
   ../builtinFonts/source/Ubuntu/Ubuntu-Vietnamese-Regular.ttf \
-  --compress --zopfli --additional-intervals 0x05D0,0x05EA "${ARABIC_INTERVALS[@]}" > ../builtinFonts/ubuntu_8_regular.h
+  --compress --zopfli --bw-threshold 5 --additional-intervals 0x05D0,0x05EA "${ARABIC_INTERVALS[@]}" \
+  > ../builtinFonts/ubuntu_8_regular.h
 
 echo ""
 python dedupe_font_tables.py ../builtinFonts/
