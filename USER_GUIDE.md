@@ -461,6 +461,15 @@ to that book only.
   - **Portrait 180°**: upside down.
   - **Landscape CCW**: turned a quarter counter-clockwise.
 
+- **Tategaki (vertical Japanese)** and **Zhípái (vertical Chinese)**: Whether Japanese and Chinese books open in
+  vertical columns.
+  - **Automatic** (default): follows the book. A book set to read right to left opens vertically, any other book
+    horizontally.
+  - **On**: always vertical.
+  - **Off**: always horizontal.
+
+  The **Vertical Text** switch in a book's Reader Settings overrides this for that book.
+
 - **Rotate Panels** (on by default): In manga, turns a panel sideways when that makes it fit the screen better.
 
 - **Images**: Pictures inside books.
@@ -1255,8 +1264,10 @@ browser.
 
 ### 6.3 Japanese Books
 
-Copy a Japanese EPUB to the SD card and open it from the Library. It opens in vertical text when the book says it
-is Japanese. A book with no language set, or the wrong one, is recognised from its kana the first time you open it.
+Copy a Japanese EPUB to the SD card and open it from the Library. A Japanese novel set to read right to left opens
+in vertical text, other Japanese books horizontally. To open every Japanese book one way, set **Settings → Reader →
+Tategaki (vertical Japanese)** to **On** or **Off**. A book with no language set, or the wrong one, is recognised
+from its kana the first time you open it.
 
 **Furigana.** The reader shows the furigana that a book already has. It cannot add furigana itself. For a book
 without them, you can add them once on a computer before copying the book to the card:
@@ -1388,8 +1399,9 @@ per thousand characters, so a whole novel is a long run.
 #### Vertical Text
 
 The layout follows the publisher. A book set to read right to left (common for novels from Taiwan) opens in
-vertical columns. Every other Chinese book opens horizontally. The **Vertical Text** switch in **Reader Settings**
-overrides this and is saved per book.
+vertical columns. Every other Chinese book opens horizontally. To open every Chinese book one way, set **Settings →
+Reader → Zhípái (vertical Chinese)** to **On** or **Off**. The **Vertical Text** switch in a book's **Reader
+Settings** overrides both and is saved per book.
 
 #### Fonts and the Interface
 

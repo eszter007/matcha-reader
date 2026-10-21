@@ -22,7 +22,7 @@ This page is the short version. How to use everything is in the [User Guide](USE
 | Word lookup | Page split into words, conjugations undone | Page split into words | Same | Same | Word by word, with word-form rules |
 | Reading shown | Kana | Pinyin, HSK level | Pinyin, zhuyin, TOCFL level | Pinyin, jyutping | none |
 | Dictionary | Jitendex / JMdict, names, grammar | CC-CEDICT | CC-CEDICT + MoE 重編國語辭典 | CC-Canto + CC-CEDICT | Any StarDict |
-| Text layout | Vertical by default | Horizontal | Vertical for right-to-left books | As traditional | Horizontal |
+| Text layout | Vertical for right-to-left books | Horizontal | Vertical for right-to-left books | As traditional | Horizontal |
 | Readings above the text | Furigana | Pinyin | Pinyin or zhuyin | none | none |
 | Font | Built in | SD font required | SD font required | SD font required | Built in |
 
@@ -48,7 +48,7 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
 
 ### For Japanese learners
 
-- **Vertical text**, detected from the book: right-to-left columns, kinsoku line breaking, emphasis marks and furigana. Both the layout and the furigana can be switched per book.
+- **Vertical text**, detected from the book: right-to-left columns, kinsoku line breaking, emphasis marks and furigana. Both the layout and the furigana can be switched per book, and **Tategaki** in the Reader settings opens every Japanese book vertically or horizontally.
 - **Conjugations resolve to the dictionary form**: 読んで becomes 読む, 食べませんでした becomes 食べる.
 - **Vocabulary, names and grammar** each come from their own dictionary.
 - **Furigana for books that have none**: a script adds it to the EPUB on your computer.
