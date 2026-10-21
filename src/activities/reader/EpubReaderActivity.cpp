@@ -293,6 +293,10 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
   }
 }
 
+// A button contact is closed right now. Reads the Xteink ADC ladder and power pin only; on other
+// boards a press stops the build once the loop has debounced it.
+bool buttonContactClosed() { return gpio.rawInputActive(); }
+
 }  // namespace
 
 EpubReaderActivity::~EpubReaderActivity() {
@@ -978,7 +982,7 @@ void EpubReaderActivity::readerLoop() {
   }
 
   // The radio stopped for a chapter build: once the render task has let go of the lock, that page
-  // is on screen; once the look-ahead below has finished the chapter, no parser is left alive and
+  // is on screen; once the build tick below has finished the chapter, no parser is left alive and
   // the radio may start again.
   if (radioReleasedForBuild.load()) {
     RenderLock lock{RenderLock::Try{}};
@@ -1140,18 +1144,22 @@ void EpubReaderActivity::readerLoop() {
     // The heap gate is re-read inside the lock: a render that won the lock race can expand
     // retained glyph buffers, invalidating a pre-lock reading.
     // Not under an open toolbar or panel: those repaint straight onto the page in the framebuffer.
-    if (lock.held() && overlay == Overlay::None && backgroundBuildWanted()) {
+    // A button is down: the next loop frames act on it first.
+    if (lock.held() && overlay == Overlay::None && backgroundBuildWanted() && !buttonContactClosed()) {
       if (buildTickHeapGate()) {
         // A build step can lend the framebuffer (image probes), which hands it back white while
         // the panel still shows the page; redraw so nothing is later painted over the blank buffer.
         const uint32_t loansBefore = renderer.frameBufferLoanCount();
-        const bool built = section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK, BACKGROUND_BUILD_BUDGET_MS);
+        const bool built = section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK, BACKGROUND_BUILD_BUDGET_MS,
+                                                  &buttonContactClosed);
         if (renderer.frameBufferLoanCount() != loansBefore) {
           pageBufferStale = true;
           requestUpdate();
         }
         if (!built) {
           LOG_ERR("ERS", "Background section build failed");
+          backgroundBuildFailedSpine = currentSpineIndex;
+          nextPageNumber = section->currentPage;
           section.reset();
           requestUpdate();
         } else if (section->isBuildComplete() && applyDeferredReposition()) {
@@ -1454,6 +1462,7 @@ void EpubReaderActivity::readerLoop() {
     } else {
       openReaderMenu();
     }
+    return;  // no build step before the menu shows
   }
 
   // Short press Back restores position when viewing a footnote (takes priority over navigation)
@@ -2676,8 +2685,11 @@ void EpubReaderActivity::onReturnFromEndOfBook() {
 
 // Whether a background build tick has anything to do. No look-ahead window: this fork keeps
 // ticking until the chapter finalizes, or isBuilding() stays true for the session and the page
-// total never stops being an estimate.
-bool EpubReaderActivity::backgroundBuildWanted() const { return section && section->isBuilding(); }
+// total never stops being an estimate. Not while the radio holds the heap, and not in a spine
+// whose background build failed.
+bool EpubReaderActivity::backgroundBuildWanted() const {
+  return section && section->isBuilding() && !bleturner::holdsHeap() && currentSpineIndex != backgroundBuildFailedSpine;
+}
 
 // TODO: Failure handling
 void EpubReaderActivity::render(RenderLock&& lock) {

@@ -801,7 +801,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   return true;
 }
 
-bool Section::buildSomeMore(const int maxPages, const uint32_t maxMillis) {
+bool Section::buildSomeMore(const int maxPages, const uint32_t maxMillis, bool (*yieldNow)()) {
   if (!build_ || !build_->parser) {
     LOG_ERR("SCT", "buildSomeMore with no active build");
     return false;
@@ -831,11 +831,10 @@ bool Section::buildSomeMore(const int maxPages, const uint32_t maxMillis) {
     if (status == ChapterHtmlSlimParser::ParseStatus::Done) {
       return finalizeBuild();
     }
-    // ParseStatus::More: yield once we've laid out the requested number of pages, or once the
-    // caller's time budget is spent -- whichever comes first. One parse step is the floor: a
-    // single slow page still runs to completion, so this bounds the tick at roughly one page
-    // rather than the full maxPages worth.
-    if (maxPages > 0 && (builtPageCount_ - startCount) >= maxPages) {
+    // ParseStatus::More: yield once we've laid out the requested number of pages, once the
+    // caller's time budget is spent, or as soon as the caller has something more urgent to do.
+    // One parse step is the floor: a single slow page still runs to completion.
+    if ((maxPages > 0 && (builtPageCount_ - startCount) >= maxPages) || (yieldNow && yieldNow())) {
       build_->bytesConsumed = build_->parser->parseBytesConsumed();
       return true;
     }

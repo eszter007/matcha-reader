@@ -5,6 +5,7 @@
 
 #include <array>
 #include <climits>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -267,11 +268,13 @@ class ChapterHtmlSlimParser {
   std::vector<uint32_t> tableLineVisibleOffsets;
   bool listItemBulletOnly = false;  // true when currentTextBlock has only the <li> bullet
 
-  // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
+  // Anchor-to-page mapping: tracks which page each HTML id attribute lands on. A deque grows in
+  // small chunks, so a long chapter never needs one large free block (a vector doubling past 512
+  // anchors needs ~28 KB contiguous, and a failed allocation aborts).
   int completedPageCount = 0;
   static constexpr size_t MAX_SECTION_FOOTNOTES = 128;
   std::vector<std::pair<uint16_t, FootnoteEntry>> sectionFootnoteData;
-  std::vector<std::pair<std::string, uint16_t>> anchorData;
+  std::deque<std::pair<std::string, uint16_t>> anchorData;
   std::string pendingAnchorId;          // deferred until after previous text block is flushed
   std::vector<std::string> tocAnchors;  // the list of anchors that are TOC chapter boundaries
   uint16_t xpathParagraphIndex = 0;
@@ -431,7 +434,7 @@ class ChapterHtmlSlimParser {
   void abortParse();   // tear down without flushing (error / abandon)
 
   void addLineToPage(std::unique_ptr<TextBlock> line, uint32_t visibleOffset);
-  const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
+  const std::deque<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
   // Every footnote reference in the section with the page it appears on (same page counter as
   // getAnchors), for the section-wide footnote table -- see Section::loadSectionFootnotes().
   const std::vector<std::pair<uint16_t, FootnoteEntry>>& getSectionFootnotes() const { return sectionFootnoteData; }
