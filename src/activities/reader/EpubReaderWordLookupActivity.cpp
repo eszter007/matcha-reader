@@ -1525,8 +1525,11 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   // transient strings and read whole grammar entries; under a near-exhausted heap those
   // allocations abort() (-fno-exceptions) -- confirmed by a real device crash_report with a
   // ~30-byte string allocation failing in this block. Show the plain result instead of crashing.
-  if (ESP.getMaxAllocHeap() < 16 * 1024) {
-    LOG_ERR("WLA", "Skipping grammar scan, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
+  // Only the scan's own small strings need guarding here: entry reads are refused by DictIndex
+  // when they do not fit (dictFitsWithReserve).
+  if (ESP.getMaxAllocHeap() < 4 * 1024 || ESP.getFreeHeap() < 8 * 1024) {
+    LOG_ERR("WLA", "Skipping grammar scan, heap too low (free=%u maxAlloc=%u)", ESP.getFreeHeap(),
+            ESP.getMaxAllocHeap());
   } else if (Storage.exists(DictIndex::grammarIdxPath())) {
     const size_t allStart = currentAllGlyphIndex();
     if (allStart >= scan.allGlyphs.size()) return;

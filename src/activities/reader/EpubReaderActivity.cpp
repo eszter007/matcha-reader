@@ -795,7 +795,16 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
 }
 
 void EpubReaderActivity::onLookupPanelResult(const ActivityResult& result) {
+  if (lookupPageHeld_) {
+    lookupPage_ = VerticalPage();  // move-assigning an empty page frees its buffers
+    lookupPageHeld_ = false;
+  }
   if (const auto* clip = std::get_if<ClipStartResult>(&result.data); clip && !result.isCancelled) {
+    // No section: the lookup dropped a running build; render() rebuilds it and the clip is lost.
+    if (!section && !verticalSection) {
+      requestUpdate();
+      return;
+    }
     startClipSelection(clip->wordX, clip->wordY, clip->touchX, clip->touchY);
     return;
   }
@@ -1216,6 +1225,10 @@ void EpubReaderActivity::readerLoop() {
     // The style was switched off while an overlay was up (Settings reached via
     // the More panel); fall back to the clean page.
     overlay = Overlay::None;
+    {
+      RenderLock lock;  // the render task may be inside renderOverlay()
+      toolbarUi.reset();
+    }
     discardOverlayPage();
     requestUpdate();
     return;
@@ -4711,6 +4724,7 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
 }
 
 EpubReaderActivity::SectionPageSpan EpubReaderActivity::sectionPageSpan() const {
+  if (!verticalSection && lookupPageHeld_) return lookupSpan_;
   const int rawPage = verticalSection ? verticalSection->currentPage : section ? section->currentPage : 0;
   // estimatedTotalPages() rather than pageCount: while a giant spine builds, pageCount is only
   // the watermark reached so far, so "page X of Y" would count against a total that keeps moving.
@@ -5611,7 +5625,10 @@ bool EpubReaderActivity::repaintPageForPanelThunk(void* ctx) {
 
 bool EpubReaderActivity::repaintPageForPanel() {
   bool drew = false;
-  if (verticalSection) {
+  if (!verticalSection && lookupPageHeld_) {
+    renderVerticalPageBody(lookupPage_);
+    drew = true;
+  } else if (verticalSection) {
     if (const VerticalPage* page = verticalSection->getPage()) {
       renderVerticalPageBody(*page);
       drew = true;
@@ -5679,8 +5696,8 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
     // with the lock held (ActivityManager takes it again to perform the push).
     // Same reclaim as the horizontal branch below, for the same reason: the scan aborts on a
     // failed allocation (pushGlyphSafe -> scanTruncated) and shows whatever it had, which
-    // surfaces as INCOMPLETE matches rather than none. Vertical has no incremental build to
-    // suspend, but the glyph caches are the bulk of it and reload lazily on the next page.
+    // surfaces as INCOMPLETE matches rather than none. A running vertical build is dropped below;
+    // the glyph caches are the bulk of what is left and reload lazily on the next page.
     std::unique_ptr<Activity> panel;
     {
       RenderLock lock(*this);
@@ -5717,10 +5734,42 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
           if (++taken >= kMiningTailChars) break;
         }
       }
-      if (const VerticalPage* page = verticalSection->getPage()) {
+      const int pageIndex = verticalSection->currentPage;
+      const VerticalPage* page = nullptr;
+      // A chapter still building holds most of the heap, and it stays held while the panel is in
+      // front because the build only advances in this activity's loop. Drop the build, keep the
+      // page; render() lays the chapter out again, in the background, at this page once the panel
+      // closes.
+      if (verticalBuildInProgress_.load(std::memory_order_relaxed) && verticalSection->isBuilding()) {
+        lookupSpan_ = sectionPageSpan();
+        lookupPageHeld_ = verticalSection->abandonBuildKeepingPage(pageIndex, lookupPage_);
+        if (lookupPageHeld_) {
+          page = &lookupPage_;
+        } else {
+          lookupPage_ = VerticalPage();  // a failed read can leave a partial page behind
+          LOG_ERR("ERS", "Word lookup: page %d not readable after dropping the build", pageIndex);
+        }
+        verticalSection.reset();
+        verticalBuildInProgress_.store(false, std::memory_order_relaxed);
+        verticalTickCount_ = 0;
+        verticalTickBusyMs_ = 0;
+        earlyDisplayedPage_.store(-1, std::memory_order_relaxed);
+        midBuildTurnTarget_ = -1;
+        nextPageNumber = pageIndex;
+        // pageIndex is in the dropped build's pagination; the offset saved at open would undo
+        // turns made during it, as tickVerticalBuild() notes.
+        cachedVisibleTextOffset.reset();
+        cachedChapterTotalPageCount = 0;
+        releaseReloadableMemory();
+        LOG_INF("ERS", "Word lookup: dropped the vertical build at page %d (maxAlloc=%u)", pageIndex,
+                ESP.getMaxAllocHeap());
+      } else {
+        page = verticalSection->getPage();
+      }
+      if (page) {
         auto lookup = makeUniqueNoThrow<EpubReaderWordLookupActivity>(
             renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
-            static_cast<uint16_t>(verticalSection->currentPage), selectCtx, lookupTail, lookupTailParagraph);
+            static_cast<uint16_t>(pageIndex), selectCtx, lookupTail, lookupTailParagraph);
         if (!lookup) {
           LOG_ERR("ERS", "OOM: word lookup panel");
         } else {
@@ -5732,6 +5781,12 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
     }
     if (panel) {
       startActivityForResult(std::move(panel), [this](const ActivityResult& result) { onLookupPanelResult(result); });
+    } else {
+      if (lookupPageHeld_) {
+        lookupPage_ = VerticalPage();
+        lookupPageHeld_ = false;
+      }
+      requestUpdate();  // a dropped build restarts from render()
     }
   } else if (section) {
     // loadPage(), not loadPageAt(): with the incremental build the current page often lives only
@@ -6510,6 +6565,10 @@ void EpubReaderActivity::handleOverlayInput() {
         verticalSection.reset();
       }
       overlay = Overlay::None;
+      {
+        RenderLock lock;  // the render task may be inside renderOverlay()
+        toolbarUi.reset();
+      }
       discardOverlayPage();
       requestUpdate();
     } else if (overlay == Overlay::More) {
@@ -6781,8 +6840,13 @@ void EpubReaderActivity::activateMoreRow(int row) {
     default:
       break;
   }
-  // Leaf actions open their own screen / perform the action; close the overlay first.
+  // Leaf actions open their own screen / perform the action; close the overlay first. The sheet's
+  // tables go too: left allocated they split the heap the next screen or a chapter build needs.
   overlay = Overlay::None;
+  {
+    RenderLock lock;  // the render task may be inside renderOverlay()
+    toolbarUi.reset();
+  }
   if (action == MA::GO_TO_PERCENT && overlayPageStored) {
     // The percent dialog is a popup over the current frame: wipe the toolbar
     // chrome back to the clean page first so the dialog draws over the page,

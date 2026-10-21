@@ -5,6 +5,9 @@ Install `requirements.txt` in a Python environment, then run
 under `../builtinFonts/source/`. Generated built-in headers are checked in. The Joyo CJK
 headers (`notosansjp_joyo_*`) are not produced by this script; it only dedupes
 their tables.
+Their source font is not in the repository. To change their group sizes, run
+`python regroup_font_header.py ../builtinFonts/notosansjp_joyo_*_regular.h`; it
+regroups the existing headers with the caps from `fontconvert.py`.
 
 Reader and CJK fonts use row-aligned 2-bit DEFLATE groups. The Ubuntu UI fonts retain
 their packed 1-bit pixels inside DEFLATE groups capped at 4 KiB. The firmware

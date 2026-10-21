@@ -688,6 +688,10 @@ class EpubReaderActivity final : public ReaderActivity {
   uint32_t liveSelectionStart = UINT32_MAX;
   uint32_t liveSelectionEnd = 0;
   bool repaintPageForPanel();
+  // The page a lookup opened during a vertical build took with it when the build was dropped;
+  // the panel repaints from it until it closes. Empty otherwise.
+  VerticalPage lookupPage_;
+  bool lookupPageHeld_ = false;
   static constexpr uint16_t kSpineProbeFailed = 0xFFFF;  // session marker: cache probe failed, don't retry
   // Page numbering across the logical ToC chapter: spine files without their own ToC entry
   // (inline illustration files etc.) inherit the previous entry's tocIndex, so the "page X/Y"
@@ -710,6 +714,8 @@ class EpubReaderActivity final : public ReaderActivity {
     int count;
   };
   SectionPageSpan sectionPageSpan() const;
+  // The status bar's span when a lookup dropped the vertical build; see lookupPage_.
+  SectionPageSpan lookupSpan_{1, 1};
   int pageBasedPercent(int spineIndex, int sectionPage) const;  // sectionPage is 1-based
   mutable int chapterSpanSpine = -1;
   mutable int chapterSpanLivePages = -1;
