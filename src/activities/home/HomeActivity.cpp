@@ -346,9 +346,12 @@ void HomeActivity::onEnter() {
     fillCoverGridFromLibrary();
     resolveGridCoverPaths();
   }
-  // A Chinese title (or one with a rare kanji) needs glyphs the built-in CJK subset lacks: bring
-  // the SD companion in for the UI before anything is drawn. A Latin-only shelf pays nothing.
-  sdFontSystem.setUiCjkNeededForTitles(renderer, recentBooks, [](const auto& book) { return book.title.c_str(); });
+  // A Chinese title or author (or one with a rare kanji) needs glyphs the built-in CJK subset
+  // lacks: bring the SD companion in for the UI before anything is drawn. A Latin-only shelf pays
+  // nothing.
+  sdFontSystem.setUiCjkNeededForBooks(
+      renderer, recentBooks, [](const auto& book) { return book.title.c_str(); },
+      [](const auto& book) { return book.author.c_str(); });
   if (coverGridUi) coverGridUi->begin(recentBooks, hasOpdsServers, hasContinueReading);
 
   const auto base = static_cast<int>(recentBooks.size());

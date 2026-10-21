@@ -489,8 +489,10 @@ void OpdsBookBrowserActivity::rebuildRowItems() {
     item.actionValue = static_cast<int16_t>(rowItems.size());
     rowItems.push_back(item);
   }
-  // A Chinese title (or one with a rare kanji) needs glyphs the built-in CJK subset lacks.
-  sdFontSystem.setUiCjkNeededForTitles(renderer, entries, [](const OpdsEntry& entry) { return entry.title.c_str(); });
+  // A Chinese title or author (or one with a rare kanji) needs glyphs the built-in CJK subset lacks.
+  sdFontSystem.setUiCjkNeededForBooks(
+      renderer, entries, [](const OpdsEntry& entry) { return entry.title.c_str(); },
+      [](const OpdsEntry& entry) { return entry.author.c_str(); });
 }
 
 void OpdsBookBrowserActivity::releaseEntries() {

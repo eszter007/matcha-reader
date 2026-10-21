@@ -17,6 +17,7 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include "SdCardFontSystem.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/HomeTabBar.h"
@@ -905,6 +906,15 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
     winItems.push_back(item);
     rows++;
   }
+
+  // The rows on screen decide whether the UI needs the SD companion: a Chinese title or author, or
+  // a rare kanji the built-in subset lacks. Checked per page, because the list is read lazily.
+  CjkScript uiScript = CjkScript::None;
+  for (int i = 0; i < rows && uiScript == CjkScript::None; i++) {
+    uiScript = sdFontSystem.uiCjkScriptFor(winTitles[static_cast<size_t>(i)].c_str());
+    if (uiScript == CjkScript::None) uiScript = sdFontSystem.uiCjkScriptFor(winAuthors[static_cast<size_t>(i)].c_str());
+  }
+  sdFontSystem.setUiCjkNeeded(renderer, uiScript);
 
   props.items = winItems.data();
   props.itemsWindowFirst = static_cast<uint16_t>(windowStart);
