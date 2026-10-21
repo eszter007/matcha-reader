@@ -531,6 +531,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // A pause this long, caches already released, means the build's own context holds the heap below
   // the floors and no tick will ever run: suspend it (the partial stays) instead of holding it.
   static constexpr uint32_t BACKGROUND_BUILD_STALL_MS = 3000;
+  // A background build failed in this spine. The error would likely recur, so from then on the
+  // spine is built only as far as the reader goes; pages from earlier build steps stay readable.
+  int backgroundBuildFailedSpine = -1;
   // Bluetooth page turner: every chapter build stops the radio until the chapter is built and its
   // page is shown. False: the radio still holds or is taking the heap, and the build must not run.
   std::atomic<bool> radioReleasedForBuild{false};
