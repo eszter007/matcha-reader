@@ -923,18 +923,38 @@ struct PodWriteArchive {
 // G is const on the write side, mutable on the read side.
 template <typename Ar, typename G>
 void visitGlyphFields(Ar& ar, G& g) {
-  ar(g.codepoint);
-  ar(g.column);
-  ar(g.row);
+  // The record keeps its full-width fields; VerticalGlyph packs some into bit-fields, which cannot
+  // be bound to the archive's references, so they pass through locals.
+  uint32_t codepoint = g.codepoint;
+  uint16_t column = g.column;
+  uint16_t row = g.row;
+  uint32_t paragraphIndex = g.paragraphIndex;
+  uint8_t renderKind = g.renderKind;
+  uint8_t style = g.style;
+  bool emphasis = g.emphasis;
+  uint8_t lineHeadFlush = g.lineHeadFlush;
+  ar(codepoint);
+  ar(column);
+  ar(row);
   ar(g.x);
   ar(g.y);
-  ar(g.paragraphIndex);
+  ar(paragraphIndex);
   ar(g.byteOffset);
-  ar(g.renderKind);
-  ar(g.style);
-  ar(g.emphasis);
-  ar(g.lineHeadFlush);
+  ar(renderKind);
+  ar(style);
+  ar(emphasis);
+  ar(lineHeadFlush);
   ar(g.textId);
+  if constexpr (!std::is_const_v<G>) {
+    g.codepoint = codepoint;
+    g.column = static_cast<uint8_t>(column);
+    g.row = static_cast<uint8_t>(row);
+    g.paragraphIndex = paragraphIndex;
+    g.renderKind = renderKind;
+    g.style = style;
+    g.emphasis = emphasis;
+    g.lineHeadFlush = lineHeadFlush;
+  }
 }
 
 template <typename Ar, typename R>
@@ -1045,7 +1065,7 @@ ReadResult readPage(HalFile& file, VerticalPage& page) {
     return ReadResult::Corrupt;
   }
   // reserve() throws-and-ABORTS under -fno-exceptions; verify the block actually exists
-  // first. A corrupt count within the format bound can still demand ~98KB -- observed on
+  // first. A corrupt count within the format bound can still demand ~80KB -- observed on
   // device as an abort inside this exact reserve during a mid-build read-back. The margin
   // is deliberately small: the page is transient (rendered, then freed), and an over-strict
   // margin starved mid-build page-turn serves for entire dense stretches.
@@ -1726,15 +1746,14 @@ constexpr size_t HEADER_PAGECOUNT_OFFSET = sizeof(uint8_t)      // version
 // (a partial one silently drops whichever selectors sit late in the file), so it is skipped rather
 // than truncated.
 //
-// Derived from what the table actually costs rather than guessed. collectVerticalStyles() now
-// reserves its cap in ONE allocation, so the contiguous requirement is exactly that reservation;
-// the selector strings it copies are many small allocations that need free heap, not a big block.
-// The old flat 48KB predated SD CJK fonts, and a resident CJK font cache holds maxAlloc under it
-// for a whole session: on device this book was skipped -- and so rendered unstyled -- with 46996
-// bytes still available in the largest free block, a miss of barely 4KB.
+// collectVerticalStyles() reserves its cap in ONE allocation, so the contiguous requirement is
+// exactly that reservation plus a little slack (it checks again right before reserving). The
+// working room the rest of the build needs is free heap, not part of the same block.
 constexpr size_t STYLED_BLOCK_TABLE_ENTRIES = 256;  // must match collectVerticalStyles()'s maxOut default
-constexpr uint32_t MIN_MAX_ALLOC_FOR_STYLED_BLOCKS =
-    static_cast<uint32_t>(STYLED_BLOCK_TABLE_ENTRIES * sizeof(CssParser::VerticalBlockRule)) + 12 * 1024;
+constexpr uint32_t STYLED_BLOCK_TABLE_BYTES =
+    static_cast<uint32_t>(STYLED_BLOCK_TABLE_ENTRIES * sizeof(CssParser::VerticalBlockRule));
+constexpr uint32_t MIN_MAX_ALLOC_FOR_STYLED_BLOCKS = STYLED_BLOCK_TABLE_BYTES + 2 * 1024;
+constexpr uint32_t MIN_FREE_FOR_STYLED_BLOCKS = STYLED_BLOCK_TABLE_BYTES + 12 * 1024;
 
 namespace {
 uint32_t starvedGlyphCount(GfxRenderer& renderer) {
@@ -1992,16 +2011,21 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
     // .k-solid boxes vanishing at a 64-entry cap). Either the full table fits, or the build
     // runs unstyled -- text-complete and still cached, see lastBuildUnstyledForHeap_.
     const uint32_t maxAllocNow = ESP.getMaxAllocHeap();
-    LOG_DBG("VSC", "styled-block table needs %u bytes contiguous (%u entries x %u); maxAlloc=%u",
+    const uint32_t freeNow = ESP.getFreeHeap();
+    LOG_DBG("VSC", "styled-block table needs %u bytes contiguous (%u entries x %u); maxAlloc=%u free=%u",
             static_cast<unsigned>(MIN_MAX_ALLOC_FOR_STYLED_BLOCKS), static_cast<unsigned>(STYLED_BLOCK_TABLE_ENTRIES),
-            static_cast<unsigned>(sizeof(CssParser::VerticalBlockRule)), maxAllocNow);
-    if (maxAllocNow < MIN_MAX_ALLOC_FOR_STYLED_BLOCKS) {
-      LOG_ERR("VSC", "Heap too tight for styled blocks (maxAlloc=%u, need %u); building unstyled", maxAllocNow,
-              static_cast<unsigned>(MIN_MAX_ALLOC_FOR_STYLED_BLOCKS));
+            static_cast<unsigned>(sizeof(CssParser::VerticalBlockRule)), maxAllocNow, freeNow);
+    if (maxAllocNow < MIN_MAX_ALLOC_FOR_STYLED_BLOCKS || freeNow < MIN_FREE_FOR_STYLED_BLOCKS) {
+      LOG_ERR("VSC", "Heap too tight for styled blocks (maxAlloc=%u, free=%u); building unstyled", maxAllocNow,
+              freeNow);
       lastBuildUnstyledForHeap_ = true;
     } else {
       const CssParser::StylesheetFilter stylesheets = epub->stylesheetFilterFor(b.tmpHtmlPath, b.localPath);
       epub->getCssParser()->collectVerticalStyles(b.blockStyles, STYLED_BLOCK_TABLE_ENTRIES, &stylesheets);
+      if (b.blockStyles.capacity() < STYLED_BLOCK_TABLE_ENTRIES) {
+        LOG_ERR("VSC", "Styled-block table refused at reserve (maxAlloc=%u); building unstyled", ESP.getMaxAllocHeap());
+        lastBuildUnstyledForHeap_ = true;
+      }
       if (!b.blockStyles.empty()) {
         LOG_DBG("VSC", "%u styled-block selectors active", static_cast<unsigned>(b.blockStyles.size()));
       }

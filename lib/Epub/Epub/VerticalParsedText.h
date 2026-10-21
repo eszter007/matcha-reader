@@ -1,7 +1,10 @@
 #pragma once
 
+#include <EpdFontFamily.h>
+
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -66,29 +69,37 @@ struct VerticalGlyph {
   //                      codepoint holds the character.
   enum RenderKind : uint8_t { Upright = 0, RotatedRun = 1, RotatedPunct = 2, SmallKanaCorner = 3, UprightRun = 4 };
 
-  uint32_t codepoint = 0;
-  uint16_t column = 0;  // 0 = rightmost column on the page
-  uint16_t row = 0;     // 0 = topmost cell in the column
-  uint16_t x = 0;       // logical screen-space draw position
-  uint16_t y = 0;       // logical screen-space draw position
-  uint32_t paragraphIndex = 0;
-  uint32_t byteOffset = 0;  // UTF-8 byte offset into that paragraph's text
-  uint8_t renderKind = Upright;
-  uint8_t style = 0;      // EpdFontFamily::Style flags (BOLD, ITALIC, etc.)
-  bool emphasis = false;  // text-emphasis (sesame dots beside character)
+  // Packed to 20 bytes: every page buffer, page read and lookup copy holds hundreds of
+  // these. The on-disk record is unchanged; visitGlyphFields() in VerticalSection.cpp widens the
+  // fields when writing and narrows them when reading.
+  uint32_t codepoint : 21 = 0;  // up to U+10FFFF
+  uint32_t style : 7 = 0;       // EpdFontFamily::Style flags (BOLD, ITALIC, etc.)
+  uint32_t renderKind : 3 = Upright;
+  uint32_t emphasis : 1 = 0;  // text-emphasis (sesame dots beside character)
+  uint32_t paragraphIndex : 31 = 0;
   // Opening bracket starting its column: set flush to the line head (tentsuki), the half em
   // before it deleted. Decided in layout, which knows where columns start (indents included).
-  uint8_t lineHeadFlush = 0;
+  uint32_t lineHeadFlush : 1 = 0;
+  uint32_t byteOffset = 0;  // UTF-8 byte offset into that paragraph's text
+  uint16_t x = 0;           // logical screen-space draw position
+  uint16_t y = 0;           // logical screen-space draw position
   // Index into the owning VerticalPage's texts pool: the run string for
   // RotatedRun/UprightRun glyphs, the furigana/ruby annotation (UTF-8) for
   // every other kind. NO_TEXT = none. An id instead of inline std::strings
-  // keeps the glyph a ~28-byte POD -- two always-present strings cost ~48
+  // keeps the glyph a small POD -- two always-present strings cost ~48
   // bytes per glyph even when empty, tripling every page buffer, reserve and
   // grow-copy on the heap-tight X3. The id travels WITH the glyph through
   // oikomi moves and drop paths, so there is no side table to desync.
   static constexpr uint16_t NO_TEXT = 0xFFFF;
   uint16_t textId = NO_TEXT;
+  // Layout caps both at MAX_GRID_CELLS (see VerticalParsedText::layoutPages()).
+  uint8_t column = 0;  // 0 = rightmost column on the page
+  uint8_t row = 0;     // 0 = topmost cell in the column
+  static constexpr uint16_t MAX_GRID_CELLS = std::numeric_limits<uint8_t>::max();
 };
+static_assert(sizeof(VerticalGlyph) == 20, "VerticalGlyph packing");
+static_assert(VerticalGlyph::UprightRun < (1u << 3), "renderKind bit-field too narrow");
+static_assert((EpdFontFamily::RUBY_CONTINUE << 1) - 1 < (1u << 7), "style bit-field too narrow");
 
 // One screen's worth of vertically laid out text, ready to hand to
 // VerticalTextBlock::render(). Glyph records are fixed-size; the variable-length
