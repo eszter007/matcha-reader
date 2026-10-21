@@ -87,7 +87,8 @@ void ReadingStatsActivity::onEnter() {
   Activity::onEnter();
   tabBand_.begin();
   READING_STATS_STORE.loadFromFile();
-  READING_STATS_STORE.getLanguages(languages);
+  languages.clear();
+  if (SETTINGS.showLanguageStats) READING_STATS_STORE.getLanguages(languages);
   tabLabels.clear();
   tabLabels.reserve(languages.size() + 1);
   tabLabels.emplace_back(tr(STR_STATS_TAB_ALL));
@@ -228,7 +229,9 @@ void ReadingStatsActivity::render(RenderLock&&) {
   // The tab band sits in the fixed strip under the header, exactly as it does in Library and
   // Settings, and the scrollable content starts below it.
   const int tabBarY = screen.y + metrics.topPadding + metrics.headerHeight;
-  const int tabBarH = tabBandHeight(metrics, mappedInput.hasTouch());
+  // With language stats hidden there is only the All tab, so the band is left out.
+  const bool showTabs = tabLabels.size() > 1;
+  const int tabBarH = showTabs ? tabBandHeight(metrics, mappedInput.hasTouch()) : 0;
   const int headerBottom = tabBarY + tabBarH + metrics.verticalSpacing;
   const int contentTop = headerBottom - scrollOffset;
 
@@ -300,11 +303,12 @@ void ReadingStatsActivity::render(RenderLock&&) {
   // Redraw header and band on top of scrolled content so text doesn't bleed through.
   renderer.fillRect(0, 0, screen.width, headerBottom - metrics.verticalSpacing, false);
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                 tr(STR_STATS), nullptr, HomeTabBar::showsBackButton(true), UiTabBand::drawsTopRule() ? 0 : -1);
+                 tr(STR_STATS), nullptr, HomeTabBar::showsBackButton(true),
+                 showTabs && UiTabBand::drawsTopRule() ? 0 : -1);
   // Kept for loop(), so a tap in the band's gaps is swallowed. Drawn focused while the cursor is
   // on the page: Confirm acts on the tabs there and nothing else.
   tabBar = Rect{0, tabBarY, screen.width, tabBarH};
-  {
+  if (showTabs) {
     constexpr int MAX_TABS = 12;
     freeink::ui::TabItem tabs[MAX_TABS];
     const int total = static_cast<int>(tabLabels.size());

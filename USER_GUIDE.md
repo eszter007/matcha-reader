@@ -355,6 +355,9 @@ Some rows only appear on certain devices or while another setting is on. The not
 
 - **Night Mode** (off by default): White text on black, on every screen.
 
+- **Show language stats** (on by default): Shows a tab per language in [Insights](#71-insights). Turn it off to see only
+  the totals for all languages. Stats are still recorded per language, so turning it back on brings the tabs back.
+
 - **Show Hidden Files** (off by default): Shows files and folders whose names start with a dot (`.`) in the file
   browser.
 
@@ -1585,6 +1588,8 @@ reading time, your longest streak and a calendar of the days you read.
 The tabs at the top split these numbers by language. **All** covers everything. After it comes one tab for each
 language you have read. Each tab has its own streak, calendar and totals, so reading an English book does not
 break your Japanese streak.
+
+To hide the language tabs and keep only the totals, turn off **Settings → Display → Show language stats**.
 
 A tab shows the language's name if the firmware has a translation for it, e.g. `ja` shows as 日本語. Otherwise it
 shows the language code, such as `ZH`. Books with no language tag (TXT, XTC and manga converted without
