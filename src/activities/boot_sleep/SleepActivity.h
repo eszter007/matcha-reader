@@ -22,8 +22,6 @@ class SleepActivity final : public Activity {
   bool renderSleepOverlayPath(const std::string& path) const;
   void renderLastScreenSleepScreen() const;
   void renderTransparentCustomSleepScreen() const;
-  // Legacy fork overlay locations, retained so existing SD cards continue to work.
-  bool renderLegacyTransparentOverlay() const;
   void renderBlankSleepScreen() const;
   void renderDeparturesSleepScreen() const;
 

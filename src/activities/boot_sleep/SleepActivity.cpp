@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -65,8 +66,10 @@ HalDisplay::GrayscaleMode sleepGrayscaleMode(const GfxRenderer& renderer) {
 // Kept separate from normal custom sleep sources so alpha-overlay art does not mix with full-screen wallpapers.
 constexpr char TRANSPARENT_SLEEP_ROOT_BMP[] = "/sleep-overlay.bmp";
 constexpr char TRANSPARENT_SLEEP_ROOT_PNG[] = "/sleep-overlay.png";
-constexpr char TRANSPARENT_SLEEP_DIR[] = "/.sleep-overlay";
-constexpr char TRANSPARENT_SLEEP_LEGACY_DIR[] = "/sleep-overlay";
+constexpr const char* SLEEP_DIRS[] = {"/.sleep", "/sleep"};
+// The last two are the fork's own overlay folders from before upstream added overlays.
+constexpr const char* TRANSPARENT_SLEEP_DIRS[] = {"/.sleep-overlay", "/sleep-overlay", "/.sleep/transparent",
+                                                  "/sleep/transparent"};
 constexpr size_t MAX_SLEEP_FILE_NAME_LEN = 256;
 constexpr uint8_t MIN_VISIBLE_ALPHA = 8;
 
@@ -466,7 +469,8 @@ bool findNextValidSleepImage(HalFile& dir, const SleepRecentKind recentKind, cha
   return false;
 }
 
-bool selectRandomSleepFile(const char* firstDirPath, const char* secondDirPath, const SleepRecentKind recentKind,
+// The folders form one pool: each image is equally likely whichever folder holds it.
+bool selectRandomSleepFile(const char* const* dirPaths, size_t dirCount, const SleepRecentKind recentKind,
                            std::string& selectedPath) {
   auto name = makeUniqueNoThrow<char[]>(MAX_SLEEP_FILE_NAME_LEN);
   if (!name) {
@@ -474,11 +478,11 @@ bool selectRandomSleepFile(const char* firstDirPath, const char* secondDirPath, 
     return false;
   }
 
-  constexpr size_t DIRECTORY_COUNT = 2;
-  const char* dirPaths[DIRECTORY_COUNT] = {firstDirPath, secondDirPath};
-  uint16_t directoryCounts[DIRECTORY_COUNT] = {};
+  constexpr size_t MAX_DIRECTORIES = 4;
+  dirCount = std::min(dirCount, MAX_DIRECTORIES);
+  uint16_t directoryCounts[MAX_DIRECTORIES] = {};
   uint16_t fileCount = 0;
-  for (size_t i = 0; i < DIRECTORY_COUNT; i++) {
+  for (size_t i = 0; i < dirCount; i++) {
     auto dir = Storage.open(dirPaths[i]);
     if (!dir || !dir.isDirectory()) continue;
 
@@ -503,9 +507,9 @@ bool selectRandomSleepFile(const char* firstDirPath, const char* secondDirPath, 
 
   size_t directoryIndex = 0;
   uint16_t localIndex = randomFileIndex;
-  if (randomFileIndex >= directoryCounts[0]) {
-    directoryIndex = 1;
-    localIndex = static_cast<uint16_t>(randomFileIndex - directoryCounts[0]);
+  while (directoryIndex + 1 < dirCount && localIndex >= directoryCounts[directoryIndex]) {
+    localIndex = static_cast<uint16_t>(localIndex - directoryCounts[directoryIndex]);
+    directoryIndex++;
   }
 
   auto dir = Storage.open(dirPaths[directoryIndex]);
@@ -663,7 +667,7 @@ void SleepActivity::renderCustomSleepScreen() const {
   }
 
   std::string selectedPath;
-  selectRandomSleepFile("/.sleep", "/sleep", SleepRecentKind::Standard, selectedPath);
+  selectRandomSleepFile(SLEEP_DIRS, std::size(SLEEP_DIRS), SleepRecentKind::Standard, selectedPath);
 
   if (!selectedPath.empty()) {
     HalFile randFile;
@@ -725,8 +729,12 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
                             (preserveBackground || SETTINGS.sleepScreenCoverFilter ==
                                                        CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER);
 
+  // A cover under an overlay on a panel without absolute gray planes is shown B/W only (see the
+  // overlay renderers), so dither its grays rather than letting them all turn black.
+  const bool ditherCover = overlayCover == &bitmap && hasGreyscale &&
+                           !renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported();
   if (!renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY, /*allowUpscale=*/false,
-                           /*whiteAsTransparent=*/preserveBackground)) {
+                           /*whiteAsTransparent=*/preserveBackground, ditherCover)) {
     renderer.displayBuffer(kSleepClean);
     return;
   }
@@ -908,12 +916,10 @@ void SleepActivity::renderTransparentCustomSleepScreen() const {
   if (renderSleepOverlayPath(TRANSPARENT_SLEEP_ROOT_PNG)) return;
 
   std::string selectedPath;
-  selectRandomSleepFile(TRANSPARENT_SLEEP_DIR, TRANSPARENT_SLEEP_LEGACY_DIR, SleepRecentKind::Overlay, selectedPath);
+  selectRandomSleepFile(TRANSPARENT_SLEEP_DIRS, std::size(TRANSPARENT_SLEEP_DIRS), SleepRecentKind::Overlay,
+                        selectedPath);
 
   if (!selectedPath.empty() && renderSleepOverlayPath(selectedPath)) return;
-
-  // Fall back to the old fork locations so existing SD cards keep working.
-  if (renderLegacyTransparentOverlay()) return;
 
   LOG_ERR("SLP", "No valid transparent sleep overlay found");
   if (overlayCover) {
@@ -923,45 +929,6 @@ void SleepActivity::renderTransparentCustomSleepScreen() const {
     if (cover.rewindToData() == BmpReaderError::Ok) return renderBitmapSleepScreen(cover);
   }
   renderDefaultSleepScreen();
-}
-
-// The fork's pre-merge overlay locations use the same renderer as current paths.
-bool SleepActivity::renderLegacyTransparentOverlay() const {
-  static constexpr const char* kLegacyDirs[] = {"/.sleep/transparent", "/sleep/transparent"};
-  for (const char* dirPath : kLegacyDirs) {
-    auto dir = Storage.open(dirPath);
-    if (!dir || !dir.isDirectory()) continue;
-
-    // Collect names first: the random pick needs the count, and re-walking the directory per
-    // candidate costs an SD scan each time.
-    std::vector<std::string> files;
-    files.reserve(16);
-    // Heap, not stack: MAX_SLEEP_FILE_NAME_LEN is 256 bytes and the stack budget for a local
-    // is under that (same reason selectRandomSleepFile above allocates it).
-    auto name = makeUniqueNoThrow<char[]>(MAX_SLEEP_FILE_NAME_LEN);
-    if (!name) {
-      LOG_ERR("SLP", "OOM: legacy overlay filename buffer");
-      return false;
-    }
-    for (auto dirFile = dir.openNextFile(); dirFile; dirFile = dir.openNextFile()) {
-      if (dirFile.isDirectory()) continue;
-      dirFile.getName(name.get(), MAX_SLEEP_FILE_NAME_LEN);
-      if (name[0] == '\0' || name[0] == '.') continue;
-      const std::string_view entryName{name.get()};
-      if (FsHelpers::hasBmpExtension(entryName) || FsHelpers::hasPngExtension(entryName)) {
-        files.emplace_back(name.get());
-      }
-    }
-    dir.close();
-    if (files.empty()) continue;
-
-    const auto index = static_cast<size_t>(random(static_cast<long>(files.size())));
-    const std::string path = std::string(dirPath) + "/" + files[index];
-    LOG_DBG("SLP", "Legacy transparent overlay: %s", path.c_str());
-
-    if (renderSleepOverlayPath(path)) return true;
-  }
-  return false;
 }
 
 void SleepActivity::renderCoverSleepScreen() const {
