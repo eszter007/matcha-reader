@@ -1273,6 +1273,14 @@ int GfxRenderer::layoutTextScaled(const int resolvedFontId, const int x, const i
   // A FaceScale font scales each glyph by where it comes from (FaceGlyphScale).
   const bool faceScaled = faceScaleFor(resolvedFontId).sizeFallbacks;
   const FaceGlyphScale faceGlyph(font, style);
+  // A scaled font (an SD font lent to a UI size) that lacks a CJK glyph gets it from another font
+  // (the built-in jōyō subset, a companion) of a different size: draw that glyph at the em the
+  // font's own glyphs have, not at the font's scale. The em is the font's own 一.
+  const EpdFontData* ownData = font.getData(style);
+  int32_t ownEm = 0;
+  if (!faceScaled && scale != 256 && font.getDataForGlyph(0x4E00, style) == ownData) {
+    if (const EpdGlyph* one = font.getGlyph(0x4E00, style)) ownEm = one->advanceX;
+  }
   int lastBaseX = x;
   int lastBaseLeft = 0;
   int lastBaseWidth = 0;
@@ -1321,8 +1329,13 @@ int GfxRenderer::layoutTextScaled(const int resolvedFontId, const int x, const i
     // family's size, not the font's: it takes its own scale.
     if (faceScaled) {
       prevScale = faceGlyph.at(font, cp, style, scale, nonCjkScale);
+    } else if (nonCjkScale != scale && font.drawsFromFallback(cp, style)) {
+      prevScale = nonCjkScale;
+    } else if (ownEm > 0 && glyph && glyph->advanceX > 0 && FaceGlyphScale::fullWidth(cp) &&
+               font.getDataForGlyph(cp, style) != ownData) {
+      prevScale = static_cast<uint16_t>(static_cast<uint32_t>(scale) * ownEm / glyph->advanceX);
     } else {
-      prevScale = nonCjkScale != scale && font.drawsFromFallback(cp, style) ? nonCjkScale : scale;
+      prevScale = scale;
     }
     if (draw) renderCharAtScale(*this, renderMode, font, cp, lastBaseX, yPos, black, style, prevScale);
     prevCp = cp;
