@@ -45,10 +45,14 @@ class ReadingStatsStore {
   // 3650 days is a decade of reading every day for 22KB. A file holding more keeps its most
   // recent 3650 (see loadFromFile, which consumes the rest to stay aligned).
   static constexpr size_t MAX_DAYS = 3650;
-  // Bounded because each entry heap-allocates its path (~40-80 bytes) and the store is a
-  // long-lived singleton. When full, the least recently read book is dropped -- its minutes
-  // stay counted in the per-day totals, which are the numbers the UI shows today.
+
+ public:
+  // Bounded because each entry heap-allocates its path (~40-80 bytes). When full, the least
+  // recently read book is dropped -- its minutes stay counted in the per-day totals, which are the
+  // numbers the UI shows today. Public for the file reader that checks it without loading.
   static constexpr size_t MAX_BOOKS = 150;
+
+ private:
   std::vector<DailyReading> days;  // sorted ascending by date
   uint16_t booksFinished = 0;
   std::vector<std::string> finishedBookPaths;
@@ -58,11 +62,15 @@ class ReadingStatsStore {
   // its tag -- so a smaller cap buys the same 25KB. Shrink the record with a language table
   // before raising this.
   static constexpr size_t MAX_LANG_DAYS = 2500;
-  // Room reserved at load for new day records; see loadFromFile.
-  static constexpr size_t GROWTH_SLACK_DAYS = 31;
   std::vector<LanguageDaily> languageDays;  // sorted ascending by date
-  // Only this store writes the file, so after one read it stays in memory until invalidate().
-  bool loaded = false;
+  bool loaded = false;                      // set by loadFromFile(), cleared by release()
+  // The journal prefix (byte count and hash) this file already holds; replay starts after it.
+  // Stored after the last block, where older readers stop.
+  uint32_t foldedJournalBytes = 0;
+  uint32_t foldedJournalHash = 0;
+
+  bool loadMainFile(size_t pendingRecords);
+  bool replayJournal();
 
  public:
   static ReadingStatsStore& getInstance() { return instance; }
@@ -128,11 +136,53 @@ class ReadingStatsStore {
   // Count days read in a given month.
   int getDaysReadInMonth(uint16_t year, uint8_t month) const;
 
+  // Writes the tables through a temp file, so an interrupted save leaves the old file whole.
   bool saveToFile() const;
-  // Reads the file once; later calls return at once until invalidate().
+  // Reads the stats file and replays the journal on top. Returns at once if already loaded; false
+  // (with nothing held) when the file is unreadable or its tables do not fit the heap right now.
   bool loadFromFile();
-  // The card may have changed under the store (USB drive mode): the next load rereads the file.
-  void invalidate() { loaded = false; }
+  // Frees everything loaded. Screens that show stats load, read and release, so the store holds no
+  // heap between uses.
+  void release();
+
+  // A change recorded without loading anything: one record appended to a small journal. What the
+  // reader saves while a chapter is laid out (session minutes, a finished book) goes through here.
+  struct Change {
+    uint16_t year = 0;
+    uint8_t month = 0;
+    uint8_t day = 0;
+    uint16_t minutes = 0;                // 0 = no reading session
+    const char* bookPath = nullptr;      // book the minutes belong to
+    const char* language = nullptr;      // that book's language tag
+    const char* finishedPath = nullptr;  // book marked finished, or nullptr
+  };
+  static bool record(const Change& change);
+  // Folds the journal into the stats file (load, replay, save, remove the journal). Run where the
+  // heap is free -- boot -- so the tables are only ever built there or on a stats screen.
+  bool compact();
+
+  // The numbers the end-of-book summary shows, read straight from the file and the journal with no
+  // tables built: that screen runs with the book still in memory. Same values as the getters.
+  struct Summary {
+    int streak = 0;
+    uint16_t booksFinished = 0;
+    uint16_t languageBooksFinished = 0;  // for summarize()'s language; 0 without one
+  };
+  Summary summarize(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay, const char* language);
+
+  // Holds the full tables for as long as it lives (a stats screen). loaded() is false when they
+  // could not be read or did not fit the heap.
+  class Loaded {
+   public:
+    Loaded() : ok_(getInstance().loadFromFile()) {}
+    ~Loaded() { getInstance().release(); }
+    Loaded(const Loaded&) = delete;
+    Loaded& operator=(const Loaded&) = delete;
+    bool loaded() const { return ok_; }
+
+   private:
+    bool ok_;
+  };
 };
 
 #define READING_STATS_STORE ReadingStatsStore::getInstance()

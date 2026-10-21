@@ -334,9 +334,9 @@ void drawIconWhite(const GfxRenderer& renderer, const uint8_t* bitmap, const int
 EndOfBookOptions::EndOfBookOptions(GfxRenderer& renderer) : renderer(renderer) {}
 
 void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* bookLanguage) {
-  READING_STATS_STORE.loadFromFile();
-  READING_STATS_STORE.markBookFinished(bookPath);
-  READING_STATS_STORE.saveToFile();
+  ReadingStatsStore::Change update;
+  update.finishedPath = bookPath.c_str();
+  READING_STATS_STORE.record(update);
 
   BookStats stats;
   if (stats.load(bookPath.c_str())) {
@@ -346,8 +346,11 @@ void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* book
     summary.sentences = stats.getSentencesSaved();
   }
   const StatsWidgets::Today today = StatsWidgets::getToday();
-  summary.streak = READING_STATS_STORE.getStreak(today.year, today.month, today.day);
-  summary.booksFinished = READING_STATS_STORE.getBooksFinished();
+  // Streamed from the file: the reader is still in memory, so no tables are built here.
+  const ReadingStatsStore::Summary totals =
+      READING_STATS_STORE.summarize(today.year, today.month, today.day, bookLanguage);
+  summary.streak = totals.streak;
+  summary.booksFinished = totals.booksFinished;
   stamp_ = stampFor(bookLanguage);
   snprintf(summary.finishedOn, sizeof(summary.finishedOn), "%04u.%02u.%02u", static_cast<unsigned>(today.year),
            static_cast<unsigned>(today.month), static_cast<unsigned>(today.day));
@@ -362,7 +365,7 @@ void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* book
   if (code[0]) {
     // The per-language count only sees books with reading time on record; the one just finished is
     // in this language whatever its history, so it is at least the first.
-    summary.languageBooksFinished = std::max<uint16_t>(READING_STATS_STORE.getBooksFinished(code), 1);
+    summary.languageBooksFinished = std::max<uint16_t>(totals.languageBooksFinished, 1);
     if (const char* name = I18n::languageNameForCode(code)) summary.languageName = name;
   }
 }

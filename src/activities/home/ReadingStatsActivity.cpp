@@ -86,7 +86,7 @@ void ReadingStatsActivity::ringSetFocus(const TabRing::Focus focus, const bool a
 void ReadingStatsActivity::onEnter() {
   Activity::onEnter();
   tabBand_.begin();
-  READING_STATS_STORE.loadFromFile();
+  stats_.emplace();
   languages.clear();
   if (SETTINGS.showLanguageStats) READING_STATS_STORE.getLanguages(languages);
   tabLabels.clear();
@@ -100,7 +100,10 @@ void ReadingStatsActivity::onEnter() {
   requestUpdate();
 }
 
-void ReadingStatsActivity::onExit() { Activity::onExit(); }
+void ReadingStatsActivity::onExit() {
+  stats_.reset();
+  Activity::onExit();
+}
 
 // Shared by both stats screens in spirit, but each owns its own calendar rect.
 bool ReadingStatsActivity::stepMonthFromTap() {

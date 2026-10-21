@@ -1113,11 +1113,17 @@ void SleepActivity::renderDeparturesSleepScreen() const {
     }
   }
 
-  READING_STATS_STORE.loadFromFile();
   const StatsWidgets::Today today = StatsWidgets::getToday();
-  const uint32_t hours = READING_STATS_STORE.getTotalMinutes() / 60;
-  const int streak = READING_STATS_STORE.getStreak(today.year, today.month, today.day);
-  const uint16_t weekMinutes = READING_STATS_STORE.getMinutesThisWeek(today.year, today.month, today.day);
+  uint32_t hours = 0;
+  int streak = 0;
+  uint16_t weekMinutes = 0;
+  {
+    // The reader has exited by now, so the tables have the heap to themselves.
+    const ReadingStatsStore::Loaded stats;
+    hours = READING_STATS_STORE.getTotalMinutes() / 60;
+    streak = READING_STATS_STORE.getStreak(today.year, today.month, today.day);
+    weekMinutes = READING_STATS_STORE.getMinutesThisWeek(today.year, today.month, today.day);
+  }
 
   const int pageWidth = renderer.getScreenWidth();
   const int pageHeight = renderer.getScreenHeight();

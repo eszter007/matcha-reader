@@ -1,4 +1,5 @@
 #pragma once
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,8 @@ class ReadingStatsActivity final : public Activity, public TabRing::Host {
   // order. One screen rather than a list and a detail screen behind a button, so a language is
   // one tab away on every theme.
   std::vector<ReadingStatsStore::LanguageSummary> languages;
+  // The stats tables, held while this screen is open.
+  std::optional<ReadingStatsStore::Loaded> stats_;
   std::vector<std::string> tabLabels;
   int selectedTab = 0;
   // Where the band was drawn, for loop()'s hit test. Empty until the first render.
