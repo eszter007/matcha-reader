@@ -152,12 +152,11 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
     renderer.drawText(fontId, dx, uprightDy, utf8Char.c_str(), black, static_cast<EpdFontFamily::Style>(g.style));
 
     if (g.emphasis) {
-      // Sesame dot centred in the half-em band beside the character, where ruby goes (JLREQ: an
-      // emphasis mark takes the ruby position). The ruby band starts at the cell's edge; adding an
-      // ink gap on top pushed the dot out between the columns, visibly apart from its character.
-      // Clamped to the panel like ruby, for the first column. Stamped from a mask, not drawn as
-      // U+FE45: the built-in fonts lack that block, so a glyph showed as the missing-character box.
-      const int left = std::min(dx + cellPx + cellPx / 4 - sesame.size / 2, renderer.getScreenWidth() - sesame.size);
+      // Sesame dot beside the character, in the ruby band (JLREQ: an emphasis mark takes the ruby
+      // position). It starts at the cell edge: centred in the band it read as floating between the
+      // columns. Clamped to the panel like ruby, for the first column. Stamped from a mask, not drawn
+      // as U+FE45: the built-in fonts lack that block, so a glyph showed as the missing-character box.
+      const int left = std::min(dx + cellPx, renderer.getScreenWidth() - sesame.size);
       const int top = cellTop + (cellPx - sesame.size) / 2;
       for (int row = 0; row < sesame.size; ++row) {
         for (int col = 0; col < sesame.size; ++col) {
