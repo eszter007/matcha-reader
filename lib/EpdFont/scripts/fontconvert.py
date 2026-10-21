@@ -22,6 +22,7 @@ parser.add_argument("--2bit", dest="is2Bit", action="store_true", help="generate
 parser.add_argument("--additional-intervals", dest="additional_intervals", action="append", help="Additional code point intervals to export as min,max. This argument can be repeated.")
 parser.add_argument("--compress", dest="compress", action="store_true", help="Compress glyph bitmaps using DEFLATE with group-based compression.")
 parser.add_argument("--zopfli", dest="zopfli", action="store_true", help="Use Zopfli for the DEFLATE backend instead of zlib. Produces standard raw-DEFLATE streams (decoded unchanged by the on-device uzlib inflater), typically a few percent smaller than zlib -9, at the cost of much slower compression. Requires --compress and the 'zopfli' package.")
+parser.add_argument("--bw-threshold", dest="bw_threshold", type=int, default=2, help="1-bit mode: the 4-bit grey level (0-15) from which a pixel is black. Default 2. Higher thins strokes that round up to an extra pixel at small sizes.")
 parser.add_argument("--force-autohint", dest="force_autohint", action="store_true", help="Force FreeType auto-hinter instead of native font hinting. Improves stem width consistency for fonts with weak or no native TrueType hints.")
 parser.add_argument("--pnum", dest="pnum", action="store_true", help="Use proportional numerals (pnum OpenType feature) instead of default tabular figures. Reduces visual gaps between digits in running prose.")
 args = parser.parse_args()
@@ -347,15 +348,17 @@ for i_start, i_end in intervals:
                 px = px << (4 - (bitmap.width * bitmap.rows) % 4) * 2
                 pixels2b.append(px)
         else:
-            # Downsample to 1-bit bitmap - treat any 2+ as black
+            # Downsample to 1-bit bitmap: grey level args.bw_threshold and up is black
             pixelsbw = []
+            bw_low = args.bw_threshold & 0xF
+            bw_high = bw_low << 4
             px = 0
             pitch = (bitmap.width // 2) + (bitmap.width % 2)
             for y in range(bitmap.rows):
                 for x in range(bitmap.width):
                     px = px << 1
                     bm = pixels4g[y * pitch + (x // 2)]
-                    px += 1 if ((x & 1) == 0 and bm & 0xE > 0) or ((x & 1) == 1 and bm & 0xE0 > 0) else 0
+                    px += 1 if ((x & 1) == 0 and (bm & 0xF) >= bw_low) or ((x & 1) == 1 and (bm & 0xF0) >= bw_high) else 0
 
                     if (y * bitmap.width + x) % 8 == 7:
                         pixelsbw.append(px)
