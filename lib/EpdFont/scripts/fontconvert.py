@@ -23,9 +23,13 @@ parser.add_argument("--additional-intervals", dest="additional_intervals", actio
 parser.add_argument("--compress", dest="compress", action="store_true", help="Compress glyph bitmaps using DEFLATE with group-based compression.")
 parser.add_argument("--zopfli", dest="zopfli", action="store_true", help="Use Zopfli for the DEFLATE backend instead of zlib. Produces standard raw-DEFLATE streams (decoded unchanged by the on-device uzlib inflater), typically a few percent smaller than zlib -9, at the cost of much slower compression. Requires --compress and the 'zopfli' package.")
 parser.add_argument("--bw-threshold", dest="bw_threshold", type=int, default=2, help="1-bit mode: the 4-bit grey level (0-15) from which a pixel is black. Default 2. Higher thins strokes that round up to an extra pixel at small sizes.")
+parser.add_argument("--embolden-x", dest="embolden_x", type=int, default=0, help="Widen each outline horizontally by this many 1/64 px before rasterising; the advance grows by the same amount. Fills out strokes evenly where a threshold change alone would round some up and leave others thin.")
+parser.add_argument("--embolden-y", dest="embolden_y", type=int, default=0, help="Same as --embolden-x, vertically: thickens horizontal strokes and the tops and bottoms of curves.")
 parser.add_argument("--force-autohint", dest="force_autohint", action="store_true", help="Force FreeType auto-hinter instead of native font hinting. Improves stem width consistency for fonts with weak or no native TrueType hints.")
 parser.add_argument("--pnum", dest="pnum", action="store_true", help="Use proportional numerals (pnum OpenType feature) instead of default tabular figures. Reduces visual gaps between digits in running prose.")
 args = parser.parse_args()
+
+import ctypes
 
 import freetype
 from fontTools.ttLib import TTFont
@@ -269,7 +273,15 @@ def load_glyph(code_point):
         if glyph_index is None:
             glyph_index = face.get_char_index(code_point)
         if glyph_index > 0:
-            face.load_glyph(glyph_index, load_flags)
+            if args.embolden_x or args.embolden_y:
+                # Load the outline, widen it, then rasterise it the way FT_LOAD_RENDER would.
+                face.load_glyph(glyph_index, load_flags & ~freetype.FT_LOAD_RENDER)
+                if face.glyph.format == freetype.FT_GLYPH_FORMAT_OUTLINE:
+                    freetype.FT_Outline_EmboldenXY(
+                        ctypes.byref(face.glyph._FT_GlyphSlot.contents.outline), args.embolden_x, args.embolden_y)
+                face.glyph.render(freetype.FT_RENDER_MODE_NORMAL)
+            else:
+                face.load_glyph(glyph_index, load_flags)
             return face
         face_index += 1
     return None
@@ -376,7 +388,7 @@ for i_start, i_end in intervals:
             height = bitmap.rows,
             # We use linearHoriAdvance (16.16 fixed-point, unhinted) instead of
             # advance.x (26.6 fixed-point, grid-fitted to whole pixels by hinter)
-            advance_x = fp4_from_ft16_16(face.glyph.linearHoriAdvance),
+            advance_x = fp4_from_ft16_16(face.glyph.linearHoriAdvance + (args.embolden_x << 10)),
             left = face.glyph.bitmap_left,
             top = face.glyph.bitmap_top,
             data_length = len(packed),
