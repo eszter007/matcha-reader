@@ -988,13 +988,13 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
       finished.push_back(pathHash(s));
     }
   }
-  uint16_t booksFinished = hasFile ? (pathsIntact ? static_cast<uint16_t>(finished.size()) : headerFinished) : 0;
+  uint16_t finishedCount = hasFile ? (pathsIntact ? static_cast<uint16_t>(finished.size()) : headerFinished) : 0;
   for (const auto& e : journal) {
     if (!e.finished || std::find(finished.begin(), finished.end(), e.finished) != finished.end()) continue;
     finished.push_back(e.finished);
-    booksFinished = std::max(booksFinished, static_cast<uint16_t>(finished.size()));  // as markBookFinished()
+    finishedCount = std::max(finishedCount, static_cast<uint16_t>(finished.size()));  // as markBookFinished()
   }
-  out.booksFinished = booksFinished;
+  out.booksFinished = finishedCount;
 
   if (lang[0]) {
     // Language per finished book: from the per-book block, then as the journal sets it.

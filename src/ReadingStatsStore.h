@@ -156,7 +156,7 @@ class ReadingStatsStore {
     const char* language = nullptr;      // that book's language tag
     const char* finishedPath = nullptr;  // book marked finished, or nullptr
   };
-  bool record(const Change& change);
+  static bool record(const Change& change);
   // Folds the journal into the stats file (load, replay, save, remove the journal). Run where the
   // heap is free -- boot -- so the tables are only ever built there or on a stats screen.
   bool compact();
