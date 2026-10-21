@@ -187,7 +187,7 @@ class CssParser {
     clear();
     entries_.reset();
     selectorPool_.reset();
-    stylePool_.reset();
+    for (auto& chunk : styleChunks_) chunk.reset();
     styleHashes_.reset();
     entryCapacity_ = 0;
     selectorPoolCapacity_ = 0;
@@ -323,7 +323,7 @@ class CssParser {
   // Selectors are stored ASCII-lowercased, which is what makes matching case-insensitive.
   struct SelectorEntry {
     uint32_t offset;      // into selectorPool_
-    uint16_t styleIndex;  // into stylePool_
+    uint16_t styleIndex;  // into the style chunks (styleRef)
     uint16_t length;
   };
   static_assert(sizeof(SelectorEntry) == 8);
@@ -333,7 +333,13 @@ class CssParser {
 
   std::unique_ptr<SelectorEntry[]> entries_;
   std::unique_ptr<char[]> selectorPool_;
-  std::unique_ptr<CssStyle[]> stylePool_;
+  // Style bodies in fixed chunks rather than one array: growing never copies the pool or needs
+  // one large block.
+  static constexpr size_t STYLE_CHUNK = 32;
+  static constexpr size_t STYLE_CHUNK_COUNT = 8;  // STYLE_CHUNK * STYLE_CHUNK_COUNT = MAX_UNIQUE_STYLES
+  std::unique_ptr<CssStyle[]> styleChunks_[STYLE_CHUNK_COUNT];
+  CssStyle& styleRef(const size_t i) { return styleChunks_[i / STYLE_CHUNK][i % STYLE_CHUNK]; }
+  const CssStyle& styleRef(const size_t i) const { return styleChunks_[i / STYLE_CHUNK][i % STYLE_CHUNK]; }
   // Style bodies are deduplicated: a template that repeats one declaration block across
   // hundreds of utility classes stores it once and points every entry at it.
   std::unique_ptr<uint32_t[]> styleHashes_;  // cheap reject before the byte compare

@@ -450,7 +450,7 @@ size_t CssParser::lowerBound(const std::string_view* pieces, const size_t count,
 const CssStyle* CssParser::findStyle(const std::string_view* pieces, const size_t count) const {
   bool exact = false;
   const size_t index = lowerBound(pieces, count, exact);
-  return exact ? &stylePool_[entries_[index].styleIndex] : nullptr;
+  return exact ? &styleRef(entries_[index].styleIndex) : nullptr;
 }
 
 std::string_view CssParser::selectorAt(const size_t index) const {
@@ -458,7 +458,7 @@ std::string_view CssParser::selectorAt(const size_t index) const {
   return {selectorPool_.get() + entry.offset, entry.length};
 }
 
-const CssStyle& CssParser::styleAt(const size_t index) const { return stylePool_[entries_[index].styleIndex]; }
+const CssStyle& CssParser::styleAt(const size_t index) const { return styleRef(entries_[index].styleIndex); }
 
 CssParser::PoolResult CssParser::ensureEntryCapacity(const size_t needed) {
   if (needed <= entryCapacity_) return PoolResult::Ready;
@@ -497,27 +497,27 @@ CssParser::PoolResult CssParser::ensureSelectorPoolCapacity(const size_t needed)
 }
 
 CssParser::PoolResult CssParser::ensureStyleCapacity(const size_t needed) {
+  static_assert(STYLE_CHUNK * STYLE_CHUNK_COUNT == MAX_UNIQUE_STYLES, "style chunks must cover the style cap");
   if (needed <= styleCapacity_) return PoolResult::Ready;
   if (needed > MAX_UNIQUE_STYLES) return PoolResult::Limit;
 
-  size_t capacity = styleCapacity_ ? styleCapacity_ * 2u : 16u;
-  while (capacity < needed) capacity *= 2u;
-  capacity = std::min(capacity, MAX_UNIQUE_STYLES);
-  auto grownStyles = makeUniqueNoThrow<CssStyle[]>(capacity);
-  if (!grownStyles) {
-    LOG_ERR("CSS", "OOM: style pool (%zu styles)", capacity);
-    return PoolResult::OutOfMemory;
+  // The hash array is 4 bytes a style: sized for the cap once, so it never grows or copies.
+  if (!styleHashes_) {
+    styleHashes_ = makeUniqueNoThrow<uint32_t[]>(MAX_UNIQUE_STYLES);
+    if (!styleHashes_) {
+      LOG_ERR("CSS", "OOM: style hashes (%zu entries)", MAX_UNIQUE_STYLES);
+      return PoolResult::OutOfMemory;
+    }
   }
-  auto grownHashes = makeUniqueNoThrow<uint32_t[]>(capacity);
-  if (!grownHashes) {
-    LOG_ERR("CSS", "OOM: style hashes (%zu entries)", capacity);
-    return PoolResult::OutOfMemory;
+  while (styleCapacity_ < needed) {
+    auto& chunk = styleChunks_[styleCapacity_ / STYLE_CHUNK];
+    chunk = makeUniqueNoThrow<CssStyle[]>(STYLE_CHUNK);
+    if (!chunk) {
+      LOG_ERR("CSS", "OOM: style pool chunk (%zu styles)", STYLE_CHUNK);
+      return PoolResult::OutOfMemory;
+    }
+    styleCapacity_ = static_cast<uint16_t>(styleCapacity_ + STYLE_CHUNK);
   }
-  for (size_t i = 0; i < styleCount_; ++i) grownStyles[i] = stylePool_[i];
-  if (styleCount_ > 0) memcpy(grownHashes.get(), styleHashes_.get(), styleCount_ * sizeof(uint32_t));
-  stylePool_ = std::move(grownStyles);
-  styleHashes_ = std::move(grownHashes);
-  styleCapacity_ = static_cast<uint16_t>(capacity);
   return PoolResult::Ready;
 }
 
@@ -533,7 +533,7 @@ CssParser::PoolResult CssParser::internStyle(const CssStyle& style, uint16_t& in
   for (uint16_t i = 0; i < styleCount_; ++i) {
     if (styleHashes_[i] != hash) continue;
     uint8_t existingWire[RULE_FIXED_BYTES];
-    encodeStyleWire(stylePool_[i], existingWire);
+    encodeStyleWire(styleRef(i), existingWire);
     if (memcmp(existingWire, wire, RULE_FIXED_BYTES) == 0) {
       indexOut = i;
       return PoolResult::Ready;
@@ -542,7 +542,7 @@ CssParser::PoolResult CssParser::internStyle(const CssStyle& style, uint16_t& in
 
   const PoolResult capacityResult = ensureStyleCapacity(static_cast<size_t>(styleCount_) + 1);
   if (capacityResult != PoolResult::Ready) return capacityResult;
-  stylePool_[styleCount_] = style;
+  styleRef(styleCount_) = style;
   styleHashes_[styleCount_] = hash;
   indexOut = styleCount_++;
   return PoolResult::Ready;
@@ -553,7 +553,7 @@ CssParser::RuleInsertResult CssParser::insertOrMerge(const std::string_view sele
   const size_t position = lowerBound(&selector, 1, exact);
   if (exact) {
     const uint16_t currentStyleIndex = entries_[position].styleIndex;
-    CssStyle merged = stylePool_[currentStyleIndex];
+    CssStyle merged = styleRef(currentStyleIndex);
     merged.applyOver(style);
 
     // Rewriting the body in place is only safe while this entry is its sole owner; a
@@ -566,7 +566,7 @@ CssParser::RuleInsertResult CssParser::insertOrMerge(const std::string_view sele
       }
     }
     if (!styleIsShared) {
-      stylePool_[currentStyleIndex] = merged;
+      styleRef(currentStyleIndex) = merged;
       uint8_t wire[RULE_FIXED_BYTES];
       encodeStyleWire(merged, wire);
       uint32_t hash = FNV_OFFSET_BASIS;
@@ -1599,13 +1599,13 @@ CssStyle CssParser::resolveStyle(const std::string_view tagName, const std::stri
   const auto emit = [&](const std::string_view* pieces, const size_t count, const uint8_t spec, const bool simple) {
     bool exact = false;
     size_t index = lowerBound(pieces, count, exact);
-    if (exact) addCandidate(&stylePool_[entries_[index].styleIndex], spec, entries_[index].offset);
+    if (exact) addCandidate(&styleRef(entries_[index].styleIndex), spec, entries_[index].offset);
     if (!simple) return;
     std::string_view scoped[CssSelector::MAX_KEY_PIECES + 1];
     scoped[0] = "h|";
     for (size_t i = 0; i < count; ++i) scoped[i + 1] = pieces[i];
     index = lowerBound(scoped, count + 1, exact);
-    if (exact) addCandidate(&stylePool_[entries_[index].styleIndex], spec, SCOPED_ORDER | entries_[index].offset);
+    if (exact) addCandidate(&styleRef(entries_[index].styleIndex), spec, SCOPED_ORDER | entries_[index].offset);
   };
 
   // The ancestor walk is skipped entirely unless the table actually holds a compound rule,
@@ -1934,9 +1934,13 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
 
   // Reserve the bounded worst case once. Without it the vector doubles its way to maxOut
   // (1, 2, 4 ... 256), and every step is an allocate-copy-free that both churns the heap and
-  // raises the peak to ~1.5x the final table -- during a build whose caller has already checked
-  // it can afford the table's SIZE, not its growth curve. One allocation instead.
-  if (out.capacity() < maxOut) out.reserve(maxOut);
+  // raises the peak to ~1.5x the final table. Checked here, right before the reserve: reserve()
+  // aborts under -fno-exceptions, and the caller's earlier check does not see what was allocated
+  // since. The caller tells this refusal apart by the capacity it left.
+  if (out.capacity() < maxOut) {
+    if (ESP.getMaxAllocHeap() < maxOut * sizeof(VerticalBlockRule) + 1024) return 0;
+    out.reserve(maxOut);
+  }
 
   std::string selector;
   for (uint16_t i = 0; i < ruleCount && out.size() < maxOut; i++) {
