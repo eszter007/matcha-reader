@@ -66,16 +66,15 @@ inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = 
   const time_t now = time(nullptr);
   struct tm t = {};
   localtime_r(&now, &t);
-  const bool loadOk = READING_STATS_STORE.loadFromFile();
-  READING_STATS_STORE.addMinutes(static_cast<uint16_t>(t.tm_year + 1900), static_cast<uint8_t>(t.tm_mon + 1),
-                                 static_cast<uint8_t>(t.tm_mday), minutes);
-  READING_STATS_STORE.addBookMinutes(bookPath, language, minutes, static_cast<uint16_t>(t.tm_year + 1900),
-                                     static_cast<uint8_t>(t.tm_mon + 1), static_cast<uint8_t>(t.tm_mday));
-  READING_STATS_STORE.addLanguageMinutes(language, minutes, static_cast<uint16_t>(t.tm_year + 1900),
-                                         static_cast<uint8_t>(t.tm_mon + 1), static_cast<uint8_t>(t.tm_mday));
-  if (!READING_STATS_STORE.saveToFile()) {
-    LOG_ERR("STATS", "saveToFile failed (load=%d, %u min lost from file)", loadOk, minutes);
-  }
+  ReadingStatsStore::Change update;
+  update.year = static_cast<uint16_t>(t.tm_year + 1900);
+  update.month = static_cast<uint8_t>(t.tm_mon + 1);
+  update.day = static_cast<uint8_t>(t.tm_mday);
+  update.minutes = minutes;
+  update.bookPath = bookPath;
+  update.language = language;
+  // Not written: keep the minutes pending (sessionStartMs unchanged) for the next flush.
+  if (!READING_STATS_STORE.record(update)) return;
   // Per-book day history (see BookStats). Loaded and dropped here: nothing stays in DRAM.
   if (bookPath && *bookPath) {
     BookStats bookStats;

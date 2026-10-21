@@ -575,9 +575,9 @@ void EpubReaderActivity::onReaderExit() {
   // Record book completion if exiting at end-of-book (only once per book).
   const bool atEnd = currentSpineIndex > 0 && epub && currentSpineIndex >= epub->getSpineItemsCount();
   if (atEnd) {
-    READING_STATS_STORE.loadFromFile();
-    READING_STATS_STORE.markBookFinished(epub->getPath());
-    READING_STATS_STORE.saveToFile();
+    ReadingStatsStore::Change update;
+    update.finishedPath = epub->getPath().c_str();
+    READING_STATS_STORE.record(update);
   }
 
   // Leaving mid-footnote loses the in-RAM return stack on deep sleep; persist the

@@ -1,16 +1,37 @@
 #include "ReadingStatsStore.h"
 
+#include <Arduino.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <SdSystemDir.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
+#include <mutex>
 #include <numeric>
 
 ReadingStatsStore ReadingStatsStore::instance;
 
 static std::string statsPath() { return sdsystem::path("reading_stats.bin"); }
+// Changes recorded since the last compact(); see record().
+static std::string journalPath() { return sdsystem::path("reading_stats.log"); }
+// Journal records start with this byte, so a torn or foreign tail is recognised and ignored.
+static constexpr uint8_t JOURNAL_RECORD_MAGIC = 0xA5;
+// A journal opens with this byte and a random nonce, so no two journals share a prefix: the fold
+// marker (see compact()) recognises a journal by its leading bytes.
+static constexpr uint8_t JOURNAL_HEADER_MAGIC = 0x5A;
+static constexpr size_t JOURNAL_HEADER_BYTES = 5;
+static constexpr size_t MAX_STORED_PATH = 500;
+// record() runs on the main loop, the end-of-book summary on the render task; one journal writer
+// at a time, and no fold while a record is being appended.
+static std::mutex& journalMutex() {
+  static std::mutex m;
+  return m;
+}
+// Heap a table reserve must leave behind; a reserve() that cannot be served aborts.
+static constexpr uint32_t TABLE_RESERVE_MARGIN = 4 * 1024;
+static bool tableFits(const size_t bytes) { return ESP.getMaxAllocHeap() >= bytes + TABLE_RESERVE_MARGIN; }
 // v3 appends the per-book block after the finished-book paths; v4 appends the per-day-per-language
 // block after that. Each older reader stops where its own format ends and ignores what follows,
 // rather than rejecting the file -- it will, however, drop the newer blocks the next time it saves.
@@ -138,21 +159,22 @@ void ReadingStatsStore::addLanguageMinutes(const char* language, const uint16_t 
   LanguageDaily fresh{year, month, day, {}, minutes};
   memcpy(fresh.language, lang, sizeof(lang));
 
-  // Sorted like days, so the per-language streak passes need no scratch buffer.
-  for (auto it = languageDays.rbegin(); it != languageDays.rend(); ++it) {
-    const int e = daysSinceEpoch(it->year, it->month, it->day);
-    if (e == epoch && memcmp(it->language, lang, sizeof(lang)) == 0) {
-      const uint32_t sum = static_cast<uint32_t>(it->minutesRead) + minutes;
-      it->minutesRead = static_cast<uint16_t>(sum > UINT16_MAX ? UINT16_MAX : sum);
-      return;
-    }
-    if (e <= epoch) {
-      // Same date, other language: insert alongside rather than walk the whole run.
-      languageDays.insert(it.base(), fresh);
+  // Sorted like days, so the per-language streak passes need no scratch buffer. From the back:
+  // the date added is almost always the newest.
+  const auto dateOf = [](const LanguageDaily& e) { return daysSinceEpoch(e.year, e.month, e.day); };
+  auto pos = languageDays.end();
+  while (pos != languageDays.begin() && dateOf(*(pos - 1)) > epoch) --pos;
+  // The whole run of this date, not just its last entry: reading ja, en, then ja again in one day
+  // must add to the first ja record, not open a second one.
+  for (auto it = pos; it != languageDays.begin() && dateOf(*(it - 1)) == epoch; --it) {
+    auto& e = *(it - 1);
+    if (memcmp(e.language, lang, sizeof(lang)) == 0) {
+      const uint32_t sum = static_cast<uint32_t>(e.minutesRead) + minutes;
+      e.minutesRead = static_cast<uint16_t>(sum > UINT16_MAX ? UINT16_MAX : sum);
       return;
     }
   }
-  languageDays.insert(languageDays.begin(), fresh);
+  languageDays.insert(pos, fresh);
 }
 
 uint16_t ReadingStatsStore::getMinutesForDay(const char* language, const uint16_t year, const uint8_t month,
@@ -412,60 +434,76 @@ int ReadingStatsStore::getDaysReadInMonth(uint16_t year, uint8_t month) const {
 }
 
 bool ReadingStatsStore::saveToFile() const {
+  const std::string tmpPath = statsPath() + ".tmp";
   HalFile f;
-  if (!Storage.openFileForWrite("STAT", statsPath().c_str(), f)) return false;
-  f.write(&STATS_VERSION, 1);
+  if (!Storage.openFileForWrite("STAT", tmpPath.c_str(), f)) return false;
+  // Every write is checked: a short file must never replace a good one.
+  bool ok = true;
+  const auto put = [&f, &ok](const void* data, const size_t n) {
+    if (ok && n && f.write(static_cast<const uint8_t*>(data), n) != n) ok = false;
+  };
+  put(&STATS_VERSION, 1);
   // days never exceeds MAX_DAYS in memory, so this only guards the 16-bit field.
   const uint16_t count = static_cast<uint16_t>(std::min<size_t>(days.size(), UINT16_MAX));
-  f.write(reinterpret_cast<const uint8_t*>(&count), 2);
-  f.write(reinterpret_cast<const uint8_t*>(&booksFinished), 2);
+  put(reinterpret_cast<const uint8_t*>(&count), 2);
+  put(reinterpret_cast<const uint8_t*>(&booksFinished), 2);
   for (uint16_t i = 0; i < count; i++) {
-    f.write(reinterpret_cast<const uint8_t*>(&days[i]), sizeof(DailyReading));
+    put(reinterpret_cast<const uint8_t*>(&days[i]), sizeof(DailyReading));
   }
   // Write finished book paths
   uint16_t pathCount = static_cast<uint16_t>(finishedBookPaths.size());
-  f.write(reinterpret_cast<const uint8_t*>(&pathCount), 2);
+  put(reinterpret_cast<const uint8_t*>(&pathCount), 2);
   for (const auto& p : finishedBookPaths) {
     uint16_t len = static_cast<uint16_t>(p.size());
-    f.write(reinterpret_cast<const uint8_t*>(&len), 2);
-    f.write(reinterpret_cast<const uint8_t*>(p.data()), len);
+    put(reinterpret_cast<const uint8_t*>(&len), 2);
+    put(reinterpret_cast<const uint8_t*>(p.data()), len);
   }
   // Per-book block (v3+)
   uint16_t bookCount = static_cast<uint16_t>(books.size());
-  f.write(reinterpret_cast<const uint8_t*>(&bookCount), 2);
+  put(reinterpret_cast<const uint8_t*>(&bookCount), 2);
   for (const auto& b : books) {
     uint16_t pathLen = static_cast<uint16_t>(b.path.size());
-    f.write(reinterpret_cast<const uint8_t*>(&pathLen), 2);
-    f.write(reinterpret_cast<const uint8_t*>(b.path.data()), pathLen);
+    put(reinterpret_cast<const uint8_t*>(&pathLen), 2);
+    put(reinterpret_cast<const uint8_t*>(b.path.data()), pathLen);
     uint8_t langLen = static_cast<uint8_t>(b.language.size());
-    f.write(&langLen, 1);
-    f.write(reinterpret_cast<const uint8_t*>(b.language.data()), langLen);
-    f.write(reinterpret_cast<const uint8_t*>(&b.minutesRead), 4);
-    f.write(reinterpret_cast<const uint8_t*>(&b.lastReadDay), 4);
+    put(&langLen, 1);
+    put(reinterpret_cast<const uint8_t*>(b.language.data()), langLen);
+    put(reinterpret_cast<const uint8_t*>(&b.minutesRead), 4);
+    put(reinterpret_cast<const uint8_t*>(&b.lastReadDay), 4);
   }
   // Per-day-per-language block (v4+). Fields written individually rather than as a struct blob:
   // LanguageDaily has trailing padding on some targets, and a padded layout would not survive a
   // format change on the reading side.
   // 16-bit count, as the format defines; clamped rather than silently truncated lower.
   const uint16_t langDayCount = static_cast<uint16_t>(std::min<size_t>(languageDays.size(), UINT16_MAX));
-  f.write(reinterpret_cast<const uint8_t*>(&langDayCount), 2);
+  put(reinterpret_cast<const uint8_t*>(&langDayCount), 2);
   size_t written = 0;
   for (const auto& e : languageDays) {
     if (written++ >= langDayCount) break;
-    f.write(reinterpret_cast<const uint8_t*>(&e.year), 2);
-    f.write(&e.month, 1);
-    f.write(&e.day, 1);
-    f.write(reinterpret_cast<const uint8_t*>(e.language), 4);
-    f.write(reinterpret_cast<const uint8_t*>(&e.minutesRead), 2);
+    put(reinterpret_cast<const uint8_t*>(&e.year), 2);
+    put(&e.month, 1);
+    put(&e.day, 1);
+    put(reinterpret_cast<const uint8_t*>(e.language), 4);
+    put(reinterpret_cast<const uint8_t*>(&e.minutesRead), 2);
   }
-  f.close();
-  return true;
+  put(&foldedJournalBytes, 4);
+  put(&foldedJournalHash, 4);
+  // SdFat writes the last sector on close: a failure there is a short file too.
+  ok = f.close() && ok;
+  if (!ok) {
+    LOG_ERR("STAT", "Stats save failed; previous file kept");
+    Storage.remove(tmpPath.c_str());
+    return false;
+  }
+  return Storage.replaceFile(tmpPath.c_str(), statsPath().c_str());
 }
 
-bool ReadingStatsStore::loadFromFile() {
-  if (loaded) return true;
+bool ReadingStatsStore::loadMainFile(const size_t pendingRecords) {
   HalFile f;
   if (!Storage.openFileForRead("STAT", statsPath().c_str(), f)) return false;
+  // Shorter than its own header (an older firmware's in-place save cut off by power loss): no
+  // history to keep, as opposed to a read error, which leaves the file for the next try.
+  if (f.size() < 5) return true;
   uint8_t version;
   if (f.read(&version, 1) != 1) {
     f.close();
@@ -490,8 +528,10 @@ bool ReadingStatsStore::loadFromFile() {
     DailyReading discard;
     if (f.read(reinterpret_cast<uint8_t*>(&discard), sizeof(DailyReading)) != sizeof(DailyReading)) break;
   }
-  // A month of room for new days, so appending mid-session does not move the vector.
-  days.reserve(std::min<size_t>(keepDays + GROWTH_SLACK_DAYS, MAX_DAYS));
+  // Room for the journal's records too, so replaying them never regrows the table.
+  const size_t dayCapacity = keepDays + pendingRecords;
+  if (!tableFits(dayCapacity * sizeof(DailyReading))) return false;
+  days.reserve(dayCapacity);
   for (size_t i = 0; i < keepDays; i++) {
     DailyReading dr;
     if (f.read(reinterpret_cast<uint8_t*>(&dr), sizeof(DailyReading)) != sizeof(DailyReading)) break;
@@ -541,7 +581,9 @@ bool ReadingStatsStore::loadFromFile() {
   if (version >= 3 && pathsIntact) {
     uint16_t bookCount = 0;
     if (f.read(reinterpret_cast<uint8_t*>(&bookCount), 2) == 2 && bookCount <= MAX_BOOKS) {
-      books.reserve(bookCount);
+      const size_t bookCapacity = std::min<size_t>(bookCount + pendingRecords, MAX_BOOKS);
+      if (!tableFits(bookCapacity * sizeof(BookReading))) return false;
+      books.reserve(bookCapacity);
       for (int i = 0; i < bookCount; i++) {
         BookReading b;
         uint16_t pathLen = 0;
@@ -573,17 +615,24 @@ bool ReadingStatsStore::loadFromFile() {
         uint8_t discard[10];
         if (f.read(discard, sizeof(discard)) != sizeof(discard)) break;
       }
-      languageDays.reserve(std::min<size_t>(keepLang + GROWTH_SLACK_DAYS, MAX_LANG_DAYS));  // see days
-      for (size_t i = 0; i < keepLang; i++) {
+      const size_t langCapacity = keepLang + pendingRecords;  // see days
+      if (!tableFits(langCapacity * sizeof(LanguageDaily))) return false;
+      languageDays.reserve(langCapacity);
+      bool langIntact = true;
+      for (size_t i = 0; i < keepLang && langIntact; i++) {
         LanguageDaily e{};
-        if (f.read(reinterpret_cast<uint8_t*>(&e.year), 2) != 2) break;
-        if (f.read(&e.month, 1) != 1) break;
-        if (f.read(&e.day, 1) != 1) break;
-        if (f.read(reinterpret_cast<uint8_t*>(e.language), 4) != 4) break;
-        if (f.read(reinterpret_cast<uint8_t*>(&e.minutesRead), 2) != 2) break;
-        e.language[3] = '\0';         // a corrupt record must not leave an unterminated tag
-        if (e.year < 2020) continue;  // same unset-clock garbage the per-day loop drops
-        languageDays.push_back(e);
+        langIntact = f.read(reinterpret_cast<uint8_t*>(&e.year), 2) == 2 && f.read(&e.month, 1) == 1 &&
+                     f.read(&e.day, 1) == 1 && f.read(reinterpret_cast<uint8_t*>(e.language), 4) == 4 &&
+                     f.read(reinterpret_cast<uint8_t*>(&e.minutesRead), 2) == 2;
+        e.language[3] = '\0';  // a corrupt record must not leave an unterminated tag
+        if (langIntact && e.year >= 2020) languageDays.push_back(e);  // same unset-clock rule as days
+      }
+      // The journal prefix this file already holds (see compact()); absent in older files. A file
+      // damaged before this point reads as holding none, so the whole journal is replayed.
+      if (!langIntact || f.read(reinterpret_cast<uint8_t*>(&foldedJournalBytes), 4) != 4 ||
+          f.read(reinterpret_cast<uint8_t*>(&foldedJournalHash), 4) != 4) {
+        foldedJournalBytes = 0;
+        foldedJournalHash = 0;
       }
       // Same ordering guarantee as days, for the same passes.
       const auto byDate = [](const LanguageDaily& a, const LanguageDaily& b) {
@@ -595,6 +644,424 @@ bool ReadingStatsStore::loadFromFile() {
     }
   }
   f.close();
+  return true;
+}
+
+namespace {
+uint32_t fnv1a(uint32_t h, const uint8_t* p, const size_t n) {
+  for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
+  return h;
+}
+constexpr uint32_t FNV_BASIS = 2166136261u;
+uint32_t pathHash(const std::string& s) {
+  return fnv1a(FNV_BASIS, reinterpret_cast<const uint8_t*>(s.data()), s.size());
+}
+
+bool skipBytes(HalFile& f, size_t n) {
+  uint8_t buf[64];
+  while (n) {
+    const size_t k = std::min(n, sizeof(buf));
+    if (f.read(buf, k) != static_cast<int>(k)) return false;
+    n -= k;
+  }
+  return true;
+}
+
+// One journal record: magic, date, minutes, then three length-prefixed strings (language, book
+// path, finished path). Built whole so it goes to the card in one write.
+void appendString(std::string& out, const char* s, const size_t maxLen) {
+  const auto len = static_cast<uint16_t>(s ? strnlen(s, maxLen) : 0);
+  out.append(reinterpret_cast<const char*>(&len), 2);
+  if (len) out.append(s, len);
+}
+bool readString(HalFile& f, std::string& out, const size_t maxLen) {
+  uint16_t len = 0;
+  if (f.read(reinterpret_cast<uint8_t*>(&len), 2) != 2 || len > maxLen) return false;
+  out.assign(len, '\0');
+  return len == 0 || f.read(reinterpret_cast<uint8_t*>(&out[0]), len) == static_cast<int>(len);
+}
+struct JournalRecord {
+  uint16_t year = 0;
+  uint8_t month = 0;
+  uint8_t day = 0;
+  uint16_t minutes = 0;
+  std::string language, bookPath, finishedPath;
+};
+bool readRecord(HalFile& f, JournalRecord& r) {
+  uint8_t magic = 0;
+  return f.read(&magic, 1) == 1 && magic == JOURNAL_RECORD_MAGIC &&
+         f.read(reinterpret_cast<uint8_t*>(&r.year), 2) == 2 && f.read(&r.month, 1) == 1 && f.read(&r.day, 1) == 1 &&
+         f.read(reinterpret_cast<uint8_t*>(&r.minutes), 2) == 2 && readString(f, r.language, MAX_STORED_LANGUAGE) &&
+         readString(f, r.bookPath, MAX_STORED_PATH) && readString(f, r.finishedPath, MAX_STORED_PATH);
+}
+
+// Size and hash of the whole journal: what compact() records as folded into the stats file.
+void journalDigest(uint32_t& bytes, uint32_t& hash) {
+  bytes = 0;
+  hash = FNV_BASIS;
+  HalFile f;
+  if (!Storage.openFileForRead("STAT", journalPath().c_str(), f)) return;
+  uint8_t buf[64];
+  int k;
+  while ((k = f.read(buf, sizeof(buf))) > 0) {
+    hash = fnv1a(hash, buf, static_cast<size_t>(k));
+    bytes += static_cast<uint32_t>(k);
+  }
+}
+
+// Opens the journal positioned after the prefix a stats file already holds, so a fold whose
+// journal removal was interrupted is never counted twice. A journal that does not start with that
+// prefix is a new one, read from the start.
+bool openUnfoldedJournal(HalFile& f, const uint32_t foldedBytes, const uint32_t foldedHash) {
+  if (!Storage.openFileForRead("STAT", journalPath().c_str(), f)) return false;
+  if (foldedBytes == 0 || f.size() < foldedBytes) return skipBytes(f, JOURNAL_HEADER_BYTES);
+  uint32_t hash = FNV_BASIS;
+  uint8_t buf[64];
+  size_t left = foldedBytes;
+  while (left) {
+    const size_t k = std::min(left, sizeof(buf));
+    if (f.read(buf, k) != static_cast<int>(k)) break;
+    hash = fnv1a(hash, buf, k);
+    left -= k;
+  }
+  if (left == 0 && hash == foldedHash) return true;
+  f.close();
+  return Storage.openFileForRead("STAT", journalPath().c_str(), f) && skipBytes(f, JOURNAL_HEADER_BYTES);
+}
+
+size_t countJournalRecords() {
+  HalFile f;
+  if (!Storage.openFileForRead("STAT", journalPath().c_str(), f) || !skipBytes(f, JOURNAL_HEADER_BYTES)) return 0;
+  JournalRecord r;
+  size_t n = 0;
+  while (readRecord(f, r)) n++;
+  return n;
+}
+
+// Reads only the trailer of a stats file: the journal prefix it holds (see compact()). False when the
+// file does not read whole to its trailer. Same bounds as the loader, so the two agree on a file.
+bool readFoldMarker(const std::string& path, uint32_t& bytes, uint32_t& hash) {
+  bytes = hash = 0;
+  HalFile f;
+  if (!Storage.openFileForRead("STAT", path.c_str(), f) || f.size() < 5) return false;
+  uint8_t version = 0;
+  uint16_t count = 0, finished = 0, n = 0;
+  if (f.read(&version, 1) != 1 || version < 4 || f.read(reinterpret_cast<uint8_t*>(&count), 2) != 2 ||
+      f.read(reinterpret_cast<uint8_t*>(&finished), 2) != 2 || !skipBytes(f, count * sizeof(DailyReading)) ||
+      f.read(reinterpret_cast<uint8_t*>(&n), 2) != 2 || n > 500) {
+    return false;
+  }
+  std::string s;
+  for (uint16_t i = 0; i < n; i++) {
+    if (!readString(f, s, MAX_STORED_PATH)) return false;
+  }
+  if (f.read(reinterpret_cast<uint8_t*>(&n), 2) != 2 || n > ReadingStatsStore::MAX_BOOKS) return false;
+  for (uint16_t i = 0; i < n; i++) {
+    uint8_t langLen = 0;
+    if (!readString(f, s, MAX_STORED_PATH) || f.read(&langLen, 1) != 1 || langLen > MAX_STORED_LANGUAGE ||
+        !skipBytes(f, langLen + 8u)) {
+      return false;
+    }
+  }
+  uint32_t b = 0, h = 0;
+  if (f.read(reinterpret_cast<uint8_t*>(&n), 2) != 2 || !skipBytes(f, n * 10u) ||
+      f.read(reinterpret_cast<uint8_t*>(&b), 4) != 4 || f.read(reinterpret_cast<uint8_t*>(&h), 4) != 4) {
+    return false;
+  }
+  bytes = b;
+  hash = h;
+  return true;
+}
+
+// A save swaps its temp file in by removing the old file first; a power loss in between leaves only
+// the temp. It is adopted before anything reads or writes the stats -- but only when it reads whole
+// to its trailer: a temp cut off mid-write is dropped, and the journal still holds everything.
+void recoverInterruptedSave() {
+  const std::string tmpPath = statsPath() + ".tmp";
+  if (Storage.exists(statsPath().c_str()) || !Storage.exists(tmpPath.c_str())) return;
+  uint32_t bytes = 0, hash = 0;
+  if (readFoldMarker(tmpPath, bytes, hash)) {
+    Storage.rename(tmpPath.c_str(), statsPath().c_str());
+  } else {
+    Storage.remove(tmpPath.c_str());
+  }
+}
+}  // namespace
+
+bool ReadingStatsStore::replayJournal() {
+  HalFile f;
+  if (!openUnfoldedJournal(f, foldedJournalBytes, foldedJournalHash)) return true;  // nothing recorded
+  // A record cut short by a power loss ends the replay; everything before it counts.
+  JournalRecord r;
+  while (readRecord(f, r)) {
+    if (r.minutes > 0) {
+      if (r.year >= 2020) {  // the loader drops unset-clock days; the per-book total keeps them
+        addMinutes(r.year, r.month, r.day, r.minutes);
+        addLanguageMinutes(r.language.c_str(), r.minutes, r.year, r.month, r.day);
+      }
+      addBookMinutes(r.bookPath.c_str(), r.language.c_str(), r.minutes, r.year, r.month, r.day);
+    }
+    if (!r.finishedPath.empty()) markBookFinished(r.finishedPath);
+  }
+  return true;
+}
+
+bool ReadingStatsStore::loadFromFile() {
+  if (loaded) return true;
+  recoverInterruptedSave();
+  const size_t pending = countJournalRecords();
+  if (Storage.exists(statsPath().c_str()) && !loadMainFile(pending)) {
+    LOG_ERR("STAT", "Stats not loaded (unreadable or no heap: maxAlloc=%u, %u journal records)", ESP.getMaxAllocHeap(),
+            static_cast<unsigned>(pending));
+    release();
+    return false;
+  }
+  replayJournal();
   loaded = true;
   return true;
+}
+
+void ReadingStatsStore::release() {
+  std::vector<DailyReading>().swap(days);
+  std::vector<std::string>().swap(finishedBookPaths);
+  std::vector<BookReading>().swap(books);
+  std::vector<LanguageDaily>().swap(languageDays);
+  booksFinished = 0;
+  foldedJournalBytes = 0;
+  foldedJournalHash = 0;
+  loaded = false;
+}
+
+bool ReadingStatsStore::record(const Change& change) {
+  std::string rec;
+  rec.reserve(JOURNAL_HEADER_BYTES + 13 + MAX_STORED_LANGUAGE +
+              (change.bookPath ? strnlen(change.bookPath, MAX_STORED_PATH) : 0) +
+              (change.finishedPath ? strnlen(change.finishedPath, MAX_STORED_PATH) : 0));
+  rec.push_back(static_cast<char>(JOURNAL_RECORD_MAGIC));
+  rec.append(reinterpret_cast<const char*>(&change.year), 2);
+  rec.push_back(static_cast<char>(change.month));
+  rec.push_back(static_cast<char>(change.day));
+  rec.append(reinterpret_cast<const char*>(&change.minutes), 2);
+  appendString(rec, change.language, MAX_STORED_LANGUAGE);
+  appendString(rec, change.bookPath, MAX_STORED_PATH);
+  appendString(rec, change.finishedPath, MAX_STORED_PATH);
+
+  std::lock_guard<std::mutex> lock(journalMutex());
+  HalFile f;
+  if (!Storage.openFileForAppend("STAT", journalPath().c_str(), f)) return false;
+  const size_t before = f.size();
+  if (before == 0) {
+    const uint32_t nonce = esp_random();
+    std::string header(1, static_cast<char>(JOURNAL_HEADER_MAGIC));
+    header.append(reinterpret_cast<const char*>(&nonce), 4);
+    rec.insert(0, header);
+  }
+  // A short append is cut back off: a torn record would end every replay before the ones after it.
+  if (f.write(rec.data(), rec.size()) != rec.size()) {
+    f.truncate(before);
+    f.close();
+    return false;
+  }
+  if (f.close()) return true;
+  // A failed close may still have committed the record; retrying it then would count it twice.
+  HalFile check;
+  return Storage.openFileForRead("STAT", journalPath().c_str(), check) && check.size() == before + rec.size();
+}
+
+ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear, const uint8_t todayMonth,
+                                                        const uint8_t todayDay, const char* language) {
+  Summary out;
+  recoverInterruptedSave();
+  const int today = daysSinceEpoch(todayYear, todayMonth, todayDay);
+  char lang[4] = {};
+  if (language && *language) normalizeLanguage(language, lang);
+
+  // The table path, for what the stream below does not handle (older formats, unsorted days).
+  const auto fromTables = [&]() {
+    // Held so a record() on the main loop cannot add to the journal between its count and replay.
+    std::lock_guard<std::mutex> lock(journalMutex());
+    Summary t;
+    if (loadFromFile()) {
+      t.streak = getStreak(todayYear, todayMonth, todayDay);
+      t.booksFinished = getBooksFinished();
+      if (lang[0]) t.languageBooksFinished = getBooksFinished(lang);
+    }
+    release();
+    return t;
+  };
+
+  // The journal past what the file holds, condensed to what the numbers need: no strings kept.
+  struct Entry {
+    int day;
+    uint16_t minutes;
+    uint32_t book;      // hash of the book path, 0 for none
+    uint32_t finished;  // hash of the finished path, 0 for none
+    char language[4];
+    bool hasLanguage;
+  };
+  std::vector<Entry> journal;
+  {
+    uint32_t foldedBytes = 0, foldedHash = 0;
+    readFoldMarker(statsPath(), foldedBytes, foldedHash);
+    HalFile j;
+    if (openUnfoldedJournal(j, foldedBytes, foldedHash)) {
+      journal.reserve(countJournalRecords());
+      JournalRecord r;
+      while (readRecord(j, r)) {
+        Entry e{daysSinceEpoch(r.year, r.month, r.day), r.minutes, 0, 0, {}, !r.language.empty()};
+        if (r.minutes > 0 && !r.bookPath.empty()) e.book = pathHash(r.bookPath);
+        if (!r.finishedPath.empty()) e.finished = pathHash(r.finishedPath);
+        normalizeLanguage(r.language.c_str(), e.language);
+        if (r.minutes > 0 && r.year < 2020) e.minutes = 0;  // dropped from days, as on replay
+        journal.push_back(e);
+      }
+    }
+  }
+  // Journal minutes per day, ascending.
+  std::vector<std::pair<int, uint32_t>> journalDays;
+  journalDays.reserve(journal.size());
+  for (const auto& e : journal) {
+    if (e.minutes == 0) continue;
+    auto it = std::lower_bound(journalDays.begin(), journalDays.end(), std::make_pair(e.day, uint32_t{0}));
+    if (it != journalDays.end() && it->first == e.day) {
+      it->second += e.minutes;
+    } else {
+      journalDays.insert(it, {e.day, e.minutes});
+    }
+  }
+
+  HalFile f;
+  const bool hasFile = Storage.openFileForRead("STAT", statsPath().c_str(), f) && f.size() >= 5;
+  uint8_t version = 0;
+  uint16_t count = 0, headerFinished = 0;
+  if (hasFile &&
+      (f.read(&version, 1) != 1 || version != STATS_VERSION || f.read(reinterpret_cast<uint8_t*>(&count), 2) != 2 ||
+       f.read(reinterpret_cast<uint8_t*>(&headerFinished), 2) != 2)) {
+    f.close();
+    return fromTables();
+  }
+
+  // Days, file and journal merged in date order; the run of read days ending today is the streak.
+  int prev = INT32_MIN, run = 0, lastFileDay = INT32_MIN;
+  size_t jd = 0;
+  const auto takeDay = [&](const int e, const uint32_t minutes) {
+    if (minutes == 0 || e > today) return;  // as getStreak(): empty days and future dates do not count
+    run = (e == prev + 1) ? run + 1 : 1;
+    prev = e;
+  };
+  const size_t skip = count > MAX_DAYS ? count - MAX_DAYS : 0;  // the loader keeps the newest MAX_DAYS
+  for (size_t i = 0; hasFile && i < count; i++) {
+    DailyReading d;
+    if (f.read(reinterpret_cast<uint8_t*>(&d), sizeof(d)) != sizeof(d)) {
+      f.close();
+      return fromTables();
+    }
+    if (i < skip || d.year < 2020) continue;
+    const int e = daysSinceEpoch(d.year, d.month, d.day);
+    if (e < lastFileDay) {  // unsorted: the loader sorts, so leave it to the tables
+      f.close();
+      return fromTables();
+    }
+    lastFileDay = e;
+    uint32_t minutes = d.minutesRead;
+    for (; jd < journalDays.size() && journalDays[jd].first < e; jd++)
+      takeDay(journalDays[jd].first, journalDays[jd].second);
+    if (jd < journalDays.size() && journalDays[jd].first == e) minutes += journalDays[jd++].second;
+    takeDay(e, minutes);
+  }
+  for (; jd < journalDays.size(); jd++) takeDay(journalDays[jd].first, journalDays[jd].second);
+  out.streak = prev == today ? run : 0;
+
+  // Finished books: hashes of their paths, then their languages from the per-book block.
+  std::vector<uint32_t> finished;
+  bool pathsIntact = false;
+  uint16_t pathCount = 0;
+  std::string s;
+  if (hasFile && f.read(reinterpret_cast<uint8_t*>(&pathCount), 2) == 2 && pathCount <= 500) {
+    pathsIntact = true;
+    finished.reserve(pathCount + journal.size());
+    for (uint16_t i = 0; i < pathCount; i++) {
+      if (!readString(f, s, MAX_STORED_PATH)) {
+        pathsIntact = false;
+        break;
+      }
+      finished.push_back(pathHash(s));
+    }
+  }
+  uint16_t booksFinished = hasFile ? (pathsIntact ? static_cast<uint16_t>(finished.size()) : headerFinished) : 0;
+  for (const auto& e : journal) {
+    if (!e.finished || std::find(finished.begin(), finished.end(), e.finished) != finished.end()) continue;
+    finished.push_back(e.finished);
+    booksFinished = std::max(booksFinished, static_cast<uint16_t>(finished.size()));  // as markBookFinished()
+  }
+  out.booksFinished = booksFinished;
+
+  if (lang[0]) {
+    // Language per finished book: from the per-book block, then as the journal sets it.
+    std::vector<std::pair<uint32_t, std::array<char, 4>>> finishedLang;
+    uint16_t bookCount = 0;
+    if (pathsIntact && f.read(reinterpret_cast<uint8_t*>(&bookCount), 2) == 2 && bookCount <= MAX_BOOKS) {
+      std::string bookLang;
+      for (uint16_t i = 0; i < bookCount; i++) {
+        uint8_t langLen = 0;
+        if (!readString(f, s, MAX_STORED_PATH) || f.read(&langLen, 1) != 1 || langLen > MAX_STORED_LANGUAGE) break;
+        bookLang.assign(langLen, '\0');
+        if ((langLen && f.read(reinterpret_cast<uint8_t*>(&bookLang[0]), langLen) != langLen) || !skipBytes(f, 8)) {
+          break;
+        }
+        const uint32_t h = pathHash(s);
+        if (std::find(finished.begin(), finished.end(), h) == finished.end()) continue;
+        std::array<char, 4> code{};
+        normalizeLanguage(bookLang.c_str(), code.data());
+        finishedLang.push_back({h, code});
+      }
+    }
+    for (const auto& e : journal) {
+      if (!e.book || std::find(finished.begin(), finished.end(), e.book) == finished.end()) continue;
+      auto it =
+          std::find_if(finishedLang.begin(), finishedLang.end(), [&e](const auto& x) { return x.first == e.book; });
+      if (it == finishedLang.end()) {
+        finishedLang.push_back({e.book, {}});
+        it = finishedLang.end() - 1;
+      } else if (!e.hasLanguage) {
+        continue;  // an empty tag never overwrites a known one (addBookMinutes)
+      }
+      memcpy(it->second.data(), e.language, 4);
+    }
+    for (const auto& x : finishedLang) {
+      if (memcmp(x.second.data(), lang, 4) == 0) out.languageBooksFinished++;
+    }
+  }
+  return out;
+}
+
+bool ReadingStatsStore::compact() {
+  std::lock_guard<std::mutex> lock(journalMutex());
+  recoverInterruptedSave();
+  const bool hasJournal = Storage.exists(journalPath().c_str());
+  bool outdated = false;  // an older format: one rewrite upgrades it
+  {
+    HalFile f;
+    uint8_t version = 0;
+    if (Storage.openFileForRead("STAT", statsPath().c_str(), f) && f.size() >= 5 && f.read(&version, 1) == 1) {
+      outdated = version != STATS_VERSION;
+    }
+  }
+  if (!hasJournal && !outdated) return true;
+
+  release();
+  uint32_t bytes = 0, hash = 0;
+  if (hasJournal) journalDigest(bytes, hash);
+  // The saved file records which journal it now holds, so a removal cut short here never counts the
+  // journal twice; until that save lands the journal is untouched.
+  bool ok = loadFromFile();
+  if (ok) {
+    foldedJournalBytes = bytes;
+    foldedJournalHash = hash;
+    ok = saveToFile();
+  }
+  if (ok && hasJournal) Storage.remove(journalPath().c_str());
+  if (!ok) LOG_ERR("STAT", "Stats journal not folded in; kept for the next try");
+  release();
+  return ok;
 }

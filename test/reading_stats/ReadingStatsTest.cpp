@@ -2,10 +2,13 @@
 // streak boundaries, session counting, per-language independence, and the save/load round trip.
 #include <HalStorage.h>  // the stub: provides testRoot()
 #include <I18n.h>
+#include <SdSystemDir.h>
 #include <gtest/gtest.h>
 
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -443,4 +446,161 @@ TEST_F(StatsTest, DaySpanCountsCalendarDaysFirstToLast) {
   EXPECT_EQ(b.getDaySpan(), 4) << "Feb 27 to Mar 2, across a non-leap February";
   b.recordMinutes(2027, 3, 2, 5);
   EXPECT_EQ(b.getDaySpan(), 369);
+}
+
+// What the reader records goes to the journal; a load replays it, and compact() folds it into the
+// stats file. Either way the result must equal applying the same changes in memory.
+TEST_F(StatsTest, JournalReplaysAndCompactsLikeInMemoryUpdates) {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(Y, M, 1, 10);
+  s.addBookMinutes("/a.epub", "ja", 10, Y, M, 1);
+  s.addLanguageMinutes("ja", 10, Y, M, 1);
+  ASSERT_TRUE(s.saveToFile());
+
+  std::vector<ReadingStatsStore::Change> changes(4);
+  changes[0] = {Y, M, 3, 5, "/b.epub", "en", nullptr};
+  changes[1] = {Y, M, 2, 7, "/c.epub", "ja-JP", nullptr};  // an earlier day than the last
+  changes[2].finishedPath = "/b.epub";
+  changes[3] = {Y, M, 3, 4, "/a.epub", "", "/a.epub"};
+
+  // Reference: the same changes applied in memory.
+  ReadingStatsStore ref;
+  ASSERT_TRUE(ref.loadFromFile());
+  for (const auto& c : changes) {
+    if (c.minutes) {
+      ref.addMinutes(c.year, c.month, c.day, c.minutes);
+      ref.addBookMinutes(c.bookPath, c.language, c.minutes, c.year, c.month, c.day);
+      ref.addLanguageMinutes(c.language, c.minutes, c.year, c.month, c.day);
+    }
+    if (c.finishedPath) ref.markBookFinished(c.finishedPath);
+  }
+
+  READING_STATS_STORE = ReadingStatsStore{};
+  for (const auto& c : changes) ASSERT_TRUE(s.record(c));
+  const auto same = [&ref](const ReadingStatsStore& st) {
+    EXPECT_EQ(st.getTotalMinutes(), ref.getTotalMinutes());
+    EXPECT_EQ(st.getDaysRead(), ref.getDaysRead());
+    EXPECT_EQ(st.getBooksFinished(), ref.getBooksFinished());
+    EXPECT_EQ(st.getTotalMinutes("ja"), ref.getTotalMinutes("ja"));
+    EXPECT_EQ(st.getTotalMinutes("en"), ref.getTotalMinutes("en"));
+    EXPECT_EQ(st.getBooks().size(), ref.getBooks().size());
+  };
+  ASSERT_TRUE(s.loadFromFile());  // file + journal replay
+  same(s);
+  s.release();
+
+  ASSERT_TRUE(s.compact());
+  EXPECT_FALSE(std::filesystem::exists(testRoot() + sdsystem::path("reading_stats.log")));
+  ASSERT_TRUE(s.loadFromFile());  // file alone now
+  same(s);
+}
+
+// A record cut short by a power loss is ignored; the ones before it still count.
+TEST_F(StatsTest, TornJournalTailIsIgnored) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.record({Y, M, 5, 12, "/a.epub", "ja", nullptr}));
+  {
+    std::ofstream log(testRoot() + sdsystem::path("reading_stats.log"), std::ios::binary | std::ios::app);
+    const char torn[] = {static_cast<char>(0xA5), 0x07, 0x00};
+    log.write(torn, sizeof(torn));
+  }
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 12u);
+}
+
+// An empty stats file (a save cut off before its first byte) is no history, not a reason to stop
+// recording.
+TEST_F(StatsTest, EmptyStatsFileStillTakesTheJournal) {
+  auto& s = READING_STATS_STORE;
+  {
+    std::ofstream(testRoot() + sdsystem::path("reading_stats.bin"), std::ios::binary);
+  }
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/a.epub", "en", nullptr}));
+  ASSERT_TRUE(s.compact());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 9u);
+}
+
+// ja, then en, then ja again on one day is one ja record, not two.
+TEST_F(StatsTest, SameDayLanguageReturnMergesIntoItsRecord) {
+  auto& s = READING_STATS_STORE;
+  s.addLanguageMinutes("ja", 10, Y, M, 5);
+  s.addLanguageMinutes("en", 5, Y, M, 5);
+  s.addLanguageMinutes("ja", 3, Y, M, 5);
+  EXPECT_EQ(s.getLanguageDays().size(), 2u);
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 5), 13);
+}
+
+// summarize() streams the file and journal; it must agree with the getters over the loaded tables.
+TEST_F(StatsTest, SummaryMatchesTheLoadedTables) {
+  auto& s = READING_STATS_STORE;
+  for (uint8_t d = 1; d <= 6; d++) s.addMinutes(Y, M, d, 10);
+  s.addBookMinutes("/a.epub", "ja", 30, Y, M, 3);
+  s.addBookMinutes("/b.epub", "en", 30, Y, M, 6);
+  s.addLanguageMinutes("ja", 30, Y, M, 3);
+  s.addLanguageMinutes("en", 30, Y, M, 6);
+  s.markBookFinished("/a.epub");
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.record({Y, M, 7, 15, "/b.epub", "en", nullptr}));
+  ASSERT_TRUE(s.record({Y, M, 8, 20, "/c.epub", "ja-JP", "/c.epub"}));
+  ASSERT_TRUE(s.record({Y, M, 8, 0, nullptr, nullptr, "/b.epub"}));
+
+  const ReadingStatsStore::Summary sum = s.summarize(Y, M, 8, "ja");
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(sum.streak, s.getStreak(Y, M, 8));
+  EXPECT_EQ(sum.booksFinished, s.getBooksFinished());
+  EXPECT_EQ(sum.languageBooksFinished, s.getBooksFinished("ja"));
+  EXPECT_EQ(sum.streak, 8);
+  EXPECT_EQ(sum.booksFinished, 3);
+  EXPECT_EQ(sum.languageBooksFinished, 2);
+}
+
+// A fold whose journal removal never happened (power loss) must not count the journal again, and
+// a new journal that starts with the same record must still count.
+TEST_F(StatsTest, FoldedJournalIsNotCountedTwice) {
+  auto& s = READING_STATS_STORE;
+  const std::string log = testRoot() + sdsystem::path("reading_stats.log");
+  ASSERT_TRUE(s.record({Y, M, 5, 10, "/a.epub", "ja", nullptr}));
+  std::filesystem::copy_file(log, log + ".keep");
+  ASSERT_TRUE(s.compact());
+  std::filesystem::rename(log + ".keep", log);  // as if the removal was cut off
+  ASSERT_TRUE(s.compact());
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 10u);
+  s.release();
+
+  std::filesystem::remove(log);
+  ASSERT_TRUE(s.record({Y, M, 5, 10, "/a.epub", "ja", nullptr}));  // identical record, new journal
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 20u);
+}
+
+// A save interrupted between removing the old file and renaming the new one leaves only the
+// complete temp file; it is adopted, not overwritten.
+TEST_F(StatsTest, InterruptedSaveTempIsAdopted) {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(Y, M, 1, 30);
+  ASSERT_TRUE(s.saveToFile());
+  const std::string bin = testRoot() + sdsystem::path("reading_stats.bin");
+  std::filesystem::rename(bin, bin + ".tmp");
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.record({Y, M, 2, 5, "/a.epub", "en", nullptr}));
+  ASSERT_TRUE(s.compact());
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 35u);
+}
+
+// A file shorter than its header is no history; recording carries on.
+TEST_F(StatsTest, TruncatedHeaderIsNoHistory) {
+  auto& s = READING_STATS_STORE;
+  {
+    std::ofstream bin(testRoot() + sdsystem::path("reading_stats.bin"), std::ios::binary);
+    bin.write("\x04\x01", 2);
+  }
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/a.epub", "en", nullptr}));
+  ASSERT_TRUE(s.compact());
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 9u);
 }

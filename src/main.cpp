@@ -737,9 +737,8 @@ void setup() {
   HalSystem::checkPanic();
 
   APP_STATE.loadFromFile();
-  // Long-lived once read: loading it first keeps it at the bottom of the heap rather than in the
-  // middle of the free region a chapter build needs later.
-  READING_STATS_STORE.loadFromFile();
+  // Fold the reading-stats journal in while the heap is still whole; see ReadingStatsStore::record().
+  READING_STATS_STORE.compact();
   const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
   const bool isPersistedSleepWake = isSleepWake && !APP_STATE.showBootScreen;
 

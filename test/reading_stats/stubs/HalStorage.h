@@ -1,4 +1,5 @@
 #pragma once
+#include <unistd.h>
 // Host stand-in for the SD-backed HalStorage, sufficient for the stats stores: the same call
 // surface, backed by real files under the test's working directory.
 #include <sys/stat.h>
@@ -33,10 +34,20 @@ class HalFile {
 
   size_t read(void* b, size_t n) { return f ? fread(b, 1, n, f) : 0; }
   size_t write(const void* b, size_t n) { return f ? fwrite(b, 1, n, f) : 0; }
-  void close() {
-    if (f) fclose(f);
-    f = nullptr;
+  size_t size() {
+    if (!f) return 0;
+    const long pos = ftell(f);
+    fseek(f, 0, SEEK_END);
+    const long end = ftell(f);
+    fseek(f, pos, SEEK_SET);
+    return static_cast<size_t>(end);
   }
+  bool close() {
+    const bool ok = !f || fclose(f) == 0;
+    f = nullptr;
+    return ok;
+  }
+  bool truncate(uint64_t n) { return f && fflush(f) == 0 && ftruncate(fileno(f), static_cast<off_t>(n)) == 0; }
 };
 
 class HalStorage {
@@ -59,6 +70,19 @@ class HalStorage {
     return true;
   }
   bool remove(const char* p) { return ::remove(testRootPath(p).c_str()) == 0; }
+  bool rename(const char* from, const char* to) {
+    return ::rename(testRootPath(from).c_str(), testRootPath(to).c_str()) == 0;
+  }
+  bool replaceFile(const char* tmp, const char* to) {
+    ::remove(testRootPath(to).c_str());
+    return rename(tmp, to);
+  }
+  bool openFileForAppend(const char*, const char* p, HalFile& out) {
+    FILE* h = fopen(testRootPath(p).c_str(), "ab");
+    if (!h) return false;
+    out = HalFile(h);
+    return true;
+  }
   bool openFileForRead(const char*, const char* p, HalFile& out) {
     FILE* h = fopen(testRootPath(p).c_str(), "rb");
     if (!h) return false;

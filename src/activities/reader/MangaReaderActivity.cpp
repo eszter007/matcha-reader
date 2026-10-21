@@ -212,9 +212,9 @@ void MangaReaderActivity::onExit() {
   // got marked finished even at 100% progress, unlike Epub/Txt readers.
   const bool atLastPage = book && book->getPageCount() > 0 && currentPage >= book->getPageCount() - 1;
   if (atLastPage) {
-    READING_STATS_STORE.loadFromFile();
-    READING_STATS_STORE.markBookFinished(book->getFolder());
-    READING_STATS_STORE.saveToFile();
+    ReadingStatsStore::Change update;
+    update.finishedPath = book->getFolder().c_str();
+    READING_STATS_STORE.record(update);
   }
 
   saveProgress();

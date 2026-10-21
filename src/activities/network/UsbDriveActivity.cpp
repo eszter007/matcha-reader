@@ -5,7 +5,6 @@
 #include <I18n.h>
 
 #include "MappedInputManager.h"
-#include "ReadingStatsStore.h"
 #include "SilentRestart.h"
 #include "components/UITheme.h"
 
@@ -36,7 +35,6 @@ void UsbDriveActivity::onEnter() {
 
 void UsbDriveActivity::onExit() {
   if (!restartRequested) Storage.endUsbDrive();
-  READING_STATS_STORE.invalidate();  // the host may have changed the stats file
   Activity::onExit();
 }
 
