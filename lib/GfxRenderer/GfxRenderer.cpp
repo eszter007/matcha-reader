@@ -1940,7 +1940,7 @@ void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, con
 
 bool GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, const int maxWidth, const int maxHeight,
                              const float cropX, const float cropY, const bool allowUpscale,
-                             const bool whiteAsTransparent) const {
+                             const bool whiteAsTransparent, const bool ditherGrays) const {
   // Deliberately skipped, not failed: a caller that treats false as a render error would show
   // an error screen for a background font scan that finishes on its own.
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return true;
@@ -2050,7 +2050,11 @@ bool GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
       if (whiteAsTransparent && val == 3) continue;
 
       if (renderMode == BW && val < 3) {
-        drawPixel(screenX, screenY);
+        // Bayer 2x2 thresholds in eighths: dark gray (1) is 3/4 black, light gray (2) 1/4 black.
+        static constexpr uint8_t BAYER_EIGHTHS[4] = {1, 5, 7, 3};
+        if (!ditherGrays || val * 8 < BAYER_EIGHTHS[(screenY & 1) * 2 + (screenX & 1)] * 3) {
+          drawPixel(screenX, screenY);
+        }
       } else if (renderMode == GRAYSCALE_LSB || renderMode == GRAYSCALE_MSB) {
         const auto pixel = grayPlanePixel(val, renderMode == GRAYSCALE_MSB, absoluteGrayPlanes);
         if (pixel.write) drawPixel(screenX, screenY, pixel.black);

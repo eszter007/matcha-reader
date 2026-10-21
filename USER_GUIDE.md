@@ -821,11 +821,12 @@ Choose what the screen shows while the device sleeps in **Settings → Sleep →
 | **None**           | A blank screen.                                                                                                 |
 | **Quick Resume**   | Leaves the current screen as it is, so the page you were on stays visible.                                      |
 | **Transparent**    | A picture drawn on top of the current page (see [Transparent sleep screen](#transparent-sleep-screen)). Shows **Dark** if no usable picture is found. |
+| **Cover + Transparent** | The transparent picture drawn on top of the cover of the last book you opened, from any screen. Behaves like **Transparent** if that book has no cover, and shows the plain cover if no usable picture is found. On the X4 the cover is drawn in dithered black and white under the picture. |
 | **Stats**          | Your reading stats styled as a train departures board: total hours read, current day streak and minutes this week. The board's words are always in English and Japanese. |
 
 #### Cover settings
 
-Two more settings change how pictures look in **Cover**, **Cover + Custom** and **Custom**:
+Two more settings change how pictures look in **Cover**, **Cover + Custom**, **Cover + Transparent** and **Custom**:
 
 - **Sleep Screen Cover Mode**: **Fit** shows the whole picture with white borders. **Crop** fills the screen and trims the edges.
 - **Sleep Screen Cover Filter**: **None** keeps the shades of gray. **Contrast** turns the picture pure black and white. **Inverted** does the same with the colors swapped.
@@ -839,9 +840,9 @@ Set **Sleep Screen** to **Custom** or **Cover + Custom**, then put BMP images on
 
 #### Transparent overlay images
 
-Set **Sleep Screen** to **Transparent**, then put BMP or PNG images on the SD card:
+Set **Sleep Screen** to **Transparent** or **Cover + Transparent**, then put BMP or PNG images on the SD card:
 
-- **Several images (recommended):** Make a folder called `.sleep-overlay` in the top level of the card and put your `.bmp` or `.png` files in it. One is picked at random each time. A folder called `sleep-overlay` works too.
+- **Several images (recommended):** Make a folder called `.sleep-overlay` in the top level of the card and put your `.bmp` or `.png` files in it. One is picked at random each time. Folders called `sleep-overlay` and `.sleep/transparent` work too, and pictures in all of them share one pool.
 - **One image:** Put `sleep-overlay.bmp` or `sleep-overlay.png` in the top level of the card. The BMP wins over the PNG, and both win over the folders.
 
 Keep these pictures apart from your normal sleep images, because they work differently:
@@ -879,7 +880,7 @@ Tips for the image:
 
 **Transparent** draws a picture on top of the page you were reading. White parts of the picture let the page show through and black parts paint over it. You see your artwork and the paragraph where you stopped, together.
 
-Put 480x800 images (X4) or 528x792 images (X3) in `.sleep-overlay` on the card, as described above. Pictures with lots of white space work best, because solid areas hide the text below. Artwork along one edge, like the example, keeps most of the page readable. The older `.sleep/transparent` folder still works if the overlay folders have nothing to show.
+Put 480x800 images (X4) or 528x792 images (X3) in `.sleep-overlay` on the card, as described above. Pictures with lots of white space work best, because solid areas hide the text below. Artwork along one edge, like the example, keeps most of the page readable.
 
 <p align="center"><img src="docs/images/screenshots/sleep-screen-transparent.png" width="260" alt="Sleep wallpaper drawn over the page, with the text still readable behind it"></p>
 

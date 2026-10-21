@@ -31,6 +31,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     // settings.json written before the merge still selects the overlay screen.
     TRANSPARENT_CUSTOM = 7,
     STATS = 8,
+    // Upstream uses 8 for this; the fork's STATS already holds 8 in saved settings.
+    COVER_TRANSPARENT = 9,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };

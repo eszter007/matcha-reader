@@ -470,8 +470,10 @@ class GfxRenderer {
   // screens rely on this); pass true to also grow a source smaller than the box up to fill it
   // (manga panel zoom). Only wired through the 1-bit path -- the grayscale path always shrink-fits.
   void drawIcon(const uint8_t bitmap[], int x, int y, int size) const;
+  // ditherGrays: in BW mode, draw the two gray levels as a 2x2 ordered dither instead of solid
+  // black, for a picture that gets no grayscale passes afterwards.
   bool drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0, float cropY = 0,
-                  bool allowUpscale = false, bool whiteAsTransparent = false) const;
+                  bool allowUpscale = false, bool whiteAsTransparent = false, bool ditherGrays = false) const;
   bool drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, bool allowUpscale = false) const;
   // Counter-invert content images in the logical framebuffer so output-level
   // dark mode leaves their original polarity unchanged.

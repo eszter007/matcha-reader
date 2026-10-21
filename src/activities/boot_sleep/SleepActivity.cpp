@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -62,11 +63,13 @@ HalDisplay::GrayscaleMode sleepGrayscaleMode(const GfxRenderer& renderer) {
              : HalDisplay::GrayscaleMode::Absolute;
 }
 
-// Kept separate from /sleep.bmp and /.sleep so alpha-overlay art does not mix with full-screen wallpapers.
+// Kept separate from normal custom sleep sources so alpha-overlay art does not mix with full-screen wallpapers.
 constexpr char TRANSPARENT_SLEEP_ROOT_BMP[] = "/sleep-overlay.bmp";
 constexpr char TRANSPARENT_SLEEP_ROOT_PNG[] = "/sleep-overlay.png";
-constexpr char TRANSPARENT_SLEEP_DIR[] = "/.sleep-overlay";
-constexpr char TRANSPARENT_SLEEP_LEGACY_DIR[] = "/sleep-overlay";
+constexpr const char* SLEEP_DIRS[] = {"/.sleep", "/sleep"};
+// The last two are the fork's own overlay folders from before upstream added overlays.
+constexpr const char* TRANSPARENT_SLEEP_DIRS[] = {"/.sleep-overlay", "/sleep-overlay", "/.sleep/transparent",
+                                                  "/sleep/transparent"};
 constexpr size_t MAX_SLEEP_FILE_NAME_LEN = 256;
 constexpr uint8_t MIN_VISIBLE_ALPHA = 8;
 
@@ -328,6 +331,23 @@ bool renderTransparentOverlayPass(HalFile& file, const OverlayBmpInfo& info, con
   return true;
 }
 
+// Starts a gray plane under an overlay. Absolute planes keep the B/W base; other gray planes carry only
+// the overlay's gray. Cover + Transparent redraws a gray cover (set only for absolute planes) to keep its gray levels.
+bool beginOverlayGrayPlane(GfxRenderer& renderer, const Bitmap* grayCover, const GfxRenderer::RenderMode plane,
+                           const bool absolute) {
+  if (grayCover) {
+    if (grayCover->rewindToData() != BmpReaderError::Ok) return false;
+    renderer.clearScreen();
+  } else if (!absolute) {
+    renderer.clearScreen(0x00);
+  }
+  renderer.setRenderMode(plane);
+  if (!grayCover) return true;
+  const auto placement = calculateBitmapPlacement(grayCover->getWidth(), grayCover->getHeight(), renderer);
+  return renderer.drawBitmap(*grayCover, placement.x, placement.y, renderer.getScreenWidth(),
+                             renderer.getScreenHeight(), placement.cropX, placement.cropY);
+}
+
 enum class AlphaOverlayResult : uint8_t { Rendered, NotAlphaOverlay, Error };
 enum class AlphaScanResult : uint8_t { Useful, NotUseful, Error };
 
@@ -356,7 +376,8 @@ AlphaScanResult scanForUsefulAlpha(HalFile& file, const OverlayBmpInfo& info, ui
   return AlphaScanResult::NotUseful;
 }
 
-AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& renderer, const char* pathForLog) {
+AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& renderer, const char* pathForLog,
+                                                  const Bitmap* grayCover) {
   OverlayBmpInfo info;
   if (!parseOverlayBmpHeader(file, info, false)) return AlphaOverlayResult::NotAlphaOverlay;
 
@@ -384,9 +405,8 @@ AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& re
   }
 
   // Absolute planes retain B/W background bits; each visible overlay pixel is rewritten in both passes.
-  if (!absolute) renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  if (!renderTransparentOverlayPass(file, info, placement, renderer, row.get(), TransparentOverlayPass::GrayscaleLsb)) {
+  if (!beginOverlayGrayPlane(renderer, grayCover, GfxRenderer::GRAYSCALE_LSB, absolute) ||
+      !renderTransparentOverlayPass(file, info, placement, renderer, row.get(), TransparentOverlayPass::GrayscaleLsb)) {
     renderer.setRenderMode(GfxRenderer::BW);
     // Keep the current display instead of trying another overlay with a
     // framebuffer that now contains an incomplete gray plane.
@@ -394,9 +414,8 @@ AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& re
   }
   renderer.copyGrayscaleLsbBuffers();
 
-  if (!absolute) renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  if (!renderTransparentOverlayPass(file, info, placement, renderer, row.get(), TransparentOverlayPass::GrayscaleMsb)) {
+  if (!beginOverlayGrayPlane(renderer, grayCover, GfxRenderer::GRAYSCALE_MSB, absolute) ||
+      !renderTransparentOverlayPass(file, info, placement, renderer, row.get(), TransparentOverlayPass::GrayscaleMsb)) {
     renderer.setRenderMode(GfxRenderer::BW);
     return AlphaOverlayResult::Rendered;
   }
@@ -450,18 +469,30 @@ bool findNextValidSleepImage(HalFile& dir, const SleepRecentKind recentKind, cha
   return false;
 }
 
-bool selectRandomSleepFile(const char* dirPath, const SleepRecentKind recentKind, std::string& selectedPath) {
-  auto dir = Storage.open(dirPath);
-  if (!dir || !dir.isDirectory()) return false;
-
+// The folders form one pool: each image is equally likely whichever folder holds it.
+bool selectRandomSleepFile(const char* const* dirPaths, size_t dirCount, const SleepRecentKind recentKind,
+                           std::string& selectedPath) {
   auto name = makeUniqueNoThrow<char[]>(MAX_SLEEP_FILE_NAME_LEN);
   if (!name) {
     LOG_ERR("SLP", "OOM: sleep filename buffer");
     return false;
   }
 
+  constexpr size_t MAX_DIRECTORIES = 4;
+  dirCount = std::min(dirCount, MAX_DIRECTORIES);
+  uint16_t directoryCounts[MAX_DIRECTORIES] = {};
   uint16_t fileCount = 0;
-  while (fileCount < UINT16_MAX && findNextValidSleepImage(dir, recentKind, name.get())) ++fileCount;
+  for (size_t i = 0; i < dirCount; i++) {
+    auto dir = Storage.open(dirPaths[i]);
+    if (!dir || !dir.isDirectory()) continue;
+
+    const auto remainingCapacity = static_cast<uint16_t>(UINT16_MAX - fileCount);
+    while (directoryCounts[i] < remainingCapacity && findNextValidSleepImage(dir, recentKind, name.get())) {
+      directoryCounts[i]++;
+    }
+    fileCount = static_cast<uint16_t>(fileCount + directoryCounts[i]);
+  }
+
   if (fileCount == 0) return false;
 
   // Pick a random wallpaper, excluding recently shown ones.
@@ -474,13 +505,25 @@ bool selectRandomSleepFile(const char* dirPath, const SleepRecentKind recentKind
     randomFileIndex = static_cast<uint16_t>(random(fileCount));
   }
 
-  dir.rewindDirectory();
-  for (uint16_t index = 0; index <= randomFileIndex; ++index) {
+  size_t directoryIndex = 0;
+  uint16_t localIndex = randomFileIndex;
+  while (directoryIndex + 1 < dirCount && localIndex >= directoryCounts[directoryIndex]) {
+    localIndex = static_cast<uint16_t>(localIndex - directoryCounts[directoryIndex]);
+    directoryIndex++;
+  }
+
+  auto dir = Storage.open(dirPaths[directoryIndex]);
+  if (!dir || !dir.isDirectory()) {
+    LOG_ERR("SLP", "Failed to open selected sleep image directory: %s", dirPaths[directoryIndex]);
+    return false;
+  }
+  for (uint16_t index = 0; index <= localIndex; ++index) {
     if (!findNextValidSleepImage(dir, recentKind, name.get())) return false;
   }
 
-  selectedPath.reserve(strlen(dirPath) + 1 + strlen(name.get()));
-  selectedPath = dirPath;
+  const char* selectedDirPath = dirPaths[directoryIndex];
+  selectedPath.reserve(strlen(selectedDirPath) + 1 + strlen(name.get()));
+  selectedPath = selectedDirPath;
   selectedPath += "/";
   selectedPath += name.get();
   pushRecentSleepIndex(recentKind, randomFileIndex);
@@ -554,7 +597,9 @@ void SleepActivity::onEnter() {
   // night-mode reader render.
   display.setInverted(false);
 
-  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::TRANSPARENT_CUSTOM) {
+  const uint8_t sleepScreen = SETTINGS.sleepScreen;
+  if (sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::TRANSPARENT_CUSTOM ||
+      sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::COVER_TRANSPARENT) {
     // Transparent mode retains the current framebuffer. Materialize any
     // output-level inversion first so the retained content keeps its visible
     // polarity after the display driver returns to normal.
@@ -567,6 +612,9 @@ void SleepActivity::onEnter() {
       renderer.setOrientation(GfxRenderer::Orientation::Portrait);
     }
     releaseSdFontCachesForDecode(renderer);
+    if (sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::COVER_TRANSPARENT) {
+      return renderCoverSleepScreen();
+    }
     return renderTransparentCustomSleepScreen();
   }
 
@@ -602,7 +650,7 @@ void SleepActivity::onEnter() {
 void SleepActivity::renderCustomSleepScreen() const {
   // Look for sleep.bmp on the root of the sd card to determine if we should
   // render a custom sleep screen instead of the default.
-  // This takes priority over the /sleep folder.
+  // This takes priority over both custom sleep directories.
   HalFile file;
   if (Storage.openFileForRead("SLP", "/sleep.bmp", file)) {
     Bitmap bitmap(file, true,
@@ -619,9 +667,7 @@ void SleepActivity::renderCustomSleepScreen() const {
   }
 
   std::string selectedPath;
-  if (!selectRandomSleepFile("/.sleep", SleepRecentKind::Standard, selectedPath)) {
-    selectRandomSleepFile("/sleep", SleepRecentKind::Standard, selectedPath);
-  }
+  selectRandomSleepFile(SLEEP_DIRS, std::size(SLEEP_DIRS), SleepRecentKind::Standard, selectedPath);
 
   if (!selectedPath.empty()) {
     HalFile randFile;
@@ -679,12 +725,16 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
   LOG_DBG("SLP", "drawing to %d x %d", x, y);
   if (!preserveBackground) renderer.clearScreen();
 
-  const bool hasGreyscale =
-      bitmap.hasGreyscale() && (preserveBackground || SETTINGS.sleepScreenCoverFilter ==
-                                                          CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER);
+  const bool hasGreyscale = (bitmap.hasGreyscale() || (preserveBackground && overlayGrayCover)) &&
+                            (preserveBackground || SETTINGS.sleepScreenCoverFilter ==
+                                                       CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER);
 
+  // A cover under an overlay on a panel without absolute gray planes is shown B/W only (see the
+  // overlay renderers), so dither its grays rather than letting them all turn black.
+  const bool ditherCover = overlayCover == &bitmap && hasGreyscale &&
+                           !renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported();
   if (!renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY, /*allowUpscale=*/false,
-                           /*whiteAsTransparent=*/preserveBackground)) {
+                           /*whiteAsTransparent=*/preserveBackground, ditherCover)) {
     renderer.displayBuffer(kSleepClean);
     return;
   }
@@ -692,6 +742,16 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
   if (!preserveBackground &&
       SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::INVERTED_BLACK_AND_WHITE) {
     renderer.invertScreen();
+  }
+
+  // Cover + Transparent: the B/W cover is the overlay's background; the overlay renderers redraw its gray planes.
+  if (overlayCover == &bitmap) {
+    if (hasGreyscale && renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported()) {
+      overlayGrayCover = &bitmap;
+    }
+    renderTransparentCustomSleepScreen();
+    overlayGrayCover = nullptr;
+    return;
   }
 
   const bool absolute = hasGreyscale && renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported();
@@ -721,8 +781,15 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
         ready = false;
         break;
       }
-      if (!absolute || !preserveBackground) renderer.clearScreen(absolute ? 0xFF : 0x00);
-      renderer.setRenderMode(plane);
+      if (preserveBackground) {
+        if (!beginOverlayGrayPlane(renderer, overlayGrayCover, plane, absolute)) {
+          ready = false;
+          break;
+        }
+      } else {
+        renderer.clearScreen(absolute ? 0xFF : 0x00);
+        renderer.setRenderMode(plane);
+      }
       if (!renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY, /*allowUpscale=*/false,
                                /*whiteAsTransparent=*/preserveBackground)) {
         ready = false;
@@ -742,7 +809,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
 }
 
 bool SleepActivity::renderSleepOverlayFile(HalFile& file, const char* pathForLog) const {
-  const auto alphaResult = tryRenderTransparentOverlayBmp(file, renderer, pathForLog);
+  const auto alphaResult = tryRenderTransparentOverlayBmp(file, renderer, pathForLog, overlayGrayCover);
   if (alphaResult == AlphaOverlayResult::Rendered) return true;
   if (alphaResult == AlphaOverlayResult::Error) return false;
 
@@ -800,7 +867,38 @@ bool SleepActivity::renderTransparentOverlayPng(const std::string& path) const {
   LOG_DBG("SLP", "Rendering transparent PNG overlay: %s (%dx%d)", path.c_str(), dims.width, dims.height);
 
   if (!converter.decodeToFramebuffer(path, renderer, config)) return false;
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  // The overlay itself is drawn 1-bit, so it needs no gray passes. Only a grayscale cover under it
+  // (Cover + Transparent on an absolute-plane panel) does.
+  if (!overlayGrayCover) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    return true;
+  }
+  const bool absolute = renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported();
+  if (absolute) {
+    // The cover replaces the previous screen, so clean it like the BMP paths do.
+    if (overlayCover) cleanBeforeAbsoluteGray(renderer);
+    if (!renderer.displayGrayscaleBase(sleepGrayscaleMode(renderer))) return false;
+  } else {
+    renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
+  }
+
+  // Absolute planes retain B/W background bits; each visible overlay pixel is rewritten in both passes.
+  if (!beginOverlayGrayPlane(renderer, overlayGrayCover, GfxRenderer::GRAYSCALE_LSB, absolute) ||
+      !converter.decodeToFramebuffer(path, renderer, config)) {
+    renderer.setRenderMode(GfxRenderer::BW);
+    return true;
+  }
+  renderer.copyGrayscaleLsbBuffers();
+
+  if (!beginOverlayGrayPlane(renderer, overlayGrayCover, GfxRenderer::GRAYSCALE_MSB, absolute) ||
+      !converter.decodeToFramebuffer(path, renderer, config)) {
+    renderer.setRenderMode(GfxRenderer::BW);
+    return true;
+  }
+  renderer.copyGrayscaleMsbBuffers();
+
+  renderer.displayGrayBuffer();
+  renderer.setRenderMode(GfxRenderer::BW);
   return true;
 }
 
@@ -818,63 +916,31 @@ void SleepActivity::renderTransparentCustomSleepScreen() const {
   if (renderSleepOverlayPath(TRANSPARENT_SLEEP_ROOT_PNG)) return;
 
   std::string selectedPath;
-  if (!selectRandomSleepFile(TRANSPARENT_SLEEP_DIR, SleepRecentKind::Overlay, selectedPath)) {
-    selectRandomSleepFile(TRANSPARENT_SLEEP_LEGACY_DIR, SleepRecentKind::Overlay, selectedPath);
-  }
+  selectRandomSleepFile(TRANSPARENT_SLEEP_DIRS, std::size(TRANSPARENT_SLEEP_DIRS), SleepRecentKind::Overlay,
+                        selectedPath);
 
   if (!selectedPath.empty() && renderSleepOverlayPath(selectedPath)) return;
 
-  // Fall back to the old fork locations so existing SD cards keep working.
-  if (renderLegacyTransparentOverlay()) return;
-
   LOG_ERR("SLP", "No valid transparent sleep overlay found");
-  renderDefaultSleepScreen();
-}
-
-// The fork's pre-merge overlay locations use the same renderer as current paths.
-bool SleepActivity::renderLegacyTransparentOverlay() const {
-  static constexpr const char* kLegacyDirs[] = {"/.sleep/transparent", "/sleep/transparent"};
-  for (const char* dirPath : kLegacyDirs) {
-    auto dir = Storage.open(dirPath);
-    if (!dir || !dir.isDirectory()) continue;
-
-    // Collect names first: the random pick needs the count, and re-walking the directory per
-    // candidate costs an SD scan each time.
-    std::vector<std::string> files;
-    files.reserve(16);
-    // Heap, not stack: MAX_SLEEP_FILE_NAME_LEN is 256 bytes and the stack budget for a local
-    // is under that (same reason selectRandomSleepFile above allocates it).
-    auto name = makeUniqueNoThrow<char[]>(MAX_SLEEP_FILE_NAME_LEN);
-    if (!name) {
-      LOG_ERR("SLP", "OOM: legacy overlay filename buffer");
-      return false;
-    }
-    for (auto dirFile = dir.openNextFile(); dirFile; dirFile = dir.openNextFile()) {
-      if (dirFile.isDirectory()) continue;
-      dirFile.getName(name.get(), MAX_SLEEP_FILE_NAME_LEN);
-      if (name[0] == '\0' || name[0] == '.') continue;
-      const std::string_view entryName{name.get()};
-      if (FsHelpers::hasBmpExtension(entryName) || FsHelpers::hasPngExtension(entryName)) {
-        files.emplace_back(name.get());
-      }
-    }
-    dir.close();
-    if (files.empty()) continue;
-
-    const auto index = static_cast<size_t>(random(static_cast<long>(files.size())));
-    const std::string path = std::string(dirPath) + "/" + files[index];
-    LOG_DBG("SLP", "Legacy transparent overlay: %s", path.c_str());
-
-    if (renderSleepOverlayPath(path)) return true;
+  if (overlayCover) {
+    // Show the plain cover.
+    const Bitmap& cover = *overlayCover;
+    overlayCover = nullptr;
+    if (cover.rewindToData() == BmpReaderError::Ok) return renderBitmapSleepScreen(cover);
   }
-  return false;
+  renderDefaultSleepScreen();
 }
 
 void SleepActivity::renderCoverSleepScreen() const {
   void (SleepActivity::*renderNoCoverSleepScreen)() const;
+  bool withOverlay = false;
   switch (SETTINGS.sleepScreen) {
     case (CrossPointSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM):
       renderNoCoverSleepScreen = &SleepActivity::renderCustomSleepScreen;
+      break;
+    case (CrossPointSettings::SLEEP_SCREEN_MODE::COVER_TRANSPARENT):
+      renderNoCoverSleepScreen = &SleepActivity::renderTransparentCustomSleepScreen;
+      withOverlay = true;
       break;
     default:
       renderNoCoverSleepScreen = &SleepActivity::renderDefaultSleepScreen;
@@ -932,7 +998,9 @@ void SleepActivity::renderCoverSleepScreen() const {
     Bitmap bitmap(file);
     if (bitmap.parseHeaders() == BmpReaderError::Ok) {
       LOG_DBG("SLP", "Rendering sleep cover: %s", coverBmpPath.c_str());
+      if (withOverlay) overlayCover = &bitmap;
       renderBitmapSleepScreen(bitmap);
+      overlayCover = nullptr;
       return;
     }
   }
