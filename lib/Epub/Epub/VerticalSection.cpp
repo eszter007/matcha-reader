@@ -923,18 +923,38 @@ struct PodWriteArchive {
 // G is const on the write side, mutable on the read side.
 template <typename Ar, typename G>
 void visitGlyphFields(Ar& ar, G& g) {
-  ar(g.codepoint);
-  ar(g.column);
-  ar(g.row);
+  // The record keeps its full-width fields; VerticalGlyph packs some into bit-fields, which cannot
+  // be bound to the archive's references, so they pass through locals.
+  uint32_t codepoint = g.codepoint;
+  uint16_t column = g.column;
+  uint16_t row = g.row;
+  uint32_t paragraphIndex = g.paragraphIndex;
+  uint8_t renderKind = g.renderKind;
+  uint8_t style = g.style;
+  bool emphasis = g.emphasis;
+  uint8_t lineHeadFlush = g.lineHeadFlush;
+  ar(codepoint);
+  ar(column);
+  ar(row);
   ar(g.x);
   ar(g.y);
-  ar(g.paragraphIndex);
+  ar(paragraphIndex);
   ar(g.byteOffset);
-  ar(g.renderKind);
-  ar(g.style);
-  ar(g.emphasis);
-  ar(g.lineHeadFlush);
+  ar(renderKind);
+  ar(style);
+  ar(emphasis);
+  ar(lineHeadFlush);
   ar(g.textId);
+  if constexpr (!std::is_const_v<G>) {
+    g.codepoint = codepoint;
+    g.column = static_cast<uint8_t>(column);
+    g.row = static_cast<uint8_t>(row);
+    g.paragraphIndex = paragraphIndex;
+    g.renderKind = renderKind;
+    g.style = style;
+    g.emphasis = emphasis;
+    g.lineHeadFlush = lineHeadFlush;
+  }
 }
 
 template <typename Ar, typename R>
@@ -1045,7 +1065,7 @@ ReadResult readPage(HalFile& file, VerticalPage& page) {
     return ReadResult::Corrupt;
   }
   // reserve() throws-and-ABORTS under -fno-exceptions; verify the block actually exists
-  // first. A corrupt count within the format bound can still demand ~98KB -- observed on
+  // first. A corrupt count within the format bound can still demand ~80KB -- observed on
   // device as an abort inside this exact reserve during a mid-build read-back. The margin
   // is deliberately small: the page is transient (rendered, then freed), and an over-strict
   // margin starved mid-build page-turn serves for entire dense stretches.
