@@ -1,9 +1,10 @@
 #pragma once
-#include <unistd.h>
 // Host stand-in for the SD-backed HalStorage, sufficient for the stats stores: the same call
 // surface, backed by real files under the test's working directory.
 #include <sys/stat.h>
+#include <unistd.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <string>
 
