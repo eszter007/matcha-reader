@@ -97,6 +97,10 @@ class Section {
 
   // Constructor and destructor are out-of-line: BuildContext holds a unique_ptr to the
   // forward-declared ChapterHtmlSlimParser, whose full definition is only visible in the .cpp.
+  // Below this largest block a build inflates its chapter in the lent framebuffer (32KB window plus
+  // tinfl's ~11KB state), which leaves the framebuffer white afterwards.
+  static constexpr uint32_t INFLATE_HEAP_NEEDED = 48 * 1024;
+
   explicit Section(const std::shared_ptr<Epub>& epub, int spineIndex, GfxRenderer& renderer);
   ~Section();
   bool loadSectionFile(const ReaderRenderSpec& spec);

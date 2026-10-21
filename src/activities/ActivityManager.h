@@ -51,6 +51,11 @@ class ActivityManager {
   std::unique_ptr<Activity> pendingActivity;
   enum class PendingAction { None, Push, Pop, Replace, ReplaceForSleep };
   PendingAction pendingAction = PendingAction::None;
+  // A reader asked for by goToReader() is built only once the current screen is gone, so its
+  // objects take the space that screen frees instead of splitting the large free block a chapter
+  // build needs. Empty when none is pending.
+  std::string pendingReaderPath;
+  bool pendingReaderFastRefresh = false;
 
   // Task to render and display the activity
   TaskHandle_t renderTaskHandle = nullptr;

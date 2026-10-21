@@ -39,6 +39,7 @@
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "OpdsTokenStore.h"
+#include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
@@ -736,6 +737,9 @@ void setup() {
   HalSystem::checkPanic();
 
   APP_STATE.loadFromFile();
+  // Long-lived once read: loading it first keeps it at the bottom of the heap rather than in the
+  // middle of the free region a chapter build needs later.
+  READING_STATS_STORE.loadFromFile();
   const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
   const bool isPersistedSleepWake = isSleepWake && !APP_STATE.showBootScreen;
 

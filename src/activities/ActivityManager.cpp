@@ -158,7 +158,8 @@ void ActivityManager::loop() {
     // The page turner's radio gives its heap back before the next screen allocates. Its teardown
     // can span loop passes and runs outside the render lock.
     if (pendingAction != PendingAction::ReplaceForSleep &&
-        !bleturner::beforeScreenChange(0, pendingActivity && pendingActivity->isReaderActivity())) {
+        !bleturner::beforeScreenChange(
+            0, pendingActivity ? pendingActivity->isReaderActivity() : !pendingReaderPath.empty())) {
       return;
     }
     if (pendingAction == PendingAction::Pop) {
@@ -208,7 +209,7 @@ void ActivityManager::loop() {
         continue;
       }
 
-    } else if (pendingActivity) {
+    } else if (pendingActivity || !pendingReaderPath.empty()) {
       // A pushed activity comes from the input loop. Do not stall that loop behind a long render
       // tail (for example SD-backed glyph prewarming); leave the request pending and retry it on
       // the next tick instead.
@@ -237,6 +238,15 @@ void ActivityManager::loop() {
         while (!stackActivities.empty()) {
           stackActivities.back()->onExit();
           stackActivities.pop_back();
+        }
+        if (!pendingActivity) {
+          pendingActivity =
+              ReaderActivity::create(renderer, mappedInput, std::move(pendingReaderPath), pendingReaderFastRefresh);
+          pendingReaderPath.clear();
+          if (!pendingActivity) {
+            LOG_ERR("ACT", "OOM: reader activity");
+            pendingActivity = std::make_unique<HomeActivity>(renderer, mappedInput, HomeMenuItem::NONE, false);
+          }
         }
       } else if (pendingAction == PendingAction::Push) {
         // Move current activity to stack
@@ -280,6 +290,7 @@ void ActivityManager::exitActivity(const RenderLock& lock) {
 
 void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   mappedInput.resetHomeButtonInput();
+  pendingReaderPath.clear();
   // Note: no lock here, this is usually called by loop() and we may run into deadlock
   if (currentActivity) {
     // Defer launch if we're currently in an activity, to avoid deleting the current activity
@@ -395,6 +406,15 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
     return;
   }
 
+  if (currentActivity) {
+    // Built in loop() after the current screen is gone; see pendingReaderPath.
+    mappedInput.resetHomeButtonInput();
+    pendingActivity.reset();
+    pendingReaderPath = std::move(path);
+    pendingReaderFastRefresh = allowFastInitialRefresh;
+    pendingAction = PendingAction::Replace;
+    return;
+  }
   auto activity = ReaderActivity::create(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
   if (!activity) {
     LOG_ERR("ACT", "OOM: reader activity");
@@ -445,6 +465,7 @@ void ActivityManager::goToCrashReport() { replaceActivity(std::make_unique<Crash
 
 void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {
   mappedInput.resetHomeButtonInput();
+  pendingReaderPath.clear();
   if (pendingActivity) {
     // Should never happen in practice
     LOG_ERR("ACT", "pendingActivity while pushActivity is not expected");
@@ -456,6 +477,7 @@ void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {
 
 void ActivityManager::popActivity() {
   mappedInput.resetHomeButtonInput();
+  pendingReaderPath.clear();
   if (pendingActivity) {
     // Should never happen in practice
     LOG_ERR("ACT", "pendingActivity while popActivity is not expected");

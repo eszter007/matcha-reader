@@ -1097,11 +1097,18 @@ void EpubReaderActivity::readerLoop() {
   {
     RenderLock lock{RenderLock::Try{}};
     if (lock.held() && section && !section->isBuilding() && section->isPartial() && buildViewportWidth > 0 &&
-        !partialRebuildStartFailed && !bleturner::holdsHeap() &&
+        !partialRebuildStartFailed && !bleturner::holdsHeap() && overlay == Overlay::None &&
         section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
       // Reuse the last render's viewport so the extension paginates identically to the partial.
       const ReaderRenderSpec buildSpec = readerSpec(buildViewportWidth, buildViewportHeight);
-      if (!startSectionBuild(buildSpec)) {
+      // Starting can inflate the chapter in the lent framebuffer; redraw the page it whitened.
+      const uint32_t loansBefore = renderer.frameBufferLoanCount();
+      const bool started = startSectionBuild(buildSpec);
+      if (renderer.frameBufferLoanCount() != loansBefore) {
+        pageBufferStale = true;
+        requestUpdate();
+      }
+      if (!started) {
         // Not fatal: the partial keeps serving its pages; crossing the watermark falls back to
         // the blocking extension in render(). Don't retry every tick.
         partialRebuildStartFailed = true;
@@ -3854,13 +3861,16 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
   // This is why the call runs BEFORE the idle glyph warm: the release empties the mini-font cache.
   releaseReloadableMemory();
 
-  // Post-release gate, vertical only (the most memory-hungry build in the reader): if the largest
+  // Post-release gate. Vertical (the most memory-hungry build in the reader): if the largest
   // block is STILL small the build runs degraded -- observed at maxAlloc=63476: styled blocks
   // skipped, glyphs dropped, the section stamped stale the moment it was written. Leave it unbuilt:
   // a roomier tick retries, and the foreground open (which frees more first) builds it properly.
   constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 96 * 1024;
   constexpr uint32_t SILENT_INDEX_BACKOFF_MS = 1500;  // well under WINDOW * a turn (~600 ms)
-  if (vertical && ESP.getMaxAllocHeap() < SILENT_VBUILD_MIN_ALLOC) {
+  // Horizontal: below this the build would inflate in the lent framebuffer, leaving it white under
+  // the page this tail has just drawn. The foreground build on arrival lends safely instead.
+  const uint32_t minAlloc = vertical ? SILENT_VBUILD_MIN_ALLOC : Section::INFLATE_HEAP_NEEDED;
+  if (ESP.getMaxAllocHeap() < minAlloc) {
     LOG_DBG("ERS", "Silent index skipped, heap too tight (maxAlloc=%u)", ESP.getMaxAllocHeap());
     silentIndexBackoffUntilMs_ = millis() + SILENT_INDEX_BACKOFF_MS;
     return;

@@ -8,6 +8,7 @@
 #include <Serialization.h>
 
 #include <algorithm>
+#include <optional>
 
 #include "Epub/FootnoteHrefIo.h"
 #include "Epub/RubyGlossary.h"
@@ -643,7 +644,13 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
       // Larger chunks mean far fewer SD writes inflating the HTML; a 1KB chunk turned a 584KB
       // single-spine novel into ~570 tiny writes (multi-second). 8KB keeps the transient buffers
       // small while cutting the write count 8x.
-      streamed = epub->readItemContentsToStream(localPath, tmpHtml, 8192);
+      {
+        // No block for the 32KB inflate window: lend the framebuffer to InflateStream, as the
+        // vertical build does. The page stays on the panel; the loan marks the buffer stale.
+        std::optional<GfxRenderer::FrameBufferLoan> loan;
+        if (ESP.getMaxAllocHeap() < INFLATE_HEAP_NEEDED && renderer.hasFrameBuffer()) loan.emplace(renderer);
+        streamed = epub->readItemContentsToStream(localPath, tmpHtml, 8192);
+      }
       fileSize = tmpHtml.size();
       // Explicitly close() file before calling Storage.remove()
       tmpHtml.close();

@@ -58,7 +58,11 @@ class ReadingStatsStore {
   // its tag -- so a smaller cap buys the same 25KB. Shrink the record with a language table
   // before raising this.
   static constexpr size_t MAX_LANG_DAYS = 2500;
+  // Room reserved at load for new day records; see loadFromFile.
+  static constexpr size_t GROWTH_SLACK_DAYS = 31;
   std::vector<LanguageDaily> languageDays;  // sorted ascending by date
+  // Only this store writes the file, so after one read it stays in memory until invalidate().
+  bool loaded = false;
 
  public:
   static ReadingStatsStore& getInstance() { return instance; }
@@ -125,7 +129,10 @@ class ReadingStatsStore {
   int getDaysReadInMonth(uint16_t year, uint8_t month) const;
 
   bool saveToFile() const;
+  // Reads the file once; later calls return at once until invalidate().
   bool loadFromFile();
+  // The card may have changed under the store (USB drive mode): the next load rereads the file.
+  void invalidate() { loaded = false; }
 };
 
 #define READING_STATS_STORE ReadingStatsStore::getInstance()
