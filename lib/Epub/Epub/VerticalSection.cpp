@@ -2498,6 +2498,31 @@ std::optional<int> VerticalSection::getPageForVisibleTextOffset(const uint32_t o
   return best;
 }
 
+bool VerticalSection::abandonBuildKeepingPage(const int pageIndex, VerticalPage& page) {
+  bool kept = false;
+  if (pageIndex == loadedPageIndex_) {
+    page = std::move(loadedPage_);
+    kept = true;
+  }
+  if (build_) {
+    const std::string tmpHtmlPath = build_->tmpHtmlPath;
+    build_.reset();                           // closes (and so flushes) the section file, frees the parser
+    if (!kept) loadedPage_ = VerticalPage();  // another page's buffers must not sit beside the read
+    if (!kept && pageIndex >= 0 && pageIndex < static_cast<int>(pageOffsets_.size())) {
+      HalFile file;
+      if (Storage.openFileForRead("VSC", filePath, file) && file.seek(pageOffsets_[static_cast<size_t>(pageIndex)])) {
+        kept = readPage(file, page) == ReadResult::Ok;
+      }
+    }
+    Storage.remove(tmpHtmlPath.c_str());
+    Storage.remove(filePath.c_str());
+  }
+  pageOffsets_.clear();
+  pageCount = 0;
+  loadedPageIndex_ = -1;
+  return kept;
+}
+
 const VerticalPage* VerticalSection::getPage() const { return getPage(currentPage); }
 
 const VerticalPage* VerticalSection::getPage(int pageIndex) const {

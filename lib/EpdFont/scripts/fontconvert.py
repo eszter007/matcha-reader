@@ -842,6 +842,9 @@ if compress:
     # UI fonts keep their packed 1-bit pixels. 4 KB holds all of basic Latin even at 12pt bold, so
     # ordinary UI text never switches the single hot group mid-word.
     GROUP_MAX_UNCOMPRESSED_BYTES = 16384 if is2Bit else 4096
+    # Glyphs outside the named ranges (kana, kanji, enclosed numbers) cap at 4 KB even in 2-bit
+    # fonts, so a fragmented heap can still hold their group. regroup_font_header.py mirrors this.
+    OTHER_SCRIPT_GROUP_MAX_BYTES = 4096
 
     def get_script_group(code_point):
         for i, (start, end) in enumerate(SCRIPT_GROUP_RANGES):
@@ -867,7 +870,8 @@ if compress:
                 f"{GROUP_MAX_UNCOMPRESSED_BYTES}. Consider: (1) increasing GROUP_MAX_UNCOMPRESSED_BYTES, "
                 f"(2) reducing font size, or (3) excluding this codepoint."  
             )
-        size_overflow = group_uncompressed + glyph_aligned_size > GROUP_MAX_UNCOMPRESSED_BYTES
+        group_cap = OTHER_SCRIPT_GROUP_MAX_BYTES if sg == -1 else GROUP_MAX_UNCOMPRESSED_BYTES
+        size_overflow = group_uncompressed + glyph_aligned_size > group_cap
 
         if sg != current_group_id or size_overflow:
             if group_count > 0:

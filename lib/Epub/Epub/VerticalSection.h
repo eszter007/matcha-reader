@@ -168,6 +168,10 @@ class VerticalSection {
   bool isBuilding() const { return static_cast<bool>(build_); }
   // Drops a running build and its partial file; the next load rebuilds the chapter.
   void abandonBuild();
+  // abandonBuild(), keeping one page it already wrote. The page is read back after the build's
+  // parser and buffers are freed, so a heap the build had exhausted can still hold it. False when
+  // the page was not written or could not be read.
+  bool abandonBuildKeepingPage(int pageIndex, VerticalPage& page);
   // The reader drew a page between two slices (a menu over the page): the build's result is then
   // used for this session but stamped stale, see finishBuild().
   void notePageDrawnBetweenSlices();
