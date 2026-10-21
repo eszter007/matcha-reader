@@ -2106,6 +2106,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               applyLanguageOverride(menu->languageOverride);
               applyVerticalFuriganaOverride(menu->verticalOverride, menu->furiganaOverride);
             }
+            // A Tategaki/Zhipai change applies to the open book unless it has its own choice.
+            if ((section || verticalSection) && useVerticalText() != (verticalSection != nullptr)) {
+              dropSectionsKeepingPosition();
+            }
             sdFontSystem.ensureLoaded(renderer);
             sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
             // Reading Orientation now only changes via this screen (removed from the reader's
@@ -7233,11 +7237,17 @@ bool EpubReaderActivity::useVerticalText() const {
   if (!isCjkBook()) return false;
   if (verticalOverride == 0) return false;
   if (verticalOverride == 1) return true;
-  // Auto: Japanese books are vertical by default. Chinese EPUBs are horizontal far more often
-  // than not (every mainland book, and Taiwanese non-fiction), so they follow the publisher:
-  // a spine declared right-to-left (Taiwanese novels from Readmoo, Kobo, Books.com.tw) opens in
-  // columns, anything else horizontal, and the per-book toggle overrides either.
-  return isJapaneseBook() || (isChineseBook() && epub && epub->pageProgressionRtl());
+  // No per-book choice: the Tategaki (Japanese) or Zhipai (Chinese) setting decides. Automatic follows
+  // the publisher: a spine declared right-to-left (Japanese novels; Taiwanese novels from Readmoo,
+  // Kobo, Books.com.tw) opens in columns, anything else horizontal.
+  switch (isJapaneseBook() ? SETTINGS.tategaki : SETTINGS.zhipai) {
+    case CrossPointSettings::VERTICAL_ON:
+      return true;
+    case CrossPointSettings::VERTICAL_OFF:
+      return false;
+    default:
+      return epub && epub->pageProgressionRtl();
+  }
 }
 
 uint8_t EpubReaderActivity::readerBottomReserve(const bool verticalMode) const {
