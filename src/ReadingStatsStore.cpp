@@ -463,6 +463,7 @@ bool ReadingStatsStore::saveToFile() const {
 }
 
 bool ReadingStatsStore::loadFromFile() {
+  if (loaded) return true;
   HalFile f;
   if (!Storage.openFileForRead("STAT", statsPath().c_str(), f)) return false;
   uint8_t version;
@@ -489,7 +490,8 @@ bool ReadingStatsStore::loadFromFile() {
     DailyReading discard;
     if (f.read(reinterpret_cast<uint8_t*>(&discard), sizeof(DailyReading)) != sizeof(DailyReading)) break;
   }
-  days.reserve(keepDays);
+  // A month of room for new days, so appending mid-session does not move the vector.
+  days.reserve(std::min<size_t>(keepDays + GROWTH_SLACK_DAYS, MAX_DAYS));
   for (size_t i = 0; i < keepDays; i++) {
     DailyReading dr;
     if (f.read(reinterpret_cast<uint8_t*>(&dr), sizeof(DailyReading)) != sizeof(DailyReading)) break;
@@ -571,7 +573,7 @@ bool ReadingStatsStore::loadFromFile() {
         uint8_t discard[10];
         if (f.read(discard, sizeof(discard)) != sizeof(discard)) break;
       }
-      languageDays.reserve(keepLang);
+      languageDays.reserve(std::min<size_t>(keepLang + GROWTH_SLACK_DAYS, MAX_LANG_DAYS));  // see days
       for (size_t i = 0; i < keepLang; i++) {
         LanguageDaily e{};
         if (f.read(reinterpret_cast<uint8_t*>(&e.year), 2) != 2) break;
@@ -593,5 +595,6 @@ bool ReadingStatsStore::loadFromFile() {
     }
   }
   f.close();
+  loaded = true;
   return true;
 }

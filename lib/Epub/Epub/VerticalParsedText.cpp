@@ -812,27 +812,33 @@ struct VerticalParsedText::LayoutCursor {
   void* const ctx;
   const PageReadyCallback onPageReady;
 
+  // = growForOnePush's LINEAR_GROWTH_STEP for glyphs: the room a page keeps before it must grow.
+  static constexpr size_t PAGE_GLYPH_HEADROOM = 16;
+
   // Can one more glyph be appended without a reallocation that the heap cannot serve?
   bool pageVectorCanTakeMore() const {
-    constexpr size_t GROWTH_STEP = 16;  // = growForOnePush's LINEAR_GROWTH_STEP for glyphs
-    if (page.glyphs.size() + GROWTH_STEP <= page.glyphs.capacity()) return true;
-    const size_t growBytes = (page.glyphs.capacity() + GROWTH_STEP) * sizeof(VerticalGlyph);
+    if (page.glyphs.size() + PAGE_GLYPH_HEADROOM <= page.glyphs.capacity()) return true;
+    const size_t growBytes = (page.glyphs.capacity() + PAGE_GLYPH_HEADROOM) * sizeof(VerticalGlyph);
     return ESP.getMaxAllocHeap() >= growBytes;
   }
 
   void reservePageGlyphs(VerticalPage& p) const {
-    const size_t requestBytes = glyphsPerPage * sizeof(VerticalGlyph);
+    // A full page plus pageVectorCanTakeMore()'s step twice: a page that fills never has to grow,
+    // including the few that hold a cell or two more than glyphsPerPage (ruby, half-width pairs).
+    const size_t fullCapacity = glyphsPerPage + 2 * PAGE_GLYPH_HEADROOM;
+    if (p.glyphs.capacity() >= fullCapacity) return;  // a recycled page's buffer
+    const size_t requestBytes = fullCapacity * sizeof(VerticalGlyph);
     if (heapCanAfford(requestBytes, MIN_FREE_HEAP_FOR_RESERVE)) {
-      p.glyphs.reserve(glyphsPerPage);
+      p.glyphs.reserve(fullCapacity);
       return;
     }
     // Partial fallback: reserve the largest fitting fraction of the page instead of nothing.
     // Starting from capacity 0 makes the vector double 1-2-4-...-256, and every doubling's
     // grow-copy (old + new buffer coexisting) is a fresh chance to land on a heap dip -- on
     // the X3's tighter heap that fired the emergency page split constantly, which the reader
-    // sees as pages breaking at random fill levels. This runs right after the previous page
-    // was flushed and freed (the heap's local best), so one medium block now prevents most of
-    // the risky growth steps later at the dips.
+    // sees as pages breaking at random fill levels. This runs only while no recycled buffer of
+    // full size exists, so one medium block now prevents most of the risky growth steps later
+    // at the dips.
     for (size_t fraction = 2; fraction <= 8; fraction *= 2) {
       const size_t partial = glyphsPerPage / fraction;
       if (partial < 32) break;
@@ -1254,11 +1260,14 @@ struct VerticalParsedText::LayoutCursor {
       // can never be touched again and is safe to write out and free now.
       if (onPageReady) {
         while (pages.size() > 1) {
-          onPageReady(ctx, std::move(pages.front()));
+          onPageReady(ctx, pages.front());
+          o.recyclePage(std::move(pages.front()));
           pages.erase(pages.begin());
         }
       }
-      page = VerticalPage{};
+      page = std::move(o.recycledPage_);
+      page.clearKeepingCapacity();
+      o.recycledPage_ = VerticalPage{};
       page.columnCount = geom.columnsPerPage;
       page.rowsPerColumn = geom.rowsPerColumn;
       // A break decided while placing a character opens this page WITH that character on it, so
@@ -1666,6 +1675,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     pendingPage_.columnCount = columnsPerPage;
     pendingPage_.rowsPerColumn = rowsPerColumn;
     cur.reservePageGlyphs(pendingPage_);
+    // The second of the two page buffers that circulate (see recycledPage_), taken now while the
+    // heap is at its chapter-start best rather than at the first page break.
+    cur.reservePageGlyphs(recycledPage_);
     pendingColumn_ = 0;
     pendingRow_ = 0;
     pendingColumnYShift_ = 0;

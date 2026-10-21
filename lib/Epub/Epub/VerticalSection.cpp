@@ -1329,6 +1329,7 @@ struct LayoutPageSink final : ParagraphSink {
     // pending: the pending page (whose content PRECEDES the image) landed in the cache AFTER
     // the image page, and post-image text silently merged onto it -- confirmed on a real device
     // as dialogue continuing mid-column across a scene-break graphic instead of starting fresh.
+    layout.releaseRecycledPage();  // the extraction wants one contiguous 32KB inflate block
     VerticalPage imagePage = makeImagePage(src);
     if (failed) return;  // cancelled during the image extraction
     // An image narrow enough to sit among the columns flows with the text: it takes the columns
@@ -1355,7 +1356,9 @@ struct LayoutPageSink final : ParagraphSink {
     writeOne(imagePage);
   }
 
-  static void writePageCallback(void* ctx, VerticalPage&& page) { static_cast<LayoutPageSink*>(ctx)->writeOne(page); }
+  static void writePageCallback(void* ctx, const VerticalPage& page) {
+    static_cast<LayoutPageSink*>(ctx)->writeOne(page);
+  }
 
   // isFinalFlush must be true ONLY for the chapter's true last flush (see the caller in
   // streamParseAndLayout(), after extractor.flushParagraph()) -- every mid-chapter call (the
@@ -1383,7 +1386,10 @@ struct LayoutPageSink final : ParagraphSink {
     // VerticalParsedText.h for why this is safe (oikomi only ever looks one page back).
     auto pages = layout.layoutPages(this, &writePageCallback, isFinalFlush);
     layout.reset();
-    for (const auto& p : pages) writeOne(p);
+    for (auto& p : pages) {
+      writeOne(p);
+      layout.recyclePage(std::move(p));
+    }
   }
 
   // Page serialization staging capacity: one file.write per page instead of ~10 mutexed

@@ -174,6 +174,19 @@ struct VerticalPage {
   int16_t imageHeight = 0;
   bool imageRotated = false;  // true = landscape image rotated 90° CW to fill portrait screen
   bool isImagePage() const { return !imagePath.empty(); }
+  // Back to an empty page, keeping the vectors' capacity so the next page fills without allocating.
+  void clearKeepingCapacity() {
+    auto g = std::move(glyphs);
+    auto b = std::move(boxes);
+    auto t = std::move(texts);
+    *this = VerticalPage{};
+    g.clear();
+    b.clear();
+    t.clear();
+    glyphs = std::move(g);
+    boxes = std::move(b);
+    texts = std::move(t);
+  }
 };
 
 // Lays out one or more paragraphs of Japanese (or any CJK) text into
@@ -234,7 +247,8 @@ class VerticalParsedText {
   // Called for a page as soon as it's confirmed safe to write -- i.e. one page has already been
   // completed after it, so the "oikomi" pull-back check (which only ever looks at the single most
   // recently completed page) can no longer touch it. ctx is caller-supplied context.
-  using PageReadyCallback = void (*)(void* ctx, VerticalPage&& page);
+  // Read only: the layout reuses the page's buffers once the callback returns.
+  using PageReadyCallback = void (*)(void* ctx, const VerticalPage& page);
 
   // Runs the column-fill layout algorithm over everything added since the last layoutPages() call
   // (i.e. since construction, or since the most recent call) and returns one VerticalPage per
@@ -266,6 +280,14 @@ class VerticalParsedText {
   // trailing page if isFinalFlush) -- callers must still write those, same as before.
   std::vector<VerticalPage> layoutPages(void* ctx = nullptr, PageReadyCallback onPageReady = nullptr,
                                         bool isFinalFlush = true);
+
+  // Hands a written page back so its buffers serve the next page (see recycledPage_). Keeps the
+  // larger of the two when one is already held.
+  void recyclePage(VerticalPage&& page) {
+    if (page.glyphs.capacity() > recycledPage_.glyphs.capacity()) recycledPage_ = std::move(page);
+  }
+  // Frees the held buffers, for a caller about to need one large block (an image extraction).
+  void releaseRecycledPage() { recycledPage_ = VerticalPage{}; }
 
   // Detach and return the in-progress page (the one held across isFinalFlush=false calls) so a
   // caller can splice a standalone page -- an image -- into the page sequence in document order.
@@ -468,6 +490,9 @@ class VerticalParsedText {
   // the same page on the next call instead of finalizing it early and starting a fresh one. See
   // layoutPages()'s isFinalFlush doc comment for the full rationale.
   VerticalPage pendingPage_;
+  // A page already handed to onPageReady, kept for its buffers: the next page reuses them instead
+  // of allocating and growing a glyph vector between the build's other allocations.
+  VerticalPage recycledPage_;
   // A paragraph break recorded at exactly the end of a batch's stream (trailing newline) --
   // carried across reset() and re-recorded at the start of the next batch. See layoutPages().
   // A rotated Latin run that reaches the end of a non-final batch is NOT placed: the layout
