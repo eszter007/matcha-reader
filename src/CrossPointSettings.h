@@ -291,6 +291,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Night mode: inverted output polarity, applied to every activity per
   // render by ActivityManager. The sleep screen opts out itself.
   uint8_t screenInverted = 0;
+  // Per-language tabs on the Insights screen. Display only: stats are tracked per language either way.
+  uint8_t showLanguageStats = 1;
   // Sleep screen cover mode settings
   uint8_t sleepScreenCoverMode = FIT;
   // Sleep screen cover filter
