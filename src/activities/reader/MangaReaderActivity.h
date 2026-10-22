@@ -52,7 +52,6 @@ class MangaReaderActivity final : public Activity {
   std::vector<manga::Panel> panels;
   bool panelsLoaded = false;
 
-  bool showTextOverlay = false;
   bool pendingScreenshot = false;
   bool ignoreNextConfirmRelease = false;
   unsigned long readingSessionStartMs = 0;
@@ -69,7 +68,7 @@ class MangaReaderActivity final : public Activity {
 
   ButtonNavigator buttonNavigator;
 
-  enum class ViewMode { FullPage, PanelZoom, TextOverlay };
+  enum class ViewMode { FullPage, PanelZoom };
   ViewMode viewMode = ViewMode::FullPage;
 
   // Reading-session plugin events, reported the way the other readers report them.
@@ -375,7 +374,6 @@ class MangaReaderActivity final : public Activity {
   void loadCurrentPagePanels();
   void renderFullPage();
   void renderPanelZoom();
-  void renderTextOverlay();
 
   void nextPanel();
   void prevPanel();
@@ -396,7 +394,6 @@ class MangaReaderActivity final : public Activity {
   void updateBookmarkFlag();
   void addBookmark();
 
-  void launchWordLookup();
   void launchWordLookupCurrentView();
   void launchMenu();
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
