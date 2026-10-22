@@ -5207,6 +5207,9 @@ bool EpubReaderActivity::textAtPoint(const int x, const int y) {
   if (!section) return false;
   const auto page = section->loadPage(section->currentPage);
   if (!page) return false;
+  // A fingertip is not a stylus: the gap between two words or two lines still counts as the
+  // nearer word, up to half a line out. The word-select screen then picks that nearest word.
+  const int slop = renderer.getLineHeight(fontId) / 2;
   for (const auto& element : page->elements) {
     if (element->getTag() != TAG_PageLine) continue;
     const auto& line = static_cast<const PageLine&>(*element);
@@ -5220,7 +5223,10 @@ bool EpubReaderActivity::textAtPoint(const int x, const int y) {
       if (width <= 0) continue;
       const Rect rect =
           clippingWordRect(renderer, fontId, line, i, top + SETTINGS.screenMargin, left + SETTINGS.screenMargin, width);
-      if (x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height) return true;
+      if (x >= rect.x - slop && x < rect.x + rect.width + slop && y >= rect.y - slop &&
+          y < rect.y + rect.height + slop) {
+        return true;
+      }
     }
   }
   return false;
