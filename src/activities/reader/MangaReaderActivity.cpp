@@ -658,24 +658,6 @@ void MangaReaderActivity::loop() {
     return;
   }
 
-  if (viewMode == ViewMode::TextOverlay) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      viewMode = ViewMode::PanelZoom;
-      requestUpdate();
-      return;
-    }
-    // A tap anywhere on the overlay looks the word up, matching Confirm: the overlay is a
-    // full-screen text panel, so there is no page-turn zone here to keep clear.
-    int overlayTapX = 0;
-    int overlayTapY = 0;
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-        (mappedInput.hasTouch() && mappedInput.wasScreenTapped(overlayTapX, overlayTapY))) {
-      launchWordLookup();
-      return;
-    }
-    return;
-  }
-
   if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
     activityManager.goToFileBrowser(book ? book->getFolder() : "");
     return;
@@ -826,9 +808,6 @@ void MangaReaderActivity::render(RenderLock&&) {
       break;
     case ViewMode::PanelZoom:
       renderPanelZoom();
-      break;
-    case ViewMode::TextOverlay:
-      renderTextOverlay();
       break;
   }
 
@@ -1632,96 +1611,6 @@ void MangaReaderActivity::workerWarmPanel() {
   // Cancelled: completed stays false (dims, if probed, still get published) -> retried later.
 }
 
-void MangaReaderActivity::renderTextOverlay() {
-  renderer.clearScreen();
-  displayedRotated_ = false;  // see renderFullPage(): text is laid out in the base orientation
-  displayedMap_.valid = false;
-
-  if (currentPanel < 0 || currentPanel >= static_cast<int>(panels.size())) {
-    viewMode = ViewMode::PanelZoom;
-    renderPanelZoom();
-    return;
-  }
-
-  const auto& panel = panels[currentPanel];
-  auto& theme = UITheme::getInstance();
-  auto metrics = theme.getMetrics();
-  Rect screen = theme.getScreenSafeArea(renderer, true, false);
-
-  const int jaFont = SETTINGS.getReaderFontId();
-  const int lineH = renderer.getLineHeight(jaFont);
-  int textY = screen.y + metrics.topPadding;
-
-  // Header
-  char headerBuf[32];
-  snprintf(headerBuf, sizeof(headerBuf), tr(STR_PANEL_NUMBER_FORMAT), currentPanel + 1, (int)panels.size());
-  renderer.drawText(UI_12_FONT_ID, screen.x + metrics.contentSidePadding, textY, headerBuf, true, EpdFontFamily::BOLD);
-  textY += renderer.getLineHeight(UI_12_FONT_ID) + metrics.verticalSpacing;
-
-  // Draw text blocks
-  int maxWidth = screen.width - metrics.contentSidePadding * 2;
-  int textX = screen.x + metrics.contentSidePadding;
-  int maxY = screen.y + screen.height - renderer.getLineHeight(SMALL_FONT_ID) - 4;
-
-  for (const auto& tb : panel.textBlocks) {
-    if (textY + lineH > maxY) break;
-    if (tb.text.empty()) continue;
-
-    // Word-wrap the text block
-    std::string remaining = tb.text;
-    while (!remaining.empty() && textY + lineH <= maxY) {
-      if (renderer.getTextWidth(jaFont, remaining.c_str()) <= maxWidth) {
-        renderer.drawText(jaFont, textX, textY, remaining.c_str(), true);
-        textY += lineH;
-        break;
-      }
-
-      // Find break point
-      std::string accum;
-      const char* p = remaining.c_str();
-      while (*p) {
-        size_t charLen = 1;
-        auto c0 = static_cast<unsigned char>(*p);
-        if (c0 >= 0xF0)
-          charLen = 4;
-        else if (c0 >= 0xE0)
-          charLen = 3;
-        else if (c0 >= 0xC0)
-          charLen = 2;
-        std::string test = accum + std::string(p, charLen);
-        if (renderer.getTextWidth(jaFont, test.c_str()) > maxWidth) break;
-        accum = test;
-        p += charLen;
-      }
-
-      if (accum.empty()) {
-        auto c0 = static_cast<unsigned char>(remaining[0]);
-        size_t cl = 1;
-        if (c0 >= 0xF0)
-          cl = 4;
-        else if (c0 >= 0xE0)
-          cl = 3;
-        else if (c0 >= 0xC0)
-          cl = 2;
-        accum = remaining.substr(0, cl);
-        remaining = remaining.substr(cl);
-      } else {
-        remaining = remaining.substr(accum.size());
-      }
-
-      renderer.drawText(jaFont, textX, textY, accum.c_str(), true);
-      textY += lineH;
-    }
-
-    textY += lineH / 2;
-  }
-
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), DictIndex::isAvailable() ? tr(STR_WORD_LOOKUP) : "", "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-}
-
 void MangaReaderActivity::launchWordLookupCurrentView() {
   // In panel zoom, look up just that panel's text. In full-page view,
   // combine every panel's text on the page so lookup still works
@@ -1908,52 +1797,6 @@ void MangaReaderActivity::launchWordLookupAt(std::string combined, const int gly
       sdFontSystem.releaseAllResidentFonts(renderer);
       sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
       viewMode = returnMode;
-    }
-    requestUpdate();
-  });
-}
-
-void MangaReaderActivity::launchWordLookup() {
-  if (currentPanel < 0 || currentPanel >= static_cast<int>(panels.size())) return;
-  if (!DictIndex::isAvailable()) return;
-
-  const auto& panel = panels[currentPanel];
-  if (panel.textBlocks.empty()) return;
-
-  // Build a combined text string from all text blocks in this panel
-  std::string combined;
-  for (const auto& tb : panel.textBlocks) {
-    if (!combined.empty()) combined += '\n';
-    combined += tb.text;
-  }
-
-  if (combined.empty()) return;
-
-  {
-    RenderLock lock;
-    sdFontSystem.ensureLoaded(renderer);
-    sdFontSystem.setCjkFallbackNeeded(renderer, mangaScript(book.get()));
-  }
-
-  // Use the MangaWordLookup sub-activity with raw text. The scan cache makes a re-open of the
-  // same panel/page text instant (validated by content hash, so the key is just a hint).
-  auto lookup = makeUniqueNoThrow<MangaWordLookupActivity>(
-      renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
-      static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1));
-  if (!lookup) {
-    LOG_ERR("MRA", "OOM: word lookup");
-    RenderLock lock;
-    sdFontSystem.releaseAllResidentFonts(renderer);
-    sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
-    return;
-  }
-  lookup->setMiningContext({book->getTitle(), book->getAuthor(), {}, book->getLanguage(), book->getFolder()});
-  startActivityForResult(std::move(lookup), [this](const ActivityResult&) {
-    {
-      RenderLock lock;
-      sdFontSystem.releaseAllResidentFonts(renderer);
-      sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
-      viewMode = ViewMode::PanelZoom;
     }
     requestUpdate();
   });
