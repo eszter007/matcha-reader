@@ -224,6 +224,18 @@ bool ClipSelectionActivity::extractWords() {
     if (wordCount == MAX_SELECTABLE_WORDS) break;
   }
 
+  // Tight line spacing packs rows closer than a line height. The selection is XOR-inverted, so a
+  // box reaching into the next row would flip the overlap twice and leave a white seam.
+  for (size_t i = 0, next = 0; i < wordCount; ++i) {
+    if (next <= i) {
+      next = i + 1;
+      while (next < wordCount && words[next].row == words[i].row) ++next;
+    }
+    if (next < wordCount && words[next].pageOffset == words[i].pageOffset) {
+      const int pitch = words[next].y - words[i].y;
+      if (pitch > 0 && pitch < words[i].height) words[i].height = static_cast<int16_t>(pitch);
+    }
+  }
   return true;
 }
 
@@ -793,64 +805,10 @@ int ClipSelectionActivity::textXOffset() const {
   return selectionGeometry::keepVisible(cursor.x, cursor.width, safe.x, safe.width);
 }
 
-void ClipSelectionActivity::prewarmWord(const int index) const {
-  if (vertical()) return;
-  if (index >= 0 && index < static_cast<int>(wordCount) && words[index].text) {
-    renderer.getFontCacheManager()->prewarmCache(
-        words[index].font.fontId, words[index].text,
-        static_cast<uint8_t>(1u << (static_cast<uint8_t>(words[index].style) & 0x03)));
-  }
-}
-
-void ClipSelectionActivity::ditherGapBetween(const WordBox& a, const WordBox& b, const int offsetX,
-                                             const int offset) const {
-  if (vertical() || a.row != b.row || a.pageOffset != b.pageOffset) return;
-  const int leftRight = std::min(a.x + a.width, b.x + b.width);
-  const int rightLeft = std::max(a.x, b.x);
-  if (leftRight < rightLeft) {
-    renderer.fillRectDither(leftRight + offsetX, a.y + offset, rightLeft - leftRight, a.height, Color::LightGray);
-  }
-}
-
-void ClipSelectionActivity::clearGapBetween(const WordBox& a, const WordBox& b, const int offsetX,
-                                            const int offset) const {
-  if (vertical() || a.row != b.row || a.pageOffset != b.pageOffset) return;
-  const int leftRight = std::min(a.x + a.width, b.x + b.width);
-  const int rightLeft = std::max(a.x, b.x);
-  if (leftRight < rightLeft) {
-    renderer.fillRect(leftRight + offsetX, a.y + offset, rightLeft - leftRight, a.height, false);
-  }
-}
-
-void ClipSelectionActivity::drawWordClean(const int index, const int offsetX, const int offset) const {
-  if (index < 0 || index >= static_cast<int>(wordCount)) return;
-  const WordBox& word = words[index];
-  if (word.pageOffset != currentPageOffset) return;
-  if (rangeRepaintedByReader()) {
-    markDirty(word);
-    return;
-  }
-  if (vertical()) {
-    invertWord(word, offsetX, offset);  // undoes the highlight's inversion
-    return;
-  }
-
-  prewarmWord(index);
-
-  renderer.fillRect(word.x + offsetX, word.y + offset, word.width, word.height, false);
-
-  if (index > 0) {
-    clearGapBetween(words[index - 1], word, offsetX, offset);
-  }
-  if (index + 1 < static_cast<int>(wordCount)) {
-    clearGapBetween(word, words[index + 1], offsetX, offset);
-  }
-
-  clippingDrawWord(renderer, word.font, word.x + offsetX, word.y + offset, word.text, word.style);
-}
-
-void ClipSelectionActivity::drawWordHighlight(const int index, const int firstSelected, const int lastSelected,
-                                              const int offsetX, const int offset) const {
+// The selection is drawn by inverting word boxes, plus the gap between two selected words on one
+// horizontal row. Inverting twice restores the page, so a cursor move flips only the boxes that
+// changed and never redraws glyphs.
+void ClipSelectionActivity::flipWord(const int index, const int offsetX, const int offset, const Rect& safe) const {
   if (index < 0 || index >= static_cast<int>(wordCount)) return;
   const WordBox& word = words[index];
   if (word.pageOffset != currentPageOffset) return;
@@ -862,18 +820,47 @@ void ClipSelectionActivity::drawWordHighlight(const int index, const int firstSe
     invertWord(word, offsetX, offset);
     return;
   }
+  invertClipped(word.x + offsetX, word.y + offset, word.width, word.height, safe);
+}
 
-  prewarmWord(index);
+void ClipSelectionActivity::invertGapAfter(const int index, const int offsetX, const int offset,
+                                           const Rect& safe) const {
+  const WordBox& a = words[index];
+  const WordBox& b = words[index + 1];
+  if (vertical() || a.row != b.row || a.pageOffset != b.pageOffset || a.pageOffset != currentPageOffset) return;
+  const int leftRight = std::min(a.x + a.width, b.x + b.width);
+  const int rightLeft = std::max(a.x, b.x);
+  if (leftRight < rightLeft) invertClipped(leftRight + offsetX, a.y + offset, rightLeft - leftRight, a.height, safe);
+}
 
-  if (index > firstSelected) {
-    ditherGapBetween(words[index - 1], word, offsetX, offset);
+// The horizontal page is clipped to the safe area, so a word scrolled under the hint bar or above
+// the top margin keeps no black box there. Every path clips the same way, so flips still cancel.
+void ClipSelectionActivity::invertClipped(const int x, const int y, const int width, const int height,
+                                          const Rect& safe) const {
+  const int left = std::max(x, safe.x);
+  const int top = std::max(y, safe.y);
+  const int right = std::min(x + width, safe.x + safe.width);
+  const int bottom = std::min(y + height, safe.y + safe.height);
+  if (left < right && top < bottom) renderer.invertRect(left, top, right - left, bottom - top);
+}
+
+// Flips what differs between the old and new range. An empty old range (oldFirst > oldLast)
+// draws the new range from scratch.
+void ClipSelectionActivity::invertSelectionChange(const int oldFirst, const int oldLast, const int newFirst,
+                                                  const int newLast, const int offsetX, const int offset) const {
+  const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int from = std::min(oldFirst, newFirst);
+  const int to = std::max(oldLast, newLast);
+  for (int i = from; i <= to; ++i) {
+    const bool wasSelected = i >= oldFirst && i <= oldLast;
+    const bool isSelected = i >= newFirst && i <= newLast;
+    if (wasSelected != isSelected) flipWord(i, offsetX, offset, safe);
+    if (i < to) {
+      const bool gapWasSelected = i >= oldFirst && i + 1 <= oldLast;
+      const bool gapIsSelected = i >= newFirst && i + 1 <= newLast;
+      if (gapWasSelected != gapIsSelected) invertGapAfter(i, offsetX, offset, safe);
+    }
   }
-  if (index < lastSelected) {
-    ditherGapBetween(word, words[index + 1], offsetX, offset);
-  }
-
-  renderer.fillRectDither(word.x + offsetX, word.y + offset, word.width, word.height, Color::LightGray);
-  clippingDrawWord(renderer, word.font, word.x + offsetX, word.y + offset, word.text, word.style);
 }
 
 bool ClipSelectionActivity::renderIncremental() {
@@ -892,12 +879,7 @@ bool ClipSelectionActivity::renderIncremental() {
   if (rangeStart < 0 && lastRenderedRangeStart < 0) {
     if (selected == lastRenderedSelected) return true;
 
-    drawWordClean(lastRenderedSelected, offsetX, offset);
-    drawWordHighlight(selected, selected, selected, offsetX, offset);
-    if (!vertical()) {
-      const WordBox& cursor = words[selected];
-      renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);
-    }
+    invertSelectionChange(lastRenderedSelected, lastRenderedSelected, selected, selected, offsetX, offset);
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
     if (!vertical()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -909,7 +891,7 @@ bool ClipSelectionActivity::renderIncremental() {
 
   // Case 2: Transition from rangeStart < 0 to rangeStart >= 0 (user just confirmed rangeStart)
   if (rangeStart >= 0 && lastRenderedRangeStart < 0 && rangeStart == selected && selected == lastRenderedSelected) {
-    // The inverted cursor cell becomes the first cell of a gray range.
+    // On a vertical page the inverted cursor cell becomes the first cell of the reader's gray range.
     if (rangeRepaintedByReader()) {
       markDirty(words[selected]);
       flushDirtyCells();
@@ -944,27 +926,7 @@ bool ClipSelectionActivity::renderIncremental() {
       return true;
     }
 
-    for (int i = firstOld; i <= lastOld; ++i) {
-      if (i < firstNew || i > lastNew) {
-        drawWordClean(i, offsetX, offset);
-      }
-    }
-
-    for (int i = firstNew; i <= lastNew; ++i) {
-      if (i < firstOld || i > lastOld) {
-        drawWordHighlight(i, firstNew, lastNew, offsetX, offset);
-      }
-    }
-
-    // Vertical cells are XOR-inverted, so a cell still in range must not be touched twice.
-    if (!vertical() && lastRenderedSelected >= firstNew && lastRenderedSelected <= lastNew) {
-      drawWordHighlight(lastRenderedSelected, firstNew, lastNew, offsetX, offset);
-    }
-
-    if (!vertical()) {
-      const WordBox& cursor = words[selected];
-      renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);
-    }
+    invertSelectionChange(firstOld, lastOld, firstNew, lastNew, offsetX, offset);
     flushDirtyCells();
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
@@ -1007,19 +969,9 @@ void ClipSelectionActivity::drawSelection() const {
     invertColumnSpans(first, last, offsetX, offset);
     return;
   }
-  const WordBox* previous = nullptr;
-  for (int i = first; i <= last; ++i) {
-    const WordBox& word = words[i];
-    if (word.pageOffset != currentPageOffset) continue;
-    if (vertical()) {
-      // A range is already on the page (publishLiveSelection); only the lone cursor is inverted.
-      if (rangeStart < 0 || !liveSelection || dragging()) invertWord(word, offsetX, offset);
-      continue;
-    }
-    if (previous) ditherGapBetween(*previous, word, offsetX, offset);
-    renderer.fillRectDither(word.x + offsetX, word.y + offset, word.width, word.height, Color::LightGray);
-    clippingDrawWord(renderer, word.font, word.x + offsetX, word.y + offset, word.text, word.style);
-    previous = &word;
+  // A vertical range is already on the page (publishLiveSelection); only the lone cursor is inverted.
+  if (!vertical() || rangeStart < 0 || !liveSelection || dragging()) {
+    invertSelectionChange(0, -1, first, last, offsetX, offset);
   }
   // Handles and the action bar wait for the finger to lift: while it drags they would only chase
   // the range around the page, one full refresh per hop.
@@ -1036,9 +988,6 @@ void ClipSelectionActivity::drawSelection() const {
       while (anchor < last && words[anchor].pageOffset != currentPageOffset) ++anchor;
       GUI.drawSelectionActions(renderer, actionRect(), words[anchor].x + offsetX + words[anchor].width / 2);
     }
-  } else if (!vertical()) {
-    const WordBox& cursor = words[selected];
-    renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);
   }
 }
 
