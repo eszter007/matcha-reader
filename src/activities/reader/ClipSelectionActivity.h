@@ -20,8 +20,8 @@
 class ClipSelectionActivity final : public Activity {
  public:
   ClipSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                        std::vector<std::unique_ptr<Page>> pages, int marginLeft, int marginTop, int initialX = -1,
-                        int initialY = -1, int fontId = -1);
+                        std::vector<std::unique_ptr<Page>> pages, int marginLeft, int marginTop, int fontId,
+                        int initialX = -1, int initialY = -1);
   // A vertical page: the same selection over character cells (a rotated Latin run is one cell).
   // Rows are columns, so "along the text" is down a column and "across" is between columns.
   // The page is taken by value: the VerticalSection's single page slot is re-faulted by the
