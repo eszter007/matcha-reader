@@ -920,6 +920,8 @@ Noto Sans is no longer built in. Install the `NotoSans` family on the card to us
 
 Some fonts only add extra characters to another font. For example, `NotoSerifExtended` is Noto Serif plus Greek, Cyrillic and phonetic symbols. Such a font (any `…Extended` or `…IPA` font) does not get its own row when its base font is installed. It is folded into the base font's row, and choosing that row gives you the widest version you have. Japanese books are the exception: there the base font is paired with your Japanese font, because the device holds only one SD font in memory at a time. If the base font is missing, the extended font keeps its own row so you can still use it.
 
+If the reader shows **Damaged font file**, a `.cpfont` file on the SD card is broken (for example, from an interrupted copy). The affected characters are drawn blank. Delete the font family's folder and install it again.
+
 For folder layout and more detail, see [docs/sd-card-fonts.md](./docs/sd-card-fonts.md).
 
 ### 3.9 Language Packs (SD Card)
