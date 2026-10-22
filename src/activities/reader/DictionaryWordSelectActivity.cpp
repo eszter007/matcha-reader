@@ -83,8 +83,11 @@ void DictionaryWordSelectActivity::onEnter() {
       return;
     }
     // Missed: from here this is ordinary selection, which the reader is now driving themselves.
-    // Forgetting the press keeps the close behaviour ordinary too -- otherwise a definition they
-    // opened by hand would still return to the page instead of back to the words.
+    // Start it on the word nearest the press, so they see where it landed. Forgetting the press
+    // keeps the close behaviour ordinary too -- otherwise a definition they opened by hand would
+    // still return to the page instead of back to the words.
+    int distance = 0;
+    if (const int nearest = nearestWord(lookupAtX, lookupAtY, distance); nearest >= 0) selected = nearest;
     lookupAtX = -1;
     lookupAtY = -1;
   }
@@ -220,19 +223,34 @@ int DictionaryWordSelectActivity::wordHeight(const WordBox& word) const {
   return word.fontId == fontId ? lineHeight : renderer.getLineHeight(word.fontId);
 }
 
-// Index of the word whose box (with finger-sized slop) contains the touch
-// point; -1 when the touch lands on no word. Boxes never overlap after the
-// slop grows them, at worst they touch, so first hit wins.
+// Index of the word the touch is meant for. A fingertip is not a stylus: a touch between two lines
+// or just off a short word takes the nearest word within about a line, as the vertical lookup
+// does. -1 when no word is that close (a margin, a blank stretch of page).
 int DictionaryWordSelectActivity::wordAt(const int x, const int y) const {
-  constexpr int SLOP = 4;  // matches the highlight box (+2) plus finger error
+  int distance = 0;
+  const int nearest = nearestWord(x, y, distance);
+  return nearest >= 0 && distance <= wordHeight(words[nearest]) ? nearest : -1;
+}
+
+// The word whose box is closest to the point, as the gap to its nearest edge (0 inside).
+// Chebyshev, so "within a line" means the same across a line as along it. -1 without words.
+int DictionaryWordSelectActivity::nearestWord(const int x, const int y, int& outDistance) const {
+  int best = -1;
+  int bestDistance = INT_MAX;
   for (int i = 0; i < static_cast<int>(words.size()); i++) {
     const WordBox& word = words[i];
-    if (x >= word.x - SLOP && x < word.x + word.width + SLOP && y >= word.y - SLOP &&
-        y < word.y + wordHeight(word) + SLOP) {
-      return i;
+    const int right = word.x + word.width;
+    const int bottom = word.y + wordHeight(word);
+    const int dx = x < word.x ? word.x - x : (x >= right ? x - right + 1 : 0);
+    const int dy = y < word.y ? word.y - y : (y >= bottom ? y - bottom + 1 : 0);
+    const int distance = std::max(dx, dy);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = i;
     }
   }
-  return -1;
+  outDistance = bestDistance;
+  return best;
 }
 
 // Index of the word in `row` whose horizontal center is closest to centerX;
