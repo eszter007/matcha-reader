@@ -1150,8 +1150,8 @@ void EpubReaderActivity::readerLoop() {
         // A build step can lend the framebuffer (image probes), which hands it back white while
         // the panel still shows the page; redraw so nothing is later painted over the blank buffer.
         const uint32_t loansBefore = renderer.frameBufferLoanCount();
-        const bool built = section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK, BACKGROUND_BUILD_BUDGET_MS,
-                                                  &buttonContactClosed);
+        const bool built =
+            section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK, BACKGROUND_BUILD_BUDGET_MS, &buttonContactClosed);
         if (renderer.frameBufferLoanCount() != loansBefore) {
           pageBufferStale = true;
           requestUpdate();
