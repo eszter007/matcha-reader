@@ -17,7 +17,6 @@
 #include <numeric>
 
 #include "ClippingStore.h"
-#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "activities/ActivityResult.h"
 #include "clippings/ClippingText.h"
@@ -52,8 +51,8 @@ const char* cleanWordStart(const char* text) {
 
 ClipSelectionActivity::ClipSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                              std::vector<std::unique_ptr<Page>> pages, const int marginLeft,
-                                             const int marginTop, const int initialX, const int initialY,
-                                             const int readerFontId)
+                                             const int marginTop, const int readerFontId, const int initialX,
+                                             const int initialY)
     : Activity("ClipSelection", renderer, mappedInput),
       pages(std::move(pages)),
       marginLeft(marginLeft),
@@ -77,7 +76,6 @@ ClipSelectionActivity::ClipSelectionActivity(GfxRenderer& renderer, MappedInputM
 
 void ClipSelectionActivity::onEnter() {
   Activity::onEnter();
-  if (fontId < 0) fontId = SETTINGS.getReaderFontId();
   lineHeight = renderer.getLineHeight(fontId);
   if (!extractWords()) {
     // Out of memory, not "nothing here": say so instead of closing silently.
