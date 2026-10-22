@@ -724,6 +724,24 @@ TEST_F(DropCapTest, ScalesAnInlineFontSizeTheLadderCannotServe) {
   EXPECT_EQ(leWidth, 2 * GLYPH_INK) << "the unscaled word keeps its full advance";
 }
 
+// A heading's own font-size on a single-size reader font: its words carry the scale tag, and the
+// tag ends with the heading.
+TEST_F(DropCapTest, ScalesABlockFontSizeTheLadderCannotServe) {
+  makeParser("h2 { font-size: 1.5em; }\n");
+  parser->insideBody = true;
+  const XML_Char* none[] = {nullptr};
+  ChapterHtmlSlimParser::startElement(parser.get(), "h2", none);
+  feedWord("Title");
+  ASSERT_EQ(parser->currentTextBlock->wordFonts.size(), 1u);
+  EXPECT_EQ(parser->currentTextBlock->wordFonts[0], -384);
+  ChapterHtmlSlimParser::endElement(parser.get(), "h2");
+
+  openParagraph();
+  feedWord("Body");
+  const auto& bodyFonts = parser->currentTextBlock->wordFonts;
+  EXPECT_TRUE(bodyFonts.empty() || bodyFonts[0] == 0) << "the heading's scale must not leak past it";
+}
+
 TEST_F(DropCapTest, TheLetterLeavesTheTextFlow) {
   makeParser("p::first-letter { font-size: 300%; }\n");
   openParagraph();

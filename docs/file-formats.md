@@ -95,6 +95,12 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 107 (fork numbering)
+
+The layout format is unchanged. A block whose CSS sets `font-size` (a heading, for example) now
+stores a per-word scale tag when the reader font is an SD-card font, so it draws at the book's size
+instead of body size. Older sections are rebuilt so those headings pick it up.
+
 ### Version 106 (fork numbering)
 
 Upstream merge (their versions 63 and 64). The layout is unchanged. Static GIF images are laid out

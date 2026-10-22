@@ -250,6 +250,23 @@ void TextBlock::layoutRuby(const GfxRenderer& renderer, const int fontId, const 
   }
 }
 
+// How far the line's baseline sits below the block font's: enough that its tallest word (an
+// enlarged span, a heading's font-size) fits under the line top instead of rising into the line
+// above. The layout made the line that much taller (ChapterHtmlSlimParser::addLineToPage).
+int TextBlock::sizedWordDrop(const GfxRenderer& renderer, const int fontId) const {
+  if (!fontsPresent) return 0;
+  const int ascender = renderer.getFontAscenderSize(fontId);
+  int tallest = ascender;
+  for (uint16_t i = 0; i < numWords; i++) {
+    const int32_t slot = wordFontArr[i];
+    if (slot == 0 || slot == fontId) continue;
+    const int wordAscender =
+        isWordScaleTag(slot) ? (ascender * -slot + 128) / WORD_SCALE_ONE : renderer.getFontAscenderSize(slot);
+    tallest = std::max(tallest, wordAscender);
+  }
+  return tallest - ascender;
+}
+
 void TextBlock::wordPlacements(const GfxRenderer& renderer, const int baseFontId, const int x, const int y,
                                const bool suppressRuby, std::vector<WordPlacement>& out) const {
   out.clear();
@@ -260,7 +277,8 @@ void TextBlock::wordPlacements(const GfxRenderer& renderer, const int baseFontId
     std::vector<RubyDrawInfo> rubies;
     layoutRuby(renderer, fontId, x, wordShift, rubies);
   }
-  const int wordY = y + (suppressRuby ? 0 : getRubyShift(renderer.getFontAscenderSize(fontId)));
+  const int wordY =
+      y + (suppressRuby ? 0 : getRubyShift(renderer.getFontAscenderSize(fontId))) + sizedWordDrop(renderer, fontId);
   out.reserve(numWords);
   for (uint16_t i = 0; i < numWords; i++) {
     const int32_t fontSlot = fontsPresent ? wordFontArr[i] : 0;
@@ -350,7 +368,7 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
   // this much in the line's height. When the annotation is suppressed the layout reserves
   // nothing (see ChapterHtmlSlimParser::addLineToPage), so shifting here would push the words
   // out of their own line box and into the one below.
-  const int rubyShift = suppressRuby ? 0 : getRubyShift(ascender);
+  const int rubyShift = (suppressRuby ? 0 : getRubyShift(ascender)) + sizedWordDrop(renderer, fontId);
 
   for (uint16_t i = 0; i < numWords; i++) {
     const char* word = wordText(i);
@@ -381,6 +399,9 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
     // baseline so a scaled word sits on the same one as the text around it.
     // Rounds the way GfxRenderer's own scaleSigned does, so the shift cancels its offset exactly.
     if (wordScaled) wordY += ascender - static_cast<int>((ascender * wordScale + 128) / WORD_SCALE_ONE);
+    // A word in another loaded size: drawText puts its baseline at its own ascender, so the same
+    // correction lands it on the line's baseline.
+    if (wordFontId != fontId) wordY += ascender - renderer.getFontAscenderSize(wordFontId);
     if ((currentStyle & EpdFontFamily::SUP) != 0) {
       wordY -= ascender * 2 / 5;
     } else if ((currentStyle & EpdFontFamily::SUB) != 0) {

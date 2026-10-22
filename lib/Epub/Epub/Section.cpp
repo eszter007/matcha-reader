@@ -293,7 +293,8 @@ namespace {
 // v106: upstream merge (their v63/v64): static GIF images are laid out like JPEG and PNG instead
 //       of being skipped, and `font-weight`/`font-style: inherit` keep the parent's emphasis
 //       instead of resetting it, so lines holding either move. The framing is unchanged.
-constexpr uint8_t SECTION_FILE_VERSION = 106;
+// v107: a block's font-size on an SD-card font scales its words (headings were body size).
+constexpr uint8_t SECTION_FILE_VERSION = 107;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
