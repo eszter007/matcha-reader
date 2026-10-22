@@ -93,7 +93,6 @@ class ClipSelectionActivity final : public Activity {
   void prewarmVerticalPage();
   bool vertical() const { return verticalPage != nullptr; }
   size_t pageCount() const { return vertical() ? 1 : pages.size(); }
-  // Vertical cells are highlighted by inversion (their glyphs cannot be redrawn word by word).
   void invertWord(const WordBox& word, int offsetX, int offset) const;
   void drawPage(int offsetX, int offsetY);
   int closestInRow(uint16_t row, int centerX) const;
@@ -127,11 +126,10 @@ class ClipSelectionActivity final : public Activity {
   void pushRefresh(HalDisplay::RefreshMode mode);
   void settleRefresh();
   bool refreshPending = false;
-  void drawWordHighlight(int index, int firstSelected, int lastSelected, int offsetX, int offset) const;
-  void drawWordClean(int index, int offsetX, int offset) const;
-  void ditherGapBetween(const WordBox& a, const WordBox& b, int offsetX, int offset) const;
-  void clearGapBetween(const WordBox& a, const WordBox& b, int offsetX, int offset) const;
-  void prewarmWord(int index) const;
+  void flipWord(int index, int offsetX, int offset, const Rect& safe) const;
+  void invertGapAfter(int index, int offsetX, int offset, const Rect& safe) const;
+  void invertClipped(int x, int y, int width, int height, const Rect& safe) const;
+  void invertSelectionChange(int oldFirst, int oldLast, int newFirst, int newLast, int offsetX, int offset) const;
 
   std::vector<std::unique_ptr<Page>> pages;
   void* liveSelectionCtx = nullptr;
