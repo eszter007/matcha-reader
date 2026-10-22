@@ -4321,6 +4321,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // Reuse the image-warm input generation, which is bumped on every input/page turn.
   const uint32_t inputStamp = imageWarmInputStamp_.load(std::memory_order_relaxed);
   const int fontId = effectiveReaderFontId();
+  if (!grayscaleRefineOnly) recordTapLines(*page, fontId, orientedMarginTop, orientedMarginLeft);
   // The failure memo is scoped to ONE page render (the BW double-refresh plus every grayscale
   // band pass), so a transient decode failure is retried on the next page rather than remembered.
   ImageBlock::clearRenderFailures();
@@ -5180,7 +5181,64 @@ int EpubReaderActivity::clippingAtPoint(const Page& page, const int x, const int
   return -1;
 }
 
+void EpubReaderActivity::recordTapLines(const Page& page, const int fontId, const int marginTop, const int marginLeft) {
+  portENTER_CRITICAL(&tapLinesMux_);
+  tapLinesValid_ = false;
+  portEXIT_CRITICAL(&tapLinesMux_);
+
+  uint8_t count = 0;
+  for (const auto& element : page.elements) {
+    if (element->getTag() != TAG_PageLine) continue;
+    const auto& line = static_cast<const PageLine&>(*element);
+    const auto& block = line.getBlock();
+    if (!block || !block->valid()) continue;
+    int first = -1;
+    int last = -1;
+    for (uint16_t i = 0; i < block->wordCount(); ++i) {
+      if (!clippingText::hasVisibleText(block->wordText(i))) continue;
+      if (first < 0) first = i;
+      last = i;
+    }
+    if (first < 0) continue;
+    if (count == MAX_TAP_LINES) return;  // stays invalid: textAtPoint scans the page itself
+    const auto wordRect = [&](const uint16_t i) {
+      const auto style = static_cast<EpdFontFamily::Style>(block->wordStyle(i) & ~EpdFontFamily::UNDERLINE);
+      const char* text = block->wordText(i);
+      const int width = clippingWordWidth(renderer, clippingWordFont(*block, i, fontId), text, style);
+      return clippingWordRect(renderer, fontId, line, i, marginTop, marginLeft, std::max(width, 0));
+    };
+    const Rect a = wordRect(static_cast<uint16_t>(first));
+    const Rect b = first == last ? a : wordRect(static_cast<uint16_t>(last));
+    tapLines_[count++] = {static_cast<int16_t>(a.x), static_cast<int16_t>(a.y), static_cast<int16_t>(b.x + b.width),
+                          static_cast<int16_t>(a.y + a.height)};
+  }
+  const auto slop = static_cast<int16_t>(renderer.getLineHeight(fontId) / 2);
+  portENTER_CRITICAL(&tapLinesMux_);
+  tapLineCount_ = count;
+  tapSlop_ = slop;
+  tapLinesValid_ = true;
+  portEXIT_CRITICAL(&tapLinesMux_);
+}
+
 bool EpubReaderActivity::textAtPoint(const int x, const int y) {
+  if (!verticalSection) {
+    // The lines recorded when the page was drawn, so a tap during its refresh still counts. A
+    // fingertip is not a stylus: up to half a line around a line of text is still on it, and the
+    // word-select screen then picks the nearest word.
+    bool valid = false;
+    bool hit = false;
+    portENTER_CRITICAL(&tapLinesMux_);
+    if (tapLinesValid_) {
+      valid = true;
+      for (uint8_t i = 0; i < tapLineCount_ && !hit; ++i) {
+        const TapLine& line = tapLines_[i];
+        hit = x >= line.left - tapSlop_ && x < line.right + tapSlop_ && y >= line.top - tapSlop_ &&
+              y < line.bottom + tapSlop_;
+      }
+    }
+    portEXIT_CRITICAL(&tapLinesMux_);
+    if (valid) return hit;
+  }
   int top, right, bottom, left;
   renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
   const int fontId = effectiveReaderFontId();
