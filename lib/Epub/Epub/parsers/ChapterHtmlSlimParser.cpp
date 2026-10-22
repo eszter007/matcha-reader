@@ -295,6 +295,20 @@ void ChapterHtmlSlimParser::pushDecorationStyleEntry(const CssTextDecoration def
   updateEffectiveInlineStyle();
 }
 
+// A block's font-size on an SD-card reader font: that font is resident at one size, so the block
+// cannot switch font (cssBlockFontId). Scale its words' bitmaps instead, as an inline <span>
+// font-size does, so a heading is not stuck at body size. Popped with the element.
+void ChapterHtmlSlimParser::pushBlockFontScaleEntry(const CssStyle& cssStyle) {
+  const int32_t tag = cssBlockFontScaleTag(cssStyle, fontId);
+  if (tag == 0) return;
+  StyleStackEntry entry;
+  entry.depth = depth;
+  entry.hasFontId = true;
+  entry.fontIdOverride = tag;
+  entry.fontScale = cssFontSizeScale(cssStyle);
+  inlineStyleStack.push_back(entry);
+}
+
 // Update effective bold/italic/decorations based on block style and inline style stack
 void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   // Start with block-level styles
@@ -2495,6 +2509,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->blockStyleStack.push_back(accumulated);
     self->startNewTextBlock(accumulated.withoutBottom());
     self->currentBlockIsHeading = true;
+    self->pushBlockFontScaleEntry(cssStyle);
     // AFTER startNewTextBlock: that call flushes the PREVIOUS block, which must stay on the page
     // it was already on. The break is spent by the first block laid out from here on.
     if (cssStyle.pageBreakBefore() == CssPageBreak::Always && !self->forcedBreakTaken) self->pendingForcedBreak = true;
@@ -2545,6 +2560,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       // On the block itself, never on the style stack: a drop cap belongs to this one
       // paragraph, and the stack is what every nested and sibling block inherits from.
       self->applyDropCap(name, classAttr);
+      self->pushBlockFontScaleEntry(cssStyle);
       // See the header branch above: raised only once the previous block has been flushed.
       if (cssStyle.pageBreakBefore() == CssPageBreak::Always && !self->forcedBreakTaken) {
         self->pendingForcedBreak = true;
@@ -3262,12 +3278,14 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
 
   self->releaseInlineDropCapIfNotSingleLetter();
 
-  // Pop from inline style stack if we pushed an entry at this depth
-  // This handles all inline elements: b, i, u, span, etc.
-  if (!self->inlineStyleStack.empty() && self->inlineStyleStack.back().depth == self->depth) {
+  // Pop every inline style entry this element pushed: inline elements (b, i, u, span, ...) and a
+  // block's font-size scale, which can share its depth with a table cell's text style.
+  bool popped = false;
+  while (!self->inlineStyleStack.empty() && self->inlineStyleStack.back().depth == self->depth) {
     self->inlineStyleStack.pop_back();
-    self->updateEffectiveInlineStyle();
+    popped = true;
   }
+  if (popped) self->updateEffectiveInlineStyle();
 
   // Clear block style when leaving header or block elements
   if (headerOrBlockTag && !insideSkippedSubtree) {
@@ -3539,9 +3557,17 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
   // broken rather than as tight typography.
   int inkFloor = renderer.getFontInkHeight(lineFontId);
   if (line->hasWordFonts()) {
+    // A line made only of sized words (a block's own font-size drawn as a scale) takes their
+    // leading alone, so a small note is set tight as well as a heading set loose.
+    bool everyWordSized = line->wordCount() > 0;
+    int wordsTallest = 0;
+    int wordsInk = 0;
     for (uint16_t w = 0; w < line->wordCount(); ++w) {
-      const int32_t wf = line->wordFont(w);
-      if (wf == 0 || wf == lineFontId) continue;
+      const int32_t wf = line->wordFontSlot(w);
+      if (wf == 0 || wf == lineFontId) {
+        everyWordSized = false;
+        continue;
+      }
       int h = 0;
       int ink = 0;
       if (TextBlock::isWordScaleTag(wf)) {
@@ -3552,9 +3578,11 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
         h = renderer.getLineHeight(wf, lineCompression);
         ink = renderer.getFontInkHeight(wf);
       }
-      if (h > tallest) tallest = h;
-      if (ink > inkFloor) inkFloor = ink;
+      wordsTallest = std::max(wordsTallest, h);
+      wordsInk = std::max(wordsInk, ink);
     }
+    tallest = everyWordSized ? wordsTallest : std::max(tallest, wordsTallest);
+    inkFloor = everyWordSized ? wordsInk : std::max(inkFloor, wordsInk);
   }
   // Ink alone sets the line solid: the deepest descender meets the tallest ascender below it with
   // nothing between them, which on a bold heading reads as cramped even though nothing overlaps.

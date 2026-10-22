@@ -157,6 +157,13 @@ int8_t cssLetterSpacingPx(const CssStyle& style, const float emPx) {
 
 int32_t cssFontScaleTag(const CssStyle& style) { return fontScaleTagForScale(cssFontSizeScale(style)); }
 
+int32_t cssBlockFontScaleTag(const CssStyle& style, const int baseFontId) {
+  size_t count = 0;
+  uint8_t basePt = 0;
+  if (ladderFor(baseFontId, count, basePt) != nullptr) return 0;
+  return cssFontScaleTag(style);
+}
+
 bool cssFontSizeIsParentRelative(const CssStyle& style) {
   if (!style.hasFontSize()) return false;
   const CssUnit unit = style.fontSize.unit;

@@ -50,6 +50,11 @@ bool cssFontSizeIsParentRelative(const CssStyle& style);
 // 77% beats against the stem spacing and breaks strokes unevenly.
 int32_t cssFontScaleTag(const CssStyle& style);
 
+// The same tag for a BLOCK's font-size (h1 { font-size: 2em }), but only when the reader font has
+// no built-in sizes to snap to (an SD-card font). A built-in font keeps the ladder, or its body
+// size when the ask snaps back to it, as cssBlockFontId decides. 0 = no scaling.
+int32_t cssBlockFontScaleTag(const CssStyle& style, int baseFontId);
+
 /**
  * CSS line-height -> a PERCENTAGE of the leading the reader would have used anyway.
  *

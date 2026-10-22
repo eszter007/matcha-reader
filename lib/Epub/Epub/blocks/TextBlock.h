@@ -194,6 +194,8 @@ class TextBlock final : public Block {
     const int32_t slot = fontsPresent ? wordFontArr[i] : 0;
     return isWordScaleTag(slot) ? 0 : slot;
   }
+  // The raw slot: a font id, a scale tag (isWordScaleTag) or 0 for the block's font.
+  int32_t wordFontSlot(const uint16_t i) const { return fontsPresent ? wordFontArr[i] : 0; }
   // 256 = unscaled. Only ever non-256 when the slot carries a tag.
   uint16_t wordFontScale(const uint16_t i) const {
     const int32_t slot = fontsPresent ? wordFontArr[i] : 0;
@@ -202,6 +204,8 @@ class TextBlock final : public Block {
   uint8_t focusBoundary(const uint16_t i) const { return focusPresent ? focusBoundaryArr[i] : 0; }
   uint16_t focusSuffixX(const uint16_t i) const { return focusPresent ? focusSuffixXArr[i] : 0; }
   bool hasRuby() const;
+  // Pixels the line's baseline drops so its tallest sized word fits under the line top.
+  int sizedWordDrop(const GfxRenderer& renderer, int fontId) const;
   // Where render() draws each word: its left edge, the top of its line box, and its font. For
   // a caller that needs a line's glyph positions without drawing it (the word-lookup cursor).
   struct WordPlacement {
