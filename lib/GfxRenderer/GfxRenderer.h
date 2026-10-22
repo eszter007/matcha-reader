@@ -50,8 +50,11 @@ class GfxRenderer {
     // one from another font (an SD font at the reader's size). Off for reader faces, whose
     // global fallback is the book's own CJK font at the reader's size.
     bool sizeFallbacks = false;
+    // A partial reader face (kana but not every kanji): what it borrows from a font of another
+    // size, the 12pt built-in, is drawn at the face's own em, as if the face carried it.
+    bool matchOwnEm = false;
     // A UI face at its own size still sizes what it borrows, so it is not an identity.
-    bool identity() const { return own == 256 && fallback == 256 && !sizeFallbacks; }
+    bool identity() const { return own == 256 && fallback == 256 && !sizeFallbacks && !matchOwnEm; }
   };
   enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
 
@@ -305,11 +308,12 @@ class GfxRenderer {
     }
   }
   // Draw and measure fontId at a fixed scale from now on (see FaceScale).
-  void setFaceScale(int fontId, uint16_t own, uint16_t fallback, bool sizeFallbacks = false) {
-    if (own == 256 && fallback == 256 && !sizeFallbacks) {
+  void setFaceScale(int fontId, uint16_t own, uint16_t fallback, bool sizeFallbacks = false, bool matchOwnEm = false) {
+    const FaceScale face{own, fallback, sizeFallbacks, matchOwnEm};
+    if (face.identity()) {
       faceScales_.erase(fontId);
     } else {
-      faceScales_[fontId] = {own, fallback, sizeFallbacks};
+      faceScales_[fontId] = face;
     }
   }
   FaceScale faceScaleFor(int fontId) const {
