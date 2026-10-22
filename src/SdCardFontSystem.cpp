@@ -873,6 +873,12 @@ void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t po
   // book-level signal; within a CJK book a companion still covers either hole
   // (no CJK in the selected font, or no Latin for embedded English).
   const bool needsCompanion = cjkFallbackNeeded() && (!selectedHasCjk || !selectedHasLatin);
+  // A face with the script's kana but not every kanji (a handwriting subset) borrows the rest from
+  // the 12pt built-in: draw those at the face's own size.
+  if (const int selectedId = selected.empty() ? 0 : manager_.getFontId(selected)) {
+    const bool partial = !needsCompanion && selectedHasCjk && !loadedFamilyCovers(manager_, selected, 0x6F22);  // 漢
+    renderer.setFaceScale(selectedId, 256, 256, /*sizeFallbacks=*/false, /*matchOwnEm=*/partial);
+  }
   if (!needsCompanion) {
     if (!fallbackManager_.currentFamilyName().empty()) {
       // Unloading clears every UI fallback registration, the selected family's included; put

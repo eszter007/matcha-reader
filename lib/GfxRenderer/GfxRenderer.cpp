@@ -1247,6 +1247,13 @@ struct FaceGlyphScale {
     return static_cast<uint16_t>(static_cast<uint32_t>(fallback) * fallbackAdvanceY / source->advanceY);
   }
 };
+
+// The em of the font's own glyphs (its 一), 0 when it borrows 一 too.
+int32_t ownFullWidthEm(const EpdFontFamily& font, const EpdFontFamily::Style style) {
+  if (font.getDataForGlyph(0x4E00, style) != font.getData(style)) return 0;
+  const EpdGlyph* one = font.getGlyph(0x4E00, style);
+  return one ? one->advanceX : 0;
+}
 }  // namespace
 
 int GfxRenderer::layoutTextScaled(const int resolvedFontId, const int x, const int y, const char* renderedText,
@@ -1277,10 +1284,8 @@ int GfxRenderer::layoutTextScaled(const int resolvedFontId, const int x, const i
   // (the built-in jōyō subset, a companion) of a different size: draw that glyph at the em the
   // font's own glyphs have, not at the font's scale. The em is the font's own 一.
   const EpdFontData* ownData = font.getData(style);
-  int32_t ownEm = 0;
-  if (!faceScaled && scale != 256 && font.getDataForGlyph(0x4E00, style) == ownData) {
-    if (const EpdGlyph* one = font.getGlyph(0x4E00, style)) ownEm = one->advanceX;
-  }
+  const int32_t ownEm =
+      !faceScaled && (scale != 256 || faceScaleFor(resolvedFontId).matchOwnEm) ? ownFullWidthEm(font, style) : 0;
   int lastBaseX = x;
   int lastBaseLeft = 0;
   int lastBaseWidth = 0;
@@ -3674,7 +3679,17 @@ int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint3
 bool GfxRenderer::getGlyphMetrics(const int fontId, const uint32_t cp, const EpdFontFamily::Style style, int* left,
                                   int* width, int* top, int* height) const {
   if (!rawGlyphMetrics(fontId, cp, style, left, width, top, height)) return false;
-  const uint16_t own = faceScaleFor(fontId).own;
+  const FaceScale face = faceScaleFor(fontId);
+  uint16_t own = face.own;
+  // Same scale layoutTextScaled() draws a borrowed full-width glyph at.
+  if (face.matchOwnEm && FaceGlyphScale::fullWidth(cp)) {
+    const auto& font = fontMap.at(fontId);
+    const int32_t ownEm = ownFullWidthEm(font, style);
+    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    if (ownEm > 0 && glyph && glyph->advanceX > 0 && font.getDataForGlyph(cp, style) != font.getData(style)) {
+      own = static_cast<uint16_t>(static_cast<uint32_t>(own) * ownEm / glyph->advanceX);
+    }
+  }
   if (own != 256) {
     *left = scaleSigned(*left, own);
     *width = scalePositive(*width, own);
