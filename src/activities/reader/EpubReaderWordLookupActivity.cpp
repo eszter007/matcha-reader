@@ -876,12 +876,19 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
   // A tap straight on a word selects it AND looks it up. On a board with no front buttons (X4
   // Pro) the column jumps below are unreachable and Confirm may not exist either, which left the
   // panel openable but not usable (#128). A direct tap needs neither axis: it reaches any word on
-  // the page in one gesture. A tap that hits no word is ignored rather than moving the cursor
-  // somewhere arbitrary.
+  // the page in one gesture. A fingertip is not a stylus: a tap on a particle between two matches
+  // or just off a word takes the nearest one within a cell, as the opening hold does
+  // (resolveOpenPoint). Further out, or before the page is segmented, the tap is ignored rather
+  // than moving the cursor somewhere arbitrary.
   int tapX = 0;
   int tapY = 0;
   if (mappedInput.hasTouch() && mappedInput.wasScreenTapped(tapX, tapY)) {
-    const int hit = selectableIndexAtPoint(tapX, tapY);
+    int hit = selectableIndexAtPoint(tapX, tapY);
+    if (hit < 0 && scan.isDone()) {
+      int distance = 0;
+      const int nearest = nearestSelectableToPoint(tapX, tapY, distance);
+      if (nearest >= 0 && distance <= std::max(1, selectCtx.cellPx)) hit = nearest;
+    }
     if (hit >= 0) {
       // Straight to the definition, so the parked-move guard above does not apply: the tap names
       // its own target, so there is no pending arrival whose word would be the wrong entry.
