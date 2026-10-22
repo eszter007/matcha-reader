@@ -181,7 +181,6 @@ class WordSelectionScan {
   static void encodeUtf8(uint32_t cp, std::string& out);
   static bool isLookupableChar(uint32_t cp);
   static bool isKatakana(uint32_t cp);
-  static bool isHiragana(uint32_t cp);
   static bool isCJK(uint32_t cp);
   static bool isDigitCp(uint32_t cp);
   // A katakana run of >=2 chars immediately followed by an honorific (さん/くん/ちゃん/さま/様/氏)

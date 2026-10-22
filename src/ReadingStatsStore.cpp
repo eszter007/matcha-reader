@@ -344,10 +344,6 @@ uint16_t ReadingStatsStore::getMinutesForDay(uint16_t year, uint8_t month, uint8
   return it == days.rend() ? 0 : it->minutesRead;
 }
 
-bool ReadingStatsStore::hasReadToday(uint16_t year, uint8_t month, uint8_t day) const {
-  return getMinutesForDay(year, month, day) > 0;
-}
-
 int ReadingStatsStore::getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const {
   // Backwards through the sorted history, rather than probing one candidate date per day.
   if (days.empty()) return 0;
