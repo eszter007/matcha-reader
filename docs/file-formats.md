@@ -95,6 +95,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 108 (fork numbering)
+
+Upstream merge (their versions 65 to 67). The layout format is unchanged. Justification now
+stretches a literal space after a hyphen or ellipsis, and after visual reordering only a space
+that continues into a word. A no-break space carried across a soft line wrap no longer indents
+the next line. Older sections are rebuilt; book metadata and progress are kept.
+
 ### Version 107 (fork numbering)
 
 The layout format is unchanged. A block whose CSS sets `font-size` (a heading, for example) now
