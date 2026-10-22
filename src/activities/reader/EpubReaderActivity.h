@@ -635,8 +635,21 @@ class EpubReaderActivity final : public ReaderActivity {
   // Result of a word-lookup panel: a drag on its word handles opens clip selection there.
   void onLookupPanelResult(const ActivityResult& result);
   int clippingAtPoint(const Page& page, int x, int y) const;
-  // True when (x, y) is on a word of the page on screen; a margin or the gap between lines is not.
+  // True when (x, y) is on or near a word of the page on screen; a margin is not.
   bool textAtPoint(int x, int y);
+  // The horizontal page's text lines as the render task drew them, so textAtPoint() can answer on
+  // the loop task without the render lock, which the render task holds for the whole e-ink refresh.
+  // 64 lines x 8 bytes live in the activity; a page with more falls back to the locked scan.
+  struct TapLine {
+    int16_t left, top, right, bottom;
+  };
+  static constexpr uint8_t MAX_TAP_LINES = 64;
+  TapLine tapLines_[MAX_TAP_LINES] = {};
+  uint8_t tapLineCount_ = 0;
+  bool tapLinesValid_ = false;  // under tapLinesMux_; entries are only written while it is false
+  int16_t tapSlop_ = 0;
+  portMUX_TYPE tapLinesMux_ = portMUX_INITIALIZER_UNLOCKED;
+  void recordTapLines(const Page& page, int fontId, int marginTop, int marginLeft);
   // Vertical pages: the same selection over character cells (ClipSelectionActivity, vertical form).
   void startVerticalClipSelection(int initialX, int initialY, int dragX, int dragY);
   int verticalClippingAtPoint(const VerticalPage& vpage, int x, int y) const;
