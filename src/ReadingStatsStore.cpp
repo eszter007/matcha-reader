@@ -24,9 +24,10 @@ static constexpr uint8_t JOURNAL_HEADER_MAGIC = 0x5A;
 static constexpr size_t JOURNAL_HEADER_BYTES = 5;
 static constexpr size_t MAX_STORED_PATH = 500;
 // record() runs on the main loop, the end-of-book summary on the render task; one journal writer
-// at a time, and no fold while a record is being appended.
-static std::mutex& journalMutex() {
-  static std::mutex m;
+// at a time, and no fold while a record is being appended. Recursive: compact() and the summary's
+// table path hold it while recoverInterruptedSave() takes it again.
+static std::recursive_mutex& journalMutex() {
+  static std::recursive_mutex m;
   return m;
 }
 // Heap a table reserve must leave behind; a reserve() that cannot be served aborts.
@@ -36,6 +37,13 @@ static bool tableFits(const size_t bytes) { return ESP.getMaxAllocHeap() >= byte
 // block after that. Each older reader stops where its own format ends and ignores what follows,
 // rather than rejecting the file -- it will, however, drop the newer blocks the next time it saves.
 static constexpr uint8_t STATS_VERSION = 4;
+// A byte no stats format could carry: 0, or a version far past any written so far. Such a file is
+// not read, folded or rewritten -- one filled with text (cross-linked clusters; '{' is 123) would
+// otherwise parse as stats. A newer real format still reads, as above.
+static constexpr uint8_t MAX_PLAUSIBLE_STATS_VERSION = 31;
+static bool plausibleStatsVersion(const uint8_t version) {
+  return version >= 1 && version <= MAX_PLAUSIBLE_STATS_VERSION;
+}
 // Longest language tag a per-book entry stores, on disk and in memory. Enforced on BOTH sides:
 // the writer clamps to it, and the loader rejects anything longer rather than allocating on a
 // corrupt or misaligned file's say-so.
@@ -501,7 +509,7 @@ bool ReadingStatsStore::loadMainFile(const size_t pendingRecords) {
   // history to keep, as opposed to a read error, which leaves the file for the next try.
   if (f.size() < 5) return true;
   uint8_t version;
-  if (f.read(&version, 1) != 1) {
+  if (f.read(&version, 1) != 1 || !plausibleStatsVersion(version)) {
     f.close();
     return false;
   }
@@ -773,6 +781,7 @@ bool readFoldMarker(const std::string& path, uint32_t& bytes, uint32_t& hash) {
 // the temp. It is adopted before anything reads or writes the stats -- but only when it reads whole
 // to its trailer: a temp cut off mid-write is dropped, and the journal still holds everything.
 void recoverInterruptedSave() {
+  std::lock_guard<std::recursive_mutex> lock(journalMutex());
   const std::string tmpPath = statsPath() + ".tmp";
   if (Storage.exists(statsPath().c_str()) || !Storage.exists(tmpPath.c_str())) return;
   uint32_t bytes = 0, hash = 0;
@@ -842,10 +851,18 @@ bool ReadingStatsStore::record(const Change& change) {
   appendString(rec, change.bookPath, MAX_STORED_PATH);
   appendString(rec, change.finishedPath, MAX_STORED_PATH);
 
-  std::lock_guard<std::mutex> lock(journalMutex());
+  std::lock_guard<std::recursive_mutex> lock(journalMutex());
   HalFile f;
   if (!Storage.openFileForAppend("STAT", journalPath().c_str(), f)) return false;
-  const size_t before = f.size();
+  size_t before = f.size();
+  // A header cut off by a power loss would make replay misread every record after it: start over.
+  if (before > 0 && before < JOURNAL_HEADER_BYTES) {
+    if (!f.truncate(0)) {
+      f.close();
+      return false;
+    }
+    before = 0;
+  }
   if (before == 0) {
     const uint32_t nonce = esp_random();
     std::string header(1, static_cast<char>(JOURNAL_HEADER_MAGIC));
@@ -875,7 +892,7 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
   // The table path, for what the stream below does not handle (older formats, unsorted days).
   const auto fromTables = [&]() {
     // Held so a record() on the main loop cannot add to the journal between its count and replay.
-    std::lock_guard<std::mutex> lock(journalMutex());
+    std::lock_guard<std::recursive_mutex> lock(journalMutex());
     Summary t;
     if (loadFromFile()) {
       t.streak = getStreak(todayYear, todayMonth, todayDay);
@@ -1032,7 +1049,7 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
 }
 
 bool ReadingStatsStore::compact() {
-  std::lock_guard<std::mutex> lock(journalMutex());
+  std::lock_guard<std::recursive_mutex> lock(journalMutex());
   recoverInterruptedSave();
   const bool hasJournal = Storage.exists(journalPath().c_str());
   bool outdated = false;  // an older format: one rewrite upgrades it
@@ -1040,7 +1057,7 @@ bool ReadingStatsStore::compact() {
     HalFile f;
     uint8_t version = 0;
     if (Storage.openFileForRead("STAT", statsPath().c_str(), f) && f.size() >= 5 && f.read(&version, 1) == 1) {
-      outdated = version != STATS_VERSION;
+      outdated = plausibleStatsVersion(version) && version != STATS_VERSION;
     }
   }
   if (!hasJournal && !outdated) return true;

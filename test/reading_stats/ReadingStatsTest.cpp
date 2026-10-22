@@ -604,3 +604,33 @@ TEST_F(StatsTest, TruncatedHeaderIsNoHistory) {
   ASSERT_TRUE(s.loadFromFile());
   EXPECT_EQ(s.getTotalMinutes(), 9u);
 }
+
+// A stats file whose bytes are another file's text (cross-linked clusters) is not stats: it is
+// neither read as history nor rewritten, and the summary claims nothing from it.
+TEST_F(StatsTest, TextFilledStatsFileIsLeftAlone) {
+  auto& s = READING_STATS_STORE;
+  const std::string text = R"({"openEpubPath":"/a.epub","pe":1})";
+  const std::string path = testRoot() + sdsystem::path("reading_stats.bin");
+  {
+    std::ofstream bin(path, std::ios::binary);
+    bin << text;
+  }
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/a.epub", "en", "/a.epub"}));
+  EXPECT_FALSE(s.compact());
+  const auto summary = s.summarize(Y, M, 5, "en");
+  EXPECT_LT(summary.booksFinished, 2u) << "header bytes must not be read as a count";
+  std::ifstream in(path, std::ios::binary);
+  EXPECT_EQ(std::string(std::istreambuf_iterator<char>(in), {}), text) << "the file must not be rewritten";
+}
+
+// A journal header cut short by a power loss is started over, so the records after it count.
+TEST_F(StatsTest, TornJournalHeaderIsStartedOver) {
+  auto& s = READING_STATS_STORE;
+  {
+    std::ofstream log(testRoot() + sdsystem::path("reading_stats.log"), std::ios::binary);
+    log.write("\x5A\x01\x02", 3);
+  }
+  ASSERT_TRUE(s.record({Y, M, 5, 7, "/a.epub", "en", nullptr}));
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 7u);
+}
