@@ -64,10 +64,6 @@ bool WordSelectionScan::isKatakana(uint32_t cp) {
   return (cp >= 0x30A0 && cp <= 0x30FF) || cp == 0x30FC || (Kinsoku::isSmallKana(cp) && cp >= 0x30A0);
 }
 
-bool WordSelectionScan::isHiragana(uint32_t cp) {
-  return (cp >= 0x3040 && cp <= 0x309F) || (Kinsoku::isSmallKana(cp) && cp < 0x30A0);
-}
-
 bool WordSelectionScan::isCJK(uint32_t cp) { return cjk::isHan(cp); }
 
 bool WordSelectionScan::isDigitCp(uint32_t cp) { return (cp >= '0' && cp <= '9') || (cp >= 0xFF10 && cp <= 0xFF19); }

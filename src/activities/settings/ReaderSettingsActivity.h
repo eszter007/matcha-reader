@@ -114,7 +114,6 @@ class ReaderSettingsActivity final : public UiTabListActivity {
   void selectCategory(int categoryIndex);
   void applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr);
 
-  void enterCategory(int categoryIndex);
   void toggleCurrentSetting();
   void openSleepTimeoutPicker();
   void rebuildLibraryIndex();
