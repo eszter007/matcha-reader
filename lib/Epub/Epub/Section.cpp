@@ -294,7 +294,10 @@ namespace {
 //       of being skipped, and `font-weight`/`font-style: inherit` keep the parent's emphasis
 //       instead of resetting it, so lines holding either move. The framing is unchanged.
 // v107: a block's font-size on an SD-card font scales its words (headings were body size).
-constexpr uint8_t SECTION_FILE_VERSION = 107;
+// v108: upstream merge (their v65 to v67): justification counts a literal space after a hyphen
+//       or ellipsis, and after visual reordering only a space that continues into a word; a
+//       no-break space carried across a soft wrap no longer indents the next line.
+constexpr uint8_t SECTION_FILE_VERSION = 108;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
