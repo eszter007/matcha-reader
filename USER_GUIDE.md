@@ -939,7 +939,7 @@ To install a pack:
 2. Download the `.cplang` file for your language (e.g. `RU.cplang`) and copy it into the folder `/.crosspoint/lang/` on the SD card. Create the folder if it does not exist.
 3. Put the card back and choose the language in **Settings → System → Language**.
 
-**Chinese:** The packs are `ZHS.cplang` (简体中文, Simplified) and `ZHT.cplang` (繁體中文, Traditional). The menus need a Chinese font, so install one first: Noto Sans SC or TC, from the [fonts release](https://github.com/eszter007/matcha-reader-assets/releases/tag/fonts-1.0) (`chinese-fonts-simplified.zip` or `chinese-fonts-traditional.zip`).
+**Chinese:** The packs are `ZHS.cplang` (简体中文, Simplified) and `ZHT.cplang` (繁體中文, Traditional). The menus need a Chinese font, so install one first: Noto Sans SC or TC, from the [fonts release](https://github.com/eszter007/matcha-reader-assets/releases/tag/fonts-2.0) (`chinese-fonts-simplified.zip` or `chinese-fonts-traditional.zip`).
 
 **After a firmware update**, download the packs from the new release too. Each pack only fits the firmware it was built for. The device refuses an old pack and shows English instead of wrong text.
 

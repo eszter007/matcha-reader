@@ -170,14 +170,14 @@ The BOOX Picco has no Wi-Fi updates: flash each new release over USB, with the s
 
 | Language | What to do |
 | --- | --- |
-| Japanese | Download `japanese-dictionaries.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-1.0) and copy its `dictionaries` folder to the root of the card. It holds `dictionaries/jp/` |
-| Mandarin | Download `dictionaries-zh-simplified.zip` or `dictionaries-zh-traditional.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-1.0) and copy its `dictionaries` folder to the root of the card. Install one, not both |
-| Cantonese | Download `dictionaries-yue.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-1.0) and copy its `dictionaries` folder to the root of the card |
+| Japanese | Download `japanese-dictionaries.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card. It holds `dictionaries/jp/` |
+| Mandarin | Download `dictionaries-zh-simplified.zip` or `dictionaries-zh-traditional.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card. Install one, not both |
+| Cantonese | Download `dictionaries-yue.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card |
 | Any other | Copy a StarDict dictionary into `dictionaries/<lang>/<name>/`, for example `dictionaries/fr/larousse/` |
 
 To convert your own, use the [browser tool](https://eszter007.github.io/matcha-reader-tools/). Step by step: [docs/dictionary-setup.md](docs/dictionary-setup.md).
 
-**3. Install a font** (required for Chinese, optional for Japanese). Download the zip for your language from the [fonts release](https://github.com/eszter007/matcha-reader-assets/releases/tag/fonts-1.0) and copy the `fonts` folder inside it to the root of the card.
+**3. Install a font** (required for Chinese, optional for Japanese). Download the zip for your language from the [fonts release](https://github.com/eszter007/matcha-reader-assets/releases/tag/fonts-2.0) and copy the `fonts` folder inside it to the root of the card.
 
 | You read | Zip | Fonts |
 | --- | --- | --- |

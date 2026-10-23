@@ -290,8 +290,8 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           # Fonts and dictionaries are released separately; bump these when they change.
           ASSETS_REPO: eszter007/matcha-reader-assets
-          FONTS_RELEASE: fonts-1.0
-          DICTIONARIES_RELEASE: dictionaries-1.0
+          FONTS_RELEASE: fonts-2.0
+          DICTIONARIES_RELEASE: dictionaries-2.0
         run: |
           set -euo pipefail
           # GitHub lists assets alphabetically, so the top of the notes says which file is for
