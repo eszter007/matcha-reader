@@ -232,9 +232,35 @@ jobs:
           mapfile -t packs < <(find dist -type f -name '*.cplang' | sort)
           [ "${#packs[@]}" -gt 0 ] || { echo "No .cplang packs among the built artifacts" >&2; exit 1; }
           {
-            echo "Language packs for Matcha Reader $RELEASE_TAG. They only work with that firmware version."
+            echo "Menu languages for Matcha Reader **$RELEASE_TAG**. English, Japanese, Spanish, French and German"
+            echo "are built in. Every other language needs its file from here."
             echo
-            echo 'Download the file for your language and copy it to `/.crosspoint/lang/` on the SD card, then pick the language in Settings.'
+            echo "These files only work on $RELEASE_TAG. After a firmware update, download your language again"
+            echo "from the release with the new version number."
+            echo
+            echo '### 1. Download the file for your language'
+            echo
+            echo 'Only that one file, e.g. `RU.cplang` for Русский. No unzipping needed.'
+            echo
+            echo '### 2. Copy it to the SD card'
+            echo
+            echo 'Put the card in your computer. Open the hidden `.crosspoint` folder on the card (it is there'
+            echo 'once the device has used the card) and make a folder called `lang` inside it, if there is none yet.'
+            echo 'Copy the file into `lang`:'
+            echo
+            echo '```'
+            echo 'SD card'
+            echo '└── .crosspoint'
+            echo '    └── lang'
+            echo '        └── RU.cplang'
+            echo '```'
+            echo
+            echo 'Folders that start with a dot are hidden on most computers. On a Mac press Cmd+Shift+. in'
+            echo 'Finder to show them; on Windows turn on View → Show → Hidden items.'
+            echo
+            echo '### 3. Choose the language on the device'
+            echo
+            echo 'Put the card back and pick your language in **Settings → System → Language**.'
             echo
             echo '| Language | File |'
             echo '|---|---|'
