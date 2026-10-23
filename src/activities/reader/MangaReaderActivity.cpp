@@ -1002,6 +1002,7 @@ void MangaReaderActivity::renderFullPage() {
   config.maxHeight = screenH;
   config.useGrayscale = true;
   config.useDithering = true;
+  config.whitenPaper = true;
   config.cachePath = cachePath;
 
   // 1-bit BMP fast path: pure black/white content needs no 4-level gray refresh, so render a
@@ -1212,6 +1213,7 @@ void MangaReaderActivity::renderPanelZoom() {
   config.allowUpscale = true;  // panel zoom: a small mono crop should fill the screen
   config.useGrayscale = !bwOnly;
   config.useDithering = !bwOnly;
+  config.whitenPaper = true;
   config.cachePath = cachePath;
 
   // One open for every pass this render performs -- the BW rebuild here plus, on a deferred gray
@@ -1495,6 +1497,7 @@ void MangaReaderActivity::workerWarmNextPage() {
   config.maxHeight = g.screenH;
   config.useGrayscale = true;
   config.useDithering = true;
+  config.whitenPaper = true;
   config.cacheOnly = true;
   config.shouldCancel = &prefetchShouldCancel;
   config.cancelCtx = this;
@@ -1589,6 +1592,7 @@ void MangaReaderActivity::workerWarmPanel() {
   config.allowUpscale = true;  // same panel geometry as the on-screen render above
   config.useGrayscale = true;
   config.useDithering = true;
+  config.whitenPaper = true;
   config.cacheOnly = true;
   config.shouldCancel = &prefetchShouldCancel;
   config.cancelCtx = this;
