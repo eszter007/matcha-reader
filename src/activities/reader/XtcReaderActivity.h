@@ -41,9 +41,9 @@ class XtcReaderActivity final : public ReaderActivity {
   void loadCachedBookmarks();
   void updateBookmarkFlag();
 
-  // Page pixel buffer, allocated once (a full XTH 2-bit page is ~104KB) and reused for every page
-  // turn. Page dimensions are fixed per file, so one buffer serves all pages -- avoids a large
-  // malloc/free on every turn (slow) and grabs the block once while the heap is freshest.
+  // Page pixel buffer (a 1-bit page, or plane 1 of a 2-bit page), allocated once and reused for
+  // every page turn. Page dimensions are fixed per file, so one buffer serves all pages -- avoids a
+  // large malloc/free on every turn (slow) and grabs the block once while the heap is freshest.
   uint8_t* pageBuffer = nullptr;
   size_t pageBufferSize = 0;
   bool ensurePageBuffer(size_t needed);
