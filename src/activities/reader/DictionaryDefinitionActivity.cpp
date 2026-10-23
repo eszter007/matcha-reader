@@ -149,7 +149,7 @@ void DictionaryDefinitionActivity::onExit() {
 
 DictionaryDefinitionActivity::BodyArea DictionaryDefinitionActivity::bodyArea() const {
   const auto body = DictionaryPanel::compute(renderer).body;
-  return {body.width, body.height};
+  return {body.x, body.y, body.width, body.height};
 }
 
 // Styled path: lay the HTML definition out through the EPUB chapter parser
