@@ -21,9 +21,9 @@
 namespace {
 
 // Tone adjustments applied before the Bayer screen; see RenderConfig::lightenBy and
-// RenderConfig::stretchPaperAndInk.
+// RenderConfig::whitenPaper.
 inline uint8_t toneGray(uint8_t gray, const RenderConfig& config) {
-  if (config.stretchPaperAndInk) gray = stretchPaperAndInk(gray);
+  if (config.whitenPaper) gray = whitenPaper(gray);
   if (config.lightenBy == 0) return gray;
   const int lifted = gray + config.lightenBy;
   return lifted > 255 ? 255 : static_cast<uint8_t>(lifted);

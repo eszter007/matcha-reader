@@ -45,10 +45,10 @@ struct RenderConfig {
   // two in line without touching the shared dither routine.
   uint8_t lightenBy = 0;
 
-  // Maps grays at or below 16 to black and at or above 240 to white before dithering. Scanned
-  // manga rarely has pure white paper or pure black ink, and the Bayer screen turns the
-  // leftover tint into a speckle over the whole page.
-  bool stretchPaperAndInk = false;
+  // Maps grays at or above 240 to white before dithering, stretching the rest to match. Scanned
+  // manga rarely has pure white paper, and the Bayer screen turns the leftover tint into a
+  // speckle over the whole page. Dark tones are left alone so dense screentone does not fill in.
+  bool whitenPaper = false;
 
   // Background-prefetch mode: stream ONLY the .2bp pixel cache (cachePath, required) to SD and
   // never touch the framebuffer or read any renderer state. Because nothing shared with the
