@@ -4,6 +4,7 @@
 #include <BoardConfig.h>
 #include <FontCacheManager.h>
 #include <HalDisplay.h>
+#include <HalFrontlight.h>
 #include <HalPowerManager.h>
 #include <Memory.h>
 #include <VectorFontSupport.h>
@@ -140,11 +141,13 @@ void ActivityManager::loop() {
       // The header back button shares this band; its taps stay Back.
       statusBarTap = mappedInput.wasScreenTapped(tx, ty) && ty < 44 && !HeaderBackTapTarget::contains(tx, ty);
     }
-    if (statusBarTap || mappedInput.wasLightPanelGesture()) {
-      if (currentActivity->name == "FrontlightPanel") {
-        popActivity();
-        return;
-      }
+    const bool lightPanelRequested = statusBarTap || mappedInput.wasLightPanelGesture();
+    if (lightPanelRequested && currentActivity->name == "FrontlightPanel") {
+      popActivity();
+      return;
+    }
+    // Only boards whose frontlight was detected get the panel.
+    if (lightPanelRequested && Frontlight.present()) {
       haptic_feedback::touchAction();
       pushActivity(std::make_unique<FrontlightPanelActivity>(renderer, mappedInput));
       return;

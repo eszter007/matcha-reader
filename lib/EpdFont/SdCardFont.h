@@ -220,12 +220,7 @@ class SdCardFont {
       uint32_t nextCp = 0;
       uint32_t glyph = 0;
     };
-    // True when bmpIntervals/fullIntervals above points at another style's table instead of
-    // this style's own allocation (see the sharing check at the end of the interval-loading
-    // loop in load()). Regular/bold/italic weights of the same family almost always cover the
-    // identical codepoint set, so a CJK font's multi-KB-per-style interval table is otherwise
-    // paid once per style for no reason. freeStyleAll() must not delete[] a borrowed pointer.
-    bool intervalsShared = false;
+    // The table may be shared with other styles and other loaded fonts; see releaseIntervals().
     // Codepoints above the BMP (rare kanji from JIS X 0213 plane 2) sort after every BMP
     // interval, so they form a tail of the on-disk table. Keeping that tail resident cost
     // ~3.5KB per style -- it also forces every interval to the 12-byte form -- on a heap
@@ -439,14 +434,25 @@ class SdCardFont {
   void applyGlyphMissCallback(uint8_t styleIdx);
   int32_t findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) const;
   static int32_t findPackedGlyphIndex(const PerStyle& s, uint32_t codepoint);
+  // Drops this style's reference to its interval table and frees the table with the last one.
+  static void releaseIntervals(PerStyle& s);
   // False for a glyph entry the file cannot back (a corrupt .cpfont): its data length must be the
   // packed size of its pixels and its bitmap must lie inside the file. Logs the first few per font.
   bool glyphEntryValid(const PerStyle& s, const EpdGlyph& glyph, uint32_t codepoint);
   // A corrupt entry, drawn as nothing at the font's full-width advance.
   EpdGlyph blankGlyph(uint8_t styleIdx) const;
-  // Resident run `j` of `o`'s table. A packed table is read in order through `cursor`, so callers
+  // A resident interval table in whichever form it was loaded (see releaseIntervals()).
+  struct IntervalView {
+    const EpdUnicodeInterval* full = nullptr;
+    const PerStyle::BmpInterval16* bmp = nullptr;
+    const uint8_t* packed = nullptr;
+    uint32_t residentCount = 0;
+  };
+  // `entry` is a shared-table registry entry (SdCardFont.cpp).
+  static IntervalView viewOf(const void* entry);
+  // Resident run `j` of `o`. A packed table is read in order through `cursor`, so callers
   // ask for j = 0, 1, 2, ... False past the resident runs.
-  static bool residentRecord(const PerStyle& o, uint32_t j, PerStyle::PackCursor& cursor, EpdUnicodeInterval& out);
+  static bool residentRecord(const IntervalView& o, uint32_t j, PerStyle::PackCursor& cursor, EpdUnicodeInterval& out);
   int fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCount, uint8_t styleMask);
   int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly, bool loadKernLig,
                    bool accumulate);

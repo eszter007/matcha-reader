@@ -118,6 +118,49 @@ bool ensureArrayCapacity(T*& buf, CapT& capacity, const uint32_t needed) {
   return buf != nullptr;
 }
 
+// Interval tables are shared by content across every loaded SdCardFont. The styles of one file and
+// the sizes of one family almost always cover the same codepoints, and on a broad CJK font each
+// copy is tens of KB. An entry is one resident table in whichever form it was loaded (full,
+// compact BMP or packed); the arrays belong to the registry and go with the last reference.
+struct SharedIntervals {
+  const void* full = nullptr;    // EpdUnicodeInterval[]
+  const void* bmp = nullptr;     // PerStyle::BmpInterval16[]
+  const void* packed = nullptr;  // uint8_t[] varint runs
+  const void* blocks = nullptr;  // PerStyle::PackBlock[] for `packed`
+  uint32_t residentCount = 0;
+  uint32_t packBlockCount = 0;
+  uint32_t packedBytes = 0;
+  uint16_t refs = 0;
+  const void* key() const { return packed ? packed : bmp ? bmp : full; }
+};
+constexpr size_t MAX_SHARED_INTERVALS = 16;
+SharedIntervals sharedIntervals[MAX_SHARED_INTERVALS];
+
+// Fonts load on the main task and on the render task (the word-lookup fallback), and activity
+// onEnter() runs without RenderLock. A table freed by one task while the other compares against it
+// would be read after free, so the registry has its own lock. It guards the registry only: callers
+// still owe RenderLock for changes to the font maps. Recursive, because load()'s error paths free
+// styles while the loading style holds it.
+class RegistryLock {
+ public:
+  RegistryLock() {
+    static StaticSemaphore_t storage;
+    static SemaphoreHandle_t mutex = xSemaphoreCreateRecursiveMutexStatic(&storage);
+    mutex_ = mutex;
+    xSemaphoreTakeRecursive(mutex_, portMAX_DELAY);
+  }
+  ~RegistryLock() { unlock(); }
+  void unlock() {
+    if (mutex_) xSemaphoreGiveRecursive(mutex_);
+    mutex_ = nullptr;
+  }
+  RegistryLock(const RegistryLock&) = delete;
+  RegistryLock& operator=(const RegistryLock&) = delete;
+
+ private:
+  SemaphoreHandle_t mutex_;
+};
+
 }  // namespace
 
 SdCardFont::~SdCardFont() {
@@ -200,13 +243,22 @@ void SdCardFont::freeStyleMiniKern(PerStyle& s) {
   s.miniKernBuilt = false;
 }
 
-void SdCardFont::freeStyleAll(PerStyle& s) {
-  freeStyleMiniData(s);
-  // A shared table is owned by the style it was copied from -- that style's own
-  // freeStyleAll() call frees it. Deleting it here too would double-free.
-  if (!s.intervalsShared) {
+void SdCardFont::releaseIntervals(PerStyle& s) {
+  RegistryLock lock;
+  const void* table = s.intervalsArePacked  ? static_cast<const void*>(s.packedIntervals)
+                      : s.intervalsAreBmp16 ? static_cast<const void*>(s.bmpIntervals)
+                                            : static_cast<const void*>(s.fullIntervals);
+  // A table the full registry could not take is this style's alone.
+  bool lastReference = true;
+  for (auto& entry : sharedIntervals) {
+    if (!table || entry.key() != table) continue;
+    lastReference = --entry.refs == 0;
+    if (lastReference) entry = SharedIntervals{};
+    break;
+  }
+  if (lastReference) {
     // Each table goes back to the allocator it came from: fullIntervals through the font
-    // allocator (psramNewArray), the 16-bit BMP form through new[]. Crossing them is undefined.
+    // allocator (psramNewArray), the other forms through new[]. Crossing them is undefined.
     psramDeleteArray(s.fullIntervals);
     delete[] s.bmpIntervals;
     delete[] s.packedIntervals;
@@ -219,8 +271,12 @@ void SdCardFont::freeStyleAll(PerStyle& s) {
   s.packBlockCount = 0;
   s.packedBytes = 0;
   s.intervalsArePacked = false;
-  s.intervalsShared = false;
   s.intervalsAreBmp16 = false;
+}
+
+void SdCardFont::freeStyleAll(PerStyle& s) {
+  freeStyleMiniData(s);
+  releaseIntervals(s);
   s.residentIntervalCount = 0;
   s.tailIntervalCount = 0;
   s.tailIntervalFileOffset = 0;
@@ -751,23 +807,19 @@ bool SdCardFont::load(const char* path) {
     uint32_t prevLast = 0;
     uint32_t packedBytes = 0;
     EpdUnicodeInterval iv{};
-    PerStyle::PackCursor shareCursors[MAX_STYLES] = {};
+    PerStyle::PackCursor shareCursors[MAX_SHARED_INTERVALS] = {};
 
-    // Regular/bold/italic weights of the same family almost always cover the identical codepoint
-    // set, so a later style's table is usually a byte-for-byte copy of an earlier one's. Sharing
-    // it saves a full table per style, which on a broad CJK font is tens of KB, and saves the
-    // PEAK rather than just the residency: allocating first and de-duplicating afterwards still
-    // needs both tables at once, and that peak is what fails on a tight heap.
-    // The decision rides along with the validation read below -- every record is already being
-    // read here -- so it costs no second pass over the table and no buffer to hold one.
-    // A style stays a candidate only while its table has matched every record so far.
-    uint8_t shareCandidates = 0;
-    for (uint8_t k = 0; k < i; k++) {
-      if (!hasStyle(k)) continue;
-      const auto& owner = styleData(k);
-      if (owner.header.intervalCount != s.header.intervalCount) continue;
-      if (!owner.hasCoverageIndex()) continue;
-      shareCandidates |= static_cast<uint8_t>(1u << k);
+    // A loaded table with this exact content -- another style of this file, or another size of
+    // this family -- is shared instead of copied (see SharedIntervals). That saves the PEAK too:
+    // allocating first and de-duplicating afterwards would still need both tables at once, which
+    // is what fails on a tight heap. The comparison rides along with the validation read below,
+    // so it costs no second pass and no buffer. A table stays a candidate only while it has
+    // matched every resident record so far. The lock keeps the candidates alive until the
+    // decision; a font whose above-BMP tail differs can still share its resident runs.
+    RegistryLock registryLock;
+    uint16_t shareCandidates = 0;
+    for (size_t k = 0; k < MAX_SHARED_INTERVALS; k++) {
+      if (sharedIntervals[k].key()) shareCandidates |= static_cast<uint16_t>(1u << k);
     }
     for (uint32_t j = 0; j < s.header.intervalCount; ++j) {
       if (file.read(reinterpret_cast<uint8_t*>(&iv), sizeof(iv)) != sizeof(iv)) {
@@ -803,13 +855,13 @@ bool SdCardFont::load(const char* path) {
         if (iv.last > UINT16_MAX || iv.offset > UINT16_MAX) canUseBmp16 = false;
         packedBytes += varintSize(iv.first - (j == 0 ? 0 : prevLast + 1)) + varintSize(span - 1);
       }
-      for (uint8_t k = 0; k < i && shareCandidates != 0; k++) {
+      // Only the resident runs are shared; each font keeps its own above-BMP tail on the card.
+      for (size_t k = 0; iv.first <= UINT16_MAX && k < MAX_SHARED_INTERVALS && shareCandidates != 0; k++) {
         if ((shareCandidates & (1u << k)) == 0) continue;
-        // An above-BMP record is past the owner's resident runs, so it never matches here.
         EpdUnicodeInterval rec{};
-        const bool same = residentRecord(styleData(k), j, shareCursors[k], rec) && rec.first == iv.first &&
-                          rec.last == iv.last && rec.offset == iv.offset;
-        if (!same) shareCandidates &= static_cast<uint8_t>(~(1u << k));
+        const bool same = residentRecord(viewOf(&sharedIntervals[k]), j, shareCursors[k], rec) &&
+                          rec.first == iv.first && rec.last == iv.last && rec.offset == iv.offset;
+        if (!same) shareCandidates &= static_cast<uint16_t>(~(1u << k));
       }
       expectedOffset += span;
       prevLast = iv.last;
@@ -822,101 +874,48 @@ bool SdCardFont::load(const char* path) {
                            packedBytes <= UINT16_MAX &&
                            packedBytes + packBlockCount * sizeof(PerStyle::PackBlock) < s.residentIntervalCount * 6u;
 
-    // Survived every record: alias the earlier style's table instead of allocating a copy.
-    // freeStyleAll() releases the table through its owning style.
-    for (uint8_t k = 0; k < i && shareCandidates != 0; k++) {
+    // Survived every resident record: share that table instead of allocating a copy.
+    bool shared = false;
+    for (size_t k = 0; k < MAX_SHARED_INTERVALS && shareCandidates != 0; k++) {
       if ((shareCandidates & (1u << k)) == 0) continue;
-      auto& owner = styleData(k);
-      // Identical content can still be held in the other resident form when the two styles
-      // disagree on glyph count; aliasing across forms would misread the table.
-      if (owner.intervalsAreBmp16 != canUseBmp16 || owner.intervalsArePacked != usePacked) continue;
-      s.bmpIntervals = owner.bmpIntervals;
-      s.fullIntervals = owner.fullIntervals;
-      s.intervalsAreBmp16 = owner.intervalsAreBmp16;
-      s.packedIntervals = owner.packedIntervals;
-      s.packBlocks = owner.packBlocks;
-      s.packBlockCount = owner.packBlockCount;
-      s.packedBytes = owner.packedBytes;
-      s.intervalsArePacked = owner.intervalsArePacked;
-      s.intervalsShared = true;
-      LOG_DBG("SDCF", "Style %u: sharing style %u's %u-interval table (%u B not allocated)", i, k,
-              s.header.intervalCount,
-              s.header.intervalCount * (canUseBmp16 ? 6u : static_cast<uint32_t>(sizeof(EpdUnicodeInterval))));
+      auto& entry = sharedIntervals[k];
+      // Identical runs can still be held in another resident form when the two fonts disagree on
+      // glyph count; aliasing across forms would misread the table.
+      const bool entryPacked = entry.packed != nullptr;
+      const bool entryBmp16 = !entryPacked && entry.bmp != nullptr;
+      if (entry.residentCount != s.residentIntervalCount || entryPacked != usePacked ||
+          (!usePacked && entryBmp16 != canUseBmp16)) {
+        continue;
+      }
+      // The tables are never written after loading, hence the const_casts.
+      s.fullIntervals = static_cast<EpdUnicodeInterval*>(const_cast<void*>(entry.full));
+      s.bmpIntervals = static_cast<PerStyle::BmpInterval16*>(const_cast<void*>(entry.bmp));
+      s.packedIntervals = static_cast<uint8_t*>(const_cast<void*>(entry.packed));
+      s.packBlocks = static_cast<PerStyle::PackBlock*>(const_cast<void*>(entry.blocks));
+      s.packBlockCount = entry.packBlockCount;
+      s.packedBytes = entry.packedBytes;
+      s.intervalsArePacked = entryPacked;
+      s.intervalsAreBmp16 = entryBmp16;
+      entry.refs++;
+      shared = true;
+      LOG_DBG("SDCF", "Style %u: sharing a loaded %u-interval table (%u B not allocated)", i, s.residentIntervalCount,
+              entryPacked
+                  ? s.packedBytes + s.packBlockCount * static_cast<uint32_t>(sizeof(PerStyle::PackBlock))
+                  : s.residentIntervalCount * (entryBmp16 ? 6u : static_cast<uint32_t>(sizeof(EpdUnicodeInterval))));
       break;
     }
 
+    // A shared table holds a reference now; a private one is registered once it is complete.
+    registryLock.unlock();
+
     // Only the allocate-and-read path below needs the records again; a shared style is done.
-    if (!s.intervalsShared && !file.seekSet(s.intervalsFileOffset)) {
+    if (!shared && !file.seekSet(s.intervalsFileOffset)) {
       LOG_ERR("SDCF", "Failed to seek back to intervals for style %u", i);
       freeAll();
       return false;
     }
 
-    // Regular/bold/italic weights of the same family almost always cover the identical codepoint
-    // set, so a later style's table is usually a byte-for-byte copy of an earlier one's. Compare
-    // BEFORE allocating and alias on a match: allocating first and de-duplicating afterwards
-    // costs a PEAK of one table per style for a copy that is about to be freed, and on a broad
-    // CJK font that peak is what fails. Measured on NotoSansJP at 20pt: 4432 intervals = 26592 B
-    // per style, against a largest free block of ~32 KB -- one table fits, two never do, so the
-    // font could not load at all for a duplicate it would have discarded a moment later.
-    // freeStyleAll() skips delete[] when intervalsShared is set, so only the owner frees.
-    for (uint8_t k = 0; k < i && !s.intervalsShared; k++) {
-      if (!hasStyle(k)) continue;
-      auto& owner = styleData(k);
-      if (owner.residentIntervalCount != s.residentIntervalCount) continue;
-      if (owner.intervalsAreBmp16 != canUseBmp16 || owner.intervalsArePacked != usePacked) continue;
-      if (!owner.hasCoverageIndex()) continue;
-
-      // Streamed in small batches: the whole point is to not need a second table's worth of
-      // heap, so the comparison buffer stays on the stack and well inside the task's budget.
-      static constexpr uint32_t CMP_BATCH = 16;
-      EpdUnicodeInterval cmp[CMP_BATCH];
-      PerStyle::PackCursor cursor;
-      bool identical = true;
-      for (uint32_t done = 0; done < s.residentIntervalCount && identical;) {
-        const uint32_t batch = std::min(CMP_BATCH, s.residentIntervalCount - done);
-        const size_t wantBytes = batch * sizeof(EpdUnicodeInterval);
-        if (file.read(reinterpret_cast<uint8_t*>(cmp), wantBytes) != static_cast<int>(wantBytes)) {
-          identical = false;
-          break;
-        }
-        for (uint32_t b = 0; b < batch; ++b) {
-          const EpdUnicodeInterval& f = cmp[b];
-          const uint32_t at = done + b;
-          EpdUnicodeInterval rec{};
-          const bool same = residentRecord(owner, at, cursor, rec) && rec.first == f.first && rec.last == f.last &&
-                            rec.offset == f.offset;
-          if (!same) {
-            identical = false;
-            break;
-          }
-        }
-        done += batch;
-      }
-
-      if (identical) {
-        s.bmpIntervals = owner.bmpIntervals;
-        s.fullIntervals = owner.fullIntervals;
-        s.intervalsAreBmp16 = owner.intervalsAreBmp16;
-        s.packedIntervals = owner.packedIntervals;
-        s.packBlocks = owner.packBlocks;
-        s.packBlockCount = owner.packBlockCount;
-        s.packedBytes = owner.packedBytes;
-        s.intervalsArePacked = owner.intervalsArePacked;
-        s.intervalsShared = true;
-        LOG_DBG("SDCF", "Style %u: sharing style %u's %u-interval table (%u B not allocated)", i, k,
-                s.residentIntervalCount,
-                s.residentIntervalCount * (canUseBmp16 ? 6u : static_cast<uint32_t>(sizeof(EpdUnicodeInterval))));
-      }
-      // Either way the compare consumed the table; the allocate-and-read path below re-seeks.
-      if (!identical && !file.seekSet(s.intervalsFileOffset)) {
-        LOG_ERR("SDCF", "Failed to re-seek intervals for style %u", i);
-        freeAll();
-        return false;
-      }
-    }
-
-    if (s.intervalsShared) {
+    if (shared) {
       // Fall through to the per-style stub/metadata setup below without touching the table.
     } else if (usePacked) {
       s.packedIntervals = new (std::nothrow) uint8_t[packedBytes];
@@ -998,6 +997,22 @@ bool SdCardFont::load(const char* path) {
         LOG_ERR("SDCF", "Failed to read intervals for style %u", i);
         freeAll();
         return false;
+      }
+    }
+    if (!shared) {
+      // Offer the complete table to later loads. With the registry full it stays private.
+      RegistryLock lock;
+      for (auto& entry : sharedIntervals) {
+        if (entry.key()) continue;
+        entry.full = s.fullIntervals;
+        entry.bmp = s.bmpIntervals;
+        entry.packed = s.packedIntervals;
+        entry.blocks = s.packBlocks;
+        entry.residentCount = s.residentIntervalCount;
+        entry.packBlockCount = s.packBlockCount;
+        entry.packedBytes = s.packedBytes;
+        entry.refs = 1;
+        break;
       }
     }
     if (s.tailIntervalCount > 0 || s.intervalsArePacked) {
@@ -1120,14 +1135,24 @@ int32_t SdCardFont::findPackedGlyphIndex(const PerStyle& s, const uint32_t codep
   return -1;
 }
 
-bool SdCardFont::residentRecord(const PerStyle& o, const uint32_t j, PerStyle::PackCursor& cursor,
+SdCardFont::IntervalView SdCardFont::viewOf(const void* entry) {
+  const auto& e = *static_cast<const SharedIntervals*>(entry);
+  IntervalView v;
+  v.full = static_cast<const EpdUnicodeInterval*>(e.full);
+  v.bmp = static_cast<const PerStyle::BmpInterval16*>(e.bmp);
+  v.packed = static_cast<const uint8_t*>(e.packed);
+  v.residentCount = e.residentCount;
+  return v;
+}
+
+bool SdCardFont::residentRecord(const IntervalView& o, const uint32_t j, PerStyle::PackCursor& cursor,
                                 EpdUnicodeInterval& out) {
-  if (j >= o.residentIntervalCount) return false;
-  if (o.intervalsArePacked) {
-    const uint8_t* p = o.packedIntervals + cursor.byte;
+  if (j >= o.residentCount) return false;
+  if (o.packed) {
+    const uint8_t* p = o.packed + cursor.byte;
     const uint32_t gap = readVarint(p);
     const uint32_t len = readVarint(p) + 1;
-    cursor.byte = static_cast<uint32_t>(p - o.packedIntervals);
+    cursor.byte = static_cast<uint32_t>(p - o.packed);
     out.first = cursor.nextCp + gap;
     out.last = out.first + len - 1;
     out.offset = cursor.glyph;
@@ -1135,13 +1160,13 @@ bool SdCardFont::residentRecord(const PerStyle& o, const uint32_t j, PerStyle::P
     cursor.glyph += len;
     return true;
   }
-  if (o.intervalsAreBmp16) {
-    out.first = o.bmpIntervals[j].first;
-    out.last = o.bmpIntervals[j].last;
-    out.offset = o.bmpIntervals[j].offset;
+  if (o.bmp) {
+    out.first = o.bmp[j].first;
+    out.last = o.bmp[j].last;
+    out.offset = o.bmp[j].offset;
     return true;
   }
-  out = o.fullIntervals[j];
+  out = o.full[j];
   return true;
 }
 

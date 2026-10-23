@@ -33,6 +33,13 @@ namespace fui = freeink::ui;
 
 namespace {
 constexpr int SIDE_PADDING = 12;
+
+// Side clearance for the footer text in the panel's bottom corners.
+int bottomCornerClearance() {
+  const auto& board = BoardConfig::ACTIVE;
+  return board.bottomCornerRadius != 0 ? board.bottomCornerRadius : board.cornerRadius;
+}
+
 constexpr unsigned long LONG_PRESS_MS = 1000;
 
 constexpr int RECENT_TAB = 0;
@@ -1036,7 +1043,10 @@ void LibraryListActivity::drawPositionReadout() const {
   const char* positionFormat = groupsCollapsed ? tr(STR_LIBRARY_GROUP_POSITION) : tr(STR_LIBRARY_POSITION);
   snprintf(buf, sizeof(buf), positionFormat, selectedEntry() + 1, count);
   const int width = renderer.getTextWidth(SMALL_FONT_ID, buf);
-  const int x = renderer.getScreenWidth() - width - SIDE_PADDING;
+  // Bottom-right, above the tab bar and clear of the bezel and rounded corner.
+  const Rect area = UITheme::getContentArea(renderer);
+  const int right = std::max(renderer.getScreenWidth() - area.x - area.width, bottomCornerClearance());
+  const int x = renderer.getScreenWidth() - right - width - SIDE_PADDING;
   const int y = renderer.getScreenHeight() - HomeTabBar::bottomInset() - renderer.getLineHeight(SMALL_FONT_ID);
   renderer.drawText(SMALL_FONT_ID, x, y, buf, true);
 }
@@ -1060,8 +1070,11 @@ void LibraryListActivity::drawHoldHelp() const {
   if (!help) return;
 
   const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  const Rect area = UITheme::getContentArea(renderer);
+  const int left = std::max(area.x, bottomCornerClearance());
   const int y = renderer.getScreenHeight() - HomeTabBar::bottomInset() - lineHeight;
-  GUI.drawHelpText(renderer, Rect{SIDE_PADDING, y, renderer.getScreenWidth() / 2 - SIDE_PADDING, lineHeight}, help);
+  GUI.drawHelpText(renderer,
+                   Rect{left + SIDE_PADDING, y, renderer.getScreenWidth() / 2 - left - SIDE_PADDING, lineHeight}, help);
 }
 
 // OptionPopup is a self-contained modal: it owns the whole frame (hints

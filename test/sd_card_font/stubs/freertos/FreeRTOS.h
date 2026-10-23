@@ -18,3 +18,7 @@ inline SemaphoreHandle_t xSemaphoreCreateMutex() {
 inline bool xSemaphoreTake(SemaphoreHandle_t, uint32_t) { return true; }
 inline bool xSemaphoreGive(SemaphoreHandle_t) { return true; }
 inline void vSemaphoreDelete(SemaphoreHandle_t) {}
+struct StaticSemaphore_t {};
+inline SemaphoreHandle_t xSemaphoreCreateRecursiveMutexStatic(StaticSemaphore_t*) { return xSemaphoreCreateMutex(); }
+inline bool xSemaphoreTakeRecursive(SemaphoreHandle_t, uint32_t) { return true; }
+inline bool xSemaphoreGiveRecursive(SemaphoreHandle_t) { return true; }
