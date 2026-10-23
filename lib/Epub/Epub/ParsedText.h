@@ -206,15 +206,6 @@ class ParsedText {
   std::string_view lastWord() const { return wordStore.view(words.back()); }
   // Base text behind a ruby group, for the same harvest (a group ruby spans several words).
   std::string_view wordAt(const size_t i) const { return wordStore.view(words[i]); }
-  // Delegates so the sizing rule lives in ONE place: ensureRubyCapacity() only reserve()s, it
-  // does not resize, so writing rubyTexts.back() while the vector is still empty (no ruby seen
-  // in this block yet) wrote past the end -- device crash: Store access fault inside
-  // std::string::operator= during an incremental horizontal build, reached from the
-  // text-emphasis (bouten) path in flushPartWordBuffer.
-  void setLastWordRuby(const std::string& ruby) {
-    if (words.empty()) return;
-    setRubyForWordAt(words.size() - 1, ruby);
-  }
   std::string getRubyTextAt(size_t index) const { return index < rubyTexts.size() ? rubyTexts[index] : std::string(); }
   void ensureRubyCapacity();
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }

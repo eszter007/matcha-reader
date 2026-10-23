@@ -297,7 +297,7 @@ namespace {
 // v108: upstream merge (their v65 to v67): justification counts a literal space after a hyphen
 //       or ellipsis, and after visual reordering only a space that continues into a word; a
 //       no-break space carried across a soft wrap no longer indents the next line.
-constexpr uint8_t SECTION_FILE_VERSION = 108;
+constexpr uint8_t SECTION_FILE_VERSION = 109;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

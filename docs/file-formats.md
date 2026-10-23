@@ -95,6 +95,12 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 109 (fork numbering)
+
+The layout format is unchanged. CSS text-emphasis marks (bouten) are now stored on each
+character of an emphasised CJK run instead of all on the last one. Older sections are rebuilt so
+the marks line up with their characters.
+
 ### Version 108 (fork numbering)
 
 Upstream merge (their versions 65 to 67). The layout format is unchanged. Justification now
