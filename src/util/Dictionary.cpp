@@ -399,7 +399,9 @@ uint32_t Dictionary::bisectSamples(HalFile& sidecar, HalFile& source, uint32_t s
     // key or it descends on "Intelligenz," while the scan looks for "Intelligenz" and lands on
     // the wrong offset (Babylon's Duden conversion, see normalizeIndexHeadword).
     normalizeIndexHeadword(wordBuf);
-    if (StringUtils::asciiCaseCmp(wordBuf, target) <= 0) {
+    // Strictly below: a headword listed several times may start before the last sample equal to
+    // it, and the scan has to see the whole run.
+    if (StringUtils::asciiCaseCmp(wordBuf, target) < 0) {
       lo = mid;
     } else {
       hi = mid - 1;
@@ -413,8 +415,9 @@ uint32_t Dictionary::bisectSamples(HalFile& sidecar, HalFile& source, uint32_t s
 // absolutely first, so a shared handle carries no position state between calls.
 DictLocation Dictionary::locate(LookupSession& session, const char* target, std::string* matchedHeadwordOut) {
   DictLocation result;
+  sameHeadwordCount = 0;
 
-  // Bisect the sampled offsets to the last sample whose headword <= target.
+  // Bisect the sampled offsets to the last sample whose headword < target.
   const uint32_t startByte = bisectSamples(session.qidx, session.idx, session.sampleCount, target);
 
   // Linear scan of at most SAMPLE_INTERVAL entries: headword NUL, BE32 offset,
@@ -435,12 +438,16 @@ DictLocation Dictionary::locate(LookupSession& session, const char* target, std:
     if (session.idx.read(suffix, 8) != 8) break;
 
     const int cmp = StringUtils::asciiCaseCmp(wordBuf, target);
-    if (cmp == 0) {
+    if (cmp == 0 && !result.found) {
       result.offset = readBe32(suffix);
       result.size = readBe32(suffix + 4);
       result.found = true;
       if (matchedHeadwordOut) *matchedHeadwordOut = wordBuf;
-      return result;
+    } else if (cmp == 0) {
+      // Every further entry of the same headword (homographs) is a definition of its own.
+      if (sameHeadwordCount == MAX_SAME_HEADWORD - 1) break;
+      DictLocation& more = sameHeadword[sameHeadwordCount++];
+      more = DictLocation{readBe32(suffix), readBe32(suffix + 4), true, false};
     }
     if (cmp > 0) break;
   }
@@ -685,9 +692,18 @@ bool Dictionary::lookup(const char* word, std::string& definitionOut, std::strin
 
   // Found in the index — propagate the precise failure reason from readDefinition
   // (decompression / low memory / read error) so the caller can name it.
-  if (readDefinition(location, definitionOut, outResult)) {
-    setResult(LookupResult::Found);
-    return true;
+  if (!readDefinition(location, definitionOut, outResult)) return false;
+  // The other entries of the same headword follow, separated like sections. Appending can move the
+  // whole text, so the joined size must stay within the definition cap and fit one free block; an
+  // entry that does not, or cannot be read, ends the list there and the first definition stands.
+  std::string more;
+  for (uint8_t i = 0; i < sameHeadwordCount; i++) {
+    const size_t joined = definitionOut.size() + 5 + sameHeadword[i].size;
+    if (joined > MAX_DEFINITION_BYTES || ESP.getMaxAllocHeap() < joined + DEFINITION_HEAP_HEADROOM_BYTES) break;
+    if (!readDefinition(sameHeadword[i], more)) break;
+    definitionOut += htmlDefinitions ? "<hr/>" : "\n\n";
+    definitionOut += more;
   }
-  return false;
+  setResult(LookupResult::Found);
+  return true;
 }

@@ -205,6 +205,13 @@ class Dictionary {
   // The .ifo's bookname=, or the folder name when the .ifo does not declare one.
   std::string bookName;
 
+  // Further .idx entries filed under the headword of the last locate() hit: a .idx may list a
+  // headword once per part of speech, and the sorted index keeps them adjacent. Fixed, so a
+  // lookup allocates no container; a longer run is cut short.
+  static constexpr uint8_t MAX_SAME_HEADWORD = 8;
+  DictLocation sameHeadword[MAX_SAME_HEADWORD - 1];
+  uint8_t sameHeadwordCount = 0;
+
   // Shared scan buffer: lookups are single-threaded and this avoids a
   // 256-byte array on the stack of every locate() call.
   char wordBuf[256] = {};
