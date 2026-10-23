@@ -205,6 +205,59 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" "$pack" --repo "$GITHUB_REPOSITORY" --clobber
 
+      - name: Check out the translation names
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: lib/I18n/translations
+          path: src
+
+      # One release per firmware version in the assets repo, with every pack as its own file, so
+      # people download just their language. A pack only loads on the firmware it was built for,
+      # hence the firmware tag in the name. Needs a token that can write to the assets repo; without
+      # one the step is skipped and the notes link to language-packs.zip instead.
+      - name: Publish the language packs to the assets repo
+        env:
+          GH_TOKEN: ${{ secrets.ASSETS_REPO_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          ASSETS_REPO: eszter007/matcha-reader-assets
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::ASSETS_REPO_TOKEN is not set, language packs are not published to $ASSETS_REPO"
+            exit 0
+          fi
+          tag="language-packs-$RELEASE_TAG"
+          url="https://github.com/$ASSETS_REPO/releases/download/$tag"
+          mapfile -t packs < <(find dist -type f -name '*.cplang' | sort)
+          [ "${#packs[@]}" -gt 0 ] || { echo "No .cplang packs among the built artifacts" >&2; exit 1; }
+          {
+            echo "Language packs for Matcha Reader $RELEASE_TAG. They only work with that firmware version."
+            echo
+            echo 'Download the file for your language and copy it to `/.crosspoint/lang/` on the SD card, then pick the language in Settings.'
+            echo
+            echo '| Language | File |'
+            echo '|---|---|'
+            for pack in "${packs[@]}"; do
+              file="$(basename "$pack")"
+              code="${file%.cplang}"
+              yaml="$(grep -lE "^_language_code: *\"?$code\"?\s*$" src/lib/I18n/translations/*.yaml | head -1)"
+              name="$(sed -n 's/^_language_name: *"\(.*\)"/\1/p' "$yaml")"
+              echo "$name|$file"
+            done | sort -f | while IFS='|' read -r name file; do
+              echo "| $name | [\`$file\`]($url/$file) |"
+            done
+          } > packs.md
+          flags=()
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          if gh release view "$tag" --repo "$ASSETS_REPO" >/dev/null 2>&1; then
+            gh release edit "$tag" --repo "$ASSETS_REPO" --notes-file packs.md
+          else
+            gh release create "$tag" --repo "$ASSETS_REPO" --latest=false "${flags[@]}" \
+              --title "Language packs $RELEASE_TAG" --notes-file packs.md
+          fi
+          gh release upload "$tag" --repo "$ASSETS_REPO" --clobber "${packs[@]}"
+
       - name: Add the file tables to the release notes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -250,7 +303,10 @@ jobs:
           TABLE
             printf '**Extras for the SD card**\n\n'
             printf '| Contents | File |\n|---|---|\n'
-            if grep -qxF language-packs.zip <<<"$assets"; then
+            packs_tag="language-packs-$RELEASE_TAG"
+            if gh release view "$packs_tag" --repo "$ASSETS_REPO" >/dev/null 2>&1; then
+              printf '| Language packs | [%s](https://github.com/%s/releases/tag/%s) |\n' "$packs_tag" "$ASSETS_REPO" "$packs_tag"
+            elif grep -qxF language-packs.zip <<<"$assets"; then
               printf '| Language packs | [`language-packs.zip`](%s/language-packs.zip) |\n' "$url"
             fi
             printf '| Fonts | [%s](https://github.com/%s/releases/tag/%s) |\n' "$FONTS_RELEASE" "$ASSETS_REPO" "$FONTS_RELEASE"

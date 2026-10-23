@@ -191,7 +191,7 @@ Fonts and dictionaries live in the separate [matcha-reader-assets](https://githu
 
 **5. Optional extras.**
 
-- **Interface language:** Settings → System → Language. Languages marked *Needs pack* need `language-packs.zip` from the release. See [Guide §3.9](USER_GUIDE.md#39-language-packs-sd-card).
+- **Interface language:** Settings → System → Language. Languages marked *Needs pack* need their pack from the language packs release that matches your firmware, linked in the release notes. See [Guide §3.9](USER_GUIDE.md#39-language-packs-sd-card).
 - **Page translation:** save a key from [Google AI Studio](https://aistudio.google.com/apikey) as `/.system/gemini.key` on the card.
 - **Your own logo:** put a `logo.bmp` (222x316 pixels, on white) in the card's `.system` (or `system`) folder to replace the cat on the boot and sleep screens. See [Guide §3.7](USER_GUIDE.md#custom-logo).
 
