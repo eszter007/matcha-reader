@@ -170,7 +170,7 @@ void CatalogActivity::beginDownload(const std::string& title) {
   // the download ends.
   {
     RenderLock lock;
-    if (auto* fcm = renderer.getFontCacheManager()) {
+    if (const auto* fcm = renderer.getFontCacheManager()) {
       if (auto* fd = fcm->getDecompressor()) {
         fd->setSlabEnabled(false);
         slabSuspended = true;
@@ -235,7 +235,7 @@ HttpDownloader::DownloadError CatalogActivity::downloadFile(const std::string& u
 void CatalogActivity::resumeGlyphSlab() {
   if (!slabSuspended) return;
   RenderLock lock;
-  if (auto* fcm = renderer.getFontCacheManager()) {
+  if (const auto* fcm = renderer.getFontCacheManager()) {
     if (auto* fd = fcm->getDecompressor()) fd->setSlabEnabled(true);
   }
   slabSuspended = false;
