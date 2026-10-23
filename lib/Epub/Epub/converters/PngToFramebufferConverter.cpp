@@ -20,10 +20,12 @@
 
 namespace {
 
-// See RenderConfig::lightenBy -- saturating lift applied before the Bayer screen.
-inline uint8_t lightenGray(const uint8_t gray, const uint8_t lightenBy) {
-  if (lightenBy == 0) return gray;
-  const int lifted = gray + lightenBy;
+// Tone adjustments applied before the Bayer screen; see RenderConfig::lightenBy and
+// RenderConfig::stretchPaperAndInk.
+inline uint8_t toneGray(uint8_t gray, const RenderConfig& config) {
+  if (config.stretchPaperAndInk) gray = stretchPaperAndInk(gray);
+  if (config.lightenBy == 0) return gray;
+  const int lifted = gray + config.lightenBy;
   return lifted > 255 ? 255 : static_cast<uint8_t>(lifted);
 }
 
@@ -355,7 +357,7 @@ int pngDrawCallback(PNGDRAW* pDraw) {
 
           uint8_t ditheredGray;
           if (useDithering) {
-            ditheredGray = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
+            ditheredGray = applyBayerDither4Level(toneGray(gray, *ctx->config), outX, outY);
           } else {
             ditheredGray = gray >> 6;
           }
