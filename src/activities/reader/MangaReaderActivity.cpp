@@ -139,6 +139,9 @@ void MangaReaderActivity::onEnter() {
   // that is single-threaded by construction (no render has been requested yet). See the header.
   baseScreenW = renderer.getScreenWidth();
   baseScreenH = renderer.getScreenHeight();
+  // The first render streams page and panel .2bp caches into this folder, before anything else
+  // has created it.
+  Storage.mkdir(book->getCachePath().c_str());
   loadProgress();
   loadCachedBookmarks();
   updateBookmarkFlag();
