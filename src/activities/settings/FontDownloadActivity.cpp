@@ -38,6 +38,8 @@ namespace {
 // std::string/std::vector growth through the throwing operator new) and, in
 // onEnter(), before esp_wifi_init runs at all.
 constexpr size_t FONT_SCREEN_MIN_FREE_HEAP = 48 * 1024;
+// Kept while the screen is open: the list is parsed again from it after a download.
+constexpr const char* MANIFEST_TMP = "/fonts_manifest.tmp";
 constexpr size_t FONT_SCREEN_MIN_MAX_ALLOC = 12 * 1024;
 
 // Headroom over the exact bytes the catalog build is about to allocate, checked
@@ -152,6 +154,7 @@ void FontDownloadActivity::onEnter() {
 
 void FontDownloadActivity::onExit() {
   Activity::onExit();
+  Storage.remove(MANIFEST_TMP);
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
@@ -270,8 +273,6 @@ bool FontDownloadActivity::fetchAndParseManifest() {
 
   // Download manifest to a temp file on SD card to avoid holding both
   // TLS buffers and the full JSON string in RAM simultaneously.
-  static constexpr const char* MANIFEST_TMP = "/fonts_manifest.tmp";
-
   auto result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr);
   if (result != HttpDownloader::OK) {
     LOG_ERR("FONT", "Failed to fetch manifest from %s", FONT_MANIFEST_URL);
@@ -280,7 +281,11 @@ bool FontDownloadActivity::fetchAndParseManifest() {
     return false;
   }
 
-  // HTTP client is now closed — TLS buffers freed. Parse JSON from file.
+  // HTTP client is now closed — TLS buffers freed.
+  return parseManifestFile();
+}
+
+bool FontDownloadActivity::parseManifestFile() {
   HalFile manifestFile;
   if (!Storage.openFileForRead("FONT", MANIFEST_TMP, manifestFile)) {
     LOG_ERR("FONT", "Failed to open temp manifest");
@@ -308,7 +313,6 @@ bool FontDownloadActivity::fetchAndParseManifest() {
     err = deserializeJson(doc, manifestFile, DeserializationOption::Filter(filter));
   }
   manifestFile.close();
-  Storage.remove(MANIFEST_TMP);
 
   if (err) {
     LOG_ERR("FONT", "Manifest parse error: %s (%u free, %u max block)", err.c_str(), ESP.getFreeHeap(),
@@ -614,6 +618,7 @@ void FontDownloadActivity::buildFilteredIndices(const int groupListIndex) {
 
 void FontDownloadActivity::enterGroup(const int groupListIndex) {
   closeRouting();
+  groupListIndex_ = groupListIndex;
   buildFilteredIndices(groupListIndex);
   {
     RenderLock lock(*this);
@@ -877,22 +882,123 @@ bool FontDownloadActivity::isSelectedFamilyDeletable() const {
   return family.installed && !family.hasUpdate;
 }
 
+void FontDownloadActivity::trimCatalogTo(const std::vector<int>& familyIndices) {
+  // A TLS record needs a ~20KB contiguous block, and the catalog, its rows and the strings they
+  // point at are spread through the heap the parse left behind: on the X4 they cut the largest
+  // block from 43KB to 19KB. Keep only the families being fetched, built into fresh small blocks,
+  // and free everything else. If even those cannot be allocated, keep the full catalog.
+  size_t arenaBytes = 1;
+  size_t fileCount = 0;
+  for (const int familyIndex : familyIndices) {
+    const ManifestFamily& family = families_[familyIndex];
+    arenaBytes += std::strlen(str(family.name)) + 1 + std::strlen(str(family.description)) + 1;
+    for (uint32_t i = 0; i < family.fileCount; i++) {
+      arenaBytes += std::strlen(str(files_[family.fileStart + i].name)) + 1;
+    }
+    fileCount += family.fileCount;
+  }
+  auto arena = makeUniqueNoThrow<char[]>(arenaBytes);
+  auto files = makeUniqueNoThrow<ManifestFile[]>(fileCount);
+  auto families = makeUniqueNoThrow<ManifestFamily[]>(familyIndices.size());
+  if (!arena || !files || !families) {
+    LOG_ERR("FONT", "OOM: %zu byte download list, keeping the full catalog", arenaBytes);
+    return;
+  }
+
+  uint32_t used = 1;
+  arena[0] = '\0';
+  const auto copy = [&](const StrRef ref) -> StrRef {
+    const char* text = str(ref);
+    if (*text == '\0') return 0;
+    const StrRef out = used;
+    const size_t length = std::strlen(text) + 1;
+    std::memcpy(arena.get() + used, text, length);
+    used = static_cast<uint32_t>(used + length);
+    return out;
+  };
+  uint32_t fileEntry = 0;
+  for (size_t i = 0; i < familyIndices.size(); i++) {
+    ManifestFamily family = families_[familyIndices[i]];
+    const uint32_t oldStart = family.fileStart;
+    family.name = copy(family.name);
+    family.description = copy(family.description);
+    family.fileStart = fileEntry;
+    for (uint32_t f = 0; f < family.fileCount; f++) {
+      ManifestFile file = files_[oldStart + f];
+      file.name = copy(file.name);
+      files[fileEntry++] = file;
+    }
+    families[i] = family;
+  }
+
+  {
+    RenderLock lock(*this);
+    selectedBeforeTrim_ = nav.selected;
+    std::vector<std::string>().swap(rowLabels_);
+    std::vector<fui::ListItem>().swap(rowItems_);
+    rowsDirty_ = true;
+    clearManifest();
+    stringArena_ = std::move(arena);
+    arenaUsed_ = used;
+    arenaCapacity_ = static_cast<uint32_t>(arenaBytes);
+    files_ = std::move(files);
+    fileEntryCount_ = fileEntry;
+    families_.reserve(familyIndices.size());
+    filteredIndices_.reserve(familyIndices.size());
+    for (size_t i = 0; i < familyIndices.size(); i++) {
+      families_.push_back(families[i]);
+      filteredIndices_.push_back(static_cast<int>(i));
+    }
+    catalogTrimmed_ = true;
+  }
+  LOG_DBG("FONT", "Heap for download: %u free, %u max block", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+}
+
+void FontDownloadActivity::restoreCatalog() {
+  catalogTrimmed_ = false;
+  {
+    RenderLock lock(*this);
+    clearManifest();
+    std::vector<std::string>().swap(rowLabels_);
+    std::vector<fui::ListItem>().swap(rowItems_);
+  }
+  if (!parseManifestFile()) {
+    clearManifest();
+    RenderLock lock(*this);
+    state_ = ERROR;
+    downloadingFamilyIndex_ = -1;
+    return;
+  }
+  buildFilteredIndices(hasGroupScreen() ? groupListIndex_ : 0);
+  RenderLock lock(*this);
+  nav.selected = std::min(selectedBeforeTrim_, std::max(0, listItemCount() - 1));
+  rowsDirty_ = true;
+}
+
 void FontDownloadActivity::activateSelected() {
   if (filteredIndices_.empty()) return;
-  if (isDownloadAllRow(nav.selected)) {
+  if (isDownloadAllRow(nav.selected) || isUpdateAllRow(nav.selected)) {
+    const bool update = isUpdateAllRow(nav.selected);
     currentFileIndex_ = 0;
     currentFileTotal_ = 0;
-    for (const int familyIndex : filteredIndices_) {
-      if (!families_[familyIndex].installed) currentFileTotal_ += families_[familyIndex].fileCount;
+    {
+      // Scoped: freed before the transfer, whose TLS record needs the heap in one piece.
+      std::vector<int> selected;
+      selected.reserve(filteredIndices_.size());
+      for (const int familyIndex : filteredIndices_) {
+        const auto& family = families_[familyIndex];
+        if (update ? family.hasUpdate : !family.installed) {
+          currentFileTotal_ += family.fileCount;
+          selected.push_back(familyIndex);
+        }
+      }
+      trimCatalogTo(selected);
     }
-    downloadAll();
-  } else if (isUpdateAllRow(nav.selected)) {
-    currentFileIndex_ = 0;
-    currentFileTotal_ = 0;
-    for (const int familyIndex : filteredIndices_) {
-      if (families_[familyIndex].hasUpdate) currentFileTotal_ += families_[familyIndex].fileCount;
+    if (update) {
+      updateAll();
+    } else {
+      downloadAll();
     }
-    updateAll();
   } else {
     // The special rows disappear when a download starts, so a stale selection
     // can map past the family table.
@@ -902,7 +1008,8 @@ void FontDownloadActivity::activateSelected() {
     if (!family.installed || family.hasUpdate) {
       currentFileIndex_ = 0;
       currentFileTotal_ = family.fileCount;
-      downloadFamily(family);
+      trimCatalogTo({familyIndex});
+      downloadFamily(families_[catalogTrimmed_ ? 0 : familyIndex]);
     } else {
       promptDeleteSelectedFamily();
       return;
@@ -1004,6 +1111,11 @@ void FontDownloadActivity::rebuildFamilyRowItems() {
 // --- Input handling ---
 
 bool FontDownloadActivity::handleCustomInput() {
+  if (catalogTrimmed_ && state_ == FAMILY_LIST) {
+    restoreCatalog();
+    requestUpdate();
+    return true;
+  }
   if (state_ == GROUP_LIST || state_ == FAMILY_LIST) {
     // The base list protocol (Back/Confirm, touch routing, swipe scroll,
     // button navigation) handles both list states.

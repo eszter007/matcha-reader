@@ -99,6 +99,12 @@ class FontDownloadActivity final : public UiListActivity {
   // One 4-byte index per manifest family, allocated once and reused for every group.
   std::vector<int> filteredIndices_;
   freeink::ui::ListNav groupNav_;
+  // Group list index the family list was opened from, for restoring it after a download.
+  int groupListIndex_ = 0;
+  // While a download runs, the catalog holds only the families being fetched (see
+  // trimCatalogTo()); back on the family list, the full list is parsed again from the card.
+  bool catalogTrimmed_ = false;
+  int selectedBeforeTrim_ = 0;
 
   // Download progress
   size_t currentFileIndex_ = 0;
@@ -134,6 +140,9 @@ class FontDownloadActivity final : public UiListActivity {
 
   void onWifiSelectionComplete(bool success);
   bool fetchAndParseManifest();
+  bool parseManifestFile();
+  void trimCatalogTo(const std::vector<int>& familyIndices);
+  void restoreCatalog();
   // cppcheck-suppress arithOperationsOnVoidPointer // unique_ptr<char[]>::get() is char*, not void*
   const char* str(StrRef ref) const { return stringArena_ ? stringArena_.get() + ref : ""; }
   // Returns false if the string does not fit the arena reserved for the manifest.
