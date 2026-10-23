@@ -34,8 +34,8 @@ bool needsPack(const Language lang) { return !isLanguageBuiltIn(lang); }
 // Every pack language the update should refresh: the ones on the card, and the selected
 // language even when its pack is gone or was refused, since that is the one the user wants back.
 bool shouldUpdate(const Language lang) {
-  return needsPack(lang) && (I18n::packState(lang) != I18n::PackState::Missing ||
-                             static_cast<uint8_t>(lang) == SETTINGS.language);
+  return needsPack(lang) &&
+         (I18n::packState(lang) != I18n::PackState::Missing || static_cast<uint8_t>(lang) == SETTINGS.language);
 }
 }  // namespace
 
