@@ -27,6 +27,40 @@ bool readExactly(HalFile& file, void* dst, const size_t count) {
   const auto got = file.read(dst, count);
   return got > 0 && static_cast<size_t>(got) == count;
 }
+
+// Opens the pack and checks its header against this firmware. On success the file is positioned at
+// the offset table and blobLen holds the string blob size. `log` reports why it was refused.
+bool openPack(const Language lang, HalFile& file, uint16_t& blobLen, const bool log) {
+  char path[64];
+  snprintf(path, sizeof(path), "%s/%s.cplang", I18n::PACK_DIR, LANGUAGE_CODES[static_cast<size_t>(lang)]);
+  if (!Storage.openFileForRead("I18N", path, file)) return false;
+
+  uint8_t header[PACK_HEADER_BYTES];
+  if (!readExactly(file, header, sizeof(header))) return false;
+  if (memcmp(header, PACK_MAGIC, sizeof(PACK_MAGIC)) != 0) {
+    if (log) LOG_ERR("I18N", "%s: not a language pack", path);
+    return false;
+  }
+  uint16_t version = 0;
+  uint16_t keyCount = 0;
+  memcpy(&version, header + 8, sizeof(version));
+  memcpy(&keyCount, header + 10, sizeof(keyCount));
+  memcpy(&blobLen, header + 12, sizeof(blobLen));
+  if (version != PACK_VERSION) {
+    if (log) LOG_ERR("I18N", "%s: pack version %u, firmware wants %u", path, version, PACK_VERSION);
+    return false;
+  }
+  // The offsets index the string table by position, so a pack built against a different set of
+  // keys would silently return the wrong strings. Refuse it instead.
+  if (keyCount != static_cast<uint16_t>(StrId::_COUNT)) {
+    if (log) {
+      LOG_ERR("I18N", "%s: pack has %u keys, firmware has %u -- regenerate the packs", path, keyCount,
+              static_cast<unsigned>(StrId::_COUNT));
+    }
+    return false;
+  }
+  return true;
+}
 }  // namespace
 
 I18n& I18n::getInstance() {
@@ -73,44 +107,20 @@ bool I18n::setLanguage(Language lang) {
 }
 
 bool I18n::loadPack(const Language lang) {
-  char path[64];
-  snprintf(path, sizeof(path), "%s/%s.cplang", PACK_DIR, LANGUAGE_CODES[static_cast<size_t>(lang)]);
-
   HalFile file;
-  if (!Storage.openFileForRead("I18N", path, file)) return false;
-
-  uint8_t header[PACK_HEADER_BYTES];
-  if (!readExactly(file, header, sizeof(header))) return false;
-  if (memcmp(header, PACK_MAGIC, sizeof(PACK_MAGIC)) != 0) {
-    LOG_ERR("I18N", "%s: not a language pack", path);
-    return false;
-  }
-  uint16_t version = 0;
-  uint16_t keyCount = 0;
   uint16_t blobLen = 0;
-  memcpy(&version, header + 8, sizeof(version));
-  memcpy(&keyCount, header + 10, sizeof(keyCount));
-  memcpy(&blobLen, header + 12, sizeof(blobLen));
-  if (version != PACK_VERSION) {
-    LOG_ERR("I18N", "%s: pack version %u, firmware wants %u", path, version, PACK_VERSION);
-    return false;
-  }
-  // The offsets index the string table by position, so a pack built against a different set of
-  // keys would silently return the wrong strings. Refuse it instead.
-  if (keyCount != static_cast<uint16_t>(StrId::_COUNT)) {
-    LOG_ERR("I18N", "%s: pack has %u keys, firmware has %u -- regenerate the packs", path, keyCount,
-            static_cast<unsigned>(StrId::_COUNT));
-    return false;
-  }
+  if (!openPack(lang, file, blobLen, true)) return false;
+  const uint16_t keyCount = static_cast<uint16_t>(StrId::_COUNT);
+  const char* code = LANGUAGE_CODES[static_cast<size_t>(lang)];
 
   const size_t offsetBytes = static_cast<size_t>(keyCount) * sizeof(uint16_t);
   auto buffer = makeUniqueNoThrow<uint8_t[]>(offsetBytes + blobLen);
   if (!buffer) {
-    LOG_ERR("I18N", "OOM: %u bytes for %s", static_cast<unsigned>(offsetBytes + blobLen), path);
+    LOG_ERR("I18N", "OOM: %u bytes for %s pack", static_cast<unsigned>(offsetBytes + blobLen), code);
     return false;
   }
   if (!readExactly(file, buffer.get(), offsetBytes + blobLen)) {
-    LOG_ERR("I18N", "%s: truncated pack", path);
+    LOG_ERR("I18N", "%s: truncated pack", code);
     return false;
   }
 
@@ -119,17 +129,19 @@ bool I18n::loadPack(const Language lang) {
   _packBuffer = std::move(buffer);
   _packStrings = {reinterpret_cast<const char*>(_packBuffer.get() + offsetBytes),
                   reinterpret_cast<const uint16_t*>(_packBuffer.get())};
-  LOG_INF("I18N", "Loaded %s pack (%u bytes)", LANGUAGE_CODES[static_cast<size_t>(lang)],
-          static_cast<unsigned>(offsetBytes + blobLen));
+  LOG_INF("I18N", "Loaded %s pack (%u bytes)", code, static_cast<unsigned>(offsetBytes + blobLen));
   return true;
 }
 
-bool I18n::isLanguageAvailable(const Language lang) {
-  if (lang >= Language::_COUNT) return false;
-  if (isLanguageBuiltIn(lang)) return true;
+I18n::PackState I18n::packState(const Language lang) {
+  if (lang >= Language::_COUNT) return PackState::Missing;
+  if (isLanguageBuiltIn(lang)) return PackState::BuiltIn;
   char path[64];
   snprintf(path, sizeof(path), "%s/%s.cplang", PACK_DIR, LANGUAGE_CODES[static_cast<size_t>(lang)]);
-  return Storage.exists(path);
+  if (!Storage.exists(path)) return PackState::Missing;
+  HalFile file;
+  uint16_t blobLen = 0;
+  return openPack(lang, file, blobLen, false) ? PackState::Ready : PackState::Outdated;
 }
 
 const char* I18n::getLanguageName(Language lang) const {
