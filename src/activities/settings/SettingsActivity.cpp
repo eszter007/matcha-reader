@@ -96,6 +96,26 @@ SettingsSection sectionFor(const SettingInfo& setting) {
 
 bool isSubScreenCategory(const StrId category) { return category == StrId::STR_CAT_SHORTCUTS; }
 
+// Position of a row on the Dictionary Settings sub-screen, or -1 for a row it does not show.
+// These Reader rows move there from the Reader page but keep their Reader category, so Reader
+// Settings in a book and the web settings page are unchanged.
+int dictionaryRowOrder(const SettingInfo& setting) {
+  switch (setting.nameId) {
+    case StrId::STR_WORD_LOOKUP_FONT_SIZE:
+      return 0;
+    case StrId::STR_DICT_STATUS_JA:
+      return 1;
+    case StrId::STR_DICT_STATUS_ZH:
+      return 2;
+    case StrId::STR_DICT_STATUS_YUE:
+      return 3;
+    case StrId::STR_FALLBACK_DICTIONARY:
+      return 4;
+    default:
+      return -1;
+  }
+}
+
 // Device-only action rows added per section, beyond the shared list (System has the most).
 constexpr size_t EXTRA_ROWS_PER_SECTION = 8;
 }  // namespace
@@ -135,14 +155,17 @@ void SettingsActivity::rebuildSettings() {
 
   // Copy only the rows of the one category shown here; each section's title is its category
   // (Connectivity's matches none: it has only action rows).
-  const StrId category =
-      subCategory != StrId::STR_NONE_OPT ? subCategory : SETTINGS_SECTION_TITLES[static_cast<size_t>(section)];
+  const bool dictionaryPage = subCategory == StrId::STR_DICTIONARY_SETTINGS;
+  const StrId category = subCategory != StrId::STR_NONE_OPT && !dictionaryPage
+                             ? subCategory
+                             : SETTINGS_SECTION_TITLES[static_cast<size_t>(section)];
   auto all = getSettingsList(&sdFontSystem.registry(), &dictionaries, category);
 
-  const auto belongsHere = [this](const SettingInfo& setting) {
+  const auto belongsHere = [this, dictionaryPage](const SettingInfo& setting) {
     if (!showOnDevice(setting)) return false;
+    if (dictionaryPage) return dictionaryRowOrder(setting) >= 0;
     if (subCategory != StrId::STR_NONE_OPT) return setting.category == subCategory;
-    return sectionFor(setting) == section && !isSubScreenCategory(setting.category);
+    return sectionFor(setting) == section && !isSubScreenCategory(setting.category) && dictionaryRowOrder(setting) < 0;
   };
   const size_t count = std::count_if(all.begin(), all.end(), belongsHere);
   settings.clear();
@@ -156,6 +179,7 @@ void SettingsActivity::rebuildSettings() {
 
   // Sub-screens and per-board configurators lead their section, above its own rows.
   addAction(SettingsSection::Reader, StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings);
+  addAction(SettingsSection::Reader, StrId::STR_DICTIONARY_SETTINGS, SettingAction::DictionarySettings);
   addAction(SettingsSection::Controls, StrId::STR_CAT_SHORTCUTS, SettingAction::ShortcutsSettings);
   if (!BoardConfig::hasTouch()) {
     addAction(SettingsSection::Controls, StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons);
@@ -168,6 +192,10 @@ void SettingsActivity::rebuildSettings() {
   for (auto& setting : all) {
     if (!belongsHere(setting)) continue;
     settings.push_back(std::move(setting));
+  }
+  if (dictionaryPage) {
+    std::sort(settings.begin(), settings.end(),
+              [](const SettingInfo& a, const SettingInfo& b) { return dictionaryRowOrder(a) < dictionaryRowOrder(b); });
   }
 
   // Rebuild sits directly under the view picker. It rebuilds the CLX1 index, so it is offered
@@ -334,8 +362,11 @@ void SettingsActivity::toggleSelectedSetting() {
     auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
 
     switch (setting.action) {
-      case SettingAction::ShortcutsSettings: {
-        auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, section, StrId::STR_CAT_SHORTCUTS);
+      case SettingAction::ShortcutsSettings:
+      case SettingAction::DictionarySettings: {
+        const StrId page = setting.action == SettingAction::ShortcutsSettings ? StrId::STR_CAT_SHORTCUTS
+                                                                              : StrId::STR_DICTIONARY_SETTINGS;
+        auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, section, page);
         if (!activity) {
           LOG_ERR("SET", "OOM: settings sub-screen");
           return;
@@ -610,8 +641,13 @@ void SettingsActivity::drawFooter() {
       selected >= 0 && selected < static_cast<int>(settings.size()) &&
       ((settings[selected].type == SettingType::ACTION && settings[selected].action != SettingAction::Plugins) ||
        settings[selected].nameId == StrId::STR_TIME_TO_SLEEP);
-  const auto labels =
-      mappedInput.mapLabels(tr(STR_BACK), picker ? tr(STR_SELECT) : tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  // A row with a value but no setter (the dictionary status rows) does nothing on Confirm, so it
+  // gets no hint.
+  const bool readOnly = selected >= 0 && selected < static_cast<int>(settings.size()) &&
+                        settings[selected].type == SettingType::ENUM && !settings[selected].valuePtr &&
+                        settings[selected].valueGetter && !settings[selected].valueSetter;
+  const char* confirmLabel = readOnly ? "" : picker ? tr(STR_SELECT) : tr(STR_TOGGLE);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 

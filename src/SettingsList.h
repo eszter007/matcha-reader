@@ -1,6 +1,7 @@
 #pragma once
 
 #include <BoardConfig.h>
+#include <DictIndex.h>
 #include <HalClock.h>
 #include <HalFrontlight.h>
 #include <HalTiltSensor.h>
@@ -200,6 +201,20 @@ inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& di
     };
   }
 
+  return s;
+}
+
+// Whether a Japanese or Chinese dictionary was found on the card. They never appear in the
+// fallback picker (they serve their own language's books only), so without this row a working
+// install looks missing. Read-only: a getter and no setter.
+inline SettingInfo buildDictionaryStatusSetting(const StrId nameId, const char* folder) {
+  SettingInfo s;
+  s.nameId = nameId;
+  s.type = SettingType::ENUM;
+  s.enumValues = {StrId::STR_DICT_NOT_INSTALLED, StrId::STR_DICT_INSTALLED};
+  const bool installed = DictIndex::isInstalled(folder);
+  s.valueGetter = [installed]() -> uint8_t { return installed ? 1 : 0; };
+  s.category = StrId::STR_CAT_READER;
   return s;
 }
 
@@ -902,6 +917,14 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     } else {
       it = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.category == StrId::STR_CAT_CONTROLS; });
       v.insert(it, buildWordLookupFontSizeSetting());
+    }
+    // Global settings only: in a book the dictionary row already names what that book uses.
+    it = std::find_if(v.begin(), v.end(),
+                      [](const SettingInfo& s) { return s.nameId == StrId::STR_FALLBACK_DICTIONARY; });
+    if (it != v.end()) {
+      v.insert(it + 1, {buildDictionaryStatusSetting(StrId::STR_DICT_STATUS_JA, "jp"),
+                        buildDictionaryStatusSetting(StrId::STR_DICT_STATUS_ZH, "zh"),
+                        buildDictionaryStatusSetting(StrId::STR_DICT_STATUS_YUE, "yue")});
     }
   }
   return v;

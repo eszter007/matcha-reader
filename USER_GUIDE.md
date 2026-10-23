@@ -455,6 +455,16 @@ to that book only.
   of the Size and Layout tabs. The preview switches to Japanese while you edit the CJK profile. Inside a book, the
   preview uses the book's own script.
 
+- **Dictionary Settings**: Opens a page with the word lookup settings:
+  - **Word Lookup Font Size**: Text size in the word lookup window: **Tiny**, **Small** (default), **Medium** or
+    **Large**.
+  - **Japanese dictionary**, **Mandarin dictionary**, **Cantonese dictionary**: Read-only. They show **Installed**
+    when the files for that language were found (`/dictionaries/jp/`, `zh/` or `yue/`), else **Not installed**. These
+    dictionaries are used automatically in books of their language, so they are not in the fallback list.
+  - **Fallback for other languages**: The StarDict dictionary for word lookups, or **None**. Lookups use a dictionary
+    that matches the book's language first, then this one. Only shown when a dictionary folder exists under
+    `/dictionaries/` or `/.dictionaries/` on the SD card. See [docs/dictionary.md](docs/dictionary.md).
+
 - **Reading Orientation**:
   - **Portrait** (default)
   - **Landscape CW**: turned a quarter clockwise.
@@ -479,13 +489,6 @@ to that book only.
 
 - **Reader Menu Style**: How the reader menu looks: **List** (default), a full-screen list, or **Toolbar**, bars at
   the top and bottom of the page.
-
-- **Fallback dictionary**: The StarDict dictionary for word lookups, or **None**. Lookups use a dictionary that
-  matches the book's language first, then this one. Only shown when a dictionary folder exists under
-  `/dictionaries/` or `/.dictionaries/` on the SD card. See [docs/dictionary.md](docs/dictionary.md).
-
-- **Word Lookup Font Size**: Text size in the word lookup window: **Tiny**, **Small** (default), **Medium** or
-  **Large**.
 
 - **Customise Status Bar**: The line of information at the edge of the page while you read. Set it up one item at a
   time: chapter page count, book progress percentage, progress bar (book, chapter or hidden) and its thickness, title,
@@ -1000,7 +1003,7 @@ To read footnotes without leaving the page, choose **Links and footnotes** in th
 You can look up words with an offline dictionary on the SD card. To set it up:
 
 1. Copy a StarDict dictionary into the `/dictionaries/` folder (or `/.dictionaries/`, see [6.7](#67-dictionary-files-and-language-selection)).
-2. Select it in **Settings → Reader → Fallback dictionary**. Inside a book, the same row in **Reader Settings** is called **Dictionary**.
+2. Select it in **Settings → Reader → Dictionary Settings → Fallback for other languages**. Inside a book, the same row in **Reader Settings** is called **Dictionary**.
 
 To look up a word with the buttons, choose **Look Up** in the **[Reader Menu](#5-reader-menu)**. Use **Left** and **Right** to highlight a word, then press **Confirm** to see its definition. On button-only devices you can also start a lookup by holding **Confirm**, if **Long-Press Menu** in **Settings → Controls → Shortcuts** is set to **Dictionary**.
 
@@ -1567,7 +1570,7 @@ For Cantonese (`yue`), convert with `--lang yue`.
 A lookup searches up to four dictionaries for the book's language and shows every entry it finds, one after the
 other. Page past the end of one entry and the next dictionary's entry opens. Page back from its first page and you
 return to the last page of the previous one. The bottom line names the dictionary and its place in the list, e.g.
-`Collins (1/2)`. The dictionary chosen under **Settings → Reader → Fallback dictionary** comes first if it is in the
+`Collins (1/2)`. The dictionary chosen under **Settings → Reader → Dictionary Settings → Fallback for other languages** comes first if it is in the
 book's language. The others follow in folder-name order. A saved sentence records the dictionary whose entry was on
 screen. The first lookup in a newly added dictionary takes longer, because the reader prepares the dictionary
 for searching.
@@ -1577,7 +1580,7 @@ for searching.
   <img src="docs/images/screenshots/multi-dict-stardict-2.png" width="240" alt="cold: the second dictionary's entry, 2 of 2">
 </p>
 
-**Settings → Reader → Fallback dictionary** is used when a book has no language tag, or when no folder under
+**Settings → Reader → Dictionary Settings → Fallback for other languages** is used when a book has no language tag, or when no folder under
 `dictionaries/` matches its language. Inside a book, the reader settings show a **Dictionary** row with the
 dictionary that book uses first. Use it to check that the book's language tag was recognised.
 
