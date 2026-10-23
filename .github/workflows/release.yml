@@ -209,11 +209,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          # Fonts and dictionaries are released separately; bump these when they change.
+          ASSETS_REPO: eszter007/matcha-reader-assets
+          FONTS_RELEASE: fonts-1.0
+          DICTIONARIES_RELEASE: dictionaries-1.0
         run: |
           set -euo pipefail
           # GitHub lists assets alphabetically, so the top of the notes says which file is for
-          # what. Only files on the release are listed: the font and dictionary zips are uploaded
-          # by hand. The block between the markers is rebuilt, so a re-run replaces it.
+          # what. The block between the markers is rebuilt, so a re-run replaces it.
           start='<!-- release-files -->'
           end='<!-- /release-files -->'
           body="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
@@ -246,17 +249,13 @@ jobs:
           BOOX Picco (USB only, no Wi-Fi updates)|picco-firmware.bin
           TABLE
             printf '**Extras for the SD card**\n\n'
-            table 'Contents' <<'TABLE'
-          Language packs|language-packs.zip
-          Japanese fonts|japanese-fonts.zip
-          Japanese dictionaries|japanese-dictionaries.zip
-          Chinese fonts (Simplified)|chinese-fonts-simplified.zip
-          Chinese fonts (Traditional)|chinese-fonts-traditional.zip
-          Chinese dictionaries (Simplified)|dictionaries-zh-simplified.zip
-          Chinese dictionaries (Traditional)|dictionaries-zh-traditional.zip
-          Cantonese dictionaries|dictionaries-yue.zip
-          Noto Sans font|noto-sans-font.zip
-          TABLE
+            printf '| Contents | File |\n|---|---|\n'
+            if grep -qxF language-packs.zip <<<"$assets"; then
+              printf '| Language packs | [`language-packs.zip`](%s/language-packs.zip) |\n' "$url"
+            fi
+            printf '| Fonts | [%s](https://github.com/%s/releases/tag/%s) |\n' "$FONTS_RELEASE" "$ASSETS_REPO" "$FONTS_RELEASE"
+            printf '| Dictionaries | [%s](https://github.com/%s/releases/tag/%s) |\n\n' \
+              "$DICTIONARIES_RELEASE" "$ASSETS_REPO" "$DICTIONARIES_RELEASE"
             printf '%s\n\n%s\n' "$end" "$body"
           } > notes.md
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
