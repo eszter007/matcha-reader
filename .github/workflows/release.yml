@@ -205,6 +205,40 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" "$pack" --repo "$GITHUB_REPOSITORY" --clobber
 
+      - name: Add the firmware table to the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          # GitHub lists assets alphabetically, so the notes say which file fits which device.
+          # The marker keeps a re-run from appending the table twice.
+          marker='<!-- firmware-table -->'
+          body="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
+          case "$body" in *"$marker"*) exit 0 ;; esac
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
+          {
+            printf '%s\n\n%s\n\n' "$body" "$marker"
+            echo '### Which file for my device'
+            echo
+            echo '| Device | File |'
+            echo '|---|---|'
+            while IFS='|' read -r device asset; do
+              echo "| $device | [\`$asset\`]($url/$asset) |"
+            done <<'TABLE'
+          X3, and X4 (old)|x4old-x3-firmware.bin
+          X4C (new)|x4c-firmware.bin
+          X4 Pro|x4pro-firmware.bin
+          Sticky|sticky-firmware.bin
+          Papermono|papermono-firmware.bin
+          Metalio 3.97"|metalio_eink4-firmware.bin
+          EEGO A4|eego_a4-firmware.bin
+          BOOX Picco (USB only)|picco-firmware.bin
+          Language packs for the SD card|language-packs.zip
+          TABLE
+          } > notes.md
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
+
   # Languages that are not compiled in ship as .cplang packs for the SD card. A pack is
   # only valid for the firmware it was generated with -- it is indexed by string-key
   # position and refuses to load when the count differs -- so it is built from the same
