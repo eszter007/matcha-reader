@@ -327,7 +327,8 @@ jobs:
           EEGO A4|eego_a4-firmware.bin
           BOOX Picco (USB only, no Wi-Fi updates)|picco-firmware.bin
           TABLE
-            printf '**Extras for the SD card**\n\n'
+            printf '**Extras for the SD card**\n\nThey live in [%s](https://github.com/%s). Each release there explains where the files go on the card.\n\n' \
+              "${ASSETS_REPO#*/}" "$ASSETS_REPO"
             printf '| Contents | File |\n|---|---|\n'
             packs_tag="language-packs-$RELEASE_TAG"
             if gh release view "$packs_tag" --repo "$ASSETS_REPO" >/dev/null 2>&1; then
