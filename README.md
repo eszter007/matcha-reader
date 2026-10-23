@@ -170,14 +170,14 @@ The BOOX Picco has no Wi-Fi updates: flash each new release over USB, with the s
 
 | Language | What to do |
 | --- | --- |
-| Japanese | Download `japanese-dictionaries.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest) and put the files from its `dict` folder in `dictionaries/jp/` |
-| Mandarin | Download the simplified or the traditional pack from the [`dictionaries-zh` release](https://github.com/eszter007/matcha-reader/releases/tag/dictionaries-zh) and unzip it so the card holds `dictionaries/zh/`. Install one, not both |
-| Cantonese | Convert CC-Canto and CC-CEDICT with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) into `dictionaries/yue/` |
+| Japanese | Download `japanese-dictionaries.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card. It holds `dictionaries/jp/` |
+| Mandarin | Download `dictionaries-zh-simplified.zip` or `dictionaries-zh-traditional.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card. Install one, not both |
+| Cantonese | Download `dictionaries-yue.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card |
 | Any other | Copy a StarDict dictionary into `dictionaries/<lang>/<name>/`, for example `dictionaries/fr/larousse/` |
 
 To convert your own, use the [browser tool](https://eszter007.github.io/matcha-reader-tools/). Step by step: [docs/dictionary-setup.md](docs/dictionary-setup.md).
 
-**3. Install a font** (required for Chinese, optional for Japanese). Download the zip for your language from the [releases](https://github.com/eszter007/matcha-reader/releases) and copy the `fonts` folder inside it to the root of the card.
+**3. Install a font** (required for Chinese, optional for Japanese). Download the zip for your language from the [fonts release](https://github.com/eszter007/matcha-reader-assets/releases/tag/fonts-2.0) and copy the `fonts` folder inside it to the root of the card.
 
 | You read | Zip | Fonts |
 | --- | --- | --- |
@@ -185,13 +185,13 @@ To convert your own, use the [browser tool](https://eszter007.github.io/matcha-r
 | Mandarin, simplified | `chinese-fonts-simplified.zip` | Noto Sans SC, Noto Serif SC |
 | Mandarin, traditional, and Cantonese | `chinese-fonts-traditional.zip` | Noto Sans TC, Noto Serif TC |
 
-The Chinese zips are attached from 1.7.0-nightly-1 on. A dictionary entry also shows the other script's form of a word (說 next to 说); install both Chinese zips so it can be drawn. To convert another font, use the [browser tool](https://eszter007.github.io/matcha-reader-tools/); details in [docs/sd-card-fonts.md](docs/sd-card-fonts.md).
+Fonts and dictionaries live in the separate [matcha-reader-assets](https://github.com/eszter007/matcha-reader-assets) repository, since they change much less often than the firmware. A dictionary entry also shows the other script's form of a word (說 next to 说); install both Chinese zips so it can be drawn. To convert another font, use the [browser tool](https://eszter007.github.io/matcha-reader-tools/); details in [docs/sd-card-fonts.md](docs/sd-card-fonts.md).
 
 **4. Copy your books** anywhere on the card and open them from the Library. Manga and comics are converted first, with the browser tool or as in [docs/manga-conversion.md](docs/manga-conversion.md).
 
 **5. Optional extras.**
 
-- **Interface language:** Settings → System → Language. Languages marked *Needs pack* need `language-packs.zip` from the release. See [Guide §3.9](USER_GUIDE.md#39-language-packs-sd-card).
+- **Interface language:** Settings → System → Language. Languages marked *Needs pack* need their pack from the language packs release that matches your firmware, linked in the release notes. See [Guide §3.9](USER_GUIDE.md#39-language-packs-sd-card).
 - **Page translation:** save a key from [Google AI Studio](https://aistudio.google.com/apikey) as `/.system/gemini.key` on the card.
 - **Your own logo:** put a `logo.bmp` (222x316 pixels, on white) in the card's `.system` (or `system`) folder to replace the cat on the boot and sleep screens. See [Guide §3.7](USER_GUIDE.md#custom-logo).
 

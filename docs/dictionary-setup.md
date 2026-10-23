@@ -8,11 +8,11 @@ files are in [dictionary.md](dictionary.md).
 
 ## Quick start
 
-**Japanese.** Download `japanese-dictionaries.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest). It holds a `dict` folder: put its files in `dictionaries/jp/` on the card. Copying `dict/` to the root as it is works too. Nothing to convert.
+**Japanese.** Download `japanese-dictionaries.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card, so it holds `dictionaries/jp/`. Nothing to convert.
 
-**Mandarin.** Download the simplified or the traditional pack from the [`dictionaries-zh` release](https://github.com/eszter007/matcha-reader/releases/tag/dictionaries-zh) and unzip it so that the card holds `dictionaries/zh/`. Install one, not both. To build your own, convert CC-CEDICT with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) or the command under [Chinese](#chinese-mandarin-simplified-or-traditional) below.
+**Mandarin.** Download the simplified or the traditional pack from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and unzip it so that the card holds `dictionaries/zh/`. Install one, not both. To build your own, convert CC-CEDICT with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) or the command under [Chinese](#chinese-mandarin-simplified-or-traditional) below.
 
-**Cantonese.** Convert CC-Canto and CC-CEDICT with the [browser tool](https://eszter007.github.io/matcha-reader-tools/), or the command under [Cantonese](#chinese-cantonese) below, into `dictionaries/yue/`.
+**Cantonese.** Download `dictionaries-yue.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and unzip it so that the card holds `dictionaries/yue/`. To build your own, convert CC-Canto and CC-CEDICT with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) or the command under [Cantonese](#chinese-cantonese) below.
 
 **French, English, German and others.** Find a StarDict dictionary (three files: `.ifo`, `.idx`, `.dict` or `.dict.dz`) and copy them into `dictionaries/<lang>/<name>/`, for example `dictionaries/fr/larousse/`. Nothing to convert.
 
@@ -58,7 +58,7 @@ python3 tools/furigana_ruby/add_furigana_ruby.py --ai --gemini-key-file gemini.k
 
 ## Chinese: Mandarin, simplified or traditional
 
-Ready-made packs come from the [`dictionaries-zh` release](https://github.com/eszter007/matcha-reader/releases/tag/dictionaries-zh): unzip the **simplified** or the **traditional** one onto the card so that it holds `dictionaries/zh/`. Install one, not both: they share the folder. Either pack serves books in both scripts, because every entry is indexed under both forms; they differ in what the entry shows.
+Ready-made packs come from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0): unzip the **simplified** or the **traditional** one onto the card so that it holds `dictionaries/zh/`. Install one, not both: they share the folder. Either pack serves books in both scripts, because every entry is indexed under both forms; they differ in what the entry shows.
 
 | | Simplified pack | Traditional (Taiwanese) pack |
 | --- | --- | --- |
