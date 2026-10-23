@@ -4,12 +4,14 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <new>
 #include <string>
 #include <vector>
 
 namespace {
 size_t failNextArraySize = 0;
+size_t nothrowArrayAllocations = 0;
 }  // namespace
 
 // Keep array allocation and deletion paired, including arrays allocated by the test framework.
@@ -23,6 +25,7 @@ void* operator new[](size_t size) {
 }
 
 void* operator new[](size_t size, const std::nothrow_t&) noexcept {
+  ++nothrowArrayAllocations;
   if (failNextArraySize != 0 && size == failNextArraySize) {
     failNextArraySize = 0;
     return nullptr;
@@ -530,6 +533,31 @@ TEST(SdCardFontTest, StylesShareOnePackedIndex) {
   ASSERT_TRUE(font.load("fixture"));
   expectSparseLookups(font, 0);
   expectSparseLookups(font, 1);
+}
+
+TEST(SdCardFontTest, FontsWithTheSameCoverageShareOneIntervalTable) {
+  makeFont();
+  size_t firstLoad = 0;
+  size_t secondLoad = 0;
+  auto first = std::make_unique<SdCardFont>();
+  {
+    const size_t before = nothrowArrayAllocations;
+    ASSERT_TRUE(first->load("fixture"));
+    firstLoad = nothrowArrayAllocations - before;
+  }
+  SdCardFont second;
+  {
+    const size_t before = nothrowArrayAllocations;
+    ASSERT_TRUE(second.load("fixture"));
+    secondLoad = nothrowArrayAllocations - before;
+  }
+  EXPECT_EQ(firstLoad - 1, secondLoad);
+
+  // The table outlives the font that loaded it while another font still uses it.
+  first.reset();
+  EXPECT_TRUE(second.getEpdFont()->hasCodepoint(FIRST));
+  EXPECT_TRUE(second.getEpdFont()->hasCodepoint(0xFFFD));
+  EXPECT_FALSE(second.getEpdFont()->hasCodepoint(FIRST - 1));
 }
 
 TEST(SdCardFontTest, ACorruptGlyphEntryDrawsAsMissing) {
