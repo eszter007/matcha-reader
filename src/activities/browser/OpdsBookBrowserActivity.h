@@ -95,6 +95,7 @@ class OpdsBookBrowserActivity final : public CatalogActivity {
   void drawFooter() override;
   void startBrowse() override;
   void downloadFinished(bool cancelled) override;
+  void releaseFontsForDownload();
   void performSearch(const std::string& query) override;
   void onBackButton() override;
   // Pagination side buttons; everything else

@@ -587,11 +587,19 @@ bool OpdsBookBrowserActivity::verifyAndRegisterEpub(const std::string& filename)
   return true;
 }
 
+// TLS needs the heap the Details screen left in SD-font tables. The catalog asks for its CJK
+// companion again when it rebuilds its rows (rebuildRowItems()).
+void OpdsBookBrowserActivity::releaseFontsForDownload() {
+  RenderLock lock;
+  sdFontSystem.releaseAllResidentFonts(renderer);
+}
+
 void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   if (book.lcpLicense) {
     downloadLcpBook(book);
     return;
   }
+  releaseFontsForDownload();
   beginDownload(book.title);
 
   // Build full download URL relative to the current feed, not the root server URL
@@ -637,6 +645,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
 // From there the standard protected-read path opens it; the reader itself
 // carries no LCP knowledge.
 void OpdsBookBrowserActivity::downloadLcpBook(const OpdsEntry& book) {
+  releaseFontsForDownload();
   beginDownload(book.title);
 
   const std::string feedUrl = UrlUtils::buildUrl(server.url, currentPath);
@@ -756,6 +765,7 @@ OpdsBookBrowserActivity::LcpUnlock OpdsBookBrowserActivity::requestLcpUnlock(con
 // Entry point after fulfillment: a hash saved for this provider skips the
 // prompt entirely; only a stale one (403) falls through to the keyboard.
 void OpdsBookBrowserActivity::startLcpUnlock() {
+  resumeGlyphSlab();  // the transfer is over
   if (!pendingLcpLicense.provider.empty()) {
     const std::string saved = LCP_PASSPHRASES.get(pendingLcpLicense.provider);
     if (!saved.empty()) {
