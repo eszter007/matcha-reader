@@ -205,27 +205,32 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" "$pack" --repo "$GITHUB_REPOSITORY" --clobber
 
-      - name: Add the firmware table to the release notes
+      - name: Add the file table to the release notes
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          # GitHub lists assets alphabetically, so the notes say which file fits which device.
-          # The marker keeps a re-run from appending the table twice.
+          # GitHub lists assets alphabetically, so the notes say which file is for what. Only
+          # files on the release are listed: the font and dictionary zips are uploaded by hand.
+          # Everything from the marker down is rebuilt, so a re-run replaces the tables.
           marker='<!-- firmware-table -->'
           body="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
-          case "$body" in *"$marker"*) exit 0 ;; esac
+          body="${body%%"$marker"*}"
+          assets="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
           url="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
+          table() {
+            local title="$1" header="$2" rows=""
+            while IFS='|' read -r label asset; do
+              grep -qxF "$asset" <<<"$assets" || continue
+              rows+="| $label | [\`$asset\`]($url/$asset) |"$'\n'
+            done
+            [ -n "$rows" ] || return 0
+            printf '### %s\n\n| %s | File |\n|---|---|\n%s\n' "$title" "$header" "$rows"
+          }
           {
-            printf '%s\n\n%s\n\n' "$body" "$marker"
-            echo '### Which file for my device'
-            echo
-            echo '| Device | File |'
-            echo '|---|---|'
-            while IFS='|' read -r device asset; do
-              echo "| $device | [\`$asset\`]($url/$asset) |"
-            done <<'TABLE'
+            printf '%s\n\n%s\n\n' "$(printf '%s' "$body" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')" "$marker"
+            table 'Which file for my device' 'Device' <<'TABLE'
           X3, and X4 (old)|x4old-x3-firmware.bin
           X4C (new)|x4c-firmware.bin
           X4 Pro|x4pro-firmware.bin
@@ -234,7 +239,17 @@ jobs:
           Metalio 3.97"|metalio_eink4-firmware.bin
           EEGO A4|eego_a4-firmware.bin
           BOOX Picco (USB only)|picco-firmware.bin
-          Language packs for the SD card|language-packs.zip
+          TABLE
+            table 'Extras for the SD card' 'Contents' <<'TABLE'
+          Language packs|language-packs.zip
+          Japanese fonts|japanese-fonts.zip
+          Japanese dictionaries|japanese-dictionaries.zip
+          Chinese fonts (Simplified)|chinese-fonts-simplified.zip
+          Chinese fonts (Traditional)|chinese-fonts-traditional.zip
+          Chinese dictionaries (Simplified)|dictionaries-zh-simplified.zip
+          Chinese dictionaries (Traditional)|dictionaries-zh-traditional.zip
+          Cantonese dictionaries|dictionaries-yue.zip
+          Noto Sans font|noto-sans-font.zip
           TABLE
           } > notes.md
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
