@@ -417,7 +417,7 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
                      : "";
   pageCurrent = parser.currentPage();
   pageTotal = parser.pageCount();
-  const bool feedTruncated = parser.truncated();
+  bool feedTruncated = parser.truncated();
   // Reset the selection before the swap: the render task reads the selected
   // entry under only an empty() guard, and the new feed can be shorter than
   // the old selection.
@@ -426,7 +426,12 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
 
   // Pagination is a bottom tab bar (buildPaginationBar), not list rows.
   auto facetRows = parser.takeFacetEntries();
-  entries.reserve(entries.size() + facetRows.size());
+  // The parser sized `entries` to the heap it had; append only what fits, since a
+  // reallocation that fails aborts.
+  if (facetRows.size() > entries.capacity() - entries.size()) {
+    facetRows.resize(entries.capacity() - entries.size());
+    feedTruncated = true;
+  }
   // Facet groups (sort orders, filters) come after the catalog content, each
   // under its own section heading.
   entries.insert(entries.end(), std::make_move_iterator(facetRows.begin()), std::make_move_iterator(facetRows.end()));
@@ -448,7 +453,7 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
     };
     bool firstUserLink = true;
     for (const auto& link : userLinks) {
-      if (link.href.empty() || entries.size() >= OpdsLimits::MAX_ENTRIES) continue;
+      if (link.href.empty() || entries.size() >= entries.capacity()) continue;
       OpdsEntry entry;
       entry.type = OpdsEntryType::NAVIGATION;
       entry.title = link.label;
@@ -464,9 +469,10 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
     LOG_INF("OPDS", "Feed truncated to fit memory");
   }
 
+  // Rows first: the render task reads rowItems once the state is BROWSING.
+  rebuildRowItems();
   state = entries.empty() ? State::ERROR : State::BROWSING;
   if (entries.empty()) errorMessage = tr(STR_NO_ENTRIES);
-  rebuildRowItems();
   requestUpdate();
 }
 
@@ -496,6 +502,8 @@ void OpdsBookBrowserActivity::rebuildRowItems() {
 }
 
 void OpdsBookBrowserActivity::releaseEntries() {
+  // A repaint queued before this (e.g. by the press that opened a book) may still be drawing these rows.
+  RenderLock lock;
   // The app's interaction table holds row indices (and hit rects) for the old
   // entries; stop routing touches against it until the next render.
   closeRouting();
@@ -872,8 +880,11 @@ void OpdsBookBrowserActivity::openPublicationDetail(const OpdsEntry& entry) {
 
   beginLoading();
 
-  releaseEntries();
-  if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  {
+    RenderLock lock;  // the loading repaint may still be drawing with these caches
+    releaseEntries();
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  }
 
   if (haveSelf) {
     opdsClient.fetchPublication(docUrl, publication);
