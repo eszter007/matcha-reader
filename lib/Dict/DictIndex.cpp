@@ -540,6 +540,15 @@ const char* DictIndex::grammarDatPath() { return datFor(grammarIdxPath(), g_gram
 
 bool DictIndex::isAvailable() { return Storage.exists(vocabIdxPath()) && Storage.exists(vocabDatPath()); }
 
+bool DictIndex::isInstalled(const char* folder) {
+  char previous[sizeof(g_languageFolder)];
+  std::strncpy(previous, g_languageFolder, sizeof(previous));
+  setLanguageFolder(folder);
+  const bool installed = isAvailable();
+  setLanguageFolder(previous);
+  return installed;
+}
+
 void DictIndex::setLanguageFolder(const char* folder) {
   if (!folder || folder[0] == '\0') folder = "jp";
   if (std::strcmp(g_languageFolder, folder) == 0) return;

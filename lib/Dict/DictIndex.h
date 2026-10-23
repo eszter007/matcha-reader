@@ -49,6 +49,9 @@ class DictIndex {
  public:
   // Check whether the dictionary files exist on the SD card.
   static bool isAvailable();
+  // isAvailable() for another language folder ("jp", "zh", "yue"), for a status display. Switches
+  // the folder and back, which drops the lookup caches: not for use during a lookup session.
+  static bool isInstalled(const char* folder);
 
   // Select the language folder the files are read from: "jp" (default) or "zh". The reader sets
   // it when a book opens. Switching releases every cache, so call it between lookup sessions.
