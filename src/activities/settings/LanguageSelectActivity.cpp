@@ -8,6 +8,7 @@
 
 #include "CrossPointSettings.h"
 #include "I18nKeys.h"
+#include "LanguagePackDownloadActivity.h"
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "components/UITheme.h"
@@ -26,7 +27,15 @@ void LanguageSelectActivity::onEnter() {
   const auto* begin = std::begin(SORTED_LANGUAGE_INDICES);
   const auto* end = std::end(SORTED_LANGUAGE_INDICES);
   const auto* it = std::find(begin, end, currentLang);
-  nav.selected = (it != end) ? static_cast<int>(std::distance(begin, it)) : 0;
+  updateRow = LanguagePackDownloadActivity::hasInstalledPacks() ? 1 : 0;
+  nav.selected = ((it != end) ? static_cast<int>(std::distance(begin, it)) : 0) + updateRow;
+
+  if (updateRow) {
+    fui::ListItem item;
+    item.label = tr(STR_UPDATE_LANGUAGE_PACKS);
+    item.actionValue = 0;
+    rowItems[0] = item;
+  }
 
   // Built once here rather than every buildScreen() call: labels are static,
   // and the "Selected" marker can't go stale mid-visit since activateIndex()
@@ -37,13 +46,14 @@ void LanguageSelectActivity::onEnter() {
     item.label = I18N.getLanguageName(lang);
     if (SORTED_LANGUAGE_INDICES[i] == currentLang) {
       item.value = tr(STR_SELECTED);
-    } else if (!I18n::isLanguageAvailable(lang)) {
-      // Listed but not selectable until its pack is on the card. Shown rather than hidden so
-      // the language is discoverable and the reason is on screen.
-      item.value = tr(STR_LANGUAGE_PACK_MISSING);
+    } else {
+      // Selecting either downloads the pack: missing, or built for other firmware and refused.
+      const auto pack = I18n::packState(lang);
+      if (pack == I18n::PackState::Missing) item.value = tr(STR_DOWNLOAD);
+      if (pack == I18n::PackState::Outdated) item.value = tr(STR_UPDATE);
     }
-    item.actionValue = static_cast<int16_t>(i);
-    rowItems[i] = item;
+    item.actionValue = static_cast<int16_t>(i + updateRow);
+    rowItems[i + updateRow] = item;
   }
 
   // The Chinese entries name themselves in characters the built-in CJK subset lacks (简, 體):
@@ -58,7 +68,11 @@ void LanguageSelectActivity::activateIndex(const int index) {
   // unrelated element on the next render.
   app.clearTapFlash();
   nav.selected = index;
-  const uint8_t langIndex = SORTED_LANGUAGE_INDICES[index];
+  if (index < updateRow) {
+    downloadPack(Language::_COUNT);
+    return;
+  }
+  const uint8_t langIndex = SORTED_LANGUAGE_INDICES[index - updateRow];
 
   bool switched = false;
   {
@@ -66,11 +80,10 @@ void LanguageSelectActivity::activateIndex(const int index) {
     switched = I18N.setLanguage(static_cast<Language>(langIndex));
   }
 
-  // Only record a language the UI actually switched to. A language whose .cplang pack is not on
-  // the card leaves the interface in the previous one, and persisting the choice anyway would
-  // mean every later boot silently falls back with nothing on screen explaining why.
+  // Only record a language the UI actually switched to. A missing or stale pack leaves the
+  // interface in the previous one; fetch the pack instead, which records the choice once it loads.
   if (!switched) {
-    requestUpdate();
+    downloadPack(static_cast<Language>(langIndex));
     return;
   }
 
@@ -79,6 +92,20 @@ void LanguageSelectActivity::activateIndex(const int index) {
 
   // Return to previous page
   finish();
+}
+
+void LanguageSelectActivity::downloadPack(const Language target) {
+  startActivityForResult(std::make_unique<LanguagePackDownloadActivity>(renderer, mappedInput, target),
+                         [this](const ActivityResult& result) {
+                           // Leaving the download screen normally restarts the device to free the
+                           // Wi-Fi heap, so this runs only when it did not. A switched language
+                           // leaves, as a direct pick does: the rows were built for the old one.
+                           if (result.isCancelled) {
+                             requestUpdate();
+                           } else {
+                             finish();
+                           }
+                         });
 }
 
 void LanguageSelectActivity::buildScreen(UiScreen& screen) {
@@ -94,7 +121,7 @@ void LanguageSelectActivity::buildScreen(UiScreen& screen) {
   // rowItems was built once in onEnter() and is reused here on every repaint.
   fui::ListProps props;
   props.items = rowItems;
-  props.count = static_cast<uint16_t>(totalItems);
+  props.count = static_cast<uint16_t>(totalItems + updateRow);
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   // Label at the value's font size: both sides of the row read as one unit.

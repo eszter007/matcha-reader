@@ -311,7 +311,7 @@ Some rows only appear on certain devices or while another setting is on. The not
   **reading progress is lost** and each book is prepared again the next time you open it.
 
 - **Language**: The menu language. English, Japanese, Spanish, French and German are built in. The other languages
-  in the list show **Needs pack** until you install their language pack; see
+  in the list show **Download**: select one and the device downloads its language pack over Wi-Fi and switches to it; see
   [Language Packs (SD Card)](#39-language-packs-sd-card). Chinese menus also need a Chinese font on the SD card
   (see [§6.4](#64-chinese-books)), or some characters show as boxes.
 
@@ -931,9 +931,11 @@ For folder layout and more detail, see [docs/sd-card-fonts.md](./docs/sd-card-fo
 
 English, Japanese, Spanish, French and German are built in. The other languages (about 30) come as separate **language packs**, so they do not take up space on a device that only ever uses one of them.
 
-All languages are listed in **Settings → System → Language**. A language marked **Needs pack** has no pack on the card yet. Selecting it keeps the current language.
+All languages are listed in **Settings → System → Language**. A language marked **Download** has no pack on the card yet. Select it, pick a Wi-Fi network, and the device downloads the pack for your firmware version and switches to that language.
 
-To install a pack:
+Once a pack is on the card, **Update language packs** appears at the top of the list. It downloads every installed pack again, plus the one for the selected language. Use it after a firmware update.
+
+To install a pack by hand instead:
 
 1. Open the [language packs release](https://github.com/eszter007/matcha-reader-assets/releases) whose name matches the firmware you are running, e.g. `language-packs-2.0.0-rc-2` for 2.0.0-rc-2. A pack only works with the firmware it was built for. The firmware release notes link to the right one.
 2. Download the `.cplang` file for your language (e.g. `RU.cplang`) and copy it into the folder `/.crosspoint/lang/` on the SD card. Create the folder if it does not exist.
@@ -941,7 +943,7 @@ To install a pack:
 
 **Chinese:** The packs are `ZHS.cplang` (简体中文, Simplified) and `ZHT.cplang` (繁體中文, Traditional). The menus need a Chinese font, so install one first: Noto Sans SC or TC, from the [fonts release](https://github.com/eszter007/matcha-reader-assets/releases/tag/fonts-2.0) (`chinese-fonts-simplified.zip` or `chinese-fonts-traditional.zip`).
 
-**After a firmware update**, download the packs from the new release too. Each pack only fits the firmware it was built for. The device refuses an old pack and shows English instead of wrong text.
+**After a firmware update**, use **Update language packs** (or download the packs from the new release by hand). Each pack only fits the firmware it was built for. The device refuses an old pack and shows English instead of wrong text; your language then shows **Download** again.
 
 ---
 ## 4. Reading Mode
