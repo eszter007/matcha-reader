@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <FontCacheManager.h>
+#include <FontDecompressor.h>
 #include <FreeInkUIIcon.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -22,6 +23,7 @@ void CatalogActivity::onEnter() {
 }
 
 void CatalogActivity::onExit() {
+  resumeGlyphSlab();
   Activity::onExit();
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
@@ -37,6 +39,7 @@ bool CatalogActivity::wifiConnected() {
 }
 
 void CatalogActivity::fail(const StrId message) {
+  resumeGlyphSlab();
   state = State::ERROR;
   errorMessage = I18N.get(message);
   requestUpdate();
@@ -162,6 +165,18 @@ void CatalogActivity::navigateButtons() {
 }
 
 void CatalogActivity::beginDownload(const std::string& title) {
+  // A TLS record needs a ~17KB contiguous block. Drawing a CJK title on the progress screen
+  // would allocate the 24KB glyph slab mid-transfer and take it, so the slab stays off until
+  // the download ends.
+  {
+    RenderLock lock;
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      if (auto* fd = fcm->getDecompressor()) {
+        fd->setSlabEnabled(false);
+        slabSuspended = true;
+      }
+    }
+  }
   state = State::DOWNLOADING;
   statusMessage = title;
   downloadProgress = downloadTotal = 0;
@@ -217,7 +232,17 @@ HttpDownloader::DownloadError CatalogActivity::downloadFile(const std::string& u
       user, password, headers);
 }
 
+void CatalogActivity::resumeGlyphSlab() {
+  if (!slabSuspended) return;
+  RenderLock lock;
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor()) fd->setSlabEnabled(true);
+  }
+  slabSuspended = false;
+}
+
 void CatalogActivity::finishDownload(const HttpDownloader::DownloadError result) {
+  resumeGlyphSlab();
   if (result == HttpDownloader::ABORTED && goHomeAfterCancel) {
     onGoHome();
   } else if (result == HttpDownloader::OK || result == HttpDownloader::ABORTED) {

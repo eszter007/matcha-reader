@@ -69,6 +69,8 @@ class CatalogActivity : public UiListActivity {
   void launchSearch();
   void beginDownload(const std::string& title);
   void finishDownload(HttpDownloader::DownloadError result);
+  // For a successful download that does not end in finishDownload().
+  void resumeGlyphSlab();
   // postBody non-null turns the transfer into a POST of that body (e.g. an
   // LCP license to the fulfillment service), with postContentType as its
   // Content-Type. Same heap gating and cancel/progress pump either way.
@@ -89,6 +91,8 @@ class CatalogActivity : public UiListActivity {
   // downloadFile() refused to start for lack of heap: a different message from a transfer that
   // failed, because the remedy differs (leave the screen and come back, rather than retry).
   bool lowHeapRefused = false;
+  // The glyph slab is suspended while a download runs (see beginDownload()).
+  bool slabSuspended = false;
   bool searchPending = false;  // NavPrevious pressed on a searchable top row
   int lastRenderedPercent = -1;
   unsigned long lastProgressUpdateMs = 0;

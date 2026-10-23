@@ -1062,6 +1062,9 @@ void SdCardFontSystem::releaseAllResidentFonts(GfxRenderer& renderer) {
   // not residency, and ensureLoaded() reads it to decide what to restore. Clearing it here would
   // quietly demote a CJK book's fallback for any caller that only wanted the memory back.
   // Callers that mean to change the policy call setCjkFallbackNeeded().
+  // uiCjkScript_ is a screen's request, not policy: forget it with the companion, or the next
+  // setUiCjkNeeded() for the same script would return early and leave the glyphs missing.
+  uiCjkScript_ = CjkScript::None;
   unloadLookupVariant(renderer);
   if (!fallbackManager_.currentFamilyName().empty()) fallbackManager_.unloadAll(renderer);
   if (!manager_.currentFamilyName().empty()) manager_.unloadAll(renderer);

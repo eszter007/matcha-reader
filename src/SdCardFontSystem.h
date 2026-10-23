@@ -106,6 +106,7 @@ class SdCardFontSystem {
   /// saved selection is kept, and so is the JP-fallback policy; ensureLoaded() restores both when
   /// text rendering is needed again. To drop the Japanese companion for good, the caller says so
   /// with setCjkFallbackNeeded(renderer, CjkScript::None) -- releasing memory does not decide policy.
+  /// A screen's own companion request (setUiCjkNeeded*) is dropped; the screen asks again.
   void releaseAllResidentFonts(GfxRenderer& renderer);
 
   /// Font ID of the loaded companion/fallback font (0 when none). See effective-reader-font
