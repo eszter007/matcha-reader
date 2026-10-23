@@ -557,6 +557,7 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
             ? 1
             : 0;
   }
+  const size_t firstNewWord = currentTextBlock->size();
   int frenchVerbLen = 0;
   int frenchConnectorLen = 0;
   if (frenchBookCache &&
@@ -599,35 +600,33 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   }
   if (effectiveEmphasis != CssTextEmphasis::None) {
     if (const char* mark = emphasisMarkUtf8(effectiveEmphasis)) {
-      // Synthetic per-glyph ruby: one mark per codepoint, each followed by an ideographic space.
+      // Synthetic ruby, one mark per codepoint. addWord() splits CJK runs into one token per
+      // character, so each token gets its own marks; ruby centred over the whole run would
+      // land on the last token only.
       //
-      // The spacer is what makes the marks line up. Ruby draws in SUP style, which drawText
-      // renders at 50% scale, and TextBlock::render centres the whole ruby string over the whole
-      // word. Bare marks therefore advance only N/2 character widths and bunch into the middle
-      // third of the run they are meant to mark -- observed on device as a dense row of marks
-      // roughly a third the width of the emphasised text, aligned with none of it. U+3000 is
-      // full-width, so at SUP it is another 0.5 character: mark + space = exactly one character
-      // cell, making the run the same width as the text and putting one mark per character.
+      // Ruby draws in SUP style at 50% scale, so a mark is half a character wide. Joining the
+      // marks of a multi-codepoint token with U+3000 (also half a character at SUP) makes the
+      // string n - 0.5 characters wide, which centres mark i exactly over character i.
+      // U+3000 shares its block with the kutouten, so it is present wherever the marks are.
       //
-      // U+3000 shares its block (CJK Symbols and Punctuation) with the brackets and kutouten used
-      // on every page, so it is present wherever the marks themselves are.
-      //
-      // A real <rt> annotation following this word simply overwrites the marks - furigana wins
-      // over bouten. Marks render through the ruby path, so they follow the furigana toggle.
-      int cps = 0;
-      for (int i = 0; partWordBuffer[i] != '\0'; i++) {
-        if ((static_cast<unsigned char>(partWordBuffer[i]) & 0xC0) != 0x80) cps++;
-      }
-      if (cps > 0 && cps <= 24) {
-        static constexpr char IDEOGRAPHIC_SPACE[] = "\xE3\x80\x80";  // U+3000
-        std::string marks;
-        const size_t markLen = strlen(mark);
-        marks.reserve((markLen + sizeof(IDEOGRAPHIC_SPACE) - 1) * cps);
-        for (int i = 0; i < cps; i++) {
-          marks.append(mark, markLen);
-          marks.append(IDEOGRAPHIC_SPACE, sizeof(IDEOGRAPHIC_SPACE) - 1);
+      // A real <rt> annotation following this word overwrites the marks - furigana wins over
+      // bouten. Marks render through the ruby path, so they follow the furigana toggle.
+      static constexpr char IDEOGRAPHIC_SPACE[] = "\xE3\x80\x80";  // U+3000
+      const size_t markLen = strlen(mark);
+      for (size_t w = firstNewWord; w < currentTextBlock->size(); w++) {
+        const std::string_view token = currentTextBlock->wordAt(w);
+        size_t cps = 0;
+        for (const char c : token) {
+          if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) cps++;
         }
-        currentTextBlock->setLastWordRuby(marks);
+        if (cps == 0 || cps > 24) continue;
+        std::string marks;
+        marks.reserve(markLen * cps + (sizeof(IDEOGRAPHIC_SPACE) - 1) * (cps - 1));
+        for (size_t i = 0; i < cps; i++) {
+          if (i > 0) marks.append(IDEOGRAPHIC_SPACE, sizeof(IDEOGRAPHIC_SPACE) - 1);
+          marks.append(mark, markLen);
+        }
+        currentTextBlock->setRubyForWordAt(w, marks);
       }
     }
   }
