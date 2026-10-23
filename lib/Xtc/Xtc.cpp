@@ -665,12 +665,13 @@ size_t Xtc::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSize) con
 
 xtc::XtcError Xtc::loadPageStreaming(uint32_t pageIndex,
                                      std::function<void(const uint8_t* data, size_t size, size_t offset)> callback,
-                                     size_t chunkSize, CancelFn shouldCancel, void* cancelCtx) const {
+                                     size_t chunkSize, CancelFn shouldCancel, void* cancelCtx, size_t startOffset,
+                                     size_t length) const {
   if (!loaded || !parser) {
     return xtc::XtcError::FILE_NOT_FOUND;
   }
   return const_cast<xtc::XtcParser*>(parser.get())
-      ->loadPageStreaming(pageIndex, callback, chunkSize, shouldCancel, cancelCtx);
+      ->loadPageStreaming(pageIndex, callback, chunkSize, shouldCancel, cancelCtx, startOffset, length);
 }
 
 uint8_t Xtc::calculateProgress(uint32_t currentPage) const {
