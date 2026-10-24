@@ -9,6 +9,7 @@
 #include <WiFi.h>
 
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
@@ -53,9 +54,21 @@ void CatalogActivity::beginLoading() {
 
 void CatalogActivity::checkAndConnectWifi() {
   if (wifiConnected())
-    startBrowse();
+    startBrowseOnline();
   else
     launchWifiSelection();
+}
+
+void CatalogActivity::startBrowseOnline() {
+  // The TLS handshake needs a ~20KB block. SD fonts the screens underneath left resident (a
+  // Japanese title on Home loads tens of KB) can leave too little, and wolfSSL then fails with
+  // MEMORY_E before any request is sent. Fonts reload when something draws with them again.
+  {
+    RenderLock lock;
+    sdFontSystem.releaseAllResidentFonts(renderer);
+  }
+  LOG_DBG("CAT", "Heap before first fetch: %u free, %u max block", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  startBrowse();
 }
 
 void CatalogActivity::launchWifiSelection() {
@@ -71,7 +84,7 @@ void CatalogActivity::launchWifiSelection() {
     if (result.isCancelled)
       wifiSelectionCancelled();
     else
-      startBrowse();
+      startBrowseOnline();
   });
 }
 
