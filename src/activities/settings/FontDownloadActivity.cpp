@@ -257,6 +257,12 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   // releases the resident families as well as their glyph slabs and does it
   // under RenderLock. Nothing repopulates either between there and here.
 
+  // Rescan installed families before any TLS or JSON buffers exist. The rescan
+  // frees and reallocates every registry entry, which fragments the heap if it
+  // runs while the manifest DOM and the catalog arena are live.
+  clearManifest();
+  fontInstaller_.refreshRegistry();
+
   // Refuse before even opening the connection: the WiFi/TLS handshake and the
   // manual HTTP client (SecureClient/SecureHttpClient) run their own
   // std::string/std::vector growth with no heap gate of their own. Failing
@@ -390,7 +396,6 @@ bool FontDownloadActivity::parseManifestFile() {
 
   baseUrl_ = doc["baseUrl"] | "";
   downloadUrl_.reserve(baseUrl_.size() + 128);
-  fontInstaller_.refreshRegistry();
 
   stringArena_ = makeUniqueNoThrow<char[]>(arenaBytes);
   if (!stringArena_) {

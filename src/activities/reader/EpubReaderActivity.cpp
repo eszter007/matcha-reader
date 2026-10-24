@@ -110,7 +110,6 @@ constexpr uint32_t RESUME_HEAP_FLOOR = 40 * 1024;
 // prewarmVerticalPageGlyphs). Also the point at which reclaiming font memory becomes worth its
 // rebuild cost: below this, every page falls back to 40-70 individual on-demand SD glyph loads.
 constexpr uint32_t PREWARM_MIN_ALLOC_READ = 12 * 1024;
-constexpr size_t initialBookmarkCacheCapacity = 16;
 constexpr float bookmarkProgressEpsilon = 0.0001f;
 // Bump when ReaderPrefs gains/changes fields; stale files fall back to globals.
 // v2: reader font size is a point size, not a size-enum slot (upstream 1.5.0). A v1 file's
@@ -7118,9 +7117,6 @@ void EpubReaderActivity::restoreSavedPosition() {
 
 void EpubReaderActivity::loadCachedBookmarks() {
   cachedBookmarks.clear();
-  if (cachedBookmarks.capacity() < initialBookmarkCacheCapacity) {
-    cachedBookmarks.reserve(initialBookmarkCacheCapacity);
-  }
   if (!epub) {
     currentPageBookmarked = false;
     return;

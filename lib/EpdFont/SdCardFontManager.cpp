@@ -32,39 +32,46 @@ int SdCardFontManager::computeFontId(uint32_t contentHash, const char* familyNam
   return id != 0 ? id : 1;  // 0 is reserved as "not found" sentinel
 }
 
-int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* familyName, GfxRenderer& renderer) {
+int SdCardFontManager::loadFile(const SdCardFontFamilyInfo& family, const SdCardFontFileInfo& file,
+                                GfxRenderer& renderer) {
+  char path[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
+  if (!family.filePath(file, path, sizeof(path))) {
+    LOG_ERR("SDMGR", "Font path too long in family %s", family.name.c_str());
+    return 0;
+  }
   // The heap as the load STARTS. A load that fails part-way leaves a heap that has already been
   // churned by its own partial allocations, so the state at the failure site alone cannot say
   // whether there was ever room; this is the before picture.
-  LOG_DBG("SDMGR", "Loading %s (free=%u largest=%u)", file.path.c_str(),
+  LOG_DBG("SDMGR", "Loading %s (free=%u largest=%u)", path,
           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
   auto* font = new (std::nothrow) SdCardFont();
   if (!font) {
-    LOG_ERR("SDMGR", "Failed to allocate SdCardFont for %s", file.path.c_str());
+    LOG_ERR("SDMGR", "Failed to allocate SdCardFont for %s", path);
     return 0;
   }
 
-  if (!font->load(file.path.c_str())) {
-    LOG_ERR("SDMGR", "Failed to load %s (free=%u largest=%u)", file.path.c_str(),
+  if (!font->load(path)) {
+    LOG_ERR("SDMGR", "Failed to load %s (free=%u largest=%u)", path,
             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
     delete font;
     return 0;
   }
 
+  const char* familyName = family.name.c_str();
   int fontId = computeFontId(font->contentHash(), familyName, file.pointSize);
   // Guard against collision with built-in font IDs (astronomically unlikely
   // with FNV-1a hashes, but provides a safety net)
   if (renderer.getFontMap().count(fontId) != 0) {
-    LOG_ERR("SDMGR", "Font ID %d collides with existing font, skipping %s", fontId, file.path.c_str());
+    LOG_ERR("SDMGR", "Font ID %d collides with existing font, skipping %s", fontId, path);
     delete font;
     return 0;
   }
   renderer.registerSdCardFont(fontId, font);
   loaded_.push_back({font, fontId, file.pointSize});
 
-  LOG_DBG("SDMGR", "Loaded %s size=%u id=%d styles=%u", file.path.c_str(), file.pointSize, fontId, font->styleCount());
+  LOG_DBG("SDMGR", "Loaded %s size=%u id=%d styles=%u", path, file.pointSize, fontId, font->styleCount());
 
   EpdFontFamily fontFamily(font->getEpdFont(0), font->getEpdFont(1), font->getEpdFont(2), font->getEpdFont(3));
   renderer.insertFont(fontId, fontFamily);
@@ -83,7 +90,7 @@ bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRender
     return false;
   }
 
-  if (loadFile(*selected, family.name.c_str(), renderer) == 0) {
+  if (loadFile(family, *selected, renderer) == 0) {
     return false;
   }
 
@@ -103,7 +110,7 @@ int SdCardFontManager::loadFamilyExtraSize(const SdCardFontFamilyInfo& family, G
     if (lf.size == pointSize) return lf.fontId;
   }
 
-  return loadFile(*file, family.name.c_str(), renderer);
+  return loadFile(family, *file, renderer);
 }
 
 bool SdCardFontManager::hasSize(const uint8_t pointSize) const {
