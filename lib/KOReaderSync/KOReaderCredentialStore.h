@@ -48,6 +48,9 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   bool syncClippings = false;                                       // Opt-in crosspoint-sync extension
   KOReaderSyncBehavior syncBehavior = KOReaderSyncBehavior::SMART;
   KOReaderServerType serverType = KOReaderServerType::CROSSPOINT;
+  // Last day (since 2000-01-01) whose reading time reached the server, and the account it went to.
+  int32_t statsUploadedDay = 0;
+  std::string statsAccount;
 
   // Fixed-size to avoid vector growth on the settings edit path; an empty
   // name marks an unused slot.
@@ -103,6 +106,9 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
 
   void setSyncClippings(bool enabled) { syncClippings = enabled; }
   bool getSyncClippings() const { return syncClippings; }
+  // 0 when nothing was uploaded to the current account and server yet.
+  int32_t getStatsUploadedDay() const;
+  void setStatsUploadedDay(int32_t day);
 
   // Sync behavior
   void setSyncBehavior(KOReaderSyncBehavior behavior);
