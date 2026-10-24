@@ -28,6 +28,8 @@ void KOReaderCredentialStore::toJson(JsonDocument& doc) const {
   doc["sendMetadata"] = getSendMetadata();
   doc["syncClippings"] = getSyncClippings();
   doc["syncBehavior"] = static_cast<uint8_t>(getSyncBehavior());
+  doc["statsUploadedDay"] = statsUploadedDay;
+  doc["statsAccount"] = statsAccount;
   JsonArray headers = doc["headers"].to<JsonArray>();
   for (const auto& header : customHeaders) {
     JsonObject headerObj = headers.add<JsonObject>();
@@ -85,6 +87,8 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
   }
   setSendMetadata(doc["sendMetadata"] | false);
   setSyncClippings(doc["syncClippings"] | false);
+  statsUploadedDay = doc["statsUploadedDay"] | 0;
+  statsAccount = doc["statsAccount"] | "";
 
   size_t headerIndex = 0;
   for (JsonObjectConst headerObj : doc["headers"].as<JsonArrayConst>()) {
@@ -141,6 +145,16 @@ void KOReaderCredentialStore::clearCredentials() {
   password.clear();
   saveToFile();
   LOG_DBG("KRS", "Cleared KOReader credentials");
+}
+
+// A new account or server starts its stats upload from scratch.
+int32_t KOReaderCredentialStore::getStatsUploadedDay() const {
+  return statsAccount == username + "@" + getBaseUrl() ? statsUploadedDay : 0;
+}
+
+void KOReaderCredentialStore::setStatsUploadedDay(const int32_t day) {
+  statsUploadedDay = day;
+  statsAccount = username + "@" + getBaseUrl();
 }
 
 void KOReaderCredentialStore::setServerUrl(const std::string& url) {

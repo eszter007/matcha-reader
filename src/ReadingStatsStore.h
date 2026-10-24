@@ -123,6 +123,8 @@ class ReadingStatsStore {
   int getDaysRead() const;
   uint32_t getTotalMinutes() const;
   uint16_t getBooksFinished() const { return booksFinished; }
+  bool isFinished(const std::string& bookPath) const;
+  const std::vector<DailyReading>& getDays() const { return days; }
 
   uint16_t getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const;
   uint16_t getMinutesThisWeek(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;
