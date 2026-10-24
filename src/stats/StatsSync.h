@@ -36,14 +36,20 @@ int32_t daysSince2000(uint16_t year, uint8_t month, uint8_t day);
 // weekday totals cover all of it, `daily` only the slice.
 void buildGlobal(JsonDocument& doc, const std::vector<Day>& days, const Totals& totals, size_t from, size_t count);
 
-// One book's snapshot from its BookStats days (sorted ascending). finished: the book is on the finished
-// list; its last reading day stands in for the finish date, which the device does not record.
-void buildBook(JsonDocument& doc, const std::string& documentHash, const std::vector<BookDay>& days, uint32_t sessions,
-               bool finished);
+// Books per /stats/books upload. The server takes 20; 10 keeps the body near 4 KB while TLS holds its buffers.
+constexpr size_t BOOKS_PER_UPLOAD = 10;
 
-// Only for crosspoint-sync servers with credentials. Failures are logged and never fail the
+// Appends one book's snapshot from its BookStats days (sorted ascending) to a /stats/books body. finished: the
+// book is on the finished list; its last reading day stands in for the finish date, which the device does not
+// record.
+void addBook(JsonDocument& doc, const std::string& documentHash, const std::vector<BookDay>& days, uint32_t sessions,
+             bool finished);
+
+// Uploads the stats of every book read since the last upload (all of them the first time), then the daily
+// totals. Only for crosspoint-sync servers with credentials. Failures are logged and never fail the
 // caller's sync: progress matters more than stats. The device id is fixed, as for progress, so the
-// server treats every CrossPoint reader on one account as the same device.
+// server treats every CrossPoint reader on one account as the same device. bookPath is the open book; it is
+// sent even when read before the last upload, under documentHash.
 void run(const std::string& bookPath, const std::string& documentHash);
 
 }  // namespace statsSync

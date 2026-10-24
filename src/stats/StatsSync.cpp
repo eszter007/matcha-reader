@@ -2,7 +2,9 @@
 
 #include <BookStats.h>
 #include <HalMemory.h>
+#include <HalStorage.h>
 #include <KOReaderCredentialStore.h>
+#include <KOReaderDocumentId.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <ReadingStatsStore.h>
@@ -52,6 +54,57 @@ bool put(freeink::SecureHttpClient& http, const char* path, const std::string& b
   }
   return true;
 }
+
+struct PendingBook {
+  std::string path;
+  int32_t lastReadDay;  // ReadingStatsStore's day number
+  bool finished;
+};
+
+// The hash progress sync uses for this book.
+std::string documentHashFor(const std::string& path) {
+  return KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::FILENAME
+             ? KOReaderDocumentId::calculateFromFilename(path)
+             : KOReaderDocumentId::calculate(path);
+}
+
+// A deleted book or a manga folder has no document hash and is skipped. Any other failure is a read
+// error that the next sync retries.
+bool unidentifiable(const std::string& path) {
+  if (!Storage.exists(path.c_str())) return true;
+  HalFile file = Storage.open(path.c_str());
+  return file && file.isDirectory();
+}
+
+// One /stats/books body, built with no TLS session open: a book's history can take up to 12 KB.
+// `next` moves past the books handled; false on a read error, which stops the upload.
+bool buildBooks(const std::vector<PendingBook>& books, size_t& next, const std::string& openPath,
+                const std::string& openHash, std::string& body, int& count) {
+  JsonDocument doc;
+  count = 0;
+  for (; next < books.size() && count < static_cast<int>(statsSync::BOOKS_PER_UPLOAD); next++) {
+    const PendingBook& book = books[next];
+    const std::string hash = book.path == openPath ? openHash : documentHashFor(book.path);
+    if (hash.empty()) {
+      if (unidentifiable(book.path)) continue;
+      LOG_ERR("STATS", "No document hash for %s", book.path.c_str());
+      return false;
+    }
+    // load() reserves the whole history and aborts on failure under -fno-exceptions.
+    if (HalMemory::getDefaultHeap().largestBlockBytes < BookStats::MAX_DAYS * sizeof(BookDay) + 1024) {
+      LOG_ERR("STATS", "Not enough heap for book stats");
+      return false;
+    }
+    BookStats stats;
+    if (!stats.load(book.path.c_str())) return false;
+    if (stats.getDays().empty()) continue;
+    statsSync::addBook(doc, hash, stats.getDays(), stats.getSessions(), book.finished);
+    count++;
+  }
+  body.clear();
+  if (count > 0) serializeJson(doc, body);
+  return true;
+}
 }  // namespace
 
 void statsSync::run(const std::string& bookPath, const std::string& documentHash) {
@@ -65,8 +118,8 @@ void statsSync::run(const std::string& bookPath, const std::string& documentHash
   tm local{};
   localtime_r(&now, &local);
 
-  // Everything is built before any TLS: the stats tables can be tens of KB and are gone by then.
-  // The day list is reserved first, so it sits below the tables instead of splitting the heap they free.
+  // The stats tables are read before any TLS: they can be tens of KB and are gone by then. The day and
+  // book lists are reserved first, so they sit below the tables instead of splitting the heap they free.
   Totals totals;
   totals.today = daysSince2000(local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
   std::vector<Day> days;
@@ -76,7 +129,13 @@ void statsSync::run(const std::string& bookPath, const std::string& documentHash
     return;
   }
   days.reserve(HISTORY_DAYS);
-  bool finished = false;
+  std::vector<PendingBook> books;
+  if (HalMemory::getDefaultHeap().largestBlockBytes < ReadingStatsStore::MAX_BOOKS * sizeof(PendingBook) + 1024) {
+    LOG_ERR("STATS", "Not enough heap for the book list");
+    return;
+  }
+  books.reserve(ReadingStatsStore::MAX_BOOKS);
+  const int32_t booksFrom = KOREADER_STORE.getStatsBooksDay();
   {
     ReadingStatsStore::Loaded stats;
     if (!stats.loaded()) {
@@ -93,18 +152,16 @@ void statsSync::run(const std::string& bookPath, const std::string& documentHash
     }
     totals.booksFinished = READING_STATS_STORE.getBooksFinished();
     totals.longestStreak = READING_STATS_STORE.getLongestStreak();
-    finished = READING_STATS_STORE.isFinished(bookPath);
-  }
-
-  std::string body;
-  {
-    BookStats book;
-    if (book.load(bookPath.c_str()) && !book.getDays().empty()) {
-      JsonDocument doc;
-      buildBook(doc, documentHash, book.getDays(), book.getSessions(), finished);
-      serializeJson(doc, body);
+    // Books read on or after the marker's day (it may have grown since) and the open book.
+    for (const auto& b : READING_STATS_STORE.getBooks()) {
+      if (b.lastReadDay >= booksFrom || b.path == bookPath) {
+        books.push_back({b.path, b.lastReadDay, READING_STATS_STORE.isFinished(b.path)});
+      }
     }
   }
+  // Oldest first, so the marker can follow each accepted batch.
+  std::sort(books.begin(), books.end(),
+            [](const PendingBook& a, const PendingBook& b) { return a.lastReadDay < b.lastReadDay; });
 
   auto http = makeUniqueNoThrow<freeink::SecureHttpClient>();
   const auto heap = HalMemory::getDefaultHeap();
@@ -113,8 +170,24 @@ void statsSync::run(const std::string& bookPath, const std::string& documentHash
     return;
   }
   http->setInsecure();
-  // A rejected book does not hold back the totals.
-  if (!body.empty() && !put(*http, "/api/v1/stats/books", body, "accepted", 1)) LOG_ERR("STATS", "Book stats skipped");
+  // Book stats first. A failed batch does not hold back the totals; the next sync starts again from it.
+  std::string body;
+  bool ok = true;
+  bool booksDone = false;
+  int32_t booksDay = booksFrom;
+  for (size_t next = 0; next < books.size();) {
+    int count = 0;
+    if (!buildBooks(books, next, bookPath, documentHash, body, count) ||
+        (count > 0 && !put(*http, "/api/v1/stats/books", body, "accepted", count))) {
+      LOG_ERR("STATS", "Book stats incomplete");
+      ok = false;
+      break;
+    }
+    http->end();  // the next body is built without TLS buffers on the heap
+    // max: the open book can be older than the marker.
+    booksDay = std::max(booksDay, books[next - 1].lastReadDay);
+    booksDone = true;
+  }
 
   // Days from the last one uploaded (resent: today's minutes grow) onwards, 20 per request.
   const int32_t uploaded = KOREADER_STORE.getStatsUploadedDay();
@@ -122,7 +195,6 @@ void statsSync::run(const std::string& bookPath, const std::string& documentHash
                                  [](const Day& d, const int32_t day) { return d.day < day; }) -
                 days.begin();
   const size_t start = from;
-  bool ok = true;
   for (int batch = 0; batch < MAX_BATCHES; batch++) {
     const size_t count = std::min(DAYS_PER_UPLOAD, days.size() - from);
     body.clear();
@@ -141,10 +213,9 @@ void statsSync::run(const std::string& bookPath, const std::string& documentHash
   // Free the TLS session before the progress request that follows.
   http->end();
   http.reset();
-  // One SD write: a day sent twice is harmless, the server keeps the larger value.
-  if (from > start) {
-    KOREADER_STORE.setStatsUploadedDay(days[from - 1].day);
-    KOREADER_STORE.saveToFile();
-  }
+  // One SD write: a day or book sent twice is harmless, the server keeps the larger value or the newest snapshot.
+  if (from > start) KOREADER_STORE.setStatsUploadedDay(days[from - 1].day);
+  if (booksDone) KOREADER_STORE.setStatsBooksDay(booksDay);
+  if (from > start || booksDone) KOREADER_STORE.saveToFile();
   if (ok) LOG_INF("STATS", "Reading stats uploaded");
 }

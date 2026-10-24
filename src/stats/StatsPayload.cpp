@@ -87,10 +87,11 @@ void statsSync::buildGlobal(JsonDocument& doc, const std::vector<Day>& days, con
   }
 }
 
-void statsSync::buildBook(JsonDocument& doc, const std::string& documentHash, const std::vector<BookDay>& days,
-                          const uint32_t sessions, const bool finished) {
+void statsSync::addBook(JsonDocument& doc, const std::string& documentHash, const std::vector<BookDay>& days,
+                        const uint32_t sessions, const bool finished) {
   doc["device_id"] = "crosspoint-reader";
-  JsonObject item = doc["items"].to<JsonArray>().add<JsonObject>();
+  JsonArray items = doc["items"].is<JsonArray>() ? doc["items"].as<JsonArray>() : doc["items"].to<JsonArray>();
+  JsonObject item = items.add<JsonObject>();
   uint32_t seconds = 0;
   uint32_t dow[7] = {};
   for (const auto& d : days) {

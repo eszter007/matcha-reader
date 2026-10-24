@@ -64,7 +64,7 @@ void book() {
   // 2026-10-01 is a Thursday, 2026-10-06 a Tuesday.
   const std::vector<BookDay> days = {{2026, 10, 1, 10}, {2026, 10, 6, 15}};
   JsonDocument doc;
-  statsSync::buildBook(doc, "0123456789abcdef0123456789abcdef", days, 3, true);
+  statsSync::addBook(doc, "0123456789abcdef0123456789abcdef", days, 3, true);
   JsonObjectConst item = doc["items"][0];
   assert(item["seconds"] == 1500);
   assert(item["sessions"] == 3);
@@ -74,9 +74,12 @@ void book() {
   assert(item["dow"][3] == 600);                 // Thursday
   assert(item["dow"][1] == 900);                 // Tuesday
 
-  JsonDocument unfinished;
-  statsSync::buildBook(unfinished, "0123456789abcdef0123456789abcdef", days, 3, false);
-  assert(unfinished["items"][0]["finished_date"] == 0);
+  // A second book goes into the same body.
+  statsSync::addBook(doc, "fedcba9876543210fedcba9876543210", days, 1, false);
+  assert(doc["items"].size() == 2);
+  assert(doc["items"][0]["completed"] == true);
+  assert(doc["items"][1]["document"] == "fedcba9876543210fedcba9876543210");
+  assert(doc["items"][1]["finished_date"] == 0);
 }
 }  // namespace
 
