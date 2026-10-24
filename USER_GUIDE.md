@@ -822,6 +822,8 @@ For a shortcut, set **Settings → Controls → Shortcuts → Long-Press Menu** 
 
 **Sync Clippings** is off by default. Turn it on only with a CrossPoint sync server that supports clippings. **Sync Progress** then also uploads and downloads this book's clippings. Leave it off for ordinary KOSync servers.
 
+With the CrossPoint sync server, **Sync Progress** also uploads your reading stats: minutes per day, total time, books finished and your longest streak, plus this book's reading time, sessions and finished status (the device does not record a finish date, so your last reading day stands in for it). The CrossPoint app then shows your measured reading time. Stats are only sent once the clock is set (see [Syncing the Clock](#syncing-the-clock)). The first sync sends up to two years of history, so it takes longer than usual; later syncs only send the days since. If the upload fails, your progress still syncs and the next sync picks up where it stopped. Time of day and pages are not recorded on the device, so those charts in the app stay empty for it. All CrossPoint readers on one account count as one device. Ordinary KOSync servers get no stats.
+
 ### 3.7 Sleep Screen
 
 Choose what the screen shows while the device sleeps in **Settings → Sleep → Sleep Screen**.
@@ -1598,6 +1600,8 @@ still be chosen as the fallback dictionary. Japanese files in the old `dict/` fo
 
 Reading time is saved every five minutes and again when you close a book. If the battery runs out or the device
 crashes, you lose at most the last few minutes. Manga counts the same as EPUBs.
+
+With the CrossPoint sync server, **Sync Progress** also uploads these stats; see [Syncing While Reading](#syncing-while-reading).
 
 ### 7.1 Insights
 

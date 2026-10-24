@@ -27,6 +27,7 @@
 #include "components/UiAppHelpers.h"  // list icons for the compare rows
 #include "fontIds.h"
 #include "network/WifiPowerSaveGuard.h"
+#include "stats/StatsSync.h"
 #include "util/PluginEvents.h"
 #include "util/PluginHttp.h"
 
@@ -198,6 +199,15 @@ void KOReaderSyncActivity::performSync() {
       requestUpdate(true);
       return;
     }
+  }
+
+  if (KOREADER_STORE.getServerType() == KOReaderServerType::CROSSPOINT) {
+    {
+      RenderLock lock(*this);
+      statusMessage = tr(STR_SYNCING_STATS);
+    }
+    requestUpdateAndWait();
+    statsSync::run(epubPath, documentHash);
   }
 
   {

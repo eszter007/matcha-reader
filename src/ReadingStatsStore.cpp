@@ -1078,3 +1078,7 @@ bool ReadingStatsStore::compact() {
   release();
   return ok;
 }
+
+bool ReadingStatsStore::isFinished(const std::string& bookPath) const {
+  return std::find(finishedBookPaths.begin(), finishedBookPaths.end(), bookPath) != finishedBookPaths.end();
+}
