@@ -20,9 +20,10 @@ struct KOReaderMetadata {
   // verbatim (JSON types kept) inside the metadata object; the firmware
   // assigns no meaning to the keys.
   std::string extraJson;
-  std::string isbn;    // ISBN from package metadata when available
-  std::string asin;    // Amazon ASIN from package metadata when available
-  std::string series;  // Series/collection title when available
+  std::string isbn;      // ISBN from package metadata when available
+  std::string asin;      // Amazon ASIN from package metadata when available
+  std::string series;    // Series/collection title when available
+  std::string language;  // dc:language (BCP 47, e.g. "ja") when the EPUB declares one
   std::optional<float> seriesIndex;
 };
 

@@ -235,6 +235,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
     meta["filename"] = progress.metadata->filename;
     meta["title"] = progress.metadata->title;
     meta["authors"] = progress.metadata->authors;
+    if (!progress.metadata->language.empty()) meta["language"] = progress.metadata->language;
     if (KOREADER_STORE.supportsExtendedMetadata()) {
       if (!progress.metadata->isbn.empty()) meta["isbn"] = progress.metadata->isbn;
       if (!progress.metadata->asin.empty()) meta["asin"] = progress.metadata->asin;

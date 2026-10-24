@@ -411,6 +411,8 @@ void KOReaderSyncActivity::performUpload() {
     if (epub) {
       meta.title = epub->getTitle();
       meta.authors = epub->getAuthor();
+      // CrossPoint and custom servers store it; plain KOSync has no such field.
+      if (KOREADER_STORE.supportsRichProgress()) meta.language = epub->getLanguage();  // book cache, no extra read
       if (KOREADER_STORE.supportsExtendedMetadata()) {
         Epub::SyncMetadata syncMetadata;
         if (epub->loadSyncMetadata(syncMetadata)) {
