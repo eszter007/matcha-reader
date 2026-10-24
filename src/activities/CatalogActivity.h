@@ -65,6 +65,8 @@ class CatalogActivity : public UiListActivity {
   void fail(StrId message);
   void beginLoading();
   void checkAndConnectWifi();
+  // Frees the resident SD fonts so the first TLS fetch has room, then calls startBrowse().
+  void startBrowseOnline();
   void launchWifiSelection();
   void launchSearch();
   void beginDownload(const std::string& title);
