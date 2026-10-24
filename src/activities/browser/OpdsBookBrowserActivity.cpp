@@ -399,6 +399,9 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
     return;
   }
 
+  // Everything the render task reads (header, pagination bar, entries, rows, state) changes under
+  // the lock: a repaint that started before beginLoading() may still be drawing the old feed.
+  RenderLock lock;
   searchTemplate = parser.getSearchTemplate();
   searchDescriptionUrl = parser.getSearchDescriptionUrl();
   searchTemplateBase = "";  // feed-inline template resolves against the feed URL
@@ -473,6 +476,7 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   rebuildRowItems();
   state = entries.empty() ? State::ERROR : State::BROWSING;
   if (entries.empty()) errorMessage = tr(STR_NO_ENTRIES);
+  lock.unlock();
   requestUpdate();
 }
 
