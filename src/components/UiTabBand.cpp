@@ -245,22 +245,24 @@ void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, 
   tabProps.tabStyles = tabStyles;
   const fui::Rect contentTabRect = screen.takeTop(tabBand);
   const fui::Rect frameRect = screen.frame().screen();
-  // Tab chrome is a full-width screen band like the legacy GUI tab bar. The
-  // remaining list content still stays inside the device safe area.
-  const fui::Rect tabRect{frameRect.x, contentTabRect.y, frameRect.width, contentTabRect.height};
+  const fui::Rect safeRect = screen.frame().safeRect();
+  // The tab background reaches the display edges, but stops before the button labels.
+  const fui::Rect tabRect{static_cast<int16_t>(contentTabRect.x - safeRect.x), contentTabRect.y,
+                          static_cast<int16_t>(contentTabRect.width + frameRect.width - safeRect.width),
+                          contentTabRect.height};
   // Focused band wash is the Lyra treatment; legacy RoundedRaff keeps the
   // band plain in both states.
   if (tabsFocused && !metrics.tabPillFullSlot) {
     screen.target().fill(tabRect, fui::Paint::dither(fui::Color::LightGray));
   }
-  // The band chrome (wash, divider) spans the full screen width, but the tab
-  // slots keep the content side padding so the outer pills never touch the
-  // bezel. The divider is drawn here rather than by tabBar(), which would
-  // inset it along with the slots; the slot band is shortened by the same 1px
-  // so pill geometry is unchanged.
+  // The tab slots keep the content side padding inside the content area, so the outer pills
+  // never touch the bezel or the button labels. The divider is drawn here rather than by
+  // tabBar(), which would inset it along with the slots; the slot band is shortened by the same
+  // 1px so pill geometry is unchanged.
   const auto side = static_cast<int16_t>(metrics.contentSidePadding);
-  const fui::Rect slotsRect{static_cast<int16_t>(tabRect.x + side), tabRect.y,
-                            static_cast<int16_t>(tabRect.width - 2 * side), static_cast<int16_t>(tabRect.height - 1)};
+  const fui::Rect slotsRect{static_cast<int16_t>(contentTabRect.x + side), tabRect.y,
+                            static_cast<int16_t>(contentTabRect.width - 2 * side),
+                            static_cast<int16_t>(tabRect.height - 1)};
   tabProps.divider = false;
   fui::tabBar(screen.frame(), slotsRect, tabProps);
   screen.target().fill(fui::Rect{tabRect.x, static_cast<int16_t>(tabRect.bottom() - 1), tabRect.width, 1},

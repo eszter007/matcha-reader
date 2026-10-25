@@ -319,6 +319,8 @@ Some rows only appear on certain devices or while another setting is on. The not
 
 - **Plugins** (off by default): Turns the plugins on your SD card on or off. Adding or updating a plugin needs no
   firmware update. See [docs/sd-plugins.md](docs/sd-plugins.md).
+  To remove a plugin, open **Home → Plugins**, select it and hold **Confirm** for a second (on a touch device,
+  long-press its row), then confirm. This deletes the plugin's folder from the card.
 
 - **Check for Updates**: Looks for a new Matcha Reader release over Wi-Fi and installs the right file for your
   device, so you keep the Matcha features. Test builds (nightlies) are never offered here. You install those by

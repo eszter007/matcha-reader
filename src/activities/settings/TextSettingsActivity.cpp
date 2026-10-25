@@ -31,8 +31,9 @@ constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING,          StrId
                                          StrId::STR_CHARACTER_SPACING,     StrId::STR_EXTRA_SPACING,
                                          StrId::STR_PARAGRAPH_INDENTATION, StrId::STR_ALIGNMENT,
                                          StrId::STR_SCREEN_MARGIN,         StrId::STR_BOOK_CSS_MARGINS};
-constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION, StrId::STR_EMBEDDED_STYLE,
-                                        StrId::STR_TEXT_AA};
+// Only Focus Reading shows in the preview; the other Style rows say so in their label.
+constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION_NO_PREVIEW,
+                                        StrId::STR_EMBEDDED_STYLE_NO_PREVIEW, StrId::STR_TEXT_AA_NO_PREVIEW};
 
 // Position of the active family within the DISPLAYED list. The list hides the JP
 // extension families, so a registry index is not a list index -- match by name.
@@ -124,9 +125,10 @@ void TextSettingsActivity::onEnter() {
   UiTabListActivity::onEnter();
 
   metrics_ = UITheme::getInstance().getMetrics();
-  afterHeader = metrics_.topPadding + metrics_.headerHeight + metrics_.verticalSpacing;
-  bottomReserved = metrics_.buttonHintsHeight + metrics_.verticalSpacing;
-  usableHeight = renderer.getScreenHeight() - afterHeader - bottomReserved;
+  const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int safeBottom = safeArea.y + safeArea.height;
+  afterHeader = safeArea.y + metrics_.topPadding + metrics_.headerHeight + metrics_.verticalSpacing;
+  const int usableHeight = safeBottom - afterHeader - metrics_.verticalSpacing;
   previewHeight = usableHeight * metrics_.previewHeightPercent / 100;
 
   rebuildFamilyList();
@@ -287,12 +289,12 @@ bool TextSettingsActivity::handleButtons() {
 }
 
 void TextSettingsActivity::buildScreen(UiScreen& screen) {
-  // Content sits below the preview pane (render() draws header + preview
-  // directly) and above the caption band + button hints.
+  const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   const int tabTop = afterHeader + previewHeight;
-  const int captionHeight = renderer.getTextHeight(UI_10_FONT_ID) + metrics_.verticalSpacing;
-  screen.setContentMarginFromScreen(
-      fui::Insets{static_cast<int16_t>(tabTop), 0, static_cast<int16_t>(bottomReserved + captionHeight), 0});
+  const int rightInset = renderer.getScreenWidth() - (safeArea.x + safeArea.width);
+  const int bottomInset = renderer.getScreenHeight() - (safeArea.y + safeArea.height);
+  screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(tabTop), static_cast<int16_t>(rightInset),
+                                                static_cast<int16_t>(bottomInset), static_cast<int16_t>(safeArea.x)});
 
   buildTabBar(screen);
 
@@ -373,9 +375,7 @@ const char* TextSettingsActivity::confirmLabelText() const {
 }
 
 void TextSettingsActivity::drawChrome() {
-  const auto pageWidth = renderer.getScreenWidth();
-
-  GUI.drawHeader(renderer, Rect{0, metrics_.topPadding, pageWidth, metrics_.headerHeight}, tr(STR_TEXT_SETTINGS));
+  GUI.drawHeader(renderer, UITheme::getInstance().getHeaderRect(renderer, true, false), tr(STR_TEXT_SETTINGS));
 
   const char* familyName = (currentFamilyIndex_ >= 0 && currentFamilyIndex_ < static_cast<int>(fonts_.size()))
                                ? fonts_[currentFamilyIndex_].displayName()
@@ -390,20 +390,25 @@ void TextSettingsActivity::drawChrome() {
   const CjkScript previewScript = bookScript_ != CjkScript::None   ? bookScript_
                                   : (verticalText_ || editingCjk_) ? CjkScript::Japanese
                                                                    : CjkScript::None;
-  textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing, afterHeader,
-                              previewHeight, familyName, sizeName, sdFontSystem.effectiveReaderFontId(previewScript),
+  char labelBuf[128];
+  snprintf(labelBuf, sizeof(labelBuf), "%s \"%s, %s\"", tr(STR_PREVIEW), familyName, sizeName);
+  const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const Rect previewBounds{safeArea.x, afterHeader, safeArea.width, previewHeight};
+  const auto [savedX, savedY, savedWidth, savedHeight] = renderer.getClipRect();
+  const int clipLeft = std::max(previewBounds.x, savedX);
+  const int clipTop = std::max(previewBounds.y, savedY);
+  const int clipRight = std::min(previewBounds.x + previewBounds.width, savedX + savedWidth);
+  const int clipBottom = std::min(previewBounds.y + previewBounds.height, savedY + savedHeight);
+  renderer.setClipRect(clipLeft, clipTop, std::max(0, clipRight - clipLeft), std::max(0, clipBottom - clipTop));
+  textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing,
+                              previewBounds, labelBuf, sdFontSystem.effectiveReaderFontId(previewScript),
                               previewScript);
+  renderer.setClipRect(savedX, savedY, savedWidth, savedHeight);
 }
 
 // Button hints live here rather than at the end of drawChrome(): UiListActivity draws the footer
 // separately, so the hints repaint without redrawing the preview.
 void TextSettingsActivity::drawFooter() {
-  if (focusedRowHasNoPreview()) {
-    const int captionHeight = renderer.getTextHeight(UI_10_FONT_ID) + metrics_.verticalSpacing;
-    const int capY = afterHeader + usableHeight - captionHeight + metrics_.verticalSpacing;
-    renderer.drawText(UI_10_FONT_ID, metrics_.previewPadding, capY, tr(STR_NOT_IN_PREVIEW));
-  }
-
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabelText(), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
@@ -644,14 +649,6 @@ void TextSettingsActivity::confirmStyleRow(int row) {
       return;
   }
   requestUpdate();
-}
-
-// Only Focus Reading shows in the preview (bold prefixes); the other Style rows
-// have no distinct preview.
-bool TextSettingsActivity::focusedRowHasNoPreview() const {
-  if (ringPos() == 0 || tab_ != Tab::Style) return false;
-  const StyleRow row = styleRowAt(ringPos() - 1);
-  return row == StyleRow::Hyphenation || row == StyleRow::EmbeddedStyle || row == StyleRow::AntiAliasing;
 }
 
 void TextSettingsActivity::switchTab(const int direction) {

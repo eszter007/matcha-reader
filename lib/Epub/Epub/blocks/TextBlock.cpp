@@ -9,8 +9,10 @@
 #include <Utf8.h>
 
 #include <cstring>
+#include <string_view>
 
 #include "../../../../src/fontIds.h"
+#include "../CjkBreaks.h"
 
 size_t TextBlock::arenaSize(const uint16_t wordCount, const bool hasFocus, const bool hasFonts,
                             const uint16_t textBytes) {
@@ -168,11 +170,27 @@ bool TextBlock::hasRuby() const {
 }
 
 struct TextBlock::RubyDrawInfo {
-  int x;
+  int x;  // spread == 0: centred x. spread > 0: left edge of the base text.
   int width;
   std::string text;
   BidiUtils::BidiBaseDir baseDir;
+  // ruby-align: space-around. >0 when the ruby is narrower than its base: the width difference
+  // spread over the ruby's characters. 0 means plain centring.
+  int spread = 0;
+  // Gap before the first and after the last character: spread / 2n, capped at half a base
+  // character; the inner gaps take the rest.
+  int edge = 0;
+  std::vector<size_t> breaks;  // character boundaries inside `text` (see CjkBreaks)
 };
+
+namespace {
+// Copies ruby character k of s (boundaries in br) into out.
+void rubyToken(const std::string& s, const std::vector<size_t>& br, const size_t k, std::string& out) {
+  const size_t b = k == 0 ? 0 : br[k - 1];
+  const size_t e = k == br.size() ? s.size() : br[k];
+  out.assign(s.data() + b, e - b);
+}
+}  // namespace
 
 // Resolve ruby collisions left-to-right to prevent adjacent ruby texts from overlapping.
 // wordShift[i] is how far word i moves right of its laid-out position to make room.
@@ -237,7 +255,36 @@ void TextBlock::layoutRuby(const GfxRenderer& renderer, const int fontId, const 
       }
 
       rubies[i] = {rubyX, rubyWidth, rubyTexts[i], baseDir};
-      lastEnd = rubyX + rubyWidth;
+      // CSS ruby-align: space-around. A ruby narrower than its base is spread across it, each gap
+      // between characters twice the gap at either end; one character (a bouten mark) stays centred.
+      if (rubyWidth < groupActualWidth) {
+        auto breaks = CjkBreaks::characterBreakByteOffsets(rubyTexts[i]);
+        if (!breaks.empty()) {
+          int tokenSum = 0;
+          std::string tok;
+          for (size_t k = 0; k <= breaks.size(); ++k) {
+            rubyToken(rubyTexts[i], breaks, k, tok);
+            tokenSum += renderer.getTextAdvanceX(fontId, tok.c_str(), EpdFontFamily::SUP, blockStyle.letterSpacing);
+          }
+          if (tokenSum < groupActualWidth) {
+            int baseChars = 0;
+            for (int k = 0; k < groupWordCount; ++k) {
+              for (const char* p = wordText(i + k); *p; ++p) {
+                if ((static_cast<uint8_t>(*p) & 0xC0) != 0x80) baseChars++;
+              }
+            }
+            const int edgeCap = groupActualWidth / (2 * std::max(baseChars, 1));
+            const int n = static_cast<int>(breaks.size()) + 1;
+            RubyDrawInfo& info = rubies[i];
+            info.x = groupDrawX;
+            info.width = groupActualWidth;
+            info.spread = groupActualWidth - tokenSum;
+            info.edge = std::min(info.spread / (2 * n), edgeCap);
+            info.breaks = std::move(breaks);
+          }
+        }
+      }
+      lastEnd = rubies[i].x + rubies[i].width;
 
       // Propagate shift to all words in the group and subsequent words
       const int groupShift = groupDrawX - leaderWordX;
@@ -440,8 +487,26 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
       // Slightly above the ascender: fonts whose glyphs fill the em to the top
       // (UDDigiKyokasho) otherwise overlap their own base word.
       const int rubyY = wordY - ascender - std::max(1, ascender / 12);
-      renderer.drawText(fontId, rubies[i].x, rubyY, rubies[i].text.c_str(), inkBlack, EpdFontFamily::SUP,
-                        rubies[i].baseDir, blockStyle.letterSpacing);
+      const RubyDrawInfo& ruby = rubies[i];
+      if (ruby.spread == 0) {
+        renderer.drawText(fontId, ruby.x, rubyY, ruby.text.c_str(), inkBlack, EpdFontFamily::SUP, ruby.baseDir,
+                          blockStyle.letterSpacing);
+      } else {
+        // The edge gap is capped, so the rest of the space is split evenly over the n-1 inner gaps.
+        // Each position is computed from k rather than accumulated, so rounding does not build up.
+        const int n = static_cast<int>(ruby.breaks.size()) + 1;  // n >= 2 here
+        const int innerTotal = ruby.spread - 2 * ruby.edge;
+        int pen = 0;
+        std::string tok;
+        for (int k = 0; k < n; ++k) {
+          const int tokenIndex = ruby.baseDir == BidiUtils::BidiBaseDir::RTL ? n - 1 - k : k;
+          rubyToken(ruby.text, ruby.breaks, static_cast<size_t>(tokenIndex), tok);
+          const int gx = ruby.x + pen + ruby.edge + (innerTotal * k + (n - 1) / 2) / (n - 1);
+          renderer.drawText(fontId, gx, rubyY, tok.c_str(), inkBlack, EpdFontFamily::SUP, ruby.baseDir,
+                            blockStyle.letterSpacing);
+          pen += renderer.getTextAdvanceX(fontId, tok.c_str(), EpdFontFamily::SUP, blockStyle.letterSpacing);
+        }
+      }
     }
 
     if (scanning) {
