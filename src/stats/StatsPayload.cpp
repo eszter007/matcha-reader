@@ -64,7 +64,7 @@ void statsSync::buildGlobal(JsonDocument& doc, const std::vector<Day>& days, con
   std::string encoded;
   base64(history, sizeof(history), encoded);
 
-  doc["device_id"] = "crosspoint-reader";
+  doc["device_id"] = DEVICE_ID;
   doc["device"] = "CrossPoint";
   doc["v"] = 5;
   doc["sessions"] = 0;  // counted per book only
@@ -89,7 +89,7 @@ void statsSync::buildGlobal(JsonDocument& doc, const std::vector<Day>& days, con
 
 void statsSync::addBook(JsonDocument& doc, const std::string& documentHash, const std::vector<BookDay>& days,
                         const uint32_t sessions, const bool finished) {
-  doc["device_id"] = "crosspoint-reader";
+  doc["device_id"] = DEVICE_ID;
   JsonArray items = doc["items"].is<JsonArray>() ? doc["items"].as<JsonArray>() : doc["items"].to<JsonArray>();
   JsonObject item = items.add<JsonObject>();
   uint32_t seconds = 0;

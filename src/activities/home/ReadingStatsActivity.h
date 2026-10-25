@@ -36,6 +36,10 @@ class ReadingStatsActivity final : public Activity, public TabRing::Host {
   // this screen, so the band cannot own them all the time: Down past the end of the scroll moves
   // the cursor into it, Up takes it back out.
   int tabFocus = -1;
+  // The Refresh Stats row under the calendar: focused by Down at the end of the page, and its
+  // on-screen rect for taps (empty while scrolled out of view). Recomputed every render.
+  bool refreshFocused = false;
+  Rect refreshRow{};
 
   // Tab 0 is every language together; 1..N are the languages the store has records for, in its
   // order. One screen rather than a list and a detail screen behind a button, so a language is
@@ -54,6 +58,7 @@ class ReadingStatsActivity final : public Activity, public TabRing::Host {
   void stepTab(int direction);
   static std::string makeTabLabel(const char* code);
   bool stepMonthFromTap();
+  void startRefresh();
 
   // TabRing::Host. The page is one scrolling view under the tabs, so the cursor is either on the
   // page (tabs included: Confirm steps them from anywhere) or in the bottom bar.

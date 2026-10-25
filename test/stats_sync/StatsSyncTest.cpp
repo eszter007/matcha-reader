@@ -1,10 +1,12 @@
 #include <ArduinoJson.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <string>
 #include <vector>
 
+#include "stats/DailyStatsParser.h"
 #include "stats/StatsSync.h"
 
 using statsSync::Day;
@@ -81,12 +83,41 @@ void book() {
   assert(doc["items"][1]["document"] == "fedcba9876543210fedcba9876543210");
   assert(doc["items"][1]["finished_date"] == 0);
 }
+
+// Only this reader's days come back, in the window, fed in small chunks the way TLS delivers them.
+void download() {
+  const std::string body =
+      R"({"devices":[)"
+      R"({"device_id":"kobo","device":"Kobo","stats":{"daily":[{"date":"2026-10-20","seconds":600}]}},)"
+      R"({"device_id":"crosspoint-reader","device":"CrossPoint","updated_at":1,)"
+      R"("stats":{"v":5,"dow":[0,0,0,0,0,0,0],"daily":[)"
+      R"({"date":"2024-01-01","seconds":600},)"  // before the window
+      R"({"date":"2026-10-23","seconds":2460},)"
+      R"({"date":"2026-10-24","seconds":30},)"  // under a minute
+      R"({"date":"bad","seconds":60},)"
+      R"({"date":"2026-10-25","seconds":120}]}}],)"  // after today
+      R"("bookorbit":{"daily":[{"date":"2026-10-22","seconds":600}]}})";
+  std::vector<DailyReading> days;
+  days.reserve(4);
+  DailyStatsParser parser(statsSync::DEVICE_ID, days, day(2026, 10, 24) - 729, day(2026, 10, 24));
+  for (size_t i = 0; i < body.size(); i += 7) parser.feed(body.data() + i, std::min<size_t>(7, body.size() - i));
+  assert(parser.complete());
+  assert(days.size() == 1);
+  assert(days[0].year == 2026 && days[0].month == 10 && days[0].day == 23 && days[0].minutesRead == 41);
+
+  std::vector<DailyReading> cut;
+  cut.reserve(1);
+  DailyStatsParser truncated(statsSync::DEVICE_ID, cut, 0, day(2026, 10, 24));
+  truncated.feed(body.data(), body.size() / 2);
+  assert(!truncated.complete());
+}
 }  // namespace
 
 int main() {
   dates();
   global();
   book();
+  download();
   puts("stats sync tests passed");
   return 0;
 }

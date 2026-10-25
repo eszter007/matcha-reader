@@ -25,6 +25,9 @@ struct Totals {
   int longestStreak = 0;  // the server's `streak` is the all-time longest
 };
 
+// The id every CrossPoint reader uploads under, so the server sees one device per account.
+constexpr char DEVICE_ID[] = "crosspoint-reader";
+
 // The server accepts at most this many days per global upload.
 constexpr size_t DAYS_PER_UPLOAD = 20;
 // Matches the server's 730-day history bitmap; older days are not uploaded.
@@ -50,6 +53,12 @@ void addBook(JsonDocument& doc, const std::string& documentHash, const std::vect
 // caller's sync: progress matters more than stats. The device id is fixed, as for progress, so the
 // server treats every CrossPoint reader on one account as the same device. bookPath is the open book; it is
 // sent even when read before the last upload, under documentHash.
-void run(const std::string& bookPath, const std::string& documentHash);
+// True when everything was sent.
+bool run(const std::string& bookPath, const std::string& documentHash);
+
+// Downloads the daily minutes this reader's account uploaded (the last HISTORY_DAYS) and saves them
+// for ReadingStatsStore::compact() to merge at the next boot. Same server, credentials and clock
+// rules as run(); false when nothing was saved.
+bool download();
 
 }  // namespace statsSync

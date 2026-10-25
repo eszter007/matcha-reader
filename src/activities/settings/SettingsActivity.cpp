@@ -35,6 +35,7 @@
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
 #include "TextSettingsActivity.h"
+#include "activities/home/StatsSyncActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
@@ -90,6 +91,7 @@ SettingsSection sectionFor(const SettingInfo& setting) {
   if (setting.category == StrId::STR_CAT_SYSTEM) return SettingsSection::System;
   if (setting.category == StrId::STR_CAT_LIBRARY) return SettingsSection::Library;
   if (setting.category == StrId::STR_CAT_SLEEP) return SettingsSection::Sleep;
+  if (setting.category == StrId::STR_STATS) return SettingsSection::Insights;
   if (setting.category == StrId::STR_CAT_SHORTCUTS) return SettingsSection::Controls;
   return SettingsSection::End;
 }
@@ -225,6 +227,7 @@ void SettingsActivity::rebuildSettings() {
     addAction(SettingsSection::System, StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate);
   }
 
+  addAction(SettingsSection::Insights, StrId::STR_SYNC_STATS, SettingAction::SyncStats);
   addAction(SettingsSection::Connectivity, StrId::STR_WIFI_NETWORKS, SettingAction::Network);
   if (bleturner::status().compiledIn) {
     addAction(SettingsSection::Connectivity, StrId::STR_BT_PAGE_TURNER, SettingAction::Bluetooth);
@@ -399,6 +402,10 @@ void SettingsActivity::toggleSelectedSetting() {
         break;
       case SettingAction::KOReaderSync:
         startActivityForResult(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput), resultHandler);
+        break;
+      case SettingAction::SyncStats:
+        startActivityForResult(std::make_unique<StatsSyncActivity>(renderer, mappedInput, /*fromSettings=*/true),
+                               resultHandler);
         break;
       case SettingAction::OPDSBrowser:
         startActivityForResult(std::make_unique<OpdsServerListActivity>(renderer, mappedInput), resultHandler);

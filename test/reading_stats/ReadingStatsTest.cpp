@@ -634,3 +634,39 @@ TEST_F(StatsTest, TornJournalHeaderIsStartedOver) {
   ASSERT_TRUE(s.loadFromFile());
   EXPECT_EQ(s.getTotalMinutes(), 7u);
 }
+
+// Server minutes raise a day to their value and never lower it: merging the same download twice,
+// or one older than what the device recorded since, changes nothing.
+TEST_F(StatsTest, MergeMinutesTakesTheLargerValue) {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(Y, M, 5, 20);
+  s.mergeMinutes(Y, M, 5, 30);
+  s.mergeMinutes(Y, M, 5, 10);
+  s.mergeMinutes(Y, M, 3, 15);  // a day the device never saw
+  s.mergeMinutes(Y, M, 3, 15);
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 5), 30);
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 3), 15);
+  EXPECT_EQ(s.getTotalMinutes(), 45u);
+}
+
+// A saved download is folded in by the next compact(), alongside the journal, and removed.
+TEST_F(StatsTest, CompactMergesSavedDownload) {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(Y, M, 1, 30);
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.record({Y, M, 2, 5, "/a.epub", "en", nullptr}));
+  ASSERT_TRUE(ReadingStatsStore::saveDownload({{Y, M, 1, 20}, {Y, M, 2, 12}, {Y, M, 4, 7}}));
+  ASSERT_TRUE(s.compact());
+  const std::string download = testRoot() + sdsystem::path("reading_stats_download.bin");
+  EXPECT_FALSE(std::filesystem::exists(download));
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 1), 30);  // the device's own larger value stays
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 2), 12);  // the journal's 5, raised
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 4), 7);
+  EXPECT_EQ(s.getTotalMinutes(), 49u);
+  s.release();
+  ASSERT_TRUE(s.compact());  // nothing left to fold: the journal is not replayed twice
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 49u);
+}

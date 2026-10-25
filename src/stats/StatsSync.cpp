@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <ctime>
 
+#include "DailyStatsParser.h"
+
 namespace {
 // Same floor as KOReaderSyncClient and clippingSync.
 constexpr size_t MIN_FREE_FOR_TLS = 35000;
@@ -22,9 +24,8 @@ constexpr size_t MAX_RESPONSE = 512;
 // Enough batches for the full 730-day window.
 constexpr int MAX_BATCHES = (statsSync::HISTORY_DAYS + statsSync::DAYS_PER_UPLOAD - 1) / statsSync::DAYS_PER_UPLOAD;
 
-// PUT a JSON body on the shared connection; true when the server answered 200 and `ackKey` equals `expected`.
-bool put(freeink::SecureHttpClient& http, const char* path, const std::string& body, const char* ackKey,
-         const int expected) {
+// Points the client at `path` with the account's headers.
+bool begin(freeink::SecureHttpClient& http, const char* path) {
   if (!http.begin(KOREADER_STORE.getBaseUrl() + path)) {
     LOG_ERR("STATS", "Invalid sync URL");
     return false;
@@ -34,6 +35,35 @@ bool put(freeink::SecureHttpClient& http, const char* path, const std::string& b
   }
   http.addHeader("x-auth-user", KOREADER_STORE.getUsername());
   http.addHeader("x-auth-key", KOREADER_STORE.getMd5Password());
+  return true;
+}
+
+// A crosspoint-sync account and a trusted clock; `local` is today. Without the clock "today" is
+// unknown, and the history bitmap would be anchored wrong.
+bool ready(tm& local) {
+  if (KOREADER_STORE.getServerType() != KOReaderServerType::CROSSPOINT || !KOREADER_STORE.hasCredentials()) {
+    return false;
+  }
+  const time_t now = static_cast<time_t>(trustedtime::trustedNow());
+  if (now == 0) {
+    LOG_ERR("STATS", "Clock not trusted; skipping stats sync");
+    return false;
+  }
+  localtime_r(&now, &local);
+  return true;
+}
+
+bool heapForTls() {
+  const auto heap = HalMemory::getDefaultHeap();
+  if (heap.freeBytes >= MIN_FREE_FOR_TLS && heap.largestBlockBytes >= MIN_BLOCK_FOR_TLS) return true;
+  LOG_ERR("STATS", "Not enough heap for TLS: %zu free, %zu block", heap.freeBytes, heap.largestBlockBytes);
+  return false;
+}
+
+// PUT a JSON body on the shared connection; true when the server answered 200 and `ackKey` equals `expected`.
+bool put(freeink::SecureHttpClient& http, const char* path, const std::string& body, const char* ackKey,
+         const int expected) {
+  if (!begin(http, path)) return false;
   http.addHeader("Content-Type", "application/json");
   std::string response;
   response.reserve(MAX_RESPONSE);
@@ -107,16 +137,9 @@ bool buildBooks(const std::vector<PendingBook>& books, size_t& next, const std::
 }
 }  // namespace
 
-void statsSync::run(const std::string& bookPath, const std::string& documentHash) {
-  if (KOREADER_STORE.getServerType() != KOReaderServerType::CROSSPOINT || !KOREADER_STORE.hasCredentials()) return;
-  // Without a trusted clock "today" is unknown, and the history bitmap would be anchored wrong.
-  const time_t now = static_cast<time_t>(trustedtime::trustedNow());
-  if (now == 0) {
-    LOG_ERR("STATS", "Clock not trusted; skipping stats upload");
-    return;
-  }
+bool statsSync::run(const std::string& bookPath, const std::string& documentHash) {
   tm local{};
-  localtime_r(&now, &local);
+  if (!ready(local)) return false;
 
   // The stats tables are read before any TLS: they can be tens of KB and are gone by then. The day and
   // book lists are reserved first, so they sit below the tables instead of splitting the heap they free.
@@ -126,13 +149,13 @@ void statsSync::run(const std::string& bookPath, const std::string& documentHash
   // reserve() aborts on failure under -fno-exceptions, so check the block first.
   if (HalMemory::getDefaultHeap().largestBlockBytes < HISTORY_DAYS * sizeof(Day) + 1024) {
     LOG_ERR("STATS", "Not enough heap for the day list");
-    return;
+    return false;
   }
   days.reserve(HISTORY_DAYS);
   std::vector<PendingBook> books;
   if (HalMemory::getDefaultHeap().largestBlockBytes < ReadingStatsStore::MAX_BOOKS * sizeof(PendingBook) + 1024) {
     LOG_ERR("STATS", "Not enough heap for the book list");
-    return;
+    return false;
   }
   books.reserve(ReadingStatsStore::MAX_BOOKS);
   const int32_t booksFrom = KOREADER_STORE.getStatsBooksDay();
@@ -140,7 +163,7 @@ void statsSync::run(const std::string& bookPath, const std::string& documentHash
     ReadingStatsStore::Loaded stats;
     if (!stats.loaded()) {
       LOG_ERR("STATS", "Reading stats unavailable");
-      return;
+      return false;
     }
     for (const auto& d : READING_STATS_STORE.getDays()) {
       const int32_t day = daysSince2000(d.year, d.month, d.day);
@@ -164,11 +187,7 @@ void statsSync::run(const std::string& bookPath, const std::string& documentHash
             [](const PendingBook& a, const PendingBook& b) { return a.lastReadDay < b.lastReadDay; });
 
   auto http = makeUniqueNoThrow<freeink::SecureHttpClient>();
-  const auto heap = HalMemory::getDefaultHeap();
-  if (!http || heap.freeBytes < MIN_FREE_FOR_TLS || heap.largestBlockBytes < MIN_BLOCK_FOR_TLS) {
-    LOG_ERR("STATS", "Not enough heap for TLS: %zu free, %zu block", heap.freeBytes, heap.largestBlockBytes);
-    return;
-  }
+  if (!http || !heapForTls()) return false;
   http->setInsecure();
   // Book stats first. A failed batch does not hold back the totals; the next sync starts again from it.
   std::string body;
@@ -218,4 +237,43 @@ void statsSync::run(const std::string& bookPath, const std::string& documentHash
   if (booksDone) KOREADER_STORE.setStatsBooksDay(booksDay);
   if (from > start || booksDone) KOREADER_STORE.saveToFile();
   if (ok) LOG_INF("STATS", "Reading stats uploaded");
+  return ok;
+}
+
+bool statsSync::download() {
+  tm local{};
+  if (!ready(local)) return false;
+  const int32_t today = daysSince2000(local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
+  std::vector<DailyReading> days;
+  // reserve() aborts on failure under -fno-exceptions, so check the block first.
+  if (HalMemory::getDefaultHeap().largestBlockBytes < HISTORY_DAYS * sizeof(DailyReading) + 1024) {
+    LOG_ERR("STATS", "Not enough heap for the day list");
+    return false;
+  }
+  days.reserve(HISTORY_DAYS);
+  // Heap, not stack: the parser holds a 2 KB token buffer.
+  auto parser = makeUniqueNoThrow<DailyStatsParser>(DEVICE_ID, days, today - HISTORY_DAYS + 1, today);
+  auto http = makeUniqueNoThrow<freeink::SecureHttpClient>();
+  if (!parser || !http || !heapForTls()) return false;
+  http->setInsecure();
+  if (!begin(*http, "/api/v1/stats/global")) return false;
+  // Streamed: the response holds every device's whole history and can be tens of KB.
+  const int status = http->sendRequest("GET", nullptr, 0, [&](const uint8_t* data, const size_t length) {
+    parser->feed(reinterpret_cast<const char*>(data), length);
+    return true;
+  });
+  const bool complete = status == 200 && http->responseComplete() && parser->complete();
+  http->end();
+  http.reset();
+  parser.reset();
+  if (!complete) {
+    LOG_ERR("STATS", "Stats download failed: HTTP %d", status);
+    return false;
+  }
+  if (!ReadingStatsStore::saveDownload(days)) {
+    LOG_ERR("STATS", "Downloaded stats not saved");
+    return false;
+  }
+  LOG_INF("STATS", "Downloaded %zu days of reading stats", days.size());
+  return true;
 }

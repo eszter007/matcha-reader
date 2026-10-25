@@ -16,6 +16,8 @@ ReadingStatsStore ReadingStatsStore::instance;
 static std::string statsPath() { return sdsystem::path("reading_stats.bin"); }
 // Changes recorded since the last compact(); see record().
 static std::string journalPath() { return sdsystem::path("reading_stats.log"); }
+// Server minutes waiting for mergeDownload(): a uint16_t count, then DailyReading records.
+static std::string downloadPath() { return sdsystem::path("reading_stats_download.bin"); }
 // Journal records start with this byte, so a torn or foreign tail is recognised and ignored.
 static constexpr uint8_t JOURNAL_RECORD_MAGIC = 0xA5;
 // A journal opens with this byte and a random nonce, so no two journals share a prefix: the fold
@@ -128,6 +130,12 @@ void ReadingStatsStore::addMinutes(uint16_t year, uint8_t month, uint8_t day, ui
     }
   }
   days.insert(days.begin(), {year, month, day, minutes});
+}
+
+void ReadingStatsStore::mergeMinutes(const uint16_t year, const uint8_t month, const uint8_t day,
+                                     const uint16_t minutes) {
+  const uint16_t have = getMinutesForDay(year, month, day);
+  if (minutes > have) addMinutes(year, month, day, minutes - have);
 }
 
 void ReadingStatsStore::addBookMinutes(const char* bookPath, const char* language, const uint16_t minutes,
@@ -1052,6 +1060,7 @@ bool ReadingStatsStore::compact() {
   std::lock_guard<std::recursive_mutex> lock(journalMutex());
   recoverInterruptedSave();
   const bool hasJournal = Storage.exists(journalPath().c_str());
+  const bool hasDownload = Storage.exists(downloadPath().c_str());
   bool outdated = false;  // an older format: one rewrite upgrades it
   {
     HalFile f;
@@ -1060,7 +1069,7 @@ bool ReadingStatsStore::compact() {
       outdated = plausibleStatsVersion(version) && version != STATS_VERSION;
     }
   }
-  if (!hasJournal && !outdated) return true;
+  if (!hasJournal && !outdated && !hasDownload) return true;
 
   release();
   uint32_t bytes = 0, hash = 0;
@@ -1068,12 +1077,19 @@ bool ReadingStatsStore::compact() {
   // The saved file records which journal it now holds, so a removal cut short here never counts the
   // journal twice; until that save lands the journal is untouched.
   bool ok = loadFromFile();
+  bool downloadIntact = true;
   if (ok) {
     foldedJournalBytes = bytes;
     foldedJournalHash = hash;
+    if (hasDownload) downloadIntact = mergeDownloadFile();
     ok = saveToFile();
   }
   if (ok && hasJournal) Storage.remove(journalPath().c_str());
+  // A damaged download is not kept: what it held is merged, and the next refresh fetches it again.
+  if (ok && hasDownload) {
+    if (!downloadIntact) LOG_ERR("STAT", "Downloaded stats file damaged");
+    Storage.remove(downloadPath().c_str());
+  }
   if (!ok) LOG_ERR("STAT", "Stats journal not folded in; kept for the next try");
   release();
   return ok;
@@ -1081,4 +1097,41 @@ bool ReadingStatsStore::compact() {
 
 bool ReadingStatsStore::isFinished(const std::string& bookPath) const {
   return std::find(finishedBookPaths.begin(), finishedBookPaths.end(), bookPath) != finishedBookPaths.end();
+}
+
+bool ReadingStatsStore::saveDownload(const std::vector<DailyReading>& downloaded) {
+  const std::string tmpPath = downloadPath() + ".tmp";
+  HalFile f;
+  if (!Storage.openFileForWrite("STAT", tmpPath.c_str(), f)) return false;
+  const uint16_t count = static_cast<uint16_t>(std::min<size_t>(downloaded.size(), MAX_DAYS));
+  bool ok = f.write(reinterpret_cast<const uint8_t*>(&count), 2) == 2;
+  for (uint16_t i = 0; ok && i < count; i++) {
+    ok = f.write(reinterpret_cast<const uint8_t*>(&downloaded[i]), sizeof(DailyReading)) == sizeof(DailyReading);
+  }
+  ok = f.close() && ok;
+  if (!ok) {
+    Storage.remove(tmpPath.c_str());
+    return false;
+  }
+  return Storage.replaceFile(tmpPath.c_str(), downloadPath().c_str());
+}
+
+// Merges the saved download into the loaded tables. False when the file is damaged; what it held
+// up to there is merged.
+bool ReadingStatsStore::mergeDownloadFile() {
+  HalFile f;
+  uint16_t count = 0;
+  bool intact = Storage.openFileForRead("STAT", downloadPath().c_str(), f) &&
+                f.read(reinterpret_cast<uint8_t*>(&count), 2) == 2 && count <= MAX_DAYS;
+  for (uint16_t i = 0; intact && i < count; i++) {
+    // Through a buffer: a record at an odd offset has no alignment guarantee.
+    uint8_t rec[sizeof(DailyReading)];
+    intact = f.read(rec, sizeof(rec)) == sizeof(rec);
+    DailyReading d;
+    memcpy(&d, rec, sizeof(d));
+    if (intact && d.month >= 1 && d.month <= 12 && d.day >= 1 && d.day <= 31) {
+      mergeMinutes(d.year, d.month, d.day, d.minutesRead);
+    }
+  }
+  return intact;
 }

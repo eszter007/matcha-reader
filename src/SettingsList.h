@@ -383,8 +383,9 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
           // applies it to every activity), so it lives in the Display category.
           SettingInfo::Toggle(StrId::STR_NIGHT_MODE, &CrossPointSettings::screenInverted, "screenInverted",
                               StrId::STR_CAT_DISPLAY),
+          // The Insights section of Settings.
           SettingInfo::Toggle(StrId::STR_SHOW_LANGUAGE_STATS, &CrossPointSettings::showLanguageStats,
-                              "showLanguageStats", StrId::STR_CAT_DISPLAY),
+                              "showLanguageStats", StrId::STR_STATS),
 
       });
     }();
