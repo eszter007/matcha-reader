@@ -333,7 +333,7 @@ Some rows only appear on certain devices or while another setting is on. The not
 
 **Check for Updates** and **SD Card Firmware Update** are missing on boards that cannot update themselves.
 **Rebuild Library Index** is under **Settings → Library**. **Manage Fonts** is at the bottom of the font list in
-**Settings → Reader → Text Settings**.
+any profile of **Settings → Reader → Text Settings**.
 
 #### 3.6.2 Display
 
@@ -423,13 +423,15 @@ The values here are the starting point for books you have not opened yet. Once y
 font, size, spacing, margins, alignment, style options, images and orientation. Changes you make while reading apply
 to that book only.
 
-- **Text Settings**: Opens the text options, sorted into four tabs.
+- **Text Settings**: Opens a list of five text profiles: **Japanese**, **Traditional Chinese**, **Simplified
+  Chinese**, **Korean** and **Latin & Others Text Settings**. Pick one to change its options. A preview at the top
+  shows sample text in that profile's script with the current settings, and the options sit below it.
   - **Font**: the reading font. **Noto Serif** is built in. Fonts you add to the SD card are listed with it, and
-    **Manage Fonts** is at the bottom.
+    **Manage Fonts** is at the bottom. The list scrolls when it does not fit on the screen.
   - **Size**: the font size. Built-in fonts and plain TTF/OTF/TTC files offer 12, 14, 16 and 18 pt. A `.cpfont`
     family offers the sizes installed for it. When **Noto Sans** on your card consists only of Chinese or Japanese
     versions, a book offers the sizes of the version it uses, e.g. `NotoSansSC` for a simplified-Chinese book.
-  - **Layout**:
+  - **LAYOUT**:
     - **Line Spacing**: **Tight**, **Normal** (default), **Wide** or **Extra Wide**.
     - **Word spacing**: 50% to 200% of a normal space (default 100%).
     - **Character spacing**: −2 px to +2 px (default 0 px). In vertical text this is the gap between characters down
@@ -444,7 +446,7 @@ to that book only.
     - **Screen Margin**: the space around the text, 5 to 40 pixels in steps of 5 (default 5).
     - **Use Book Margins** (on by default): keeps the extra side margins a book sets, e.g. for indented quotes and
       letters. When off, those blocks line up with the rest of the text.
-  - **Style**:
+  - **STYLE**:
     - **Focus Reading** (off by default): prints the start of each word in bold to guide the eye, like Bionic
       Reading.
     - **Hyphenation** (off by default): splits long words at the end of a line. With it on, Korean text may also
@@ -452,17 +454,16 @@ to that book only.
     - **Embedded Style** (on by default): uses the book's own formatting (its CSS).
     - **Text Anti-Aliasing** (on by default): smooth grey edges on letters, furigana included. The grey appears
       about half a second after a page turns. Turning pages faster than that skips it.
-  - In a Japanese or Chinese book, the **Style** tab lists only **Embedded Style** and **Text Anti-Aliasing**.
-  - While a book is shown vertically, **Layout** lists only **Line Spacing**, **Character spacing** and
+  - The Japanese and Chinese profiles list only **Embedded Style** and **Text Anti-Aliasing** under **STYLE**.
+  - While a book is shown vertically, **LAYOUT** lists only **Line Spacing**, **Character spacing** and
     **Screen Margin**, the settings vertical text uses.
 
-- **Latin and CJK text profiles**: Japanese and Chinese books keep their own **font size**, **line spacing**,
-  **character spacing** and **word spacing**. Spacing that suits Chinese then leaves your English books alone. A book
-  whose language is Japanese, Chinese or Cantonese uses the CJK profile. Every other book uses the Latin profile.
-  Change one of these four while reading and the change goes to that book's profile. To change a profile outside a
-  book, open **Settings → Reader → Text Settings** and pick **Latin** or **CJK** in the **Edit For** row at the top
-  of the Size and Layout tabs. The preview switches to Japanese while you edit the CJK profile. Inside a book, the
-  preview uses the book's own script.
+- **Text profiles**: each of the five profiles keeps its own **font**, **font size**, **line spacing**, **character
+  spacing** and **word spacing**, so a font that suits Japanese leaves your English books alone. A book uses the
+  profile of its language: Japanese, traditional Chinese (Cantonese too), simplified Chinese, or Korean (a book tagged
+  `ko`). Every other book uses **Latin & Others**. Opened from inside a book, **Text Settings** goes straight to that
+  book's profile. A size or spacing you change while reading goes to the book's profile too. A font you pick while
+  reading stays with that book only: change a profile's font from **Settings → Reader → Text Settings**.
 
 - **Dictionary Settings**: Opens a page with the word lookup settings:
   - **Word Lookup Font Size**: Text size in the word lookup window: **Tiny**, **Small** (default), **Medium** or
@@ -920,11 +921,11 @@ Fonts come in `.cpfont` files, one file per size. You can convert any TTF or OTF
 
 **Ways to install a font**
 
-1. **Download on the device (easiest):** Go to **Settings → Reader → Text Settings**, scroll to the bottom of the font list and select **Manage Fonts**. Pick a font family to download it over Wi-Fi.
+1. **Download on the device (easiest):** Go to **Settings → Reader → Text Settings**, pick a profile, open **Font**, scroll to the bottom of the list and select **Manage Fonts**. Pick a font family to download it over Wi-Fi.
 2. **Upload from a browser:** In **File Transfer** mode, open the device's web page and use the **Fonts** tab. It takes `.cpfont` files. On boards with PSRAM it also takes `.ttf` and `.otf`.
 3. **Copy to the SD card:** Put each font in its own folder inside `/.fonts/` (or `/fonts/`), named like this: `.fonts/<Family>/<Family>_<size>.cpfont`, e.g. `.fonts/NotoSansSC/NotoSansSC_16.cpfont`. Ready-made `.cpfont` families are in the [crosspoint-fonts repository](https://github.com/crosspoint-reader/crosspoint-fonts).
 
-Installed fonts appear in the font list in **Settings → Reader → Text Settings**, next to the built-in ones.
+Installed fonts appear in the font list of every profile in **Settings → Reader → Text Settings**, next to the built-in ones.
 
 **Noto Sans**
 
@@ -1427,7 +1428,7 @@ The built-in font covers common Japanese characters only, so a Chinese book need
 SC** for simplified, **Noto Sans TC** for traditional and Cantonese. Convert one with the browser tool (README
 Setup step 3). When these fonts are published for download, **Manage Fonts** will offer them too. It is the last
 row of the font list in **Reader Settings → Text Settings**. The reader picks the font that matches the book's
-language.
+language, and each profile can also keep a font of its own.
 
 With only a Japanese font on the card, Chinese shows in Japanese letter shapes. It is readable, but it does not
 look like a printed Chinese book. With no font on the card, many everyday simplified characters show as empty
