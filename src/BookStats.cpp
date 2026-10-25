@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <mutex>
 #include <numeric>
 #include <tuple>
 
@@ -23,6 +24,15 @@ constexpr size_t V2_HEADER_BYTES = 15;
 // + lookups(4) + sentencesSaved(4)
 constexpr size_t HEADER_BYTES = V2_HEADER_BYTES + 8;
 constexpr size_t DAY_RECORD_BYTES = 6;
+// After the day records: year(2) + month(1) + day(1) of the first finish. Older readers stop
+// before it and drop it on their next save.
+constexpr size_t FINISH_BYTES = 4;
+
+// The render task records a finish while the main loop flushes minutes into the same file.
+std::mutex& fileMutex() {
+  static std::mutex m;
+  return m;
+}
 constexpr uint16_t MAX_PATH_LEN = 500;  // guards reserve() against a corrupt length field
 
 // Packed through a byte buffer, not a struct cast: ESP32-C3 faults on unaligned multi-byte
@@ -67,6 +77,7 @@ bool BookStats::load(const char* path) {
   lookups = 0;
   sentencesSaved = 0;
   days.clear();
+  finished = {};
   if (bookPath.empty()) return false;
 
   const std::string file = filePathFor(path);
@@ -108,18 +119,21 @@ bool BookStats::load(const char* path) {
     lookups = getU32(head + 15);
     sentencesSaved = getU32(head + 19);
   }
-  // Keep the most recent MAX_DAYS. Nothing follows the day records in this format, so the
-  // skipped ones need not be consumed -- but they are, so a future block could be added safely.
+  // Keep the most recent MAX_DAYS. The skipped ones are still consumed: the finish day follows them.
   const size_t keep = std::min<size_t>(dayCount, MAX_DAYS);
   for (size_t i = 0; i + keep < dayCount; i++) {
     uint8_t discard[DAY_RECORD_BYTES];
     if (f.read(discard, DAY_RECORD_BYTES) != DAY_RECORD_BYTES) break;
   }
   days.reserve(keep);
+  bool complete = true;
   for (size_t i = 0; i < keep; i++) {
     uint8_t rec[DAY_RECORD_BYTES];
     // Truncated mid-write: keep what parsed; the next save rewrites the file whole.
-    if (f.read(rec, DAY_RECORD_BYTES) != DAY_RECORD_BYTES) break;
+    if (f.read(rec, DAY_RECORD_BYTES) != DAY_RECORD_BYTES) {
+      complete = false;
+      break;
+    }
     BookDay d{};
     d.year = getU16(rec);
     d.month = rec[2];
@@ -127,6 +141,10 @@ bool BookStats::load(const char* path) {
     d.minutes = getU16(rec + 4);
     if (d.year < 2020) continue;  // recorded before the clock was set; misdated
     days.push_back(d);
+  }
+  uint8_t fin[FINISH_BYTES];
+  if (complete && f.read(fin, FINISH_BYTES) == FINISH_BYTES && getU16(fin) >= 2020) {
+    finished = {getU16(fin), fin[2], fin[3], 0};
   }
   // save() trims by keeping the tail, so the order has to hold for a file we did not write.
   // Normally one comparison pass.
@@ -174,6 +192,13 @@ bool BookStats::save() const {
       return false;
     }
   }
+  if (finished.year != 0) {
+    uint8_t fin[FINISH_BYTES];
+    putU16(fin, finished.year);
+    fin[2] = finished.month;
+    fin[3] = finished.day;
+    if (f.write(fin, FINISH_BYTES) != FINISH_BYTES) return false;
+  }
   f.close();
   return true;
 }
@@ -200,6 +225,7 @@ void BookStats::recordMinutes(const uint16_t year, const uint8_t month, const ui
 
 bool BookStats::recordOpen(const char* path) {
   if (!path || !*path) return false;
+  std::lock_guard<std::mutex> lock(fileMutex());
   BookStats b;
   if (!b.load(path)) return false;
   b.sessions++;
@@ -208,11 +234,52 @@ bool BookStats::recordOpen(const char* path) {
 
 bool BookStats::addCounts(const char* path, const uint32_t addLookups, const uint32_t addSentences) {
   if (!path || !*path || (addLookups == 0 && addSentences == 0)) return false;
+  std::lock_guard<std::mutex> lock(fileMutex());
   BookStats b;
   if (!b.load(path)) return false;
   b.lookups += addLookups;
   b.sentencesSaved += addSentences;
   return b.save();
+}
+
+bool BookStats::addMinutes(const char* path, const uint16_t year, const uint8_t month, const uint8_t day,
+                           const uint16_t minutes) {
+  if (!path || !*path) return false;
+  std::lock_guard<std::mutex> lock(fileMutex());
+  BookStats b;
+  if (!b.load(path)) return false;
+  b.recordMinutes(year, month, day, minutes);
+  return b.save();
+}
+
+bool BookStats::recordFinish(const char* path, const uint16_t year, const uint8_t month, const uint8_t day,
+                             const bool firstFinish, BookStats& out) {
+  if (!path || !*path) return false;
+  std::lock_guard<std::mutex> lock(fileMutex());
+  if (!out.load(path)) return false;
+  if (out.finished.year != 0) return true;
+  const BookDay today{year, month, day, 0};
+  if (firstFinish) {
+    if (year < 2020) return true;  // clock not set: nothing worth keeping
+    out.finished = today;
+    return out.save();
+  }
+  // Finished before dates were kept, or unsure: the last reading day before this visit's reading.
+  for (auto it = out.days.rbegin(); it != out.days.rend(); ++it) {
+    if (byDate(*it, today)) {
+      out.finished = *it;
+      break;
+    }
+  }
+  return true;
+}
+
+bool BookStats::getFinishDay(uint16_t& year, uint8_t& month, uint8_t& day) const {
+  if (finished.year == 0) return false;
+  year = finished.year;
+  month = finished.month;
+  day = finished.day;
+  return true;
 }
 
 int BookStats::getDaySpan() const {

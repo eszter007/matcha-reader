@@ -634,3 +634,60 @@ TEST_F(StatsTest, TornJournalHeaderIsStartedOver) {
   ASSERT_TRUE(s.loadFromFile());
   EXPECT_EQ(s.getTotalMinutes(), 7u);
 }
+
+// The end-of-book screen records the finish, then asks whether it was a reopening of a finished book.
+TEST_F(StatsTest, SummaryTellsAReopenedFinishedBook) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/a.epub", "en", "/a.epub"}));
+  EXPECT_TRUE(s.summarize(Y, M, 5, "en", "/a.epub").firstFinish);
+
+  ASSERT_TRUE(s.record({Y, M, 6, 0, nullptr, nullptr, "/a.epub"}));  // reopened, still in the journal
+  EXPECT_FALSE(s.summarize(Y, M, 6, "en", "/a.epub").firstFinish);
+
+  ASSERT_TRUE(s.compact());
+  ASSERT_TRUE(s.record({Y, M, 7, 0, nullptr, nullptr, "/a.epub"}));  // reopened after the fold into the file
+  EXPECT_FALSE(s.summarize(Y, M, 7, "en", "/a.epub").firstFinish);
+
+  ASSERT_TRUE(s.record({Y, M, 7, 0, nullptr, nullptr, "/b.epub"}));
+  const auto b = s.summarize(Y, M, 7, "en", "/b.epub");
+  EXPECT_TRUE(b.firstFinish);
+  EXPECT_EQ(b.booksFinished, 2u);
+}
+
+// The 読了 stamp keeps the first finish day: later visits, flushes and counters must not move it.
+TEST_F(StatsTest, FinishDayIsKeptAcrossReopens) {
+  const char* path = "/Japanese/done.epub";
+  ASSERT_TRUE(BookStats::addMinutes(path, Y, M, 6, 30));
+  BookStats b;
+  uint16_t y = 0;
+  uint8_t m = 0, d = 0;
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 7, true, b));
+  ASSERT_TRUE(b.getFinishDay(y, m, d));
+  EXPECT_EQ(d, 7);
+
+  // Reopened the next day, after reading more and a dictionary lookup.
+  ASSERT_TRUE(BookStats::addMinutes(path, Y, M, 8, 5));
+  ASSERT_TRUE(BookStats::addCounts(path, 1, 0));
+  ASSERT_TRUE(BookStats::recordOpen(path));
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 8, false, b));
+  ASSERT_TRUE(b.getFinishDay(y, m, d));
+  EXPECT_EQ(d, 7);
+  EXPECT_EQ(b.getTotalMinutes(), 35u);
+  EXPECT_EQ(b.getLookups(), 1u);
+}
+
+// A book finished before dates were kept shows its last reading day before today, and nothing is stored.
+TEST_F(StatsTest, BookFinishedEarlierShowsItsLastReadingDayUnsaved) {
+  const char* path = "/Japanese/old.epub";
+  ASSERT_TRUE(BookStats::addMinutes(path, Y, M, 3, 20));
+  ASSERT_TRUE(BookStats::addMinutes(path, Y, M, 8, 5));  // read a little on reopening, before the end
+  BookStats b;
+  uint16_t y = 0;
+  uint8_t m = 0, d = 0;
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 8, false, b));
+  ASSERT_TRUE(b.getFinishDay(y, m, d));
+  EXPECT_EQ(d, 3);
+
+  ASSERT_TRUE(b.load(path));
+  EXPECT_FALSE(b.getFinishDay(y, m, d)) << "a guessed day must not be saved";
+}

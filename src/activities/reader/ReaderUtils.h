@@ -76,15 +76,8 @@ inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = 
   // Not written: keep the minutes pending (sessionStartMs unchanged) for the next flush.
   if (!READING_STATS_STORE.record(update)) return;
   // Per-book day history (see BookStats). Loaded and dropped here: nothing stays in DRAM.
-  if (bookPath && *bookPath) {
-    BookStats bookStats;
-    if (!bookStats.load(bookPath)) {
-      LOG_ERR("STATS", "book stats load failed (%u min not attributed)", minutes);
-    } else {
-      bookStats.recordMinutes(static_cast<uint16_t>(t.tm_year + 1900), static_cast<uint8_t>(t.tm_mon + 1),
-                              static_cast<uint8_t>(t.tm_mday), minutes);
-      if (!bookStats.save()) LOG_ERR("STATS", "book stats save failed (%u min not attributed)", minutes);
-    }
+  if (bookPath && *bookPath && !BookStats::addMinutes(bookPath, update.year, update.month, update.day, minutes)) {
+    LOG_ERR("STATS", "book stats update failed (%u min not attributed)", minutes);
   }
   sessionStartMs += static_cast<unsigned long>(minutes) * 60000UL;
 }
