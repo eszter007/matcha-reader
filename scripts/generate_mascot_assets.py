@@ -170,7 +170,7 @@ def _fill_holes(ink):
     return Image.frombytes("L", (w, h), bytes(0 if o else 255 for o in outside))
 
 
-STAMP_SIZE = 180
+STAMP_SIZE = 220
 
 
 # The stamp's wording per book language, each lettered in the Noto Serif cut for its region so the
@@ -198,11 +198,11 @@ def build_stamp(font_path, text):
     draw.ellipse([inner, inner, size - inner, size - inner], outline=255, width=2 * scale)
     font = ImageFont.truetype(str(font_path), int(size * 0.30))
     font.set_variation_by_axes([700])
-    # Centred by the glyphs' ink, not the font box. With the date drawn under them (at 60% height),
-    # the two lines sit as one block in the middle of the ring.
+    # Centred by the glyphs' ink, not the font box. With the start and finish dates the firmware draws
+    # under them, the characters and dates sit as one block in the middle of the ring.
     left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
     x = (size - (right - left)) / 2 - left
-    y = size * 0.40 - (bottom - top) / 2 - top
+    y = size * 0.38 - (bottom - top) / 2 - top
     draw.text((x, y), text, fill=255, font=font)
     img = img.resize((STAMP_SIZE, STAMP_SIZE), Image.LANCZOS).point(lambda v: 255 if v > 110 else 0)
     # Worn ink: a fixed scatter of missing specks, the same on every build.

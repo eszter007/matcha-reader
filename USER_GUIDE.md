@@ -824,7 +824,7 @@ For a shortcut, set **Settings → Controls → Shortcuts → Long-Press Menu** 
 
 **Sync Clippings** is off by default. Turn it on only with a CrossPoint sync server that supports clippings. **Sync Progress** then also uploads and downloads this book's clippings. Leave it off for ordinary KOSync servers.
 
-With the CrossPoint sync server, **Sync Progress** also uploads your reading stats: minutes per day, total time, books finished and your longest streak, plus this book's reading time, sessions and finished status (the device does not record a finish date, so your last reading day stands in for it). The CrossPoint app then shows your measured reading time. Stats are only sent once the clock is set (see [Syncing the Clock](#syncing-the-clock)). The first sync sends up to two years of history, so it takes longer than usual; later syncs only send the days since. If the upload fails, your progress still syncs and the next sync picks up where it stopped. Time of day and pages are not recorded on the device, so those charts in the app stay empty for it. All CrossPoint readers on one account count as one device. Ordinary KOSync servers get no stats.
+With the CrossPoint sync server, **Sync Progress** also uploads your reading stats: minutes per day, total time, books finished and your longest streak, plus this book's reading time, sessions and finished status (as the finish date it sends your last reading day, not the finish day on the end-of-book stamp). The CrossPoint app then shows your measured reading time. Stats are only sent once the clock is set (see [Syncing the Clock](#syncing-the-clock)). The first sync sends up to two years of history, so it takes longer than usual; later syncs only send the days since. If the upload fails, your progress still syncs and the next sync picks up where it stopped. Time of day and pages are not recorded on the device, so those charts in the app stay empty for it. All CrossPoint readers on one account count as one device. Ordinary KOSync servers get no stats.
 
 ### 3.7 Sleep Screen
 
@@ -1635,7 +1635,9 @@ month to change it.
 ### 7.2 Per-book Stats
 
 Long-press a book in the Library and choose **View Stats**. You see sessions, total reading time, average session,
-days read, words looked up, sentences saved and a calendar of the days you read that book.
+days read, words looked up, sentences saved and a calendar of the days you read that book. The header shows the
+day you started the book and the day you finished it, or "since" the start while you are still reading. On the
+calendar the start day has a dotted ring and the finish day a solid one.
 
 **Words looked up** counts each word whose entry you opened, once each time you open the lookup screen. Moving
 back and forth over the same word does not count it twice. **Sentences saved** counts the cards added to your
@@ -1653,10 +1655,13 @@ Insights totals still include that reading.
 #### Finishing a book
 
 Turning past the last page opens the end-of-book screen, for every type of book. It marks the book as finished
-and tells you which number book this is for you, overall and in that language. It also shows the reading time,
-the days from your first to your last reading day, your current streak, and the words you looked up and sentences
-you saved, if any. Below that you find the next book in the same folder under **Continue with:** and a
-**Go to Home** button. A short press of Back takes you back to the last page.
+and tells you which number book this is for you, overall and in that language. The stamp on the cover (読了 for
+Japanese books) shows the day you started the book and, in bold, the day you finished it. Opening a finished book
+again keeps that day. The ticket below shows the reading time, the days from your first to your last reading day
+and, if any, the words you looked up and the sentences you saved. Below that you find the next book in the same folder under
+**Continue with:** and a **Go to Home** button. A short press of Back takes you back to the last page.
+
+Books finished before the finish day was saved show their last reading day before today instead.
 
 <p align="center"><img src="docs/images/screenshots/end-of-book.png" width="260" alt="End-of-book screen with the book's stats and the next books"></p>
 

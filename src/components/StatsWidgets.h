@@ -73,10 +73,19 @@ struct MonthNav {
   Rect next{};
 };
 
+// A book's first reading day and finish day, marked on its calendar. A zero year leaves a mark out.
+struct DayMarks {
+  uint16_t startYear = 0;
+  uint8_t startMonth = 0, startDay = 0;
+  uint16_t finishYear = 0;
+  uint8_t finishMonth = 0, finishDay = 0;
+};
+
 // Month card: title with chevrons, subtitle, weekday headers, grid. Returns height consumed.
 // `today` is outlined when it falls in the drawn month. Pass `navOut` to receive the chevron tap
 // targets; the geometry is only known here, and re-deriving it in each caller would drift.
 int drawMonthCalendar(const GfxRenderer& renderer, int x, int y, int w, uint16_t calYear, uint8_t calMonth,
-                      const Today& today, const MonthSource& source, MonthNav* navOut = nullptr);
+                      const Today& today, const MonthSource& source, MonthNav* navOut = nullptr,
+                      const DayMarks* marks = nullptr);
 
 }  // namespace StatsWidgets
