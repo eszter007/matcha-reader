@@ -6,6 +6,7 @@
 #include <Memory.h>
 
 #include <cstdio>
+#include <tuple>
 
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
@@ -101,8 +102,9 @@ void BookStatsActivity::render(RenderLock&&) {
   const int cardX = screen.x + cardMargin;
   const int cardW = screen.width - 2 * cardMargin;
 
-  const StatsWidgets::Today today = StatsWidgets::getToday();
+  StatsWidgets::Today today = StatsWidgets::getToday();
   int y = contentTop + 8;
+  char dateLine[64] = {};
 
   // Four zeroes and a blank calendar read as a bug; say there is nothing yet instead.
   if (stats.getSessions() == 0 && stats.getDaysRead() == 0) {
@@ -127,10 +129,38 @@ void BookStatsActivity::render(RenderLock&&) {
         {lookupsBuf, tr(STR_STAT_LOOKUPS), DictLookupIcon, false},
         {sentencesBuf, tr(STR_STAT_SENTENCES), DictAddCardIcon, false},
     };
+    // The first reading day and, once stored, the finish day: in the header and as rings on the
+    // calendar.
+    StatsWidgets::DayMarks marks;
+    if (!stats.getDays().empty()) {
+      const BookDay& first = stats.getDays().front();
+      const bool finished = stats.getFinishDay(marks.finishYear, marks.finishMonth, marks.finishDay);
+      // A finish stored before any minute was recorded can precede the first reading day; the start
+      // is then unknown rather than shown after the finish.
+      const bool startKnown = !finished || std::tie(first.year, first.month, first.day) <=
+                                               std::tie(marks.finishYear, marks.finishMonth, marks.finishDay);
+      char start[12] = {};
+      if (startKnown) {
+        marks.startYear = first.year;
+        marks.startMonth = first.month;
+        marks.startDay = first.day;
+        snprintf(start, sizeof(start), "%04u.%02u.%02u", first.year, first.month, first.day);
+      }
+      if (finished) {
+        char finish[12];
+        snprintf(finish, sizeof(finish), "%04u.%02u.%02u", marks.finishYear, marks.finishMonth, marks.finishDay);
+        snprintf(dateLine, sizeof(dateLine), startKnown ? "%s – %s" : "%s%s", start, finish);
+      } else {
+        snprintf(dateLine, sizeof(dateLine), tr(STR_STAT_SINCE_FORMAT), start);
+      }
+      // A finished book's calendar is history: no "today" outline on it.
+      if (finished) today = StatsWidgets::Today{};
+    }
+
     y += StatsWidgets::drawTileGrid(renderer, cardX, y, cardW, tiles, 6) + 8;
 
     const StatsWidgets::MonthSource source{&stats, bookMonthStatus, bookDaysReadInMonth};
-    y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source);
+    y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source, nullptr, &marks);
 
     // Content bottom minus the visible band, leaving room for the button hints.
     const int contentEndY = y + 10;
@@ -141,7 +171,7 @@ void BookStatsActivity::render(RenderLock&&) {
   // Header last, over the scrolled content, so text cannot bleed through.
   renderer.fillRect(0, 0, screen.width, headerLineY, false);
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                 bookTitle.c_str());
+                 bookTitle.c_str(), dateLine[0] ? dateLine : nullptr);
 
   // Hints name the months Left/Right land on, as on the other two stats screens.
   char prevBuf[16], nextBuf[16];

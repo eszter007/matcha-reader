@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <tuple>
 
 #include "BookStats.h"
 #include "CrossPointSettings.h"
@@ -342,7 +343,6 @@ void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* book
   // Streamed from the file: the reader is still in memory, so no tables are built here.
   const ReadingStatsStore::Summary totals =
       READING_STATS_STORE.summarize(today.year, today.month, today.day, bookLanguage, bookPath.c_str());
-  summary.streak = totals.streak;
   summary.booksFinished = totals.booksFinished;
   stamp_ = stampFor(bookLanguage);
 
@@ -360,6 +360,13 @@ void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* book
   stats.getFinishDay(year, month, day);
   snprintf(summary.finishedOn, sizeof(summary.finishedOn), "%04u.%02u.%02u", static_cast<unsigned>(year),
            static_cast<unsigned>(month), static_cast<unsigned>(day));
+  if (!stats.getDays().empty() && std::tie(stats.getDays().front().year, stats.getDays().front().month,
+                                           stats.getDays().front().day) <= std::tie(year, month, day)) {
+    const BookDay& first = stats.getDays().front();
+    snprintf(summary.startedOn, sizeof(summary.startedOn), "%04u.%02u.%02u", static_cast<unsigned>(first.year),
+             static_cast<unsigned>(first.month), static_cast<unsigned>(first.day));
+    if (strcmp(summary.startedOn, summary.finishedOn) == 0) summary.startedOn[0] = '\0';
+  }
 
   // Primary subtag, lowercased, as the stats store buckets it ("ja-JP" -> "ja").
   char code[4] = {};
@@ -461,12 +468,12 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
 int EndOfBookOptions::stubHeight() const {
   const int small = renderer.getLineHeight(SMALL_FONT_ID);
   int h = TEAR + 10 + (summary.booksFinished > 0 ? small + 8 : 0) + renderer.getLineHeight(UI_12_FONT_ID) + small + 14;
-  if (summary.lookups > 0 || summary.sentences > 0) h += 9 + 2 * renderer.getLineHeight(UI_10_FONT_ID) + 6;
+  if (summary.sentences > 0) h += 9 + renderer.getLineHeight(UI_10_FONT_ID) + 6;
   return h + CORNER / 2;
 }
 
-// The stub: the read in numbers. "No. 14" in the corner, the three headline stats, then the
-// dictionary counts and the language milestone.
+// The stub: the read in numbers. The milestone across the top, then time, days and lookups, then
+// the saved sentences.
 void EndOfBookOptions::drawStub(const int x, const int y, const int w, const int h) const {
   drawOutline(renderer, Shape::Stub, x, y, w, h);
   const int pad = 18;
@@ -495,13 +502,14 @@ void EndOfBookOptions::drawStub(const int x, const int y, const int w, const int
   int count = 0;
   formatDuration(cells[count].value, sizeof(cells[0].value), summary.minutes);
   cells[count++].label = tr(STR_EOB_READING_TIME);
-  // The three headline stats always show, so the stub keeps its shape after a short read. A book
-  // finished the day it was started still took a day.
+  // Time and days always show, so the stub keeps its shape after a short read. A book finished the
+  // day it was started still took a day. Lookups join them when there are any; two cells centre.
   snprintf(cells[count].value, sizeof(cells[0].value), "%d", std::max(summary.daySpan, 1));
   cells[count++].label = tr(STR_EOB_DAYS_TO_FINISH);
-  // Finishing the book today is reading today, so the streak is at least one day.
-  snprintf(cells[count].value, sizeof(cells[0].value), "%d", std::max(summary.streak, 1));
-  cells[count++].label = tr(STR_EOB_DAY_STREAK);
+  if (summary.lookups > 0) {
+    snprintf(cells[count].value, sizeof(cells[0].value), "%lu", static_cast<unsigned long>(summary.lookups));
+    cells[count++].label = tr(STR_EOB_LOOKUPS);
+  }
   const int valueY = y + TEAR + 10 + (summary.booksFinished > 0 ? renderer.getLineHeight(SMALL_FONT_ID) + 8 : 0);
   const int valueH = renderer.getLineHeight(UI_12_FONT_ID);
   const int colW = (w - 2 * pad) / count;
@@ -514,15 +522,12 @@ void EndOfBookOptions::drawStub(const int x, const int y, const int w, const int
     renderer.drawText(SMALL_FONT_ID, cx - lw / 2, valueY + valueH, label.c_str(), true);
   }
 
-  if (summary.lookups == 0 && summary.sentences == 0) return;
+  if (summary.sentences == 0) return;
   const int ruleY = valueY + valueH + renderer.getLineHeight(SMALL_FONT_ID) + 10;
   renderer.drawLine(x + pad, ruleY, x + w - pad, ruleY, true);
-  const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
   char line[64];
-  snprintf(line, sizeof(line), "%lu %s", static_cast<unsigned long>(summary.lookups), tr(STR_STAT_WORDS_LOOKED_UP));
-  renderer.drawText(UI_10_FONT_ID, x + pad, ruleY + 8, line, true);
   snprintf(line, sizeof(line), "%lu %s", static_cast<unsigned long>(summary.sentences), tr(STR_STAT_SENTENCES_SAVED));
-  renderer.drawText(UI_10_FONT_ID, x + pad, ruleY + 8 + lineH, line, true);
+  renderer.drawText(UI_10_FONT_ID, x + pad, ruleY + 8, line, true);
 }
 
 void EndOfBookOptions::drawTicket(const Rect& safe, const int bottom) const {
@@ -567,10 +572,21 @@ void EndOfBookOptions::drawTicket(const Rect& safe, const int bottom) const {
   // on top of the cover.
   Capture stamp;
   drawStamp(renderer, stamp_, safe.x, safe.y);
-  // The date in the space under 読了, kept inside the inner ring.
-  const int dateW = renderer.getTextWidth(SMALL_FONT_ID, summary.finishedOn, EpdFontFamily::BOLD);
-  renderer.drawText(SMALL_FONT_ID, safe.x + (EOB_STAMP_SIZE - dateW) / 2, safe.y + EOB_STAMP_SIZE * 60 / 100,
-                    summary.finishedOn, true, EpdFontFamily::BOLD);
+  // The dates in the space under 読了, kept inside the inner ring: the start day in the small face,
+  // joined by a short tick to the finish day in bold. A book read within one day shows only the finish.
+  int finishY = safe.y + EOB_STAMP_SIZE * 60 / 100;
+  if (summary.startedOn[0]) {
+    const int startY = safe.y + EOB_STAMP_SIZE * 56 / 100;
+    const int startH = renderer.getLineHeight(SMALL_FONT_ID);
+    const int startW = renderer.getTextWidth(SMALL_FONT_ID, summary.startedOn);
+    renderer.drawText(SMALL_FONT_ID, safe.x + (EOB_STAMP_SIZE - startW) / 2, startY, summary.startedOn, true);
+    const int tickX = safe.x + EOB_STAMP_SIZE / 2;
+    renderer.drawLine(tickX, startY + startH + 1, tickX, startY + startH + 6, true);
+    finishY = startY + startH + 7;
+  }
+  const int dateW = renderer.getTextWidth(UI_10_FONT_ID, summary.finishedOn, EpdFontFamily::BOLD);
+  renderer.drawText(UI_10_FONT_ID, safe.x + (EOB_STAMP_SIZE - dateW) / 2, finishY, summary.finishedOn, true,
+                    EpdFontFamily::BOLD);
   const bool stampCaptured = capture(renderer, safe.x, safe.y, EOB_STAMP_SIZE, EOB_STAMP_SIZE, stamp);
 
   // Top half: the cover (or the cat when there is none) and the title.
@@ -597,18 +613,20 @@ void EndOfBookOptions::drawTicket(const Rect& safe, const int bottom) const {
   const int topCx = topX + topW / 2;
   const int topCy = topY + topH / 2;
   if (topCaptured) writeTilted(renderer, top, Shape::Top, turnFor(TOP_ANGLE), topCx, topCy);
+  top.ink.reset();  // freed before the stamp's rotation buffer, the largest block on this screen
   if (stubCaptured) {
     writeTilted(renderer, stub, Shape::Stub, turnFor(STUB_ANGLE), stubX + stubW / 2, stubY + stubH / 2);
   }
+  stub.ink.reset();
 
   // Pressed on the cover's lower right corner, wherever the tilt carried it.
   if (stampCaptured) {
     int sx = 0;
     int sy = 0;
-    turnPoint(coverX - topX + coverW - 40, coverY - topY + coverH - EOB_STAMP_SIZE / 2, topW, topH,
+    turnPoint(coverX - topX + coverW - 40, coverY - topY + coverH - EOB_STAMP_SIZE / 2 + 30, topW, topH,
               topCaptured ? TOP_ANGLE : 0, topCx, topCy, sx, sy);
     // Hanging off the cover's right edge, but never off the screen.
-    const int stampCx = std::min(sx + 52, safe.x + safe.width - EOB_STAMP_SIZE / 2 - 4);
+    const int stampCx = std::min(sx + 92, safe.x + safe.width - EOB_STAMP_SIZE / 2 - 4);
     writeStamp(renderer, stamp, turnFor(STAMP_ANGLE), stampCx, sy);
   }
 }
