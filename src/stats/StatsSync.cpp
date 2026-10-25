@@ -101,7 +101,7 @@ constexpr int MAX_BOOK_PAGES = 40;
 
 // A query value: everything but unreserved characters percent-encoded (the cursor carries a ':').
 std::string urlEncode(const std::string& v) {
-  static constexpr char HEX[] = "0123456789ABCDEF";
+  static constexpr char DIGITS[] = "0123456789ABCDEF";
   std::string out;
   out.reserve(v.size() * 3);
   for (const char c : v) {
@@ -110,8 +110,8 @@ std::string urlEncode(const std::string& v) {
       out += c;
     } else {
       out += '%';
-      out += HEX[static_cast<uint8_t>(c) >> 4];
-      out += HEX[static_cast<uint8_t>(c) & 15];
+      out += DIGITS[static_cast<uint8_t>(c) >> 4];
+      out += DIGITS[static_cast<uint8_t>(c) & 15];
     }
   }
   return out;
