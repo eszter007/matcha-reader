@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <ctime>
 
+#include "BookListParser.h"
+#include "BookStatsDownload.h"
 #include "DailyStatsParser.h"
 
 namespace {
@@ -87,8 +89,74 @@ bool put(freeink::SecureHttpClient& http, const char* path, const std::string& b
 
 struct PendingBook {
   std::string path;
+  std::string language;
   int32_t lastReadDay;  // ReadingStatsStore's day number
   bool finished;
+};
+
+// Books per page of the book list; the response is streamed, so this only trades requests for page size.
+constexpr int BOOKS_PER_PAGE = 50;
+// Pages read at most: 2000 books.
+constexpr int MAX_BOOK_PAGES = 40;
+
+// This reader's own rows of the server's book list, page by page into the download file
+// (bookdownload). True with nothing written when the server has no book list yet.
+bool downloadBooks() {
+  auto http = makeUniqueNoThrow<freeink::SecureHttpClient>();
+  if (!http || !heapForTls()) return false;
+  http->setInsecure();
+  bookdownload::Writer writer;
+  if (!writer.begin()) return false;
+  const BookListParser::Sink sink{
+      &writer,
+      [](void* w, const uint32_t hash, const bool finished, const uint32_t sessions, const char* language) {
+        return static_cast<bookdownload::Writer*>(w)->beginBook(hash, finished, sessions, language);
+      },
+      [](void* w, const BookDay& day) { return static_cast<bookdownload::Writer*>(w)->addDay(day); },
+      [](void* w) { return static_cast<bookdownload::Writer*>(w)->endBook(); }};
+  std::string cursor;
+  int books = 0;
+  for (int page = 0; page < MAX_BOOK_PAGES; page++) {
+    // Heap, not stack: the parser holds a 2 KB token buffer. A fresh one per page.
+    auto parser = makeUniqueNoThrow<BookListParser>(sink);
+    char path[96];
+    snprintf(path, sizeof(path), "/api/v1/stats/books?device_id=%s&limit=%d%s", statsSync::DEVICE_ID, BOOKS_PER_PAGE,
+             cursor.empty() ? "" : "&cursor=");
+    if (!parser || !begin(*http, (std::string(path) + cursor).c_str())) {
+      writer.abort();
+      return false;
+    }
+    const int status = http->sendRequest("GET", nullptr, 0, [&](const uint8_t* data, const size_t length) {
+      parser->feed(reinterpret_cast<const char*>(data), length);
+      return true;
+    });
+    if (status == 404 && page == 0) {
+      LOG_INF("STATS", "Server has no book list; per-book stats not downloaded");
+      writer.abort();
+      return true;
+    }
+    if (status != 200 || !http->responseComplete() || !parser->complete()) {
+      LOG_ERR("STATS", "Book list download failed: HTTP %d", status);
+      writer.abort();
+      return false;
+    }
+    books += parser->books();
+    cursor = parser->next();
+    if (cursor.empty()) break;
+  }
+  http->end();
+  if (!writer.commit()) {
+    LOG_ERR("STATS", "Downloaded book stats not saved");
+    return false;
+  }
+  LOG_INF("STATS", "Downloaded stats of %d books", books);
+  return true;
+}
+
+// Where the upload stands: the book being sent and how many of its new days already went.
+struct BookCursor {
+  size_t book = 0;
+  size_t day = 0;
 };
 
 // The hash progress sync uses for this book.
@@ -106,19 +174,28 @@ bool unidentifiable(const std::string& path) {
   return file && file.isDirectory();
 }
 
-// One /stats/books body, built with no TLS session open: a book's history can take up to 12 KB.
-// `next` moves past the books handled; false on a read error, which stops the upload.
-bool buildBooks(const std::vector<PendingBook>& books, size_t& next, const std::string& openPath,
-                const std::string& openHash, std::string& body, int& count) {
-  JsonDocument doc;
-  count = 0;
-  for (; next < books.size() && count < static_cast<int>(statsSync::BOOKS_PER_UPLOAD); next++) {
-    const PendingBook& book = books[next];
+// One /stats/books body and the matching /documents body, built with no TLS session open: a book's
+// history can take up to 12 KB. Each book sends its days from `fromDay` (ReadingStatsStore's day number)
+// on, 20 per item. `at` moves past what went in; `doneDay` rises to the last read day of each book
+// finished here. False on a read error, which stops the upload.
+bool buildBatch(const std::vector<PendingBook>& books, BookCursor& at, const int32_t fromDay,
+                const std::string& openPath, const std::string& openHash, std::string& statsBody, std::string& docsBody,
+                int& items, int& docs, int32_t& doneDay) {
+  JsonDocument statsDoc;
+  JsonDocument docsDoc;
+  JsonArray docItems = docsDoc["items"].to<JsonArray>();
+  items = 0;
+  docs = 0;
+  while (at.book < books.size() && items < static_cast<int>(statsSync::ITEMS_PER_UPLOAD)) {
+    const PendingBook& book = books[at.book];
     const std::string hash = book.path == openPath ? openHash : documentHashFor(book.path);
     if (hash.empty()) {
-      if (unidentifiable(book.path)) continue;
-      LOG_ERR("STATS", "No document hash for %s", book.path.c_str());
-      return false;
+      if (!unidentifiable(book.path)) {
+        LOG_ERR("STATS", "No document hash for %s", book.path.c_str());
+        return false;
+      }
+      at = {at.book + 1, 0};
+      continue;
     }
     // load() reserves the whole history and aborts on failure under -fno-exceptions.
     if (HalMemory::getDefaultHeap().largestBlockBytes < BookStats::MAX_DAYS * sizeof(BookDay) + 1024) {
@@ -127,12 +204,41 @@ bool buildBooks(const std::vector<PendingBook>& books, size_t& next, const std::
     }
     BookStats stats;
     if (!stats.load(book.path.c_str())) return false;
-    if (stats.getDays().empty()) continue;
-    statsSync::addBook(doc, hash, stats.getDays(), stats.getSessions(), book.finished);
-    count++;
+    const auto& days = stats.getDays();
+    if (days.empty()) {
+      at = {at.book + 1, 0};
+      continue;
+    }
+    // Filename and language, so the server can filter and a restore can find the file. Once per book.
+    if (at.day == 0) {
+      JsonObject meta = docItems.add<JsonObject>();
+      meta["document"] = hash;
+      const size_t slash = book.path.find_last_of('/');
+      meta["filename"] = slash == std::string::npos ? book.path : book.path.substr(slash + 1);
+      if (!book.language.empty()) meta["language"] = book.language;
+      docs++;
+    }
+    // Days not sent yet: from the marker's day on (all of them the first time).
+    const auto firstNew = std::find_if(days.begin(), days.end(), [fromDay](const BookDay& d) {
+      return ReadingStatsStore::dayNumber(d.year, d.month, d.day) >= fromDay;
+    });
+    const size_t newDays = static_cast<size_t>(days.end() - firstNew);
+    // One item even with no new day: the totals still change with each session.
+    do {
+      const size_t count = std::min(statsSync::DAYS_PER_ITEM, newDays - std::min(at.day, newDays));
+      statsSync::addBook(statsDoc, hash, days, stats.getSessions(), book.finished,
+                         count > 0 ? &*(firstNew + static_cast<std::ptrdiff_t>(at.day)) : nullptr, count);
+      items++;
+      at.day += count;
+    } while (at.day < newDays && items < static_cast<int>(statsSync::ITEMS_PER_UPLOAD));
+    if (at.day < newDays) break;  // the rest of this book goes in the next batch
+    doneDay = std::max(doneDay, book.lastReadDay);
+    at = {at.book + 1, 0};
   }
-  body.clear();
-  if (count > 0) serializeJson(doc, body);
+  statsBody.clear();
+  docsBody.clear();
+  if (items > 0) serializeJson(statsDoc, statsBody);
+  if (docs > 0) serializeJson(docsDoc, docsBody);
   return true;
 }
 }  // namespace
@@ -178,7 +284,7 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
     // Books read on or after the marker's day (it may have grown since) and the open book.
     for (const auto& b : READING_STATS_STORE.getBooks()) {
       if (b.lastReadDay >= booksFrom || b.path == bookPath) {
-        books.push_back({b.path, b.lastReadDay, READING_STATS_STORE.isFinished(b.path)});
+        books.push_back({b.path, b.language, b.lastReadDay, READING_STATS_STORE.isFinished(b.path)});
       }
     }
   }
@@ -192,21 +298,24 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
   // Book stats first. A failed batch does not hold back the totals; the next sync starts again from it.
   std::string body;
   bool ok = true;
-  bool booksDone = false;
   int32_t booksDay = booksFrom;
-  for (size_t next = 0; next < books.size();) {
-    int count = 0;
-    if (!buildBooks(books, next, bookPath, documentHash, body, count) ||
-        (count > 0 && !put(*http, "/api/v1/stats/books", body, "accepted", count))) {
+  std::string docsBody;
+  for (BookCursor at; at.book < books.size();) {
+    int items = 0;
+    int docs = 0;
+    int32_t doneDay = booksDay;
+    // Metadata first: a book's stats are only worth recording once the server can place it.
+    if (!buildBatch(books, at, booksFrom, bookPath, documentHash, body, docsBody, items, docs, doneDay) ||
+        (docs > 0 && !put(*http, "/api/v1/documents", docsBody, "accepted", docs)) ||
+        (items > 0 && !put(*http, "/api/v1/stats/books", body, "accepted", items))) {
       LOG_ERR("STATS", "Book stats incomplete");
       ok = false;
       break;
     }
     http->end();  // the next body is built without TLS buffers on the heap
-    // max: the open book can be older than the marker.
-    booksDay = std::max(booksDay, books[next - 1].lastReadDay);
-    booksDone = true;
+    booksDay = doneDay;
   }
+  const bool booksDone = booksDay != booksFrom;
 
   // Days from the last one uploaded (resent: today's minutes grow) onwards, 20 per request.
   const int32_t uploaded = KOREADER_STORE.getStatsUploadedDay();
@@ -275,5 +384,6 @@ bool statsSync::download() {
     return false;
   }
   LOG_INF("STATS", "Downloaded %zu days of reading stats", days.size());
-  return true;
+  std::vector<DailyReading>().swap(days);
+  return downloadBooks();
 }

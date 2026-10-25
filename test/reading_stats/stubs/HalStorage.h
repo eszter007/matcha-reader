@@ -48,6 +48,9 @@ class HalFile {
     f = nullptr;
     return ok;
   }
+  bool seek(size_t pos) { return f && fseek(f, static_cast<long>(pos), SEEK_SET) == 0; }
+  bool seekCur(int64_t off) { return f && fseek(f, static_cast<long>(off), SEEK_CUR) == 0; }
+  size_t position() const { return f ? static_cast<size_t>(ftell(f)) : 0; }
   bool truncate(uint64_t n) { return f && fflush(f) == 0 && ftruncate(fileno(f), static_cast<off_t>(n)) == 0; }
 };
 

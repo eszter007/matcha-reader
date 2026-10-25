@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "BookStats.h"
+#include "BookStatsDownload.h"
 #include "ReadingStatsStore.h"
 
 namespace {
@@ -669,4 +670,73 @@ TEST_F(StatsTest, CompactMergesSavedDownload) {
   ASSERT_TRUE(s.compact());  // nothing left to fold: the journal is not replayed twice
   ASSERT_TRUE(s.loadFromFile());
   EXPECT_EQ(s.getTotalMinutes(), 49u);
+}
+
+namespace {
+// Writes a per-book download as Refresh Stats would, as the ".new" file the next boot folds in.
+void writeBookDownload(
+    const std::vector<std::tuple<std::string, bool, uint32_t, const char*, std::vector<BookDay>>>& books) {
+  bookdownload::Writer w;
+  ASSERT_TRUE(w.begin());
+  for (const auto& [name, finished, sessions, language, days] : books) {
+    ASSERT_TRUE(w.beginBook(bookdownload::nameHash(name), finished, sessions, language));
+    for (const auto& d : days) ASSERT_TRUE(w.addDay(d));
+    ASSERT_TRUE(w.endBook());
+  }
+  ASSERT_TRUE(w.commit());
+}
+}  // namespace
+
+// Boot folds the download into what the stats keep across books: a language's day is the sum of its
+// books, and books finished elsewhere count, without being counted twice once finished here.
+TEST_F(StatsTest, CompactFoldsBookDownload) {
+  auto& s = READING_STATS_STORE;
+  s.addLanguageMinutes("ja", 10, Y, M, 1);
+  s.markBookFinished("/books/here.epub");
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  writeBookDownload({
+      {"a.epub", true, 3, "ja", {{Y, M, 1, 20}, {Y, M, 2, 5}}},
+      {"b.epub", false, 1, "ja-JP", {{Y, M, 1, 15}}},
+      {"here.epub", true, 2, "en", {}},  // already finished on this card
+  });
+  ASSERT_TRUE(s.compact());
+  EXPECT_FALSE(std::filesystem::exists(testRoot() + bookdownload::newPath()));
+  EXPECT_TRUE(std::filesystem::exists(testRoot() + bookdownload::path()));  // kept for BookStats
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 1), 35);  // 20 + 15, above the 10 recorded here
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 2), 5);
+  EXPECT_EQ(s.getBooksFinished(), 2);  // here.epub, and a.epub from elsewhere
+  // Finishing a.epub here replaces its stand-in rather than adding to it.
+  s.markBookFinished("/books/a.epub");
+  EXPECT_EQ(s.getBooksFinished(), 2);
+  EXPECT_TRUE(s.isFinished("/books/a.epub"));
+}
+
+// A book on the card takes in its server days when loaded, keeping the larger value per day, and its
+// first open since marks it finished if the server says so.
+TEST_F(StatsTest, BookStatsTakeInDownload) {
+  BookStats::recordOpen("/books/a.epub");  // one local session, no days yet
+  {
+    BookStats b;
+    ASSERT_TRUE(b.load("/books/a.epub"));
+    b.recordMinutes(Y, M, 1, 30);
+    ASSERT_TRUE(b.save());
+  }
+  writeBookDownload({{"a.epub", true, 4, "ja", {{Y, M, 1, 20}, {Y, M, 2, 12}}}});
+  ASSERT_TRUE(READING_STATS_STORE.compact());
+
+  BookStats b;
+  ASSERT_TRUE(b.load("/books/a.epub"));
+  EXPECT_EQ(b.getSessions(), 4u);
+  EXPECT_EQ(b.getTotalMinutes(), 42u);  // 30 kept on the 1st, 12 added on the 2nd
+  BookStats other;
+  ASSERT_TRUE(other.load("/books/unknown.epub"));
+  EXPECT_EQ(other.getTotalMinutes(), 0u);
+
+  ASSERT_TRUE(BookStats::recordOpen("/books/a.epub"));
+  ASSERT_TRUE(READING_STATS_STORE.compact());
+  ASSERT_TRUE(READING_STATS_STORE.loadFromFile());
+  EXPECT_TRUE(READING_STATS_STORE.isFinished("/books/a.epub"));
+  EXPECT_EQ(READING_STATS_STORE.getBooksFinished(), 1);  // its stand-in went
 }

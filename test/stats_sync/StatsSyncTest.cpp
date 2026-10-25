@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "stats/BookListParser.h"
 #include "stats/DailyStatsParser.h"
 #include "stats/StatsSync.h"
 
@@ -82,6 +83,16 @@ void book() {
   assert(doc["items"][0]["completed"] == true);
   assert(doc["items"][1]["document"] == "fedcba9876543210fedcba9876543210");
   assert(doc["items"][1]["finished_date"] == 0);
+  assert(!doc["items"][0]["daily"].is<JsonArray>());  // no days asked for: none sent
+
+  // Days go out as the server's {date, seconds}, only the slice asked for.
+  JsonDocument withDays;
+  statsSync::addBook(withDays, "0123456789abcdef0123456789abcdef", days, 3, false, &days[1], 1);
+  JsonArrayConst daily = withDays["items"][0]["daily"];
+  assert(daily.size() == 1);
+  assert(daily[0]["date"] == "2026-10-06");
+  assert(daily[0]["seconds"] == 900);
+  assert(withDays["items"][0]["seconds"] == 1500);  // totals still cover every day
 }
 
 // Only this reader's days come back, in the window, fed in small chunks the way TLS delivers them.
@@ -111,6 +122,53 @@ void download() {
   truncated.feed(body.data(), body.size() / 2);
   assert(!truncated.complete());
 }
+
+// A page of the book list arrives as begin/day/end calls, book by book, in any chunking.
+void bookList() {
+  const std::string body =
+      R"({"items":[)"
+      R"({"device_id":"crosspoint-reader","document":"a","title":"Kokoro","filename":"books/kokoro.epub","language":"ja",)"
+      R"("updated_at":1,"stats":{"v":5,"sessions":4,"completed":true,"tod":[0,0,0,0],)"
+      R"("daily":[{"date":"2026-10-23","seconds":900},{"date":"2026-10-24","seconds":30}]}},)"  // 30 s: under a minute
+      R"({"device_id":"crosspoint-reader","document":"b","title":"No file","filename":null,"language":null,)"
+      R"("stats":{"sessions":1,"completed":false,"daily":[{"date":"2026-10-24","seconds":600}]}},)"
+      R"({"device_id":"crosspoint-reader","document":"c","filename":"old.epub","language":null,)"
+      R"("stats":{"sessions":2,"completed":false}}],)"  // a server without per-book days
+      R"("next":"cccccccccccccccccccccccccccccccccrosspoint-reader"})";
+  struct Log {
+    std::string calls;
+  } log;
+  const BookListParser::Sink sink{
+      &log,
+      [](void* c, const uint32_t hash, const bool finished, const uint32_t sessions, const char* language) {
+        auto& l = static_cast<Log*>(c)->calls;
+        l += "begin " + std::to_string(hash) + " " + std::to_string(finished) + " " + std::to_string(sessions) + " " +
+             language + ";";
+        return true;
+      },
+      [](void* c, const BookDay& d) {
+        static_cast<Log*>(c)->calls +=
+            "day " + std::to_string(d.month) + "-" + std::to_string(d.day) + " " + std::to_string(d.minutes) + ";";
+        return true;
+      },
+      [](void* c) {
+        static_cast<Log*>(c)->calls += "end;";
+        return true;
+      }};
+  BookListParser parser(sink);
+  for (size_t i = 0; i < body.size(); i += 5) parser.feed(body.data() + i, std::min<size_t>(5, body.size() - i));
+  assert(parser.complete());
+  assert(parser.books() == 2);
+  assert(std::string(parser.next()) == "cccccccccccccccccccccccccccccccccrosspoint-reader");
+  const std::string kokoro = std::to_string(bookNameHash("kokoro.epub", 11));
+  const std::string old = std::to_string(bookNameHash("old.epub", 8));
+  assert(log.calls == "begin " + kokoro + " 1 4 ja;day 10-23 15;end;begin " + old + " 0 2 ;end;");
+
+  BookListParser last(sink);
+  const std::string lastPage = R"({"items":[],"next":null})";
+  last.feed(lastPage.data(), lastPage.size());
+  assert(last.complete() && last.next()[0] == '\0');
+}
 }  // namespace
 
 int main() {
@@ -118,6 +176,7 @@ int main() {
   global();
   book();
   download();
+  bookList();
   puts("stats sync tests passed");
   return 0;
 }

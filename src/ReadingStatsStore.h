@@ -71,16 +71,21 @@ class ReadingStatsStore {
 
   bool loadMainFile(size_t pendingRecords);
   bool mergeDownloadFile();
+  bool mergeBookDownload();
   bool replayJournal();
 
  public:
   static ReadingStatsStore& getInstance() { return instance; }
 
   void addMinutes(uint16_t year, uint8_t month, uint8_t day, uint16_t minutes);
+  // The day number BookReading::lastReadDay is counted in.
+  static int32_t dayNumber(uint16_t year, uint8_t month, uint8_t day);
   // Raises a day to `minutes` if it holds fewer; for minutes read back from the sync server, which
   // are this device's own (or another CrossPoint reader's on the same account), so taking the larger
   // value never counts a session twice.
   void mergeMinutes(uint16_t year, uint8_t month, uint8_t day, uint16_t minutes);
+  // The same for one language's day (see addLanguageMinutes).
+  void mergeLanguageMinutes(const char* language, uint16_t minutes, uint16_t year, uint8_t month, uint8_t day);
   // Same minutes, attributed to one book. Called alongside addMinutes(); a null or empty
   // bookPath is ignored. A non-empty language overwrites a previously unknown one (a book
   // converted before meta.bin carried a language tag starts blank and fills in after a

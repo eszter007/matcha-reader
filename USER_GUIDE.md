@@ -1684,13 +1684,21 @@ With the CrossPoint sync server set up (see [Syncing While Reading](#syncing-whi
 at the bottom of Insights or **Settings → Insights → Sync Stats**. The device joins Wi-Fi, sends its stats and fetches
 the reading time saved on the server, then restarts back to where you started.
 
-What comes back is your reading time per day for the last two years, as uploaded by any CrossPoint reader on your
-account. A day that already has more minutes on the device keeps them, so syncing twice never counts anything double.
-That brings back the **All** tab: streak, longest streak, days read, total time, this week and the calendar.
+What comes back is what any CrossPoint reader on your account uploaded:
 
-Some stats stay on the device that recorded them: books finished, the language tabs, each book's own stats, and
-dictionary lookups and saved sentences. The server still has each book's time and the books you finished, and the
-CrossPoint app shows them.
+- your reading time per day for the last two years: the **All** tab's streak, days read, total time, week and
+  calendar;
+- the language tabs, from each book's days and language;
+- books finished, including ones not on this card;
+- each book's own stats (days, sessions, finished), for the books on the card. A book takes them in the next time you
+  open it or its stats.
+
+A day that already has more minutes on the device keeps them, so syncing twice never counts anything double. The
+numbers show after the restart that ends the sync. Dictionary lookups and saved sentences stay on the device that
+recorded them.
+
+Books are matched by file name, so keep the same name on every device. The server only has per-book days and
+languages if it supports them; an older server brings back the **All** tab only.
 
 ## 8. Current Limitations & Roadmap
 

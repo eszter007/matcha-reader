@@ -11,6 +11,8 @@
 #include <mutex>
 #include <numeric>
 
+#include "BookStatsDownload.h"
+
 ReadingStatsStore ReadingStatsStore::instance;
 
 static std::string statsPath() { return sdsystem::path("reading_stats.bin"); }
@@ -132,10 +134,28 @@ void ReadingStatsStore::addMinutes(uint16_t year, uint8_t month, uint8_t day, ui
   days.insert(days.begin(), {year, month, day, minutes});
 }
 
+// A book the server knows as finished but this card has never finished: counted under this stand-in
+// until the book itself is marked finished here. Never a real path, so isFinished() never matches it.
+static std::string remoteFinishedPath(const uint32_t nameHash) {
+  char buf[20];
+  snprintf(buf, sizeof(buf), "remote:%08lx", static_cast<unsigned long>(nameHash));
+  return buf;
+}
+
+int32_t ReadingStatsStore::dayNumber(const uint16_t year, const uint8_t month, const uint8_t day) {
+  return daysSinceEpoch(year, month, day);
+}
+
 void ReadingStatsStore::mergeMinutes(const uint16_t year, const uint8_t month, const uint8_t day,
                                      const uint16_t minutes) {
   const uint16_t have = getMinutesForDay(year, month, day);
   if (minutes > have) addMinutes(year, month, day, minutes - have);
+}
+
+void ReadingStatsStore::mergeLanguageMinutes(const char* language, const uint16_t minutes, const uint16_t year,
+                                             const uint8_t month, const uint8_t day) {
+  const uint16_t have = getMinutesForDay(language, year, month, day);
+  if (minutes > have) addLanguageMinutes(language, minutes - have, year, month, day);
 }
 
 void ReadingStatsStore::addBookMinutes(const char* bookPath, const char* language, const uint16_t minutes,
@@ -345,6 +365,10 @@ void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
                   [&bookPath](const std::string& p) { return p == bookPath; })) {
     return;
   }
+  // Its stand-in from the server goes: the book now counts under its own path.
+  const std::string remote = remoteFinishedPath(bookdownload::nameHash(bookPath));
+  const auto stale = std::find(finishedBookPaths.begin(), finishedBookPaths.end(), remote);
+  if (stale != finishedBookPaths.end()) finishedBookPaths.erase(stale);
   finishedBookPaths.push_back(bookPath);
   // max(), not assignment: after a truncated load the path list can hold fewer entries than the
   // count the file's header reported, and a finished-book tally must never count down.
@@ -1061,6 +1085,7 @@ bool ReadingStatsStore::compact() {
   recoverInterruptedSave();
   const bool hasJournal = Storage.exists(journalPath().c_str());
   const bool hasDownload = Storage.exists(downloadPath().c_str());
+  const bool hasBookDownload = Storage.exists(bookdownload::newPath().c_str());
   bool outdated = false;  // an older format: one rewrite upgrades it
   {
     HalFile f;
@@ -1069,7 +1094,7 @@ bool ReadingStatsStore::compact() {
       outdated = plausibleStatsVersion(version) && version != STATS_VERSION;
     }
   }
-  if (!hasJournal && !outdated && !hasDownload) return true;
+  if (!hasJournal && !outdated && !hasDownload && !hasBookDownload) return true;
 
   release();
   uint32_t bytes = 0, hash = 0;
@@ -1078,10 +1103,12 @@ bool ReadingStatsStore::compact() {
   // journal twice; until that save lands the journal is untouched.
   bool ok = loadFromFile();
   bool downloadIntact = true;
+  bool bookDownloadMerged = false;
   if (ok) {
     foldedJournalBytes = bytes;
     foldedJournalHash = hash;
     if (hasDownload) downloadIntact = mergeDownloadFile();
+    if (hasBookDownload) bookDownloadMerged = mergeBookDownload();
     ok = saveToFile();
   }
   if (ok && hasJournal) Storage.remove(journalPath().c_str());
@@ -1090,6 +1117,8 @@ bool ReadingStatsStore::compact() {
     if (!downloadIntact) LOG_ERR("STAT", "Downloaded stats file damaged");
     Storage.remove(downloadPath().c_str());
   }
+  // Folded in: from now on it is only the per-book copy BookStats::load() reads.
+  if (ok && bookDownloadMerged) Storage.replaceFile(bookdownload::newPath().c_str(), bookdownload::path().c_str());
   if (!ok) LOG_ERR("STAT", "Stats journal not folded in; kept for the next try");
   release();
   return ok;
@@ -1114,6 +1143,66 @@ bool ReadingStatsStore::saveDownload(const std::vector<DailyReading>& downloaded
     return false;
   }
   return Storage.replaceFile(tmpPath.c_str(), downloadPath().c_str());
+}
+
+// The server's per-book download, for what the reading stats keep across books: minutes per language
+// per day (the sum of that language's books) and books finished that this card never finished.
+bool ReadingStatsStore::mergeBookDownload() {
+  struct LanguageDay {
+    char language[4];
+    int32_t epoch;
+    BookDay day;
+  };
+  struct Ctx {
+    std::vector<LanguageDay> days;
+    std::vector<uint32_t> finished;
+    size_t limit;
+  } ctx;
+  // Bounded like the tables: a reserve that cannot be served aborts.
+  ctx.limit = MAX_LANG_DAYS * 4;
+  if (!tableFits(ctx.limit * sizeof(LanguageDay))) {
+    LOG_ERR("STAT", "Downloaded book stats kept for the next boot");
+    return false;
+  }
+  ctx.days.reserve(ctx.limit);
+  std::vector<BookDay> scratch;
+  bookdownload::forEach(bookdownload::newPath(), scratch, &ctx,
+                        [](void* p, const bookdownload::Book& book, const std::vector<BookDay>& days) {
+                          auto& c = *static_cast<Ctx*>(p);
+                          if (book.finished) c.finished.push_back(book.nameHash);
+                          if (!book.language[0]) return;
+                          LanguageDay e{};
+                          normalizeLanguage(book.language, e.language);
+                          for (const auto& d : days) {
+                            if (c.days.size() >= c.limit) return;
+                            e.epoch = daysSinceEpoch(d.year, d.month, d.day);
+                            e.day = d;
+                            c.days.push_back(e);
+                          }
+                        });
+  // A language's day is the sum of its books' minutes that day.
+  std::sort(ctx.days.begin(), ctx.days.end(), [](const LanguageDay& a, const LanguageDay& b) {
+    return a.epoch != b.epoch ? a.epoch < b.epoch : memcmp(a.language, b.language, 4) < 0;
+  });
+  for (size_t i = 0; i < ctx.days.size();) {
+    uint32_t minutes = 0;
+    size_t j = i;
+    for (; j < ctx.days.size() && ctx.days[j].epoch == ctx.days[i].epoch &&
+           memcmp(ctx.days[j].language, ctx.days[i].language, 4) == 0;
+         j++) {
+      minutes += ctx.days[j].day.minutes;
+    }
+    const BookDay& d = ctx.days[i].day;
+    mergeLanguageMinutes(ctx.days[i].language, static_cast<uint16_t>(std::min<uint32_t>(minutes, UINT16_MAX)), d.year,
+                         d.month, d.day);
+    i = j;
+  }
+  for (const uint32_t hash : ctx.finished) {
+    const bool here = std::any_of(finishedBookPaths.begin(), finishedBookPaths.end(),
+                                  [hash](const std::string& p) { return bookdownload::nameHash(p) == hash; });
+    if (!here) markBookFinished(remoteFinishedPath(hash));
+  }
+  return true;
 }
 
 // Merges the saved download into the loaded tables. False when the file is damaged; what it held

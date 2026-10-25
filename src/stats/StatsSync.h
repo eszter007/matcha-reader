@@ -39,14 +39,17 @@ int32_t daysSince2000(uint16_t year, uint8_t month, uint8_t day);
 // weekday totals cover all of it, `daily` only the slice.
 void buildGlobal(JsonDocument& doc, const std::vector<Day>& days, const Totals& totals, size_t from, size_t count);
 
-// Books per /stats/books upload. The server takes 20; 10 keeps the body near 4 KB while TLS holds its buffers.
-constexpr size_t BOOKS_PER_UPLOAD = 10;
+// Items per /stats/books upload. The server takes 20; 5 items of 20 days keep the body near 5 KB while TLS
+// holds its buffers.
+constexpr size_t ITEMS_PER_UPLOAD = 5;
+// Days the server takes per item; a book with more new days goes in several items.
+constexpr size_t DAYS_PER_ITEM = 20;
 
-// Appends one book's snapshot from its BookStats days (sorted ascending) to a /stats/books body. finished: the
-// book is on the finished list; its last reading day stands in for the finish date, which the device does not
-// record.
+// Appends one book's snapshot from its BookStats days (sorted ascending) to a /stats/books body, with
+// `dailyCount` of those days from `daily` as the item's per-day seconds. finished: the book is on the finished
+// list; its last reading day stands in for the finish date, which the device does not record.
 void addBook(JsonDocument& doc, const std::string& documentHash, const std::vector<BookDay>& days, uint32_t sessions,
-             bool finished);
+             bool finished, const BookDay* daily = nullptr, size_t dailyCount = 0);
 
 // Uploads the stats of every book read since the last upload (all of them the first time), then the daily
 // totals. Only for crosspoint-sync servers with credentials. Failures are logged and never fail the

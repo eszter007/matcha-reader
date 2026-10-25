@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -10,6 +11,18 @@ struct BookDay {
   uint8_t day;
   uint16_t minutes;
 };
+
+// FNV-1a of a path's last component: the name a book keeps across devices, so "/books/a.epub" and "a.epub"
+// agree. Persisted (the per-book stats download), so it must not change.
+inline uint32_t bookNameHash(const char* path, const size_t len) {
+  size_t start = 0;
+  for (size_t i = 0; i < len; i++) {
+    if (path[i] == '/') start = i + 1;
+  }
+  uint32_t h = 2166136261u;
+  for (size_t i = start; i < len; i++) h = (h ^ static_cast<uint8_t>(path[i])) * 16777619u;
+  return h;
+}
 
 // Per-book reading history: sessions, minutes, days.
 //
@@ -64,6 +77,13 @@ class BookStats {
   static std::string filePathFor(const char* bookPath);
 
  private:
+  // Takes in what the sync server has for this book (bookdownload): the larger value per day and the
+  // larger session count. True when that changed anything.
+  bool mergeDownloaded(bool& finished);
+  bool loadLocal(const char* bookPath);
+  // Set by load(): the server's copy changed this book and calls it finished.
+  bool restoredFinished = false;
+
   std::string bookPath;
   uint32_t sessions = 0;
   uint32_t lookups = 0;
