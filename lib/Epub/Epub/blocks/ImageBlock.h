@@ -34,8 +34,9 @@ class ImageBlock final : public Block {
   // Whether a decoder failed in the render since the last clearRenderFailures(). Missing files and
   // deferred PNGs do not count: drawing the page again cannot fix those.
   static bool renderHadDecodeFailure();
-  // A PNG whose decoder does not fit the heap is not decoded during a page render: it shows the
-  // placeholder and is left to the reader's warm task, which can lend the decoder the framebuffer.
+  // An image whose PNG decoder or zip inflate window does not fit the heap is not decoded during a
+  // page render: it shows the placeholder and is left to the reader's warm task, which can lend the
+  // framebuffer.
   bool needsFramebufferLoanToDecode() const;
   // Whether a render deferred such a decode since the last call (render task only).
   static bool consumeDeferredDecode();
@@ -99,6 +100,8 @@ class ImageBlock final : public Block {
   int16_t height;
   bool rotated = false;
   int16_t reserveMargin_ = 0;
+
+  bool decodeNeedsMoreHeap() const;
 
   static void* extractCtx;
   static ExtractFn extractFn;
