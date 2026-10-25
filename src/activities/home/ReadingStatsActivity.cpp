@@ -17,6 +17,8 @@
 #include "HapticFeedback.h"
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
+#include "activities/ActivityManager.h"
+#include "activities/home/StatsSyncActivity.h"
 #include "components/HomeTabBar.h"
 #include "components/StatsWidgets.h"
 #include "components/UITheme.h"
@@ -76,6 +78,7 @@ void ReadingStatsActivity::stepTab(const int direction) {
 }
 
 void ReadingStatsActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) {
+  refreshFocused = false;
   tabFocus = focus == TabRing::Focus::BottomBar ? static_cast<int>(HomeTab::Stats) : -1;
   // The top of the ring is the top of the page, where the tabs are; coming up out of the bar
   // lands at the page's end.
@@ -124,6 +127,11 @@ bool ReadingStatsActivity::stepMonthFromTap() {
   return true;
 }
 
+// Replaces this screen, so the stats tables are freed before WiFi and TLS need the heap.
+void ReadingStatsActivity::startRefresh() {
+  activityManager.replaceActivity(std::make_unique<StatsSyncActivity>(renderer, mappedInput));
+}
+
 void ReadingStatsActivity::loop() {
   if (TabRing::handleInput(*this, mappedInput, renderer) != TabRing::Result::None) return;
   // Tap leaves Insights, hold goes home; same gesture as the language screen.
@@ -151,7 +159,11 @@ void ReadingStatsActivity::loop() {
   // Confirm cycles the tabs -- All, then one per language -- and past the last one steps into
   // the bottom bar.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    TabRing::confirmTopTabs(*this);
+    if (refreshFocused) {
+      startRefresh();
+    } else {
+      TabRing::confirmTopTabs(*this);
+    }
     return;
   }
   // Tapping a tab picks it: the tabs are FreeInkUI touch targets, exactly where the band drew them.
@@ -172,6 +184,16 @@ void ReadingStatsActivity::loop() {
   // Tapping a chevron steps the month, the touch equivalent of the Left/Right keys
   // below -- which resolve to front buttons a touch board does not have.
   if (stepMonthFromTap()) return;
+  {
+    int tx = 0;
+    int ty = 0;
+    if (refreshRow.width > 0 && mappedInput.wasScreenTapped(tx, ty) && tx >= refreshRow.x &&
+        tx < refreshRow.x + refreshRow.width && ty >= refreshRow.y && ty < refreshRow.y + refreshRow.height) {
+      haptic_feedback::touchAction();
+      startRefresh();
+      return;
+    }
+  }
   // Left/Right to navigate calendar months
   if (mappedInput.wasReleased(MappedInputManager::Button::ScreenLeft)) {
     StatsWidgets::stepMonth(calYear, calMonth, -1);
@@ -208,10 +230,21 @@ void ReadingStatsActivity::loop() {
       requestUpdate();
       return;
     }
-    // Bottom of the page: the next Down carries on into the bottom bar.
+    // Bottom of the page: the next Down focuses Refresh Stats, the one after carries on into the
+    // bottom bar.
+    if (!refreshFocused) {
+      refreshFocused = true;
+      requestUpdate();
+      return;
+    }
     if (TabRing::hasBottomBar(*this)) TabRing::leaveContent(*this, 1);
   });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenUp}, [this] {
+    if (refreshFocused) {
+      refreshFocused = false;
+      requestUpdate();
+      return;
+    }
     if (scrollOffset > 0) {
       scrollOffset -= 40;
       if (scrollOffset < 0) scrollOffset = 0;
@@ -309,6 +342,26 @@ void ReadingStatsActivity::render(RenderLock&&) {
   const StatsWidgets::MonthSource source{code, statsMonthStatus, statsDaysReadInMonth};
   y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source, &monthNav);
 
+  // ==================== REFRESH STATS ====================
+  // A quiet text action: icon and small text, outlined only while focused.
+  {
+    constexpr int ICON = 24;
+    constexpr int GAP = 8;
+    constexpr int ROW_H = 44;
+    y += 12;
+    const char* label = tr(STR_REFRESH_STATS);
+    const int rowW = ICON + GAP + renderer.getTextWidth(SMALL_FONT_ID, label);
+    const int rx = cardX + (cardW - rowW) / 2;
+    if (refreshFocused) {
+      renderer.drawRoundedRect(rx - 16, y, rowW + 32, ROW_H, 2, StatsWidgets::CARD_RADIUS, true);
+    }
+    renderer.drawIcon(RefreshIcon24, rx, y + (ROW_H - ICON) / 2, ICON);
+    renderer.drawText(SMALL_FONT_ID, rx + ICON + GAP, y + (ROW_H - renderer.getLineHeight(SMALL_FONT_ID)) / 2, label,
+                      true);
+    refreshRow = Rect{cardX, y, cardW, ROW_H};
+    y += ROW_H;
+  }
+
   // Compute max scroll: content bottom minus the visible area.
   const int contentEndY = y + 10;  // 10px bottom margin
   // Where the scrollable area really ends: the tab bar's top edge when it is drawn, otherwise the
@@ -316,6 +369,8 @@ void ReadingStatsActivity::render(RenderLock&&) {
   // unable to scroll clear of the bar.
   const int visibleBottom = HomeTabBar::enabled() ? HomeTabBar::top(renderer) : renderer.getScreenHeight() - 50;
   const int visibleHeight = visibleBottom - headerBottom;
+  // Under the header or the bar a tap must not reach it.
+  if (refreshRow.y < headerBottom || refreshRow.y + refreshRow.height > visibleBottom) refreshRow = Rect{};
   maxScrollOffset = contentEndY - headerBottom - visibleHeight + scrollOffset;
   if (maxScrollOffset < 0) maxScrollOffset = 0;
   scrollPageHeight = visibleHeight;
@@ -357,9 +412,10 @@ void ReadingStatsActivity::render(RenderLock&&) {
     uint8_t pm = calMonth, nm = calMonth;
     StatsWidgets::stepMonth(py, pm, -1);
     StatsWidgets::stepMonth(ny, nm, +1);
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tabLabels.size() > 1 ? tr(STR_SWITCH) : "",
-                                              StatsWidgets::monthAbbrev(pm, prevBuf, sizeof(prevBuf)),
-                                              StatsWidgets::monthAbbrev(nm, nextBuf, sizeof(nextBuf)));
+    const char* confirm = refreshFocused ? tr(STR_SELECT) : tabLabels.size() > 1 ? tr(STR_SWITCH) : "";
+    const auto labels =
+        mappedInput.mapLabels(tr(STR_BACK), confirm, StatsWidgets::monthAbbrev(pm, prevBuf, sizeof(prevBuf)),
+                              StatsWidgets::monthAbbrev(nm, nextBuf, sizeof(nextBuf)));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
 

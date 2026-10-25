@@ -64,7 +64,7 @@ void statsSync::buildGlobal(JsonDocument& doc, const std::vector<Day>& days, con
   std::string encoded;
   base64(history, sizeof(history), encoded);
 
-  doc["device_id"] = "crosspoint-reader";
+  doc["device_id"] = DEVICE_ID;
   doc["device"] = "CrossPoint";
   doc["v"] = 5;
   doc["sessions"] = 0;  // counted per book only
@@ -87,10 +87,12 @@ void statsSync::buildGlobal(JsonDocument& doc, const std::vector<Day>& days, con
   }
 }
 
-void statsSync::buildBook(JsonDocument& doc, const std::string& documentHash, const std::vector<BookDay>& days,
-                          const uint32_t sessions, const bool finished) {
-  doc["device_id"] = "crosspoint-reader";
-  JsonObject item = doc["items"].to<JsonArray>().add<JsonObject>();
+void statsSync::addBook(JsonDocument& doc, const std::string& documentHash, const std::vector<BookDay>& days,
+                        const uint32_t sessions, const bool finished, const BookDay* daily, const size_t dailyCount,
+                        const BookDay* finishDay) {
+  doc["device_id"] = DEVICE_ID;
+  JsonArray items = doc["items"].is<JsonArray>() ? doc["items"].as<JsonArray>() : doc["items"].to<JsonArray>();
+  JsonObject item = items.add<JsonObject>();
   uint32_t seconds = 0;
   uint32_t dow[7] = {};
   for (const auto& d : days) {
@@ -110,6 +112,18 @@ void statsSync::buildBook(JsonDocument& doc, const std::string& documentHash, co
   item["start_manual"] = false;
   item["finish_manual"] = false;
   item["start_date"] = days.empty() ? 0 : unixDate(dayOf(days.front()));
-  item["finished_date"] = finished && !days.empty() ? unixDate(dayOf(days.back())) : 0;
+  // The finish day the device stored; the last reading day for a book finished before it kept one.
+  const BookDay* finishedOn = finishDay ? finishDay : (days.empty() ? nullptr : &days.back());
+  item["finished_date"] = finished && finishedOn ? unixDate(dayOf(*finishedOn)) : 0;
   weekdays(item, dow);
+  if (dailyCount > 0) {
+    JsonArray out = item["daily"].to<JsonArray>();
+    for (size_t i = 0; i < dailyCount; i++) {
+      char date[11];
+      dateString(dayOf(daily[i]), date);
+      JsonObject entry = out.add<JsonObject>();
+      entry["date"] = date;
+      entry["seconds"] = daily[i].minutes * 60u;
+    }
+  }
 }

@@ -70,12 +70,22 @@ class ReadingStatsStore {
   uint32_t foldedJournalHash = 0;
 
   bool loadMainFile(size_t pendingRecords);
+  bool mergeDownloadFile();
+  bool mergeBookDownload(const std::string& list);
   bool replayJournal();
 
  public:
   static ReadingStatsStore& getInstance() { return instance; }
 
   void addMinutes(uint16_t year, uint8_t month, uint8_t day, uint16_t minutes);
+  // The day number BookReading::lastReadDay is counted in.
+  static int32_t dayNumber(uint16_t year, uint8_t month, uint8_t day);
+  // Raises a day to `minutes` if it holds fewer; for minutes read back from the sync server, which
+  // are this device's own (or another CrossPoint reader's on the same account), so taking the larger
+  // value never counts a session twice.
+  void mergeMinutes(uint16_t year, uint8_t month, uint8_t day, uint16_t minutes);
+  // The same for one language's day (see addLanguageMinutes).
+  void mergeLanguageMinutes(const char* language, uint16_t minutes, uint16_t year, uint8_t month, uint8_t day);
   // Same minutes, attributed to one book. Called alongside addMinutes(); a null or empty
   // bookPath is ignored. A non-empty language overwrites a previously unknown one (a book
   // converted before meta.bin carried a language tag starts blank and fills in after a
@@ -158,9 +168,19 @@ class ReadingStatsStore {
     const char* finishedPath = nullptr;  // book marked finished, or nullptr
   };
   static bool record(const Change& change);
-  // Folds the journal into the stats file (load, replay, save, remove the journal). Run where the
-  // heap is free -- boot -- so the tables are only ever built there or on a stats screen.
+  // Folds the journal and any saved download into the stats file (load, replay, merge, save, remove
+  // them). Run where the heap is free -- boot -- so the tables are only ever built there or on a stats
+  // screen.
   bool compact();
+
+  // Daily minutes downloaded from the sync server, kept on SD until the next compact() folds them in
+  // with mergeMinutes(). Written with WiFi up, when the tables may not fit; a newer download replaces
+  // an unmerged one, and one that cannot be folded in yet stays for the next boot.
+  static bool saveDownload(const std::vector<DailyReading>& downloaded);
+  // A saved download the next compact() has not folded in yet.
+  static bool hasPendingDownload();
+  // A stats file exists: what a download since the last one would add to.
+  static bool hasStatsFile();
 
   // The numbers the end-of-book summary shows, read straight from the file and the journal with no
   // tables built: that screen runs with the book still in memory. Same values as the getters.

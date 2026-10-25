@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "BookStats.h"
+#include "BookStatsDownload.h"
 #include "ReadingStatsStore.h"
 #include "util/DateFormat.h"
 
@@ -634,6 +635,143 @@ TEST_F(StatsTest, TornJournalHeaderIsStartedOver) {
   ASSERT_TRUE(s.record({Y, M, 5, 7, "/a.epub", "en", nullptr}));
   ASSERT_TRUE(s.loadFromFile());
   EXPECT_EQ(s.getTotalMinutes(), 7u);
+}
+
+// Server minutes raise a day to their value and never lower it: merging the same download twice,
+// or one older than what the device recorded since, changes nothing.
+TEST_F(StatsTest, MergeMinutesTakesTheLargerValue) {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(Y, M, 5, 20);
+  s.mergeMinutes(Y, M, 5, 30);
+  s.mergeMinutes(Y, M, 5, 10);
+  s.mergeMinutes(Y, M, 3, 15);  // a day the device never saw
+  s.mergeMinutes(Y, M, 3, 15);
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 5), 30);
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 3), 15);
+  EXPECT_EQ(s.getTotalMinutes(), 45u);
+}
+
+// A saved download is folded in by the next compact(), alongside the journal, and removed.
+TEST_F(StatsTest, CompactMergesSavedDownload) {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(Y, M, 1, 30);
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.record({Y, M, 2, 5, "/a.epub", "en", nullptr}));
+  ASSERT_TRUE(ReadingStatsStore::saveDownload({{Y, M, 1, 20}, {Y, M, 2, 12}, {Y, M, 4, 7}}));
+  ASSERT_TRUE(s.compact());
+  const std::string download = testRoot() + sdsystem::path("reading_stats_download.bin");
+  EXPECT_FALSE(std::filesystem::exists(download));
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 1), 30);  // the device's own larger value stays
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 2), 12);  // the journal's 5, raised
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 4), 7);
+  EXPECT_EQ(s.getTotalMinutes(), 49u);
+  s.release();
+  ASSERT_TRUE(s.compact());  // nothing left to fold: the journal is not replayed twice
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 49u);
+}
+
+namespace {
+// Writes a per-book download as Refresh Stats would, as the ".new" file the next boot folds in.
+void writeBookDownload(
+    const std::vector<std::tuple<std::string, bool, uint32_t, const char*, std::vector<BookDay>>>& books,
+    const bool increment = false) {
+  bookdownload::Writer w;
+  ASSERT_TRUE(w.begin(bookdownload::newPath(), increment));
+  for (const auto& [name, finished, sessions, language, days] : books) {
+    ASSERT_TRUE(w.beginBook(bookdownload::nameHash(name), finished, sessions, language));
+    for (const auto& d : days) ASSERT_TRUE(w.addDay(d));
+    ASSERT_TRUE(w.endBook());
+  }
+  ASSERT_TRUE(w.commit());
+}
+}  // namespace
+
+// Boot folds the download into what the stats keep across books: a language's day is the sum of its
+// books, and books finished elsewhere count, without being counted twice once finished here.
+TEST_F(StatsTest, CompactFoldsBookDownload) {
+  auto& s = READING_STATS_STORE;
+  s.addLanguageMinutes("ja", 10, Y, M, 1);
+  s.markBookFinished("/books/here.epub");
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  writeBookDownload({
+      {"a.epub", true, 3, "ja", {{Y, M, 1, 20}, {Y, M, 2, 5}}},
+      {"b.epub", false, 1, "ja-JP", {{Y, M, 1, 15}}},
+      {"here.epub", true, 2, "en", {}},            // already finished on this card
+      {"scan.xtc", false, 1, "", {{Y, M, 2, 8}}},  // no language: the Unknown tab
+  });
+  ASSERT_TRUE(s.compact());
+  EXPECT_FALSE(std::filesystem::exists(testRoot() + bookdownload::newPath()));
+  EXPECT_TRUE(std::filesystem::exists(testRoot() + bookdownload::path()));  // kept for BookStats
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 1), 35);  // 20 + 15, above the 10 recorded here
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 2), 5);
+  EXPECT_EQ(s.getMinutesForDay("", Y, M, 2), 8);
+  EXPECT_EQ(s.getBooksFinished(), 2);  // here.epub, and a.epub from elsewhere
+  // Finishing a.epub here replaces its stand-in rather than adding to it.
+  s.markBookFinished("/books/a.epub");
+  EXPECT_EQ(s.getBooksFinished(), 2);
+  EXPECT_TRUE(s.isFinished("/books/a.epub"));
+}
+
+// A book on the card takes in its server days when loaded, keeping the larger value per day, and its
+// first open since marks it finished if the server says so.
+TEST_F(StatsTest, BookStatsTakeInDownload) {
+  BookStats::recordOpen("/books/a.epub");  // one local session, no days yet
+  {
+    BookStats b;
+    ASSERT_TRUE(b.load("/books/a.epub"));
+    b.recordMinutes(Y, M, 1, 30);
+    ASSERT_TRUE(b.save());
+  }
+  writeBookDownload({{"a.epub", true, 4, "ja", {{Y, M, 1, 20}, {Y, M, 2, 12}}}});
+  ASSERT_TRUE(READING_STATS_STORE.compact());
+
+  BookStats plain;
+  ASSERT_TRUE(plain.load("/books/a.epub"));  // a save's load leaves the server copy alone
+  EXPECT_EQ(plain.getTotalMinutes(), 30u);
+  BookStats b;
+  ASSERT_TRUE(b.load("/books/a.epub", /*withServerCopy=*/true));
+  EXPECT_EQ(b.getSessions(), 4u);
+  EXPECT_EQ(b.getTotalMinutes(), 42u);  // 30 kept on the 1st, 12 added on the 2nd
+  BookStats other;
+  ASSERT_TRUE(other.load("/books/unknown.epub", /*withServerCopy=*/true));
+  EXPECT_EQ(other.getTotalMinutes(), 0u);
+
+  ASSERT_TRUE(BookStats::recordOpen("/books/a.epub"));
+  ASSERT_TRUE(READING_STATS_STORE.compact());
+  ASSERT_TRUE(READING_STATS_STORE.loadFromFile());
+  EXPECT_TRUE(READING_STATS_STORE.isFinished("/books/a.epub"));
+  EXPECT_EQ(READING_STATS_STORE.getBooksFinished(), 1);  // its stand-in went
+}
+
+// A download of only the changed books replaces those books in the list the card has; the language
+// tabs are rebuilt from the whole list, so an unchanged book's minutes still count.
+TEST_F(StatsTest, IncrementalBookDownloadCombines) {
+  auto& s = READING_STATS_STORE;
+  writeBookDownload({
+      {"a.epub", false, 1, "ja", {{Y, M, 1, 20}}},
+      {"b.epub", false, 1, "ja", {{Y, M, 1, 10}}},
+  });
+  ASSERT_TRUE(s.compact());
+  writeBookDownload({{"a.epub", true, 2, "ja", {{Y, M, 1, 25}, {Y, M, 2, 5}}}}, /*increment=*/true);
+  ASSERT_TRUE(s.compact());
+  EXPECT_FALSE(std::filesystem::exists(testRoot() + bookdownload::newPath()));
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 1), 35);  // a's new 25 plus b's 10, kept from the old list
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 2), 5);
+  EXPECT_EQ(s.getBooksFinished(), 1);
+  s.release();
+
+  bookdownload::Book book;
+  std::vector<BookDay> days;
+  ASSERT_TRUE(bookdownload::find(bookdownload::nameHash("a.epub"), book, days));
+  EXPECT_EQ(book.sessions, 2u);
+  EXPECT_EQ(days.size(), 2u);
+  EXPECT_TRUE(bookdownload::find(bookdownload::nameHash("b.epub"), book, days));
 }
 
 // The end-of-book screen records the finish, then asks whether it was a reopening of a finished book.

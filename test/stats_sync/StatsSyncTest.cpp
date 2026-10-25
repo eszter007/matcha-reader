@@ -1,10 +1,13 @@
 #include <ArduinoJson.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <string>
 #include <vector>
 
+#include "stats/BookListParser.h"
+#include "stats/DailyStatsParser.h"
 #include "stats/StatsSync.h"
 
 using statsSync::Day;
@@ -64,7 +67,7 @@ void book() {
   // 2026-10-01 is a Thursday, 2026-10-06 a Tuesday.
   const std::vector<BookDay> days = {{2026, 10, 1, 10}, {2026, 10, 6, 15}};
   JsonDocument doc;
-  statsSync::buildBook(doc, "0123456789abcdef0123456789abcdef", days, 3, true);
+  statsSync::addBook(doc, "0123456789abcdef0123456789abcdef", days, 3, true);
   JsonObjectConst item = doc["items"][0];
   assert(item["seconds"] == 1500);
   assert(item["sessions"] == 3);
@@ -74,9 +77,105 @@ void book() {
   assert(item["dow"][3] == 600);                 // Thursday
   assert(item["dow"][1] == 900);                 // Tuesday
 
-  JsonDocument unfinished;
-  statsSync::buildBook(unfinished, "0123456789abcdef0123456789abcdef", days, 3, false);
-  assert(unfinished["items"][0]["finished_date"] == 0);
+  // A second book goes into the same body.
+  statsSync::addBook(doc, "fedcba9876543210fedcba9876543210", days, 1, false);
+  assert(doc["items"].size() == 2);
+  assert(doc["items"][0]["completed"] == true);
+  assert(doc["items"][1]["document"] == "fedcba9876543210fedcba9876543210");
+  assert(doc["items"][1]["finished_date"] == 0);
+
+  // A stored finish day wins over the last reading day.
+  const BookDay finishDay{2026, 10, 3, 0};
+  statsSync::addBook(doc, "00112233445566778899aabbccddeeff", days, 1, true, nullptr, 0, &finishDay);
+  assert(doc["items"][2]["finished_date"] == 1790985600u);  // 2026-10-03
+  assert(!doc["items"][0]["daily"].is<JsonArray>());        // no days asked for: none sent
+
+  // Days go out as the server's {date, seconds}, only the slice asked for.
+  JsonDocument withDays;
+  statsSync::addBook(withDays, "0123456789abcdef0123456789abcdef", days, 3, false, &days[1], 1);
+  JsonArrayConst daily = withDays["items"][0]["daily"];
+  assert(daily.size() == 1);
+  assert(daily[0]["date"] == "2026-10-06");
+  assert(daily[0]["seconds"] == 900);
+  assert(withDays["items"][0]["seconds"] == 1500);  // totals still cover every day
+}
+
+// Only this reader's days come back, in the window, fed in small chunks the way TLS delivers them.
+void download() {
+  const std::string body =
+      R"({"devices":[)"
+      R"({"device_id":"kobo","device":"Kobo","stats":{"daily":[{"date":"2026-10-20","seconds":600}]}},)"
+      R"({"device_id":"crosspoint-reader","device":"CrossPoint","updated_at":1,)"
+      R"("stats":{"v":5,"dow":[0,0,0,0,0,0,0],"daily":[)"
+      R"({"date":"2024-01-01","seconds":600},)"  // before the window
+      R"({"date":"2026-10-23","seconds":2460},)"
+      R"({"date":"2026-10-24","seconds":30},)"  // under a minute
+      R"({"date":"bad","seconds":60},)"
+      R"({"date":"2026-10-25","seconds":120}]}}],)"  // after today
+      R"("bookorbit":{"daily":[{"date":"2026-10-22","seconds":600}]},"until":1761300100})";
+  std::vector<DailyReading> days;
+  days.reserve(4);
+  DailyStatsParser parser(statsSync::DEVICE_ID, days, day(2026, 10, 24) - 729, day(2026, 10, 24));
+  for (size_t i = 0; i < body.size(); i += 7) parser.feed(body.data() + i, std::min<size_t>(7, body.size() - i));
+  assert(parser.complete());
+  assert(parser.until() == 1761300100u);
+  assert(days.size() == 1);
+  assert(days[0].year == 2026 && days[0].month == 10 && days[0].day == 23 && days[0].minutesRead == 41);
+
+  std::vector<DailyReading> cut;
+  cut.reserve(1);
+  DailyStatsParser truncated(statsSync::DEVICE_ID, cut, 0, day(2026, 10, 24));
+  truncated.feed(body.data(), body.size() / 2);
+  assert(!truncated.complete());
+}
+
+// A page of the book list arrives as begin/day/end calls, book by book, in any chunking.
+void bookList() {
+  const std::string body =
+      R"({"items":[)"
+      R"({"device_id":"crosspoint-reader","document":"a","title":"Kokoro","filename":"books/kokoro.epub","language":"ja",)"
+      R"("updated_at":1,"stats":{"v":5,"sessions":4,"completed":true,"tod":[0,0,0,0],)"
+      R"("daily":[{"date":"2026-10-23","seconds":900},{"date":"2026-10-24","seconds":30}]}},)"  // 30 s: under a minute
+      R"({"device_id":"crosspoint-reader","document":"b","title":"No file","filename":null,"language":null,)"
+      R"("stats":{"sessions":1,"completed":false,"daily":[{"date":"2026-10-24","seconds":600}]}},)"
+      R"({"device_id":"crosspoint-reader","document":"c","filename":"old.epub","language":null,)"
+      R"("stats":{"sessions":2,"completed":false}}],)"  // a server without per-book days
+      R"("next":"cccccccccccccccccccccccccccccccccrosspoint-reader"})";
+  struct Log {
+    std::string calls;
+  } log;
+  const BookListParser::Sink sink{
+      &log,
+      [](void* c, const uint32_t hash, const bool finished, const uint32_t sessions, const char* language) {
+        auto& l = static_cast<Log*>(c)->calls;
+        l += "begin " + std::to_string(hash) + " " + std::to_string(finished) + " " + std::to_string(sessions) + " " +
+             language + ";";
+        return true;
+      },
+      [](void* c, const BookDay& d) {
+        static_cast<Log*>(c)->calls +=
+            "day " + std::to_string(d.month) + "-" + std::to_string(d.day) + " " + std::to_string(d.minutes) + ";";
+        return true;
+      },
+      [](void* c) {
+        static_cast<Log*>(c)->calls += "end;";
+        return true;
+      }};
+  BookListParser parser(sink);
+  for (size_t i = 0; i < body.size(); i += 5) parser.feed(body.data() + i, std::min<size_t>(5, body.size() - i));
+  assert(parser.complete());
+  assert(parser.books() == 2);
+  assert(std::string(parser.next()) == "cccccccccccccccccccccccccccccccccrosspoint-reader");
+  const std::string kokoro = std::to_string(bookNameHash("kokoro.epub", 11));
+  const std::string old = std::to_string(bookNameHash("old.epub", 8));
+  assert(log.calls == "begin " + kokoro + " 1 4 ja;day 10-23 15;end;begin " + old + " 0 2 ;end;");
+
+  BookListParser last(sink);
+  const std::string lastPage = R"({"items":[],"next":null,"until":1761300100})";
+  last.feed(lastPage.data(), lastPage.size());
+  assert(last.complete() && last.next()[0] == '\0');
+  assert(last.until() == 1761300100u);
+  assert(parser.until() == 0);  // a server without it
 }
 }  // namespace
 
@@ -84,6 +183,8 @@ int main() {
   dates();
   global();
   book();
+  download();
+  bookList();
   puts("stats sync tests passed");
   return 0;
 }

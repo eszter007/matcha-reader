@@ -35,12 +35,13 @@ This guide covers the **CrossPoint** firmware as shipped in Matcha Reader: the b
       - [3.6.2 Display](#362-display)
       - [3.6.3 Sleep](#363-sleep)
       - [3.6.4 Library](#364-library)
-      - [3.6.5 Reader](#365-reader)
-      - [3.6.6 Controls](#366-controls)
-      - [3.6.7 Connectivity](#367-connectivity)
-      - [3.6.8 OPDS Servers (Multiple Libraries)](#368-opds-servers-multiple-libraries)
-      - [3.6.9 Web Settings (Wi-Fi + OPDS)](#369-web-settings-wi-fi--opds)
-      - [3.6.10 KOReader Sync Quick Setup](#3610-koreader-sync-quick-setup)
+      - [3.6.5 Insights](#365-insights)
+      - [3.6.6 Reader](#366-reader)
+      - [3.6.7 Controls](#367-controls)
+      - [3.6.8 Connectivity](#368-connectivity)
+      - [3.6.9 OPDS Servers (Multiple Libraries)](#369-opds-servers-multiple-libraries)
+      - [3.6.10 Web Settings (Wi-Fi + OPDS)](#3610-web-settings-wi-fi--opds)
+      - [3.6.11 KOReader Sync Quick Setup](#3611-koreader-sync-quick-setup)
         - [Option A: CrossPoint Sync Server (`sync.crosspointreader.com`, default)](#option-a-crosspoint-sync-server-synccrosspointreadercom-default)
         - [Option B: Legacy Public KOReader Server (`sync.koreader.rocks`)](#option-b-legacy-public-koreader-server-synckoreaderrocks)
         - [Option C: Self-Hosted Server (Docker Compose)](#option-c-self-hosted-server-docker-compose)
@@ -76,6 +77,7 @@ This guide covers the **CrossPoint** firmware as shipped in Matcha Reader: the b
     - [7.1 Insights](#71-insights)
     - [7.2 Per-book Stats](#72-per-book-stats)
     - [7.3 What the Numbers Do Not Cover](#73-what-the-numbers-do-not-cover)
+    - [7.4 Syncing Stats Between Devices](#74-syncing-stats-between-devices)
   - [8. Current Limitations & Roadmap](#8-current-limitations--roadmap)
   - [9. Troubleshooting Issues & Escaping Bootloop](#9-troubleshooting-issues--escaping-bootloop)
 
@@ -90,7 +92,7 @@ On the Xteink X4 the firmware uses the device's own buttons, in the same layout 
 | **Bottom Edge** | **Back**, **Confirm**, **Left**, **Right**       |
 | **Right Side**  | **Power**, **Side Up**, **Side Down**, **Reset** |
 
-You can change what the front buttons do in **[Controls Settings](#366-controls)**.
+You can change what the front buttons do in **[Controls Settings](#367-controls)**.
 
 ### Taking a Screenshot
 
@@ -134,7 +136,7 @@ If the light stays off after the device wakes from sleep, check **Restore Light 
 
 **Hold the Power button for about half a second** to turn the device on or off.
 
-To turn the device off with a short press instead, set **Short Power Button Click** to **Sleep** in **Settings → Controls → Shortcuts** (see **[Controls Settings](#366-controls)**).
+To turn the device off with a short press instead, set **Short Power Button Click** to **Sleep** in **Settings → Controls → Shortcuts** (see **[Controls Settings](#367-controls)**).
 
 To restart a frozen device, or after a firmware update, press and release **Reset**, then quickly press and hold **Power** for a few seconds.
 
@@ -290,8 +292,8 @@ The plugin connects to the device and creates a folder for each author, at the t
 You cannot remove books from the device through Calibre. Delete them on the device in **[Browse Files](#33-browse-files-screen)**, or use the web page.
 ### 3.6 Settings
 
-The Settings screen has seven sections: **System**, **Display**, **Sleep**, **Library**, **Reader**, **Controls** and
-**Connectivity**. Each one opens its own list. When **Plugins** is switched on under System, an eighth entry,
+The Settings screen has eight sections: **System**, **Display**, **Sleep**, **Library**, **Insights**, **Reader**,
+**Controls** and **Connectivity**. Each one opens its own list. When **Plugins** is switched on under System, a ninth entry,
 **Plugins**, appears at the end and lists the installed plugins.
 
 Settings that are simply on or off show a switch at the right of the row. Select the row to flip it. Settings with
@@ -357,9 +359,6 @@ Some rows only appear on certain devices or while another setting is on. The not
 
 - **Night Mode** (off by default): White text on black, on every screen.
 
-- **Show language stats** (on by default): Shows a tab per language in [Insights](#71-insights). Turn it off to see only
-  the totals for all languages. Stats are still recorded per language, so turning it back on brings the tabs back.
-
 - **Show Hidden Files** (off by default): Shows files and folders whose names start with a dot (`.`) in the file
   browser.
 
@@ -410,7 +409,15 @@ Some rows only appear on certain devices or while another setting is on. The not
 While **Matcha Covers** is selected, only **Library View** and **Move Finished Books to Read Folder** appear. The
 other three only affect the CrossPoint List. The cover grid always shows every book it finds on the card.
 
-#### 3.6.5 Reader
+#### 3.6.5 Insights
+
+- **Show language stats** (on by default): Shows a tab per language in [Insights](#71-insights). Turn it off to see only
+  the totals for all languages. Stats are still recorded per language, so turning it back on brings the tabs back.
+
+- **Sync Stats**: Joins Wi-Fi and syncs your reading stats with the CrossPoint sync server, the same as **Refresh
+  Stats** in Insights. See [Syncing Stats Between Devices](#74-syncing-stats-between-devices).
+
+#### 3.6.6 Reader
 
 The values here are the starting point for books you have not opened yet. Once you open a book, it remembers its own
 font, size, spacing, margins, alignment, style options, images and orientation. Changes you make while reading apply
@@ -497,7 +504,7 @@ to that book only.
   battery, the status bar for XTC files, and the clock when the device knows the time.
   - **Time Left**: an estimate of the reading time left in the chapter or the book (default: hidden). It is shown before the page count, e.g. "12 min". It learns from how long you stay on each page as you turn forward, ignoring pages you skip past in under 2 seconds or leave open for more than 30 minutes. A page left open much longer than your usual pace counts as about three times your average. Each book keeps its own reading speed, measured against how much of the book's text you get through, so it stays right when you change the font size or margins. The estimate appears once about five pages have been timed.
 
-#### 3.6.6 Controls
+#### 3.6.7 Controls
 
 Which rows you see depends on your device. Touch devices hide the rows that only make sense with front buttons.
 
@@ -618,7 +625,7 @@ Which rows you see depends on your device. Touch devices hide the rows that only
 
 - **Short Back to File Browser** (off by default, button devices): Swaps what Back does in a book. A short press
   opens the file browser and a long press goes Home, instead of the other way round.
-#### 3.6.7 Connectivity
+#### 3.6.8 Connectivity
 
 - **Wi-Fi Networks**: Save and connect to Wi-Fi networks. You need Wi-Fi for file transfers, sync, font downloads and firmware updates.
 
@@ -639,11 +646,11 @@ Which rows you see depends on your device. Touch devices hide the rows that only
   - While reading, remote **Confirm** and **Back** work like the device buttons. With the reader menu open, the page buttons move through the menu items instead of turning pages.
   - You can also switch Bluetooth on or off from the reader menu, or from the toolbar's **More** menu.
 
-- **CrossPoint Sync**: Sync your reading position with the CrossPoint sync server or any KOReader-compatible sync server. See [KOReader Sync Quick Setup](#3610-koreader-sync-quick-setup) below.
+- **CrossPoint Sync**: Sync your reading position with the CrossPoint sync server or any KOReader-compatible sync server. See [KOReader Sync Quick Setup](#3611-koreader-sync-quick-setup) below.
 
-- **OPDS Servers**: Save online book catalogs (OPDS libraries) so you can browse them and download books straight to the device. See [OPDS Servers (Multiple Libraries)](#368-opds-servers-multiple-libraries) below. ([What is OPDS?](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System))
+- **OPDS Servers**: Save online book catalogs (OPDS libraries) so you can browse them and download books straight to the device. See [OPDS Servers (Multiple Libraries)](#369-opds-servers-multiple-libraries) below. ([What is OPDS?](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System))
 
-#### 3.6.8 OPDS Servers (Multiple Libraries)
+#### 3.6.9 OPDS Servers (Multiple Libraries)
 
 You can save up to 8 catalogs (for example your Calibre library at home and a public catalog) and switch between them.
 
@@ -673,9 +680,9 @@ The same **OPDS Servers** screen also has **Download folder** (where downloaded 
 > [!NOTE]
 > Logins use standard "Basic" authentication. If your Calibre Content Server requires a login, set its authentication type to **Basic** (Digest does not work).
 
-You can also manage servers from a computer or phone. See [Web Settings (Wi-Fi + OPDS)](#369-web-settings-wi-fi--opds).
+You can also manage servers from a computer or phone. See [Web Settings (Wi-Fi + OPDS)](#3610-web-settings-wi-fi--opds).
 
-#### 3.6.9 Web Settings (Wi-Fi + OPDS)
+#### 3.6.10 Web Settings (Wi-Fi + OPDS)
 
 The device's web page lets you manage saved Wi-Fi networks and OPDS servers from a browser.
 
@@ -689,7 +696,7 @@ Good to know:
 - To keep a stored password while editing, leave the password field empty.
 - You can save a hidden network here. Whether the device can then connect to it depends on the device's own Wi-Fi connection screen.
 
-#### 3.6.10 KOReader Sync Quick Setup
+#### 3.6.11 KOReader Sync Quick Setup
 
 Sync keeps your reading position the same on every device that uses the same sync server and account. That includes KOReader apps on phones and other e-readers.
 
@@ -824,7 +831,7 @@ For a shortcut, set **Settings → Controls → Shortcuts → Long-Press Menu** 
 
 **Sync Clippings** is off by default. Turn it on only with a CrossPoint sync server that supports clippings. **Sync Progress** then also uploads and downloads this book's clippings. Leave it off for ordinary KOSync servers.
 
-With the CrossPoint sync server, **Sync Progress** also uploads your reading stats: minutes per day, total time, books finished and your longest streak, plus this book's reading time, sessions and finished status (as the finish date it sends your last reading day, not the finish day on the end-of-book stamp). The CrossPoint app then shows your measured reading time. Stats are only sent once the clock is set (see [Syncing the Clock](#syncing-the-clock)). The first sync sends up to two years of history, so it takes longer than usual; later syncs only send the days since. If the upload fails, your progress still syncs and the next sync picks up where it stopped. Time of day and pages are not recorded on the device, so those charts in the app stay empty for it. All CrossPoint readers on one account count as one device. Ordinary KOSync servers get no stats.
+With the CrossPoint sync server, **Sync Progress** also uploads your reading stats: minutes per day, total time, books finished and your longest streak, plus each book's reading time, sessions and finished status (as the finish date it sends the day on the end-of-book stamp, or your last reading day for books finished before that day was saved). The CrossPoint app then shows your measured reading time, overall and per book. Stats are only sent once the clock is set (see [Syncing the Clock](#syncing-the-clock)). The first sync sends up to two years of history and the stats of every book in your reading stats, so it takes longer than usual; later syncs only send the days and books read since. If the upload fails, your progress still syncs and the next sync picks up where it stopped. Your stats then live on the server too, so switching to another reader or resetting this one loses nothing: the CrossPoint app keeps showing your whole history, and **Refresh Stats** brings your daily reading time back to the device (see [Syncing Stats Between Devices](#74-syncing-stats-between-devices)). Dictionary lookups and saved sentences are not synced. Time of day and pages are not recorded on the device, so those charts in the app stay empty for it. All CrossPoint readers on one account count as one device. Ordinary KOSync servers get no stats.
 
 ### 3.7 Sleep Screen
 
@@ -1013,7 +1020,7 @@ You can look up words with an offline dictionary on the SD card. To set it up:
 
 To look up a word with the buttons, choose **Look Up** in the **[Reader Menu](#5-reader-menu)**. Use **Left** and **Right** to highlight a word, then press **Confirm** to see its definition. On button-only devices you can also start a lookup by holding **Confirm**, if **Long-Press Menu** in **Settings → Controls → Shortcuts** is set to **Dictionary**.
 
-On a touch device, press and hold a word on the page. Its definition opens straight away. If your page turns use swipes only, a short tap on a word opens the definition and holding a word starts a clipping instead (see [3.6.6](#366-controls)). Page through a long definition with your page-turn gesture, and tap outside the card to close it.
+On a touch device, press and hold a word on the page. Its definition opens straight away. If your page turns use swipes only, a short tap on a word opens the definition and holding a word starts a clipping instead (see [3.6.7](#367-controls)). Page through a long definition with your page-turn gesture, and tap outside the card to close it.
 
 See [docs/dictionary.md](docs/dictionary.md) for supported formats and where to find dictionaries.
 
@@ -1070,7 +1077,7 @@ The menu shows these entries, top to bottom. Some only appear when they apply to
 | **Take screenshot** | Saves the screen as an image in the `screenshots/` folder on the SD card. |
 | **Show page as QR** | Shows the text of the current page as a QR code, so you can scan it with your phone. |
 | **Go Home** | Closes the book and opens the Home screen. |
-| **Sync Progress** | Sends or fetches your reading position with a KOReader sync server (see [KOReader Sync Quick Setup](#3610-koreader-sync-quick-setup)). |
+| **Sync Progress** | Sends or fetches your reading position with a KOReader sync server (see [KOReader Sync Quick Setup](#3611-koreader-sync-quick-setup)). |
 | **Delete Book Cache** | Deletes the saved page layout for this book and closes it. The book is prepared again the next time you open it. Your reading position is kept. |
 
 **Reader Settings → Reader Menu Style** switches between this list (the default) and **Toolbar**. The toolbar is a strip at the bottom of the page with three tools: the table of contents, a quick text panel and **More**, which holds everything else from the list. The text panel has font, font size, line spacing, paragraph alignment and **Focus Reading**. In Japanese and Chinese books it has font, font size, line spacing, **Vertical Text** and **Furigana** (**Pinyin** in Chinese books).
@@ -1614,7 +1621,7 @@ The tabs at the top split these numbers by language. **All** covers everything. 
 language you have read. Each tab has its own streak, calendar and totals, so reading an English book does not
 break your Japanese streak.
 
-To hide the language tabs and keep only the totals, turn off **Settings → Display → Show language stats**.
+To hide the language tabs and keep only the totals, turn off **Settings → Insights → Show language stats**.
 
 A tab shows the language's name if the firmware has a translation for it, e.g. `ja` shows as 日本語. Otherwise it
 shows the language code, such as `ZH`. Books with no language tag (TXT, XTC and manga converted without
@@ -1624,11 +1631,14 @@ shows the language code, such as `ZH`. Books with no language tag (TXT, XTC and 
 | --- | --- |
 | Confirm | Next tab. After the last tab, the cursor moves into the bottom tab bar (Cover Grid theme). |
 | Left / Right | Previous or next month in the calendar. The button hints show which month you will move to. |
-| Up / Down | Scroll. Pressing Down at the end of the page moves the cursor into the bottom tab bar. From there, Down goes back to the top of the page and Up to its end. |
+| Up / Down | Scroll. At the end of the page, Down selects **Refresh Stats** and the next Down moves the cursor into the bottom tab bar. From there, Down goes back to the top of the page and Up to its end. |
 | Back | Back one screen. Hold it to go Home. |
 
 On a touch device, tap a tab or swipe left and right across the page to switch tabs. Tap the arrows next to the
 month to change it.
+
+**Refresh Stats** at the bottom of the page syncs your stats with the CrossPoint sync server; see
+[Syncing Stats Between Devices](#74-syncing-stats-between-devices).
 
 <p align="center"><img src="docs/images/screenshots/insights.png" width="260" alt="Insights with streak, stat cards and calendar"></p>
 
@@ -1678,6 +1688,28 @@ Books finished before the finish day was saved show their last reading day befor
 - Days read before per-language tracking existed have no language and cannot get one now.
 - The device keeps about ten years of overall history and a few years of history per language. Older days are
   dropped.
+
+### 7.4 Syncing Stats Between Devices
+
+With the CrossPoint sync server set up (see [Syncing While Reading](#syncing-while-reading)), select **Refresh Stats**
+at the bottom of Insights or **Settings → Insights → Sync Stats**. The device joins Wi-Fi, sends its stats and fetches
+the reading time saved on the server, then restarts back to where you started.
+
+What comes back is what any CrossPoint reader on your account uploaded:
+
+- your reading time per day for the last two years: the **All** tab's streak, days read, total time, week and
+  calendar;
+- the language tabs, from each book's days and language;
+- books finished, including ones not on this card;
+- each book's own stats (days, sessions, finished), for the books on the card. A book takes them in the next time you
+  open it or its stats.
+
+A day that already has more minutes on the device keeps them, so syncing twice never counts anything double. The
+numbers show after the restart that ends the sync. Dictionary lookups and saved sentences stay on the device that
+recorded them.
+
+Books are matched by file name, so keep the same name on every device. The server only has per-book days and
+languages if it supports them; an older server brings back the **All** tab only.
 
 ## 8. Current Limitations & Roadmap
 

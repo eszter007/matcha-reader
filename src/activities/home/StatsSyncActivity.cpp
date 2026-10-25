@@ -1,0 +1,124 @@
+#include "StatsSyncActivity.h"
+
+#include <GfxRenderer.h>
+#include <I18n.h>
+#include <KOReaderCredentialStore.h>
+#include <Logging.h>
+#include <WiFi.h>
+
+#include "MappedInputManager.h"
+#include "SilentRestart.h"
+#include "activities/ActivityManager.h"
+#include "activities/network/WifiSelectionActivity.h"
+#include "components/HomeTabBar.h"
+#include "components/UITheme.h"
+#include "fontIds.h"
+#include "stats/StatsSync.h"
+
+void StatsSyncActivity::onEnter() {
+  Activity::onEnter();
+  if (KOREADER_STORE.getServerType() != KOReaderServerType::CROSSPOINT || !KOREADER_STORE.hasCredentials()) {
+    state = NO_ACCOUNT;
+    requestUpdate();
+    return;
+  }
+  state = SYNCING;
+  if (WiFi.status() == WL_CONNECTED) {
+    requestUpdate();
+    return;
+  }
+  restartOnExit = true;
+  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
+                         [this](const ActivityResult& result) {
+                           // Left from loop(): replacing this activity inside its own callback is unsafe.
+                           if (result.isCancelled) state = CANCELLED;
+                           requestUpdate();
+                         });
+}
+
+void StatsSyncActivity::onExit() {
+  Activity::onExit();
+  // The restart clears the heap WiFi and TLS fragmented, and its boot folds the download in.
+  if (restartOnExit) {
+    if (WiFi.getMode() != WIFI_MODE_NULL) {
+      WiFi.disconnect(false);
+      delay(30);
+    }
+    if (fromSettings) {
+      silentRestartToSettings();
+    } else {
+      silentRestartToHomeTab(static_cast<int>(HomeTab::Stats));
+    }
+  }
+}
+
+void StatsSyncActivity::leave() {
+  if (fromSettings) {
+    finish();
+  } else {
+    activityManager.goToReadingStats();
+  }
+}
+
+void StatsSyncActivity::runSync() {
+  if (WiFi.status() != WL_CONNECTED) {
+    state = FAILED;
+    requestUpdate();
+    return;
+  }
+  // Download first: the upload's TLS sessions would otherwise leave less room for the list.
+  const bool downloaded = statsSync::download();
+  const bool uploaded = statsSync::run("", "");
+  // A saved download is merged at boot, so it needs the restart even when WiFi was already up.
+  if (downloaded) restartOnExit = true;
+  if (downloaded && uploaded) {
+    leave();
+    return;
+  }
+  LOG_ERR("STATS", "Refresh incomplete: download %d, upload %d", downloaded, uploaded);
+  state = FAILED;
+  requestUpdate();
+}
+
+void StatsSyncActivity::loop() {
+  if (state == CANCELLED) {
+    leave();
+    return;
+  }
+  if (state == SYNCING) {
+    // Paint "Syncing..." before blocking on the network.
+    requestUpdateAndWait();
+    runSync();
+    return;
+  }
+  int x = 0;
+  int y = 0;
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back) || mappedInput.wasScreenTapped(x, y)) leave();
+}
+
+void StatsSyncActivity::render(RenderLock&&) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int midY = renderer.getScreenHeight() / 2;
+  renderer.clearScreen();
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
+                 fromSettings ? tr(STR_SYNC_STATS) : tr(STR_REFRESH_STATS));
+  switch (state) {
+    case SYNCING:
+      renderer.drawCenteredText(UI_12_FONT_ID, midY, tr(STR_SYNCING_STATS));
+      break;
+    case NO_ACCOUNT:
+      renderer.drawCenteredText(UI_12_FONT_ID, midY, tr(STR_SET_CREDENTIALS_FIRST), true, EpdFontFamily::BOLD);
+      break;
+    case CANCELLED:
+      break;
+    case FAILED:
+      renderer.drawCenteredText(UI_12_FONT_ID, midY - 20, tr(STR_CLOCK_SYNC_FAIL), true, EpdFontFamily::BOLD);
+      renderer.drawCenteredText(UI_10_FONT_ID, midY + 10, tr(STR_TRY_AGAIN_LATER));
+      break;
+  }
+  if (state != SYNCING) {
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
+  renderer.displayBuffer();
+}

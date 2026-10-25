@@ -21,6 +21,7 @@ add_executable(ReadingStatsTest
   stubs/StubDefs.cpp
   ${REPO_ROOT}/src/ReadingStatsStore.cpp
   ${REPO_ROOT}/src/BookStats.cpp
+  ${REPO_ROOT}/src/BookStatsDownload.cpp
   ${REPO_ROOT}/lib/I18n/I18n.cpp
   ${I18N_GEN_DIR}/I18nStrings.cpp
 )

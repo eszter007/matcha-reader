@@ -12,6 +12,9 @@
 #include <numeric>
 #include <tuple>
 
+#include "BookStatsDownload.h"
+#include "ReadingStatsStore.h"
+
 namespace {
 // Resolved at use: the folder is "/.system" or "/system" depending on what the card has.
 static std::string statsDir() { return sdsystem::path("bookstats"); }
@@ -71,7 +74,17 @@ std::string BookStats::filePathFor(const char* path) {
   return std::string(buf);
 }
 
-bool BookStats::load(const char* path) {
+bool BookStats::load(const char* path, const bool withServerCopy) {
+  restoredFinished = false;
+  if (!loadLocal(path)) return false;
+  if (withServerCopy) {
+    bool finishedOnServer = false;
+    restoredFinished = mergeDownloaded(finishedOnServer) && finishedOnServer;
+  }
+  return true;
+}
+
+bool BookStats::loadLocal(const char* path) {
   bookPath = path ? path : "";
   sessions = 0;
   lookups = 0;
@@ -152,6 +165,26 @@ bool BookStats::load(const char* path) {
   return true;
 }
 
+bool BookStats::mergeDownloaded(bool& finishedOnServer) {
+  bookdownload::Book book;
+  std::vector<BookDay> remote;
+  if (bookPath.empty() || !bookdownload::find(bookdownload::nameHash(bookPath), book, remote)) return false;
+  finishedOnServer = book.finished;
+  bool changed = book.sessions > sessions;
+  sessions = std::max(sessions, book.sessions);
+  for (const auto& d : remote) {
+    const auto it = std::find_if(days.begin(), days.end(), [&d](const BookDay& e) {
+      return e.year == d.year && e.month == d.month && e.day == d.day;
+    });
+    const uint16_t have = it == days.end() ? 0 : it->minutes;
+    if (d.minutes > have) {
+      recordMinutes(d.year, d.month, d.day, d.minutes - have);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 bool BookStats::save() const {
   if (bookPath.empty()) return false;
   Storage.mkdir(statsDir().c_str(), true);
@@ -227,7 +260,13 @@ bool BookStats::recordOpen(const char* path) {
   if (!path || !*path) return false;
   std::lock_guard<std::mutex> lock(fileMutex());
   BookStats b;
-  if (!b.load(path)) return false;
+  if (!b.load(path, /*withServerCopy=*/true)) return false;
+  // A book the server knows as finished, opened here for the first time since: finished here too.
+  if (b.restoredFinished) {
+    ReadingStatsStore::Change change;
+    change.finishedPath = path;
+    ReadingStatsStore::record(change);
+  }
   b.sessions++;
   return b.save();
 }

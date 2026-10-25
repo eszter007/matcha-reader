@@ -118,7 +118,7 @@ Every book on the card as a cover grid, manga beside EPUBs, with a **Shelves** t
 
 ### Reading stats
 
-Streak, minutes this week, books finished and a calendar, split by language. Each book has its own stats, and finishing one opens a summary with the next books in its folder. The **Stats** sleep screen puts your hours read, streak and minutes this week on a split-flap board. With the CrossPoint sync server, **Sync Progress** also uploads these stats, so the CrossPoint app shows the time you actually read. See [Guide §7](USER_GUIDE.md#7-reading-stats), [§3.6.10](USER_GUIDE.md#syncing-while-reading) and [§3.7](USER_GUIDE.md#37-sleep-screen).
+Streak, minutes this week, books finished and a calendar, split by language. Each book has its own stats, and finishing one opens a summary with the next books in its folder. The **Stats** sleep screen puts your hours read, streak and minutes this week on a split-flap board. With the CrossPoint sync server, **Sync Progress** also uploads these stats: your daily reading time, streak and finished books, and every book's time, sessions and finished status. The CrossPoint app shows them in full, and **Refresh Stats** in Insights brings them back to a new or reset device: streak, calendar, language tabs, books finished and each book's stats. Dictionary lookups and saved sentences stay on the device that recorded them. See [Guide §7](USER_GUIDE.md#7-reading-stats), [§3.6.11](USER_GUIDE.md#syncing-while-reading) and [§3.7](USER_GUIDE.md#37-sleep-screen).
 
 <p align="center">
   <img src="docs/images/screenshots/insights.png" width="240" alt="Insights with streak, stat cards and calendar">

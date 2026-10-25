@@ -50,7 +50,14 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   KOReaderServerType serverType = KOReaderServerType::CROSSPOINT;
   // Last day (since 2000-01-01) whose reading time reached the server, and the account it went to.
   int32_t statsUploadedDay = 0;
+  // Newest ReadingStatsStore::BookReading::lastReadDay whose book stats reached the server.
+  int32_t statsBooksDay = 0;
+  // The server time of the last complete per-book download (its `until`), for fetching only what changed.
+  uint32_t statsBooksSince = 0;
+  // The same for the daily totals' download.
+  uint32_t statsDaysSince = 0;
   std::string statsAccount;
+  void stampStatsAccount();
 
   // Fixed-size to avoid vector growth on the settings edit path; an empty
   // name marks an unused slot.
@@ -109,6 +116,13 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   // 0 when nothing was uploaded to the current account and server yet.
   int32_t getStatsUploadedDay() const;
   void setStatsUploadedDay(int32_t day);
+  // Same, for per-book stats; 0 sends every book.
+  int32_t getStatsBooksDay() const;
+  void setStatsBooksDay(int32_t day);
+  uint32_t getStatsBooksSince() const;
+  void setStatsBooksSince(uint32_t until);
+  uint32_t getStatsDaysSince() const;
+  void setStatsDaysSince(uint32_t until);
 
   // Sync behavior
   void setSyncBehavior(KOReaderSyncBehavior behavior);
