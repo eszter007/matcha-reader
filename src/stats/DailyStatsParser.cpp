@@ -1,7 +1,9 @@
 #include "DailyStatsParser.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 
 #include "StatsSync.h"
 
@@ -12,9 +14,10 @@ bool equals(const char* value, const size_t len, const char* expected) {
 
 // "YYYY-MM-DD"; false for anything else.
 bool parseDate(const char* v, const size_t len, DailyReading& out) {
-  if (len != 10 || v[4] != '-' || v[7] != '-') return false;
-  for (const size_t i : {0, 1, 2, 3, 5, 6, 8, 9}) {
-    if (v[i] < '0' || v[i] > '9') return false;
+  static constexpr size_t DIGITS[] = {0, 1, 2, 3, 5, 6, 8, 9};
+  if (len != 10 || v[4] != '-' || v[7] != '-' ||
+      !std::all_of(std::begin(DIGITS), std::end(DIGITS), [v](const size_t i) { return v[i] >= '0' && v[i] <= '9'; })) {
+    return false;
   }
   const auto num = [v](const size_t at, const size_t n) {
     int x = 0;

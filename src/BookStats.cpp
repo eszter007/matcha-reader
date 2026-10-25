@@ -67,8 +67,10 @@ std::string BookStats::filePathFor(const char* path) {
 bool BookStats::load(const char* path, const bool withServerCopy) {
   restoredFinished = false;
   if (!loadLocal(path)) return false;
-  bool finished = false;
-  if (withServerCopy) restoredFinished = mergeDownloaded(finished) && finished;
+  if (withServerCopy) {
+    bool finished = false;
+    restoredFinished = mergeDownloaded(finished) && finished;
+  }
   return true;
 }
 
