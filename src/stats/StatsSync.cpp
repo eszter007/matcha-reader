@@ -99,6 +99,24 @@ constexpr int BOOKS_PER_PAGE = 50;
 // Pages read at most: 2000 books.
 constexpr int MAX_BOOK_PAGES = 40;
 
+// A query value: everything but unreserved characters percent-encoded (the cursor carries a ':').
+std::string urlEncode(const std::string& v) {
+  static constexpr char HEX[] = "0123456789ABCDEF";
+  std::string out;
+  out.reserve(v.size() * 3);
+  for (const char c : v) {
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.' ||
+        c == '_' || c == '~') {
+      out += c;
+    } else {
+      out += '%';
+      out += HEX[static_cast<uint8_t>(c) >> 4];
+      out += HEX[static_cast<uint8_t>(c) & 15];
+    }
+  }
+  return out;
+}
+
 // This reader's own rows of the server's book list, page by page into the download file
 // (bookdownload). True with nothing written when the server has no book list yet.
 bool downloadBooks() {
@@ -128,7 +146,7 @@ bool downloadBooks() {
     char path[128];
     snprintf(path, sizeof(path), "/api/v1/stats/books?device_id=%s&limit=%d&since=%lu%s", statsSync::DEVICE_ID,
              BOOKS_PER_PAGE, static_cast<unsigned long>(since), cursor.empty() ? "" : "&cursor=");
-    if (!parser || !begin(*http, (std::string(path) + cursor).c_str())) {
+    if (!parser || !begin(*http, (std::string(path) + urlEncode(cursor)).c_str())) {
       writer.abort();
       return false;
     }
