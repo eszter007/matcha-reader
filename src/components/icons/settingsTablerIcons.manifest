@@ -1,0 +1,18 @@
+# Manifest for src/components/icons/settingsTablerIcons.h — regenerate with:
+#   python3 freeink-sdk/libs/assets/Icons/tools/gen_icons.py \
+#     --manifest src/components/icons/settingsTablerIcons.manifest \
+#     --svgdir assets/icons/tabler --sizes 32 --out src/components/icons/settingsTablerIcons.h
+# then ./bin/clang-format-fix -g. Needs rsvg-convert and Pillow.
+#
+# Settings rows in the Cover Grid theme, whose tab bar draws Tabler icons (tabBarIcons.manifest).
+# Library and Insights use the same outlines as their tabs. gen_icons.py packs for freeink::Icon,
+# which FreeInkUI rows take, so these are not interchangeable with the tab bar arrays.
+tabler_settings = settings
+tabler_display = brightness
+tabler_sleep = moon
+tabler_library = library
+tabler_stats = chart-area-line
+tabler_reader = book
+tabler_controls = hand-finger
+tabler_network = wifi
+tabler_plugins = puzzle
