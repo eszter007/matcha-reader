@@ -265,12 +265,9 @@ bool BookStats::recordFinish(const char* path, const uint16_t year, const uint8_
     return out.save();
   }
   // Finished before dates were kept, or unsure: the last reading day before this visit's reading.
-  for (auto it = out.days.rbegin(); it != out.days.rend(); ++it) {
-    if (byDate(*it, today)) {
-      out.finished = *it;
-      break;
-    }
-  }
+  const auto last =
+      std::find_if(out.days.rbegin(), out.days.rend(), [&today](const BookDay& d) { return byDate(d, today); });
+  if (last != out.days.rend()) out.finished = *last;
   return true;
 }
 
