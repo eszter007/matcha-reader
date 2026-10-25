@@ -51,10 +51,12 @@ class Writer {
   bool ok = false;
 };
 
+// Called with a context pointer, a book and its days.
+using BookFn = void (*)(void*, const Book&, const std::vector<BookDay>&);
+
 // Calls fn for every book in `file` with its days, read into `days` (reused). False when the file is
 // missing or damaged; the books before the damage were still passed to fn.
-bool forEach(const std::string& file, std::vector<BookDay>& days, void* ctx,
-             void (*fn)(void* ctx, const Book& book, const std::vector<BookDay>& days));
+bool forEach(const std::string& file, std::vector<BookDay>& days, void* ctx, BookFn fn);
 
 // The book saved under `nameHash` in path(), with its days. False when there is none.
 bool find(uint32_t nameHash, Book& book, std::vector<BookDay>& days);

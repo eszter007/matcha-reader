@@ -2,11 +2,11 @@
 
 #include "activities/Activity.h"
 
-// Refresh Stats on the Insights screen, and Sync Stats in Settings: joins WiFi, downloads this account's daily minutes and
-// uploads the device's own stats. The download is merged at the next boot (ReadingStatsStore::
-// compact()), and the restart that ends the WiFi session lands back on Insights, so the screen
-// shows the merged numbers. From Insights it is opened with replaceActivity(), so the stats tables are
-// freed first; from Settings it returns there instead.
+// Refresh Stats on the Insights screen, and Sync Stats in Settings: joins WiFi, downloads this account's daily
+// minutes and uploads the device's own stats. The download is merged at the next boot
+// (ReadingStatsStore::compact()), and the restart that ends the WiFi session lands back on Insights, so the screen
+// shows the merged numbers. From Insights it is opened with replaceActivity(), so the stats tables are freed first;
+// from Settings it returns there instead.
 class StatsSyncActivity final : public Activity {
  public:
   explicit StatsSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const bool fromSettings = false)

@@ -146,8 +146,7 @@ void Writer::abort() {
   ok = false;
 }
 
-bool forEach(const std::string& file, std::vector<BookDay>& days, void* ctx,
-             void (*fn)(void* ctx, const Book& book, const std::vector<BookDay>& days)) {
+bool forEach(const std::string& file, std::vector<BookDay>& days, void* ctx, const BookFn fn) {
   HalFile f;
   if (!openChecked(file, f)) return false;
   Book book;
