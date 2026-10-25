@@ -89,8 +89,6 @@ class TextSettingsActivity final : public UiTabListActivity {
   bool styleRowIsSwitch(int row, bool& checked) const;
   // Button-hint label for Confirm at the current ring position.
   const char* confirmLabelText() const;
-  // True when the focused list row is a setting the preview cannot reflect.
-  bool focusedRowHasNoPreview() const;
   void switchTab(int direction = 1);
   // Maps a visible list position to its LayoutRow: a CJK book hides ParaSpacing,
   // Alignment and BookSideMargins, so position and enum value diverge.
@@ -151,7 +149,5 @@ class TextSettingsActivity final : public UiTabListActivity {
 
   ThemeMetrics metrics_ = {};
   int afterHeader = 0;
-  int bottomReserved = 0;
-  int usableHeight = 0;
   int previewHeight = 0;
 };
