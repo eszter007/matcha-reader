@@ -12,15 +12,20 @@
 #include "activities/plugins/PluginCatalogActivity.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
+#include "components/icons/settingsTablerIcons.h"
 
 namespace fui = freeink::ui;
 
 namespace {
 constexpr int16_t ICON_SIZE = 32;
-// Row icons, indexed by SettingsSection.
+// Row icons, indexed by SettingsSection. Cover Grid's tab bar draws Tabler icons, so its rows do too.
 constexpr const freeink::Icon* SECTION_ICONS[SETTINGS_SECTION_COUNT] = {
-    &icon_settings_32,     &icon_smartphone_32, &icon_moon_32,    &icon_library_32,
-    &icon_chart_column_32, &icon_book_open_32,  &icon_pointer_32, &icon_wifi_32,
+    &icon_settings_32,       &icon_smartphone_32, &icon_moon_32,    &icon_home_library_32,
+    &icon_home_chart_bar_32, &icon_book_open_32,  &icon_pointer_32, &icon_wifi_32,
+};
+constexpr const freeink::Icon* SECTION_ICONS_TABLER[SETTINGS_SECTION_COUNT] = {
+    &icon_tabler_settings_32, &icon_tabler_display_32, &icon_tabler_sleep_32,    &icon_tabler_library_32,
+    &icon_tabler_stats_32,    &icon_tabler_reader_32,  &icon_tabler_controls_32, &icon_tabler_network_32,
 };
 }  // namespace
 
@@ -51,15 +56,16 @@ void SettingsListActivity::loop() {
 // Rebuilds row labels; call when entering and after a section returns (the
 // UI language may have changed).
 void SettingsListActivity::rebuildRows() {
+  const bool tabler = SETTINGS.uiTheme == CrossPointSettings::COVER_GRID;
   for (size_t i = 0; i < SETTINGS_SECTION_COUNT; ++i) {
     auto& item = rowItems_[i];
     item.label = I18N.get(SETTINGS_SECTION_TITLES[i]);
-    item.icon = fui::bitmapFromIcon(*SECTION_ICONS[i]);
+    item.icon = fui::bitmapFromIcon(*(tabler ? SECTION_ICONS_TABLER : SECTION_ICONS)[i]);
     item.actionValue = static_cast<int16_t>(i);
   }
   auto& plugins = rowItems_[SETTINGS_SECTION_COUNT];
   plugins.label = tr(STR_PLUGINS);
-  plugins.icon = fui::bitmapFromIcon(icon_blocks_32);
+  plugins.icon = fui::bitmapFromIcon(tabler ? icon_tabler_plugins_32 : icon_home_blocks_32);
   plugins.actionValue = static_cast<int16_t>(SETTINGS_SECTION_COUNT);
 }
 
