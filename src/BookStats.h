@@ -92,7 +92,7 @@ class BookStats {
  private:
   // Takes in what the sync server has for this book (bookdownload): the larger value per day and the
   // larger session count. True when that changed anything.
-  bool mergeDownloaded(bool& finished);
+  bool mergeDownloaded(bool& finishedOnServer);
   bool loadLocal(const char* bookPath);
   // Set by load(): the server's copy changed this book and calls it finished.
   bool restoredFinished = false;

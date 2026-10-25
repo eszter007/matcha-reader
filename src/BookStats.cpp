@@ -78,8 +78,8 @@ bool BookStats::load(const char* path, const bool withServerCopy) {
   restoredFinished = false;
   if (!loadLocal(path)) return false;
   if (withServerCopy) {
-    bool finished = false;
-    restoredFinished = mergeDownloaded(finished) && finished;
+    bool finishedOnServer = false;
+    restoredFinished = mergeDownloaded(finishedOnServer) && finishedOnServer;
   }
   return true;
 }
@@ -165,11 +165,11 @@ bool BookStats::loadLocal(const char* path) {
   return true;
 }
 
-bool BookStats::mergeDownloaded(bool& finished) {
+bool BookStats::mergeDownloaded(bool& finishedOnServer) {
   bookdownload::Book book;
   std::vector<BookDay> remote;
   if (bookPath.empty() || !bookdownload::find(bookdownload::nameHash(bookPath), book, remote)) return false;
-  finished = book.finished;
+  finishedOnServer = book.finished;
   bool changed = book.sessions > sessions;
   sessions = std::max(sessions, book.sessions);
   for (const auto& d : remote) {
