@@ -163,10 +163,9 @@ void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, 
   } else {
     tabProps.text = screen.theme().smallText;
     tabProps.gap = static_cast<int16_t>(metrics.tabSpacing);
-    // Unfocused state: no bottom inset, so the pill (and the 2px selected
-    // underline drawn along its bottom edge) reaches the band's 1px divider —
-    // legacy Lyra drew the underline sitting on that rule, not floating above.
-    tabProps.tabInset = tabsFocused ? fui::Insets{2, 0, 4, 0} : fui::Insets{2, 0, 0, 0};
+    // No bottom inset, so the pill (and the unfocused 2px underline along its
+    // bottom edge) reaches the band's 1px divider instead of floating above it.
+    tabProps.tabInset = fui::Insets{2, 0, 0, 0};
     tabProps.layout = fui::TabBarLayout::ContentWidth;
   }
   // Equal slots narrower than the widest label would clip it: show the window of tabs that fits,
