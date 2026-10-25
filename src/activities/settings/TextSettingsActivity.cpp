@@ -75,9 +75,8 @@ static_assert(std::size(WORD_SPACING_IDS) == (WORD_SPACING_MAX - WORD_SPACING_MI
 // without case keep theirs).
 std::string upperHeading(const char* label) {
   std::string out(label);
-  for (auto& c : out) {
-    if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 32);
-  }
+  std::transform(out.begin(), out.end(), out.begin(),
+                 [](const char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 32) : c; });
   return out;
 }
 
@@ -266,7 +265,8 @@ void TextSettingsActivity::activateIndex(const int index) {
   if (index == FONT_ROW) {
     std::vector<std::string> options;
     options.reserve(fonts_.size());
-    for (const auto& font : fonts_) options.push_back(font.displayName());
+    std::transform(fonts_.begin(), fonts_.end(), std::back_inserter(options),
+                   [](const FontEntry& font) { return std::string(font.displayName()); });
     optionPopup_.show(StrId::STR_FONT, std::move(options), currentFamilyIndex_, [this](const int idx) {
       if (isManageFontsRow(idx)) {
         startActivityForResult(
@@ -285,7 +285,8 @@ void TextSettingsActivity::activateIndex(const int index) {
   } else if (index == SIZE_ROW) {
     std::vector<std::string> options;
     options.reserve(sizes_.size());
-    for (const auto& size : sizes_) options.push_back(size.name);
+    std::transform(sizes_.begin(), sizes_.end(), std::back_inserter(options),
+                   [](const SizeEntry& size) { return size.name; });
     optionPopup_.show(StrId::STR_SIZE, std::move(options), currentSizeIndex_, [this](const int idx) {
       if (idx != currentSizeIndex_) applySize(idx);
     });
