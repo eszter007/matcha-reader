@@ -139,7 +139,7 @@ void BookStatsActivity::render(RenderLock&&) {
       // is then unknown rather than shown after the finish.
       const bool startKnown = !finished || std::tie(first.year, first.month, first.day) <=
                                                std::tie(marks.finishYear, marks.finishMonth, marks.finishDay);
-      char start[12] = {}, finish[12] = {};
+      char start[12] = {};
       if (startKnown) {
         marks.startYear = first.year;
         marks.startMonth = first.month;
@@ -147,6 +147,7 @@ void BookStatsActivity::render(RenderLock&&) {
         snprintf(start, sizeof(start), "%04u.%02u.%02u", first.year, first.month, first.day);
       }
       if (finished) {
+        char finish[12];
         snprintf(finish, sizeof(finish), "%04u.%02u.%02u", marks.finishYear, marks.finishMonth, marks.finishDay);
         snprintf(dateLine, sizeof(dateLine), startKnown ? "%s – %s" : "%s%s", start, finish);
       } else {
