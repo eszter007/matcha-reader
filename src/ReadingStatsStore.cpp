@@ -1179,14 +1179,19 @@ bool ReadingStatsStore::mergeBookDownload(const std::string& list) {
     std::vector<uint32_t> finished;
     size_t limit;
   } ctx;
-  // Bounded like the tables: a reserve that cannot be served aborts.
-  ctx.limit = MAX_LANG_DAYS * 4;
+  // Sized from the list itself, bounded like the tables: a reserve that cannot be served aborts.
+  std::vector<BookDay> scratch;
+  size_t total = 0;
+  bookdownload::forEach(list, scratch, &total,
+                        [](void* p, const bookdownload::Book& book, const std::vector<BookDay>& days) {
+                          if (book.language[0]) *static_cast<size_t*>(p) += days.size();
+                        });
+  ctx.limit = std::min<size_t>(total, MAX_LANG_DAYS * 4);
   if (!tableFits(ctx.limit * sizeof(LanguageDay))) {
     LOG_ERR("STAT", "Downloaded book stats kept for the next boot");
     return false;
   }
   ctx.days.reserve(ctx.limit);
-  std::vector<BookDay> scratch;
   bookdownload::forEach(list, scratch, &ctx,
                         [](void* p, const bookdownload::Book& book, const std::vector<BookDay>& days) {
                           auto& c = *static_cast<Ctx*>(p);
