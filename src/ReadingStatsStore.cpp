@@ -154,7 +154,20 @@ void ReadingStatsStore::mergeMinutes(const uint16_t year, const uint8_t month, c
 
 void ReadingStatsStore::mergeLanguageMinutes(const char* language, const uint16_t minutes, const uint16_t year,
                                              const uint8_t month, const uint8_t day) {
-  const uint16_t have = getMinutesForDay(language, year, month, day);
+  char lang[4];
+  normalizeLanguage(language, lang);
+  const int epoch = daysSinceEpoch(year, month, day);
+  const auto dateOf = [](const LanguageDaily& e) { return daysSinceEpoch(e.year, e.month, e.day); };
+  // Sorted by date, so a binary search: a downloaded history merges thousands of days at boot.
+  auto it = std::lower_bound(languageDays.begin(), languageDays.end(), epoch,
+                             [&dateOf](const LanguageDaily& e, const int d) { return dateOf(e) < d; });
+  uint16_t have = 0;
+  for (; it != languageDays.end() && dateOf(*it) == epoch; ++it) {
+    if (memcmp(it->language, lang, sizeof(lang)) == 0) {
+      have = it->minutesRead;
+      break;
+    }
+  }
   if (minutes > have) addLanguageMinutes(language, minutes - have, year, month, day);
 }
 

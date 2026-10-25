@@ -337,7 +337,9 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
       ok = false;
       break;
     }
-    http->end();  // the next body is built without TLS buffers on the heap
+    // The next book batch is built without TLS buffers on the heap. The daily totals' small body is not:
+    // after the last batch the connection carries straight on to them.
+    if (at.book < books.size()) http->end();
     booksDay = doneDay;
   }
   const bool booksDone = booksDay != booksFrom;
