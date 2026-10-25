@@ -460,10 +460,11 @@ to that book only.
 
 - **Text profiles**: each of the five profiles keeps its own **font**, **font size**, **line spacing**, **character
   spacing** and **word spacing**, so a font that suits Japanese leaves your English books alone. A book uses the
-  profile of its language: Japanese, traditional Chinese (Cantonese too), simplified Chinese, or Korean (a book tagged
-  `ko` or `kor`). Every other book uses **Latin & Others**. Opened from inside a book, **Text Settings** goes straight to that
-  book's profile. A size or spacing you change while reading goes to the book's profile too. A font you pick while
-  reading stays with that book only: change a profile's font from **Settings → Reader → Text Settings**.
+  profile of its language: Japanese, traditional Chinese (Cantonese too), simplified Chinese, or Korean (a book
+  tagged `ko` or `kor`). Every other book uses **Latin & Others**. Opened from inside a book, **Text Settings** goes
+  straight to that book's profile. A size or spacing you change while reading goes to the book's profile too. A font
+  you pick while reading stays with that book only: change a profile's font from **Settings → Reader → Text
+  Settings**.
 
 - **Dictionary Settings**: Opens a page with the word lookup settings:
   - **Word Lookup Font Size**: Text size in the word lookup window: **Tiny**, **Small** (default), **Medium** or

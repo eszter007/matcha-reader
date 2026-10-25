@@ -123,8 +123,7 @@ void TextSettingsActivity::onEnter() {
   // From Settings, a profile other than Latin is edited in the live fields, as a book would read it.
   if (editStoredProfile_ && profile_ != CrossPointSettings::TextProfileId::Latin) {
     RenderLock lock;
-    latinWhileEditing_ = SETTINGS.liveTextProfile();
-    SETTINGS.holdLatinTextProfile(latinWhileEditing_);
+    SETTINGS.holdLatinTextProfile(SETTINGS.liveTextProfile());
     SETTINGS.setLiveTextProfile(SETTINGS.textProfile(profile_));
     swappedIn_ = true;
     sdFontSystem.ensureLoaded(renderer);
@@ -160,8 +159,7 @@ void TextSettingsActivity::onExit() {
       memcpy(edited.sdFontFamilyName, stored.sdFontFamilyName, sizeof(edited.sdFontFamilyName));
     }
     SETTINGS.setTextProfile(profile_, edited);
-    SETTINGS.releaseLatinTextProfile();
-    SETTINGS.setLiveTextProfile(latinWhileEditing_);
+    SETTINGS.setLiveTextProfile(SETTINGS.releaseLatinTextProfile());
     swappedIn_ = false;
     sdFontSystem.ensureLoaded(renderer);
   }
@@ -411,7 +409,6 @@ void TextSettingsActivity::applyFamily(int listIndex) {
     SETTINGS.fontFamily = font.settingIndex;
     SETTINGS.sdFontFamilyName[0] = '\0';
     sdFontSystem.ensureLoaded(renderer);  // unloads the previously resident SD font
-    currentFamilyIndex_ = listIndex;
   } else if (registry_) {
     const int sdIdx = font.settingIndex - CrossPointSettings::BUILTIN_FONT_COUNT;
     const auto& families = registry_->getFamilies();
@@ -419,11 +416,14 @@ void TextSettingsActivity::applyFamily(int listIndex) {
       strncpy(SETTINGS.sdFontFamilyName, families[sdIdx].name.c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);
       SETTINGS.sdFontFamilyName[sizeof(SETTINGS.sdFontFamilyName) - 1] = '\0';
       sdFontSystem.ensureLoaded(renderer);
-      currentFamilyIndex_ = listIndex;
     }
   }
-
-  if (currentFamilyIndex_ != listIndex) return;  // switch failed — keep the old size list
+  // A failed load clears the selection, so read back what is loaded rather than assume the pick.
+  currentFamilyIndex_ = findCurrentFontIndex(fonts_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
+  if (currentFamilyIndex_ != listIndex) {
+    rebuildSizeList();
+    return;
+  }
   familyChosen_ = true;
 
   // The new family ships its own set of point sizes, and ensureLoaded() may have

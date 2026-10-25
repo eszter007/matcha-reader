@@ -426,11 +426,13 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   void setTextProfile(TextProfileId id, const TextProfile& p);
   // While another profile sits in the live fields, the Latin values wait here, and saveToFile()
   // writes them as the Latin settings instead of the swapped-in ones.
-  void holdLatinTextProfile(const TextProfile& latin) {
-    latinHeld = latin;
-    latinIsHeld = true;
+  // One swap at a time: a second hold would replace the real Latin values with a swapped-in profile.
+  void holdLatinTextProfile(const TextProfile& latin);
+  // Ends the hold and returns the Latin values for the live fields.
+  TextProfile releaseLatinTextProfile() {
+    latinIsHeld = false;
+    return latinHeld;
   }
-  void releaseLatinTextProfile() { latinIsHeld = false; }
   // Profiles other than Latin, indexed by TextProfileId - 1.
   TextProfile scriptTextProfiles[static_cast<int>(TextProfileId::Count) - 1]{};
   TextProfile latinHeld{};

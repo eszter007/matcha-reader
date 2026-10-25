@@ -374,6 +374,36 @@ void EpubReaderActivity::storeBookTextProfile() {
   }
 }
 
+// Runs once per open book: on exit, or earlier when KOReader Sync frees the book first.
+void EpubReaderActivity::restoreGlobalReaderSettings() {
+  // Per-book reader prefs: pin the current reading settings to this book, then
+  // restore the global defaults. Settings edited while reading (via the pushed
+  // settings screen or the orientation shortcut) saved themselves into the
+  // global file mid-session; re-saving after the restore keeps the global page
+  // as the untouched default for books without their own prefs.
+  //
+  // Deliberately AFTER the section resets: restoring can swap the SD font, and
+  // SdCardFontSystem's loadFamily fails (and clears the selection) under a
+  // tight heap. With the chapter freed first, the load gets the coalesced heap
+  // instead of running at the worst moment with the whole book still resident.
+  if (!epub) return;
+  const ReaderPrefs current = capturePrefsFromSettings();
+  ReaderPrefs existing;
+  if (!loadBookPrefs(existing) || !(existing == current)) {
+    saveBookPrefs(current);
+  }
+  storeBookTextProfile();
+  if (!(current == globalPrefsSnapshot) || bookTextProfile_ != CrossPointSettings::TextProfileId::Latin) {
+    applyPrefsToSettings(globalPrefsSnapshot);
+    SETTINGS.releaseLatinTextProfile();  // returns the held copy of latinTextProfile_
+    SETTINGS.setLiveTextProfile(latinTextProfile_);
+    SETTINGS.saveToFile();
+    // Re-sync the loaded SD font to the restored globals so the next
+    // consumer (home UI thumbnails, TXT/XTC readers) sees a consistent state.
+    sdFontSystem.ensureLoaded(renderer);
+  }
+}
+
 void EpubReaderActivity::applyPrefsToSettings(const ReaderPrefs& prefs) {
   SETTINGS.fontFamily = prefs.fontFamily;
   strncpy(SETTINGS.sdFontFamilyName, prefs.sdFontFamilyName, sizeof(SETTINGS.sdFontFamilyName) - 1);
@@ -606,33 +636,7 @@ void EpubReaderActivity::onReaderExit() {
   verticalSection.reset();
   CLIPPINGS.unload();
 
-  // Per-book reader prefs: pin the current reading settings to this book, then
-  // restore the global defaults. Settings edited while reading (via the pushed
-  // settings screen or the orientation shortcut) saved themselves into the
-  // global file mid-session; re-saving after the restore keeps the global page
-  // as the untouched default for books without their own prefs.
-  //
-  // Deliberately AFTER the section resets: restoring can swap the SD font, and
-  // SdCardFontSystem's loadFamily fails (and clears the selection) under a
-  // tight heap. With the chapter freed first, the load gets the coalesced heap
-  // instead of running at the worst moment with the whole book still resident.
-  if (epub) {
-    const ReaderPrefs current = capturePrefsFromSettings();
-    ReaderPrefs existing;
-    if (!loadBookPrefs(existing) || !(existing == current)) {
-      saveBookPrefs(current);
-    }
-    storeBookTextProfile();
-    if (!(current == globalPrefsSnapshot) || bookTextProfile_ != CrossPointSettings::TextProfileId::Latin) {
-      applyPrefsToSettings(globalPrefsSnapshot);
-      SETTINGS.releaseLatinTextProfile();
-      SETTINGS.setLiveTextProfile(latinTextProfile_);
-      SETTINGS.saveToFile();
-      // Re-sync the loaded SD font to the restored globals so the next
-      // consumer (home UI thumbnails, TXT/XTC readers) sees a consistent state.
-      sdFontSystem.ensureLoaded(renderer);
-    }
-  }
+  restoreGlobalReaderSettings();
 
   if (pendingReadFolderMove && epub) {
     const std::string srcPath = epub->getPath();
@@ -2405,6 +2409,8 @@ bool EpubReaderActivity::launchKOReaderSync() {
     }
     // The destructor can no longer save the back-stack once epub is gone.
     if (footnoteDepth > 0) saveLinkStack();
+    // Exit skips this once epub is gone, which would leave this book's settings in place.
+    restoreGlobalReaderSettings();
     epub.reset();
     // Also release the resident font caches (SD font slab + advance tables -- tens of KB on a
     // Japanese book). Freeing the Epub alone leaves those pinned, fragmenting the heap so WiFi +

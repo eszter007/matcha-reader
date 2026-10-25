@@ -52,6 +52,15 @@ void CrossPointSettings::setLiveTextProfile(const TextProfile& p) {
   copyToField(sdFontFamilyName, p.sdFontFamilyName, sizeof(sdFontFamilyName));
 }
 
+void CrossPointSettings::holdLatinTextProfile(const TextProfile& latin) {
+  if (latinIsHeld) {
+    LOG_ERR("CPS", "Latin text profile already held; keeping the first");
+    return;
+  }
+  latinHeld = latin;
+  latinIsHeld = true;
+}
+
 CrossPointSettings::TextProfile CrossPointSettings::textProfile(const TextProfileId id) const {
   if (id != TextProfileId::Latin) return scriptTextProfiles[static_cast<int>(id) - 1];
   return latinIsHeld ? latinHeld : liveTextProfile();

@@ -106,11 +106,10 @@ class TextSettingsActivity final : public UiListActivity {
   const bool cjkBook_ = false;
   const bool verticalText_ = false;
   const bool editStoredProfile_;
-  // The live (Latin) values while another profile is swapped in for editing.
+  // Another profile is swapped into the live fields for editing (Settings holds the Latin ones).
   bool swappedIn_ = false;
   // A family was picked here (not just cleared by a failed load).
   bool familyChosen_ = false;
-  CrossPointSettings::TextProfile latinWhileEditing_{};
 
   // Row storage: rowItems_ (label/actionValue/heading) is rebuilt only when its backing data
   // changes (rebuildRowItems()); rowValues_ holds the live per-row value text, refreshed every

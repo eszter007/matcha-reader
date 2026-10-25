@@ -91,6 +91,8 @@ class EpubReaderActivity final : public ReaderActivity {
   CrossPointSettings::TextProfile openTextProfile_{};
   void applyBookTextProfile();
   void storeBookTextProfile();
+  // Pins the reading settings to the book and puts the global ones back. Needs epub.
+  void restoreGlobalReaderSettings();
   static ReaderPrefs capturePrefsFromSettings();
   static void applyPrefsToSettings(const ReaderPrefs& prefs);
   bool loadBookPrefs(ReaderPrefs& out) const;
