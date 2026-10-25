@@ -336,24 +336,30 @@ EndOfBookOptions::EndOfBookOptions(GfxRenderer& renderer) : renderer(renderer) {
 void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* bookLanguage) {
   ReadingStatsStore::Change update;
   update.finishedPath = bookPath.c_str();
-  READING_STATS_STORE.record(update);
+  const bool recorded = READING_STATS_STORE.record(update);
+
+  const StatsWidgets::Today today = StatsWidgets::getToday();
+  // Streamed from the file: the reader is still in memory, so no tables are built here.
+  const ReadingStatsStore::Summary totals =
+      READING_STATS_STORE.summarize(today.year, today.month, today.day, bookLanguage, bookPath.c_str());
+  summary.streak = totals.streak;
+  summary.booksFinished = totals.booksFinished;
+  stamp_ = stampFor(bookLanguage);
 
   BookStats stats;
-  if (stats.load(bookPath.c_str())) {
+  if (BookStats::recordFinish(bookPath.c_str(), today.year, today.month, today.day, recorded && totals.firstFinish,
+                              stats)) {
     summary.minutes = stats.getTotalMinutes();
     summary.daySpan = stats.getDaySpan();
     summary.lookups = stats.getLookups();
     summary.sentences = stats.getSentencesSaved();
   }
-  const StatsWidgets::Today today = StatsWidgets::getToday();
-  // Streamed from the file: the reader is still in memory, so no tables are built here.
-  const ReadingStatsStore::Summary totals =
-      READING_STATS_STORE.summarize(today.year, today.month, today.day, bookLanguage);
-  summary.streak = totals.streak;
-  summary.booksFinished = totals.booksFinished;
-  stamp_ = stampFor(bookLanguage);
-  snprintf(summary.finishedOn, sizeof(summary.finishedOn), "%04u.%02u.%02u", static_cast<unsigned>(today.year),
-           static_cast<unsigned>(today.month), static_cast<unsigned>(today.day));
+  // The stamp keeps the day the book was first finished.
+  uint16_t year = today.year;
+  uint8_t month = today.month, day = today.day;
+  stats.getFinishDay(year, month, day);
+  snprintf(summary.finishedOn, sizeof(summary.finishedOn), "%04u.%02u.%02u", static_cast<unsigned>(year),
+           static_cast<unsigned>(month), static_cast<unsigned>(day));
 
   // Primary subtag, lowercased, as the stats store buckets it ("ja-JP" -> "ja").
   char code[4] = {};

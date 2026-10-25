@@ -882,7 +882,8 @@ bool ReadingStatsStore::record(const Change& change) {
 }
 
 ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear, const uint8_t todayMonth,
-                                                        const uint8_t todayDay, const char* language) {
+                                                        const uint8_t todayDay, const char* language,
+                                                        const char* finishedPath) {
   Summary out;
   recoverInterruptedSave();
   const int today = daysSinceEpoch(todayYear, todayMonth, todayDay);
@@ -1002,6 +1003,13 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
     }
   }
   uint16_t finishedCount = hasFile ? (pathsIntact ? static_cast<uint16_t>(finished.size()) : headerFinished) : 0;
+  if (finishedPath && *finishedPath) {
+    // A first finish: not in the file, and finished exactly once in the journal.
+    const uint32_t h = pathHash(finishedPath);
+    out.firstFinish =
+        (!hasFile || pathsIntact) && std::find(finished.begin(), finished.end(), h) == finished.end() &&
+        std::count_if(journal.begin(), journal.end(), [h](const Entry& e) { return e.finished == h; }) == 1;
+  }
   for (const auto& e : journal) {
     if (!e.finished || std::find(finished.begin(), finished.end(), e.finished) != finished.end()) continue;
     finished.push_back(e.finished);
