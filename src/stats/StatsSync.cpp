@@ -393,8 +393,11 @@ bool statsSync::download() {
   if (!parser || !http || !heapForTls()) return false;
   http->setInsecure();
   // This reader's days only, and once a download is folded in, only those uploaded since the last one. An
-  // unmerged download would be replaced by this one, so its days are fetched again in full.
-  const uint32_t since = ReadingStatsStore::hasPendingDownload() ? 0 : KOREADER_STORE.getStatsDaysSince();
+  // unmerged download would be replaced by this one, and a missing stats file has lost what the last one
+  // brought: either way all of them again.
+  const uint32_t since = ReadingStatsStore::hasPendingDownload() || !ReadingStatsStore::hasStatsFile()
+                             ? 0
+                             : KOREADER_STORE.getStatsDaysSince();
   char path[96];
   snprintf(path, sizeof(path), "/api/v1/stats/global?device_id=%s&since=%lu", DEVICE_ID,
            static_cast<unsigned long>(since));

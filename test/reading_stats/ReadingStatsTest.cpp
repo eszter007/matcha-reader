@@ -699,7 +699,8 @@ TEST_F(StatsTest, CompactFoldsBookDownload) {
   writeBookDownload({
       {"a.epub", true, 3, "ja", {{Y, M, 1, 20}, {Y, M, 2, 5}}},
       {"b.epub", false, 1, "ja-JP", {{Y, M, 1, 15}}},
-      {"here.epub", true, 2, "en", {}},  // already finished on this card
+      {"here.epub", true, 2, "en", {}},            // already finished on this card
+      {"scan.xtc", false, 1, "", {{Y, M, 2, 8}}},  // no language: the Unknown tab
   });
   ASSERT_TRUE(s.compact());
   EXPECT_FALSE(std::filesystem::exists(testRoot() + bookdownload::newPath()));
@@ -707,6 +708,7 @@ TEST_F(StatsTest, CompactFoldsBookDownload) {
   ASSERT_TRUE(s.loadFromFile());
   EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 1), 35);  // 20 + 15, above the 10 recorded here
   EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 2), 5);
+  EXPECT_EQ(s.getMinutesForDay("", Y, M, 2), 8);
   EXPECT_EQ(s.getBooksFinished(), 2);  // here.epub, and a.epub from elsewhere
   // Finishing a.epub here replaces its stand-in rather than adding to it.
   s.markBookFinished("/books/a.epub");

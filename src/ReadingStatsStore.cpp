@@ -1147,6 +1147,7 @@ bool ReadingStatsStore::isFinished(const std::string& bookPath) const {
 }
 
 bool ReadingStatsStore::hasPendingDownload() { return Storage.exists(downloadPath().c_str()); }
+bool ReadingStatsStore::hasStatsFile() { return Storage.exists(statsPath().c_str()); }
 
 bool ReadingStatsStore::saveDownload(const std::vector<DailyReading>& downloaded) {
   const std::string tmpPath = downloadPath() + ".tmp";
@@ -1183,8 +1184,8 @@ bool ReadingStatsStore::mergeBookDownload(const std::string& list) {
   std::vector<BookDay> scratch;
   size_t total = 0;
   bookdownload::forEach(list, scratch, &total,
-                        [](void* p, const bookdownload::Book& book, const std::vector<BookDay>& days) {
-                          if (book.language[0]) *static_cast<size_t*>(p) += days.size();
+                        [](void* p, const bookdownload::Book&, const std::vector<BookDay>& days) {
+                          *static_cast<size_t*>(p) += days.size();
                         });
   ctx.limit = std::min<size_t>(total, MAX_LANG_DAYS * 4);
   if (!tableFits(ctx.limit * sizeof(LanguageDay))) {
@@ -1196,7 +1197,7 @@ bool ReadingStatsStore::mergeBookDownload(const std::string& list) {
                         [](void* p, const bookdownload::Book& book, const std::vector<BookDay>& days) {
                           auto& c = *static_cast<Ctx*>(p);
                           if (book.finished) c.finished.push_back(book.nameHash);
-                          if (!book.language[0]) return;
+                          // No language is the Unknown tab's bucket, as for a book read here without one.
                           LanguageDay e{};
                           normalizeLanguage(book.language, e.language);
                           for (const auto& d : days) {

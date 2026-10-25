@@ -179,6 +179,8 @@ class ReadingStatsStore {
   static bool saveDownload(const std::vector<DailyReading>& downloaded);
   // A saved download the next compact() has not folded in yet.
   static bool hasPendingDownload();
+  // A stats file exists: what a download since the last one would add to.
+  static bool hasStatsFile();
 
   // The numbers the end-of-book summary shows, read straight from the file and the journal with no
   // tables built: that screen runs with the book still in memory. Same values as the getters.
