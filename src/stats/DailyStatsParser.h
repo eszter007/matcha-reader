@@ -21,9 +21,12 @@ class DailyStatsParser {
   void feed(const char* data, size_t len) { parser.feed(data, len); }
   // The whole document parsed without error.
   bool complete() const { return finished && !parser.hasError(); }
+  // The server's time for this answer, to pass as `since` next time; 0 from a server without it.
+  uint32_t until() const { return untilTime; }
 
  private:
-  enum class Key : uint8_t { NONE, DEVICE_ID, DAILY, DATE, SECONDS };
+  enum class Key : uint8_t { NONE, DEVICE_ID, DAILY, DATE, SECONDS, UNTIL };
+  static constexpr uint8_t ROOT_DEPTH = 1;
   // Depths of the containers this reads: root, devices, a device, its stats, daily, a day.
   static constexpr uint8_t DEVICE_DEPTH = 3;
   static constexpr uint8_t STATS_DEPTH = 4;
@@ -50,6 +53,7 @@ class DailyStatsParser {
   bool ownDevice = false;
   bool inDaily = false;
   bool finished = false;
+  uint32_t untilTime = 0;
   DailyReading day{};
   uint32_t seconds = 0;
 };

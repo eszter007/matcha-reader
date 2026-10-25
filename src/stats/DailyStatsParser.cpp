@@ -40,6 +40,7 @@ DailyStatsParser::DailyStatsParser(const char* deviceId, std::vector<DailyReadin
 void DailyStatsParser::onKey(void* ctx, const char* k, const size_t len) {
   auto* self = static_cast<DailyStatsParser*>(ctx);
   self->key = Key::NONE;
+  if (self->depth == ROOT_DEPTH && equals(k, len, "until")) self->key = Key::UNTIL;
   if (self->depth == DEVICE_DEPTH && equals(k, len, "device_id")) self->key = Key::DEVICE_ID;
   if (self->depth == STATS_DEPTH && self->ownDevice && equals(k, len, "daily")) self->key = Key::DAILY;
   if (self->depth == DAY_DEPTH && self->inDaily && equals(k, len, "date")) self->key = Key::DATE;
@@ -55,12 +56,14 @@ void DailyStatsParser::onString(void* ctx, const char* value, const size_t len) 
 
 void DailyStatsParser::onNumber(void* ctx, const char* value, const size_t len) {
   auto* self = static_cast<DailyStatsParser*>(ctx);
-  if (self->key == Key::SECONDS) {
+  if (self->key == Key::SECONDS || self->key == Key::UNTIL) {
     char buf[16];
     const size_t n = len < sizeof(buf) - 1 ? len : sizeof(buf) - 1;
     memcpy(buf, value, n);
     buf[n] = '\0';
-    self->seconds = static_cast<uint32_t>(strtoul(buf, nullptr, 10));
+    const auto v = static_cast<uint32_t>(strtoul(buf, nullptr, 10));
+    if (self->key == Key::SECONDS) self->seconds = v;
+    if (self->key == Key::UNTIL) self->untilTime = v;
   }
   self->key = Key::NONE;
 }

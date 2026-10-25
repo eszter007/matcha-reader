@@ -390,13 +390,20 @@ bool statsSync::download() {
   auto http = makeUniqueNoThrow<freeink::SecureHttpClient>();
   if (!parser || !http || !heapForTls()) return false;
   http->setInsecure();
-  if (!begin(*http, "/api/v1/stats/global")) return false;
-  // Streamed: the response holds every device's whole history and can be tens of KB.
+  // This reader's days only, and once a download is folded in, only those uploaded since the last one. An
+  // unmerged download would be replaced by this one, so its days are fetched again in full.
+  const uint32_t since = ReadingStatsStore::hasPendingDownload() ? 0 : KOREADER_STORE.getStatsDaysSince();
+  char path[96];
+  snprintf(path, sizeof(path), "/api/v1/stats/global?device_id=%s&since=%lu", DEVICE_ID,
+           static_cast<unsigned long>(since));
+  if (!begin(*http, path)) return false;
+  // Streamed: without the filters (an older server) it holds every device's whole history.
   const int status = http->sendRequest("GET", nullptr, 0, [&](const uint8_t* data, const size_t length) {
     parser->feed(reinterpret_cast<const char*>(data), length);
     return true;
   });
   const bool complete = status == 200 && http->responseComplete() && parser->complete();
+  const uint32_t until = parser->until();
   parser.reset();
   if (!complete) {
     LOG_ERR("STATS", "Stats download failed: HTTP %d", status);
@@ -406,6 +413,8 @@ bool statsSync::download() {
     LOG_ERR("STATS", "Downloaded stats not saved");
     return false;
   }
+  KOREADER_STORE.setStatsDaysSince(until);
+  KOREADER_STORE.saveToFile();
   LOG_INF("STATS", "Downloaded %zu days of reading stats", days.size());
   std::vector<DailyReading>().swap(days);
   // Same connection: the book list follows on it without another handshake.

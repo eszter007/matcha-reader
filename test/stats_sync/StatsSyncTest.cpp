@@ -107,12 +107,13 @@ void download() {
       R"({"date":"2026-10-24","seconds":30},)"  // under a minute
       R"({"date":"bad","seconds":60},)"
       R"({"date":"2026-10-25","seconds":120}]}}],)"  // after today
-      R"("bookorbit":{"daily":[{"date":"2026-10-22","seconds":600}]}})";
+      R"("bookorbit":{"daily":[{"date":"2026-10-22","seconds":600}]},"until":1761300100})";
   std::vector<DailyReading> days;
   days.reserve(4);
   DailyStatsParser parser(statsSync::DEVICE_ID, days, day(2026, 10, 24) - 729, day(2026, 10, 24));
   for (size_t i = 0; i < body.size(); i += 7) parser.feed(body.data() + i, std::min<size_t>(7, body.size() - i));
   assert(parser.complete());
+  assert(parser.until() == 1761300100u);
   assert(days.size() == 1);
   assert(days[0].year == 2026 && days[0].month == 10 && days[0].day == 23 && days[0].minutesRead == 41);
 

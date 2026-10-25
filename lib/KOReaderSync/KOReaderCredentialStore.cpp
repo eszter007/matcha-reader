@@ -31,6 +31,7 @@ void KOReaderCredentialStore::toJson(JsonDocument& doc) const {
   doc["statsUploadedDay"] = statsUploadedDay;
   doc["statsBooksDay"] = statsBooksDay;
   doc["statsBooksSince"] = statsBooksSince;
+  doc["statsDaysSince"] = statsDaysSince;
   doc["statsAccount"] = statsAccount;
   JsonArray headers = doc["headers"].to<JsonArray>();
   for (const auto& header : customHeaders) {
@@ -92,6 +93,7 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
   statsUploadedDay = doc["statsUploadedDay"] | 0;
   statsBooksDay = doc["statsBooksDay"] | 0;
   statsBooksSince = doc["statsBooksSince"] | 0u;
+  statsDaysSince = doc["statsDaysSince"] | 0u;
   statsAccount = doc["statsAccount"] | "";
 
   size_t headerIndex = 0;
@@ -168,6 +170,7 @@ void KOReaderCredentialStore::stampStatsAccount() {
   statsUploadedDay = 0;
   statsBooksDay = 0;
   statsBooksSince = 0;
+  statsDaysSince = 0;
 }
 
 void KOReaderCredentialStore::setStatsUploadedDay(const int32_t day) {
@@ -187,6 +190,15 @@ uint32_t KOReaderCredentialStore::getStatsBooksSince() const {
 void KOReaderCredentialStore::setStatsBooksSince(const uint32_t until) {
   stampStatsAccount();
   statsBooksSince = until;
+}
+
+uint32_t KOReaderCredentialStore::getStatsDaysSince() const {
+  return statsAccount == username + "@" + getBaseUrl() ? statsDaysSince : 0;
+}
+
+void KOReaderCredentialStore::setStatsDaysSince(const uint32_t until) {
+  stampStatsAccount();
+  statsDaysSince = until;
 }
 
 void KOReaderCredentialStore::setServerUrl(const std::string& url) {

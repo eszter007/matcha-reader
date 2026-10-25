@@ -1133,6 +1133,8 @@ bool ReadingStatsStore::isFinished(const std::string& bookPath) const {
   return std::find(finishedBookPaths.begin(), finishedBookPaths.end(), bookPath) != finishedBookPaths.end();
 }
 
+bool ReadingStatsStore::hasPendingDownload() { return Storage.exists(downloadPath().c_str()); }
+
 bool ReadingStatsStore::saveDownload(const std::vector<DailyReading>& downloaded) {
   const std::string tmpPath = downloadPath() + ".tmp";
   HalFile f;

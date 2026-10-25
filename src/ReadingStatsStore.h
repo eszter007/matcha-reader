@@ -177,6 +177,8 @@ class ReadingStatsStore {
   // with mergeMinutes(). Written with WiFi up, when the tables may not fit; a newer download replaces
   // an unmerged one, and one that cannot be folded in yet stays for the next boot.
   static bool saveDownload(const std::vector<DailyReading>& downloaded);
+  // A saved download the next compact() has not folded in yet.
+  static bool hasPendingDownload();
 
   // The numbers the end-of-book summary shows, read straight from the file and the journal with no
   // tables built: that screen runs with the book still in memory. Same values as the getters.
