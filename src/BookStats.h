@@ -40,8 +40,10 @@ class BookStats {
   static constexpr size_t MAX_DAYS = 2000;
 
   // Loads this book's history. Returns false only on a read error; a book with no history yet
-  // loads clean and empty, which is the normal first-open case.
-  bool load(const char* bookPath);
+  // loads clean and empty, which is the normal first-open case. withServerCopy also takes in what the
+  // last Refresh Stats downloaded for it (bookdownload): for screens that show it and the first open,
+  // not for every save, which would scan that file each time.
+  bool load(const char* bookPath, bool withServerCopy = false);
   bool save() const;
 
   // One session = one opening. Called from each reader's onEnter, which runs once per open:

@@ -727,12 +727,15 @@ TEST_F(StatsTest, BookStatsTakeInDownload) {
   writeBookDownload({{"a.epub", true, 4, "ja", {{Y, M, 1, 20}, {Y, M, 2, 12}}}});
   ASSERT_TRUE(READING_STATS_STORE.compact());
 
+  BookStats plain;
+  ASSERT_TRUE(plain.load("/books/a.epub"));  // a save's load leaves the server copy alone
+  EXPECT_EQ(plain.getTotalMinutes(), 30u);
   BookStats b;
-  ASSERT_TRUE(b.load("/books/a.epub"));
+  ASSERT_TRUE(b.load("/books/a.epub", /*withServerCopy=*/true));
   EXPECT_EQ(b.getSessions(), 4u);
   EXPECT_EQ(b.getTotalMinutes(), 42u);  // 30 kept on the 1st, 12 added on the 2nd
   BookStats other;
-  ASSERT_TRUE(other.load("/books/unknown.epub"));
+  ASSERT_TRUE(other.load("/books/unknown.epub", /*withServerCopy=*/true));
   EXPECT_EQ(other.getTotalMinutes(), 0u);
 
   ASSERT_TRUE(BookStats::recordOpen("/books/a.epub"));

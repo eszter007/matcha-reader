@@ -64,11 +64,11 @@ std::string BookStats::filePathFor(const char* path) {
   return std::string(buf);
 }
 
-bool BookStats::load(const char* path) {
+bool BookStats::load(const char* path, const bool withServerCopy) {
   restoredFinished = false;
   if (!loadLocal(path)) return false;
   bool finished = false;
-  restoredFinished = mergeDownloaded(finished) && finished;
+  if (withServerCopy) restoredFinished = mergeDownloaded(finished) && finished;
   return true;
 }
 
@@ -232,7 +232,7 @@ void BookStats::recordMinutes(const uint16_t year, const uint8_t month, const ui
 bool BookStats::recordOpen(const char* path) {
   if (!path || !*path) return false;
   BookStats b;
-  if (!b.load(path)) return false;
+  if (!b.load(path, /*withServerCopy=*/true)) return false;
   // A book the server knows as finished, opened here for the first time since: finished here too.
   if (b.restoredFinished) {
     ReadingStatsStore::Change change;

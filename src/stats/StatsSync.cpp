@@ -119,10 +119,7 @@ std::string urlEncode(const std::string& v) {
 
 // This reader's own rows of the server's book list, page by page into the download file
 // (bookdownload). True with nothing written when the server has no book list yet.
-bool downloadBooks() {
-  auto http = makeUniqueNoThrow<freeink::SecureHttpClient>();
-  if (!http || !heapForTls()) return false;
-  http->setInsecure();
+bool downloadBooks(freeink::SecureHttpClient& http) {
   // Only what changed since the last download, when the list it has is whole and merged; else all of it.
   const uint32_t since =
       Storage.exists(bookdownload::path().c_str()) && !Storage.exists(bookdownload::newPath().c_str())
@@ -146,11 +143,11 @@ bool downloadBooks() {
     char path[128];
     snprintf(path, sizeof(path), "/api/v1/stats/books?device_id=%s&limit=%d&since=%lu%s", statsSync::DEVICE_ID,
              BOOKS_PER_PAGE, static_cast<unsigned long>(since), cursor.empty() ? "" : "&cursor=");
-    if (!parser || !begin(*http, (std::string(path) + urlEncode(cursor)).c_str())) {
+    if (!parser || !begin(http, (std::string(path) + urlEncode(cursor)).c_str())) {
       writer.abort();
       return false;
     }
-    const int status = http->sendRequest("GET", nullptr, 0, [&](const uint8_t* data, const size_t length) {
+    const int status = http.sendRequest("GET", nullptr, 0, [&](const uint8_t* data, const size_t length) {
       parser->feed(reinterpret_cast<const char*>(data), length);
       return true;
     });
@@ -159,7 +156,7 @@ bool downloadBooks() {
       writer.abort();
       return true;
     }
-    if (status != 200 || !http->responseComplete() || !parser->complete()) {
+    if (status != 200 || !http.responseComplete() || !parser->complete()) {
       LOG_ERR("STATS", "Book list download failed: HTTP %d", status);
       writer.abort();
       return false;
@@ -170,7 +167,6 @@ bool downloadBooks() {
     cursor = parser->next();
     if (cursor.empty()) break;
   }
-  http->end();
   if (!writer.commit()) {
     LOG_ERR("STATS", "Downloaded book stats not saved");
     return false;
@@ -237,8 +233,13 @@ bool buildBatch(const std::vector<PendingBook>& books, BookCursor& at, const int
       at = {at.book + 1, 0};
       continue;
     }
-    // Filename and language, so the server can filter and a restore can find the file. Once per book.
-    if (at.day == 0) {
+    // Days not sent yet: from the marker's day on (all of them the first time).
+    const auto firstNew = std::find_if(days.begin(), days.end(), [fromDay](const BookDay& d) {
+      return ReadingStatsStore::dayNumber(d.year, d.month, d.day) >= fromDay;
+    });
+    // Filename and language, so the server can filter and a restore can find the file: once, with the
+    // book's first upload (all its days new), not every time it is read.
+    if (at.day == 0 && firstNew == days.begin()) {
       JsonObject meta = docItems.add<JsonObject>();
       meta["document"] = hash;
       const size_t slash = book.path.find_last_of('/');
@@ -246,10 +247,6 @@ bool buildBatch(const std::vector<PendingBook>& books, BookCursor& at, const int
       if (!book.language.empty()) meta["language"] = book.language;
       docs++;
     }
-    // Days not sent yet: from the marker's day on (all of them the first time).
-    const auto firstNew = std::find_if(days.begin(), days.end(), [fromDay](const BookDay& d) {
-      return ReadingStatsStore::dayNumber(d.year, d.month, d.day) >= fromDay;
-    });
     const size_t newDays = static_cast<size_t>(days.end() - firstNew);
     // One item even with no new day: the totals still change with each session.
     do {
@@ -400,8 +397,6 @@ bool statsSync::download() {
     return true;
   });
   const bool complete = status == 200 && http->responseComplete() && parser->complete();
-  http->end();
-  http.reset();
   parser.reset();
   if (!complete) {
     LOG_ERR("STATS", "Stats download failed: HTTP %d", status);
@@ -413,5 +408,8 @@ bool statsSync::download() {
   }
   LOG_INF("STATS", "Downloaded %zu days of reading stats", days.size());
   std::vector<DailyReading>().swap(days);
-  return downloadBooks();
+  // Same connection: the book list follows on it without another handshake.
+  const bool books = downloadBooks(*http);
+  http->end();
+  return books;
 }
