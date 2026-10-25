@@ -363,9 +363,15 @@ void ImageBlock::clearRenderFailures() {
 
 bool ImageBlock::renderHadDecodeFailure() { return decodeFailedThisRender; }
 
-bool ImageBlock::needsFramebufferLoanToDecode() const {
-  return FsHelpers::hasPngExtension(imagePath) && !PngToFramebufferConverter::decoderFitsHeap() && !hasValidCache();
+bool ImageBlock::decodeNeedsMoreHeap() const {
+  if (FsHelpers::hasPngExtension(imagePath) && !PngToFramebufferConverter::decoderFitsHeap()) return true;
+  // Not yet pulled out of the book: the zip inflate window is one contiguous 32KB block.
+  constexpr uint32_t INFLATE_WINDOW_BYTES = 32768;
+  return !srcPath.empty() && extractFn && ESP.getMaxAllocHeap() < INFLATE_WINDOW_BYTES &&
+         !Storage.exists(imagePath.c_str());
 }
+
+bool ImageBlock::needsFramebufferLoanToDecode() const { return decodeNeedsMoreHeap() && !hasValidCache(); }
 
 bool ImageBlock::consumeDeferredDecode() {
   const bool deferred = deferredDecode;
@@ -472,8 +478,8 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   // Before the extraction below: it needs the same scarce contiguous heap (a 32KB inflate window),
   // and the warm task extracts too, inside the framebuffer loan where the window can use the lent
   // bytes. Deferring after a failed extraction left an unextracted PNG as a placeholder for good.
-  if (FsHelpers::hasPngExtension(imagePath) && !PngToFramebufferConverter::decoderFitsHeap()) {
-    LOG_INF("IMG", "Deferring PNG decode to the warm task (largest=%u): %s", (unsigned)ESP.getMaxAllocHeap(),
+  if (decodeNeedsMoreHeap()) {
+    LOG_INF("IMG", "Deferring image decode to the warm task (largest=%u): %s", (unsigned)ESP.getMaxAllocHeap(),
             imagePath.c_str());
     deferredDecode = true;
     rememberImageFailure(imagePath);
