@@ -8,20 +8,15 @@
 
 #include "CrossPointSettings.h"
 #include "TextSettingsPreview.h"
-#include "activities/UiTabListActivity.h"
+#include "activities/UiListActivity.h"
 #include "components/OptionPopup.h"
 #include "components/themes/BaseTheme.h"
 #include "util/CjkScript.h"
 
-// Reader text settings with a shared live preview pane: tab bar
-// (Font | Size | Layout | Style) is position 0 of the Up/Down nav ring, same
-// idiom as SettingsActivity. Family/Size rows apply on Confirm; Layout/Style
-// rows toggle or open an OptionPopup picker. (Tab::Family/Style are the enum
-// names for the Font/Style tabs.)
-class TextSettingsActivity final : public UiTabListActivity {
+// Reader text settings for one text profile, under a live preview: Font and Size rows, then the
+// Layout and Style rows under their headings. Font and Size open a popup of their choices.
+class TextSettingsActivity final : public UiListActivity {
  public:
-  enum class Tab : uint8_t { Family, Size, Layout, Style, Count };
-
   // One row of the family list. Public so the list-position helper in the .cpp can
   // take it: the displayed list hides the JP extension families, so a family's list
   // position no longer matches its registry index and has to be looked up by name.
@@ -33,17 +28,19 @@ class TextSettingsActivity final : public UiTabListActivity {
     const char* displayName() const { return label.empty() ? name.c_str() : label.c_str(); }
   };
 
+  // profile: the profile these settings are (the title). In a book the live settings already hold
+  // it; from Settings (editStoredProfile) it is swapped in on enter and back out on exit.
+  // bookScript/verticalText: the open book's script and direction, which pick the preview face
+  // and hide rows the book's layout does not read.
   TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const SdCardFontRegistry* registry,
-                       Tab initialTab = Tab::Family, CjkScript bookScript = CjkScript::None, bool verticalText = false,
-                       bool profileChoice = false);
+                       CrossPointSettings::TextProfileId profile, CjkScript bookScript = CjkScript::None,
+                       bool verticalText = false, bool editStoredProfile = false);
 
   void onEnter() override;
   void onExit() override;
   void render(RenderLock&&) override;
 
  private:
-  // Row indices per tab. enum class (not plain enum) so a LayoutRow can't be
-  // silently confused with a StyleRow of equal value.
   // Not every row applies to every book: visibleLayoutRows() lists the ones shown.
   enum class LayoutRow {
     LineSpacing,
@@ -57,19 +54,17 @@ class TextSettingsActivity final : public UiTabListActivity {
     Count
   };
   enum class StyleRow { FocusReading, Hyphenation, EmbeddedStyle, AntiAliasing, Count };
+  // The rows before Layout.
+  static constexpr int FONT_ROW = 0;
+  static constexpr int SIZE_ROW = 1;
+  static constexpr int LAYOUT_FIRST_ROW = 2;
 
-  // --- UiTabListActivity contract ---
+  // --- UiListActivity contract ---
   int listCount() const override;
-  int tabCount() const override;
-  int activeTab() const override { return static_cast<int>(tab_); }
-  const char* tabLabel(int index) const override;
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
-  void onTabAction(int index) override;
-  void stepTab(int direction) override { switchTab(direction); }
   void drawChrome() override;
   void drawFooter() override;
-  bool handleButtons() override;
   bool handleCustomInput() override;
 
   void applyFamily(int listIndex);
@@ -79,57 +74,49 @@ class TextSettingsActivity final : public UiTabListActivity {
   void rebuildSizeList();
   void confirmLayoutRow(int row);
   void confirmStyleRow(int row);
-  // Applies the row at the given list index for the active tab (Confirm and tap share this).
-  void activateRow(int row);
 
   std::string layoutValueText(int row) const;
-  // On/off rows draw a switch in place of their value. `checked` is only read when the row is
-  // one; `row` is the visible index, so Layout goes through layoutRowAt() like its value text.
+  // On/off rows draw a switch in place of their value. `checked` is only read when the row is one.
   bool layoutRowIsSwitch(int row, bool& checked) const;
   bool styleRowIsSwitch(int row, bool& checked) const;
-  // Button-hint label for Confirm at the current ring position.
+  // Button-hint label for Confirm on the selected row.
   const char* confirmLabelText() const;
-  void switchTab(int direction = 1);
-  // Maps a visible list position to its LayoutRow: a CJK book hides ParaSpacing,
-  // Alignment and BookSideMargins, so position and enum value diverge.
+  // Maps a visible list position to its LayoutRow: vertical text hides most of them, so position
+  // and enum value diverge.
   LayoutRow layoutRowAt(int visibleIndex) const;
   // Fills `out` (when non-null, room for LayoutRow::Count) with the Layout rows shown for this
   // book, in order, and returns how many.
   int visibleLayoutRows(LayoutRow* out) const;
-  // CJK books hide FocusReading/Hyphenation; vertical text also hides AntiAliasing.
+  // CJK books hide FocusReading/Hyphenation.
   StyleRow styleRowAt(int visibleIndex) const;
+  int styleRowCount() const { return cjkBook_ ? 2 : static_cast<int>(StyleRow::Count); }
   // Sentinel settingIndex for the "Manage Fonts" row appended to the family list. It opens
-  // FontDownloadActivity instead of selecting a font -- the shortcut the pre-1.5.0 font
-  // picker had at the bottom of its list, so "the font I want isn't here" is one press away.
+  // FontDownloadActivity instead of selecting a font, so "the font I want isn't here" is one press away.
   static constexpr uint8_t MANAGE_FONTS_ROW = 0xFF;
   bool isManageFontsRow(int row) const {
     return row >= 0 && row < static_cast<int>(fonts_.size()) && fonts_[row].settingIndex == MANAGE_FONTS_ROW;
   }
   // Rebuilds fonts_ (families installed on the card can change while this screen is open).
   void rebuildFamilyList();
-  // Script of the book these settings apply to (None outside a CJK book). CJK books share the
-  // Japanese row set; the script also picks the preview face.
+
+  const CrossPointSettings::TextProfileId profile_;
+  // Script of the book these settings apply to (the profile's script outside a book). CJK books
+  // share the Japanese row set; the script also picks the preview face.
   const CjkScript bookScript_ = CjkScript::None;
   const bool cjkBook_ = false;
   const bool verticalText_ = false;
+  const bool editStoredProfile_;
+  // The live (Latin) values while another profile is swapped in for editing.
+  bool swappedIn_ = false;
+  CrossPointSettings::TextProfile latinWhileEditing_{};
 
-  // Text profiles (Settings, not a book): an "Edit for" row heads the Size and Layout tabs and
-  // switches which profile -- Latin or CJK -- the four profile rows edit. While CJK is chosen its
-  // values sit in the live fields (as when reading a CJK book) and the Latin ones wait here.
-  const bool profileChoice_;
-  bool editingCjk_ = false;
-  CrossPointSettings::TextProfile latinWhileEditingCjk_{};
-  int profileRows() const { return profileChoice_ && (tab_ == Tab::Size || tab_ == Tab::Layout) ? 1 : 0; }
-  void toggleProfile();
-
-  // Row storage for the active tab: rowItems_ (label/actionValue) is
-  // rebuilt only when the tab or its backing data changes (rebuildRowItems(),
-  // called from onEnter()/onTabAction()/switchTab()); rowValues_ holds the
-  // live per-row value text, refreshed every buildScreen() call by assigning
-  // into the existing strings (no vector growth), so steady-state rendering
-  // never allocates/frees row storage.
+  // Row storage: rowItems_ (label/actionValue/heading) is rebuilt only when its backing data
+  // changes (rebuildRowItems()); rowValues_ holds the live per-row value text, refreshed every
+  // buildScreen() by assigning into the existing strings.
   std::vector<std::string> rowValues_;
   std::vector<freeink::ui::ListItem> rowItems_;
+  std::string layoutHeading_;
+  std::string styleHeading_;
   void rebuildRowItems();
 
   struct SizeEntry {
@@ -143,11 +130,24 @@ class TextSettingsActivity final : public UiTabListActivity {
   std::vector<SizeEntry> sizes_;
   textsettings::PreviewLayout previewLayout_;  // cached preview line layout; relaid only on setting/geometry change
 
-  Tab tab_;
   int currentFamilyIndex_ = 0;
   int currentSizeIndex_ = 0;
 
   ThemeMetrics metrics_ = {};
   int afterHeader = 0;
   int previewHeight = 0;
+};
+
+// The five text profiles, from Settings: picking one opens its Text Settings.
+class TextProfileMenuActivity final : public UiListActivity {
+ public:
+  TextProfileMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+      : UiListActivity("TextProfiles", renderer, mappedInput) {}
+
+ private:
+  int listCount() const override;
+  void buildScreen(UiScreen& screen) override;
+  void activateIndex(int index) override;
+  const char* headerTitle() const override;
+  std::vector<freeink::ui::ListItem> items_;
 };

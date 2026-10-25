@@ -19,13 +19,11 @@
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 #include "fontIds.h"
+#include "util/TextProfiles.h"
 
 namespace fui = freeink::ui;
 
 namespace {
-// Tab labels for Font | Size | Layout | Style.
-constexpr StrId TAB_NAME_IDS[] = {StrId::STR_FONT, StrId::STR_SIZE, StrId::STR_LAYOUT, StrId::STR_STYLE};
-
 // Indexed by LayoutRow / StyleRow; rebuildRowItems() asserts the lengths match.
 constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING,          StrId::STR_WORD_SPACING,
                                          StrId::STR_CHARACTER_SPACING,     StrId::STR_EXTRA_SPACING,
@@ -72,57 +70,65 @@ constexpr int WORD_SPACING_MIN = CrossPointSettings::WORD_SPACING_MIN;
 constexpr int WORD_SPACING_MAX = CrossPointSettings::WORD_SPACING_MAX;
 constexpr int WORD_SPACING_STEP = CrossPointSettings::WORD_SPACING_STEP;
 static_assert(std::size(WORD_SPACING_IDS) == (WORD_SPACING_MAX - WORD_SPACING_MIN) / WORD_SPACING_STEP + 1);
+
+// Heading text for the LAYOUT and STYLE sections: the label in capitals (ASCII only; scripts
+// without case keep theirs).
+std::string upperHeading(const char* label) {
+  std::string out(label);
+  for (auto& c : out) {
+    if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 32);
+  }
+  return out;
+}
+
+// Space between the preview box's border and the sample.
+constexpr int PREVIEW_INNER_PADDING = 16;
+
+// Latin for a UI language written in CJK, whose own sample would not be in the Latin profile's script.
+// Not a UI string: a typographic sample.
+constexpr const char* LATIN_SAMPLE = "The quick brown fox jumps over the lazy dog.";
+
+// The preview sample in the edited profile's script.
+const char* previewSample(const CrossPointSettings::TextProfileId profile, const CjkScript script) {
+  switch (script) {
+    case CjkScript::Japanese:
+      return tr(STR_FONT_PREVIEW_TEXT_CJK);
+    case CjkScript::SimplifiedChinese:
+      return tr(STR_FONT_PREVIEW_TEXT_ZH_HANS);
+    case CjkScript::TraditionalChinese:
+      return tr(STR_FONT_PREVIEW_TEXT_ZH_HANT);
+    case CjkScript::None:
+      break;
+  }
+  if (profile == CrossPointSettings::TextProfileId::Korean) return tr(STR_FONT_PREVIEW_TEXT_KO);
+  const Language ui = I18N.getLanguage();
+  if (ui == Language::JA || ui == Language::ZHS || ui == Language::ZHT) return LATIN_SAMPLE;
+  return tr(STR_FONT_PREVIEW_TEXT);
+}
 }  // namespace
 
 TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                           const SdCardFontRegistry* registry, Tab initialTab,
-                                           const CjkScript bookScript, const bool verticalText,
-                                           const bool profileChoice)
-    : UiTabListActivity("TextSettings", renderer, mappedInput),
-      registry_(registry),
-      tab_(initialTab),
+                                           const SdCardFontRegistry* registry,
+                                           const CrossPointSettings::TextProfileId profile, const CjkScript bookScript,
+                                           const bool verticalText, const bool editStoredProfile)
+    : UiListActivity("TextSettings", renderer, mappedInput),
+      profile_(profile),
       bookScript_(bookScript),
       cjkBook_(bookScript != CjkScript::None),
       verticalText_(verticalText),
-      profileChoice_(profileChoice) {}
-
-// Leaving with the CJK profile on screen: its values go back to the CJK profile and the Latin
-// ones, which are the live settings everywhere else, come back.
-void TextSettingsActivity::onExit() {
-  if (editingCjk_) {
-    RenderLock lock;
-    SETTINGS.setCjkTextProfile(SETTINGS.liveTextProfile());
-    SETTINGS.setLiveTextProfile(latinWhileEditingCjk_);
-    editingCjk_ = false;
-    sdFontSystem.ensureLoaded(renderer);
-  }
-  UiTabListActivity::onExit();
-}
-
-void TextSettingsActivity::toggleProfile() {
-  {
-    // Swapping the size reloads the SD font, which the render task may be reading.
-    RenderLock lock;
-    if (editingCjk_) {
-      SETTINGS.setCjkTextProfile(SETTINGS.liveTextProfile());
-      SETTINGS.setLiveTextProfile(latinWhileEditingCjk_);
-    } else {
-      latinWhileEditingCjk_ = SETTINGS.liveTextProfile();
-      SETTINGS.setLiveTextProfile(SETTINGS.cjkTextProfile());
-    }
-    editingCjk_ = !editingCjk_;
-    sdFontSystem.ensureLoaded(renderer);
-  }
-  rebuildSizeList();
-  tabNavs[static_cast<int>(Tab::Size)].selected = currentSizeIndex_ + 1 + 1;
-  rebuildRowItems();
-  requestUpdate();
-}
-
-const char* TextSettingsActivity::tabLabel(const int index) const { return I18N.get(TAB_NAME_IDS[index]); }
+      editStoredProfile_(editStoredProfile),
+      registry_(registry) {}
 
 void TextSettingsActivity::onEnter() {
-  UiTabListActivity::onEnter();
+  // From Settings, a profile other than Latin is edited in the live fields, as a book would read it.
+  if (editStoredProfile_ && profile_ != CrossPointSettings::TextProfileId::Latin) {
+    RenderLock lock;
+    latinWhileEditing_ = SETTINGS.liveTextProfile();
+    SETTINGS.setLiveTextProfile(SETTINGS.textProfile(profile_));
+    swappedIn_ = true;
+    sdFontSystem.ensureLoaded(renderer);
+  }
+  UiListActivity::onEnter();
 
   metrics_ = UITheme::getInstance().getMetrics();
   const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
@@ -131,20 +137,25 @@ void TextSettingsActivity::onEnter() {
   const int usableHeight = safeBottom - afterHeader - metrics_.verticalSpacing;
   previewHeight = usableHeight * metrics_.previewHeightPercent / 100;
 
+  layoutHeading_ = upperHeading(tr(STR_LAYOUT));
+  styleHeading_ = upperHeading(tr(STR_STYLE));
   rebuildFamilyList();
-
   rebuildSizeList();
-
   currentFamilyIndex_ = findCurrentFontIndex(fonts_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
-  // Per-tab ring positions (0 = tab bar, 1..N = row). The base reset each
-  // tab's nav with followOnBuild armed, so each tab's first build shows its
-  // remembered selection (Family/Size open on the current item).
-  for (auto& n : tabNavs) n.selected = 1;  // default to the first list row
-  tabNavs[static_cast<int>(Tab::Family)].selected = currentFamilyIndex_ + 1;
-  tabNavs[static_cast<int>(Tab::Size)].selected = currentSizeIndex_ + 1 + (profileChoice_ ? 1 : 0);
-  tabNavs[static_cast<int>(tab_)].selected = 0;  // screen opens with the tab bar focused, not a list row
-
   rebuildRowItems();
+}
+
+// Leaving a swapped-in profile: its values go back to it and the Latin ones, which are the live
+// settings everywhere else, come back.
+void TextSettingsActivity::onExit() {
+  if (swappedIn_) {
+    RenderLock lock;
+    SETTINGS.setTextProfile(profile_, SETTINGS.liveTextProfile());
+    SETTINGS.setLiveTextProfile(latinWhileEditing_);
+    swappedIn_ = false;
+    sdFontSystem.ensureLoaded(renderer);
+  }
+  UiListActivity::onExit();
 }
 
 void TextSettingsActivity::rebuildFamilyList() {
@@ -177,9 +188,8 @@ void TextSettingsActivity::rebuildFamilyList() {
   fonts_.push_back({I18N.get(StrId::STR_MANAGE_FONTS), false, MANAGE_FONTS_ROW});
 }
 
-// Rebuilds rowItems_ (label + actionValue) for the active tab. Structural —
-// call only when tab_ or its backing data (fonts_/sizes_) changes, never from
-// buildScreen(), which just refreshes rowValues_/rowItems_[].value in place.
+// Structural: call only when its backing data (fonts_/sizes_) changes, never from
+// buildScreen(), which just refreshes rowValues_ in place.
 void TextSettingsActivity::rebuildRowItems() {
   static_assert(std::size(LAYOUT_ROW_NAME_IDS) == static_cast<size_t>(LayoutRow::Count),
                 "LAYOUT_ROW_NAME_IDS must have one label per LayoutRow");
@@ -189,34 +199,24 @@ void TextSettingsActivity::rebuildRowItems() {
   rowValues_.assign(count, std::string());
   rowItems_.clear();
   rowItems_.reserve(count);
-  const int pr = profileRows();
+  const int layoutCount = visibleLayoutRows(nullptr);
   for (int i = 0; i < count; i++) {
     fui::ListItem item;
-    if (i < pr) {
-      item.label = tr(STR_TEXT_PROFILE);
-      item.actionValue = static_cast<int16_t>(i);
-      rowItems_.push_back(item);
-      continue;
-    }
-    switch (tab_) {
-      case Tab::Family:
-        item.label = fonts_[i].displayName();
-        break;
-      case Tab::Size:
-        item.label = sizes_[i - pr].name.c_str();
-        break;
-      case Tab::Layout:
-        // Visible position -> LayoutRow: not every row is shown for every book, so `i` is not
-        // the enum value (see visibleLayoutRows()).
-        item.label = I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(layoutRowAt(i - pr))]);
-        break;
-      case Tab::Style:
-        item.label = I18N.get(STYLE_ROW_NAME_IDS[static_cast<int>(styleRowAt(i))]);
-        break;
-      default:
-        break;
-    }
     item.actionValue = static_cast<int16_t>(i);
+    if (i == FONT_ROW) {
+      item.label = tr(STR_FONT);
+    } else if (i == SIZE_ROW) {
+      item.label = tr(STR_SIZE);
+    } else if (i < LAYOUT_FIRST_ROW + layoutCount) {
+      // Visible position -> LayoutRow: not every row is shown for every book.
+      const int layoutIndex = i - LAYOUT_FIRST_ROW;
+      item.label = I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(layoutRowAt(layoutIndex))]);
+      if (layoutIndex == 0) item.sectionHeading = layoutHeading_.c_str();
+    } else {
+      const int styleIndex = i - LAYOUT_FIRST_ROW - layoutCount;
+      item.label = I18N.get(STYLE_ROW_NAME_IDS[static_cast<int>(styleRowAt(styleIndex))]);
+      if (styleIndex == 0) item.sectionHeading = styleHeading_.c_str();
+    }
     rowItems_.push_back(item);
   }
 }
@@ -246,19 +246,8 @@ void TextSettingsActivity::rebuildSizeList() {
   }
 }
 
-void TextSettingsActivity::onTabAction(const int index) {
-  if (optionPopup_.isActive()) return;
-  if (tab_ != static_cast<Tab>(index)) {
-    tab_ = static_cast<Tab>(index);
-    rebuildRowItems();
-    auto& n = activeNav();
-    n.selected = 0;          // tab taps land with the tab bar focused (legacy tap behavior)
-    n.followOnBuild = true;  // pull the new tab's viewport to its remembered selection
-    requestUpdate();
-  }
-  // The switched-to tab repaints as the selected pill; a flash overlay on top
-  // of it just repaints the pill in the focused style.
-  app.clearTapFlash();
+bool TextSettingsActivity::handleCustomInput() {
+  return optionPopup_.handleInput(mappedInput, [this] { requestUpdate(); });
 }
 
 void TextSettingsActivity::activateIndex(const int index) {
@@ -266,74 +255,68 @@ void TextSettingsActivity::activateIndex(const int index) {
   // Most rows repaint a different surface (popup, preview, new value);
   // a lingering tap flash would gray an unrelated element.
   app.clearTapFlash();
-  activateRow(index);
-}
-
-bool TextSettingsActivity::handleCustomInput() {
-  return optionPopup_.handleInput(mappedInput, [this] { requestUpdate(); });
-}
-
-bool TextSettingsActivity::handleButtons() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finish();
-    return true;
+  if (index == FONT_ROW) {
+    std::vector<std::string> options;
+    options.reserve(fonts_.size());
+    for (const auto& font : fonts_) options.push_back(font.displayName());
+    optionPopup_.show(StrId::STR_FONT, options, currentFamilyIndex_, [this](const int idx) {
+      if (isManageFontsRow(idx)) {
+        startActivityForResult(
+            std::make_unique<FontDownloadActivity>(renderer, mappedInput), [this](const ActivityResult&) {
+              // Fonts may have been installed or deleted while we were away.
+              rebuildFamilyList();
+              currentFamilyIndex_ = findCurrentFontIndex(fonts_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
+              rebuildSizeList();
+              requestUpdate();
+            });
+      } else if (idx != currentFamilyIndex_) {
+        applyFamily(idx);
+      }
+    });
+    requestUpdate();
+  } else if (index == SIZE_ROW) {
+    std::vector<std::string> options;
+    options.reserve(sizes_.size());
+    for (const auto& size : sizes_) options.push_back(size.name);
+    optionPopup_.show(StrId::STR_SIZE, options, currentSizeIndex_, [this](const int idx) {
+      if (idx != currentSizeIndex_) applySize(idx);
+    });
+    requestUpdate();
+  } else if (index < LAYOUT_FIRST_ROW + visibleLayoutRows(nullptr)) {
+    confirmLayoutRow(static_cast<int>(layoutRowAt(index - LAYOUT_FIRST_ROW)));
+  } else {
+    confirmStyleRow(static_cast<int>(styleRowAt(index - LAYOUT_FIRST_ROW - visibleLayoutRows(nullptr))));
   }
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    // Confirm on the tab band is TabRing's (handleTabBarInput runs first).
-    if (ringPos() != 0) activateRow(ringPos() - 1);
-    return true;
-  }
-
-  return false;
 }
 
 void TextSettingsActivity::buildScreen(UiScreen& screen) {
   const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  const int tabTop = afterHeader + previewHeight;
+  const int listTop = afterHeader + previewHeight + metrics_.verticalSpacing;
   const int rightInset = renderer.getScreenWidth() - (safeArea.x + safeArea.width);
   const int bottomInset = renderer.getScreenHeight() - (safeArea.y + safeArea.height);
-  screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(tabTop), static_cast<int16_t>(rightInset),
+  screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(listTop), static_cast<int16_t>(rightInset),
                                                 static_cast<int16_t>(bottomInset), static_cast<int16_t>(safeArea.x)});
 
-  buildTabBar(screen);
-
-  // rowItems_ (label/actionValue) was built by rebuildRowItems() when the tab
-  // was last switched; only the live value text needs refreshing here, by
-  // assigning into the existing rowValues_ strings (no vector growth) rather
-  // than building a new items/values vector on every render.
+  // rowItems_ was built by rebuildRowItems(); only the live value text is refreshed here, by
+  // assigning into the existing rowValues_ strings (no vector growth).
   const int count = listCount();
-  const int pr = profileRows();
-  if (pr > 0) {
-    rowItems_[0].toggle = false;
-    rowValues_[0] = editingCjk_ ? tr(STR_TEXT_PROFILE_CJK) : tr(STR_TEXT_PROFILE_LATIN);
-    rowItems_[0].value = rowValues_[0].c_str();
-  }
-  for (int i = pr; i < count; i++) {
+  const int layoutCount = visibleLayoutRows(nullptr);
+  for (int i = 0; i < count; i++) {
     bool checked = false;
     rowItems_[i].toggle = false;
-    // Cleared up front so a row that sets no value can't keep the previous tab's text.
     rowValues_[i].clear();
-    switch (tab_) {
-      case Tab::Family:
-        rowValues_[i] = (i == currentFamilyIndex_) ? tr(STR_SELECTED) : "";
-        break;
-      case Tab::Size:
-        rowValues_[i] = (i - pr == currentSizeIndex_) ? tr(STR_SELECTED) : "";
-        break;
-      case Tab::Layout: {
-        // Visible position -> LayoutRow, as the labels do (see visibleLayoutRows()).
-        const int layoutRow = static_cast<int>(layoutRowAt(i - pr));
-        rowItems_[i].toggle = layoutRowIsSwitch(layoutRow, checked);
-        if (!rowItems_[i].toggle) rowValues_[i] = layoutValueText(layoutRow);
-        break;
+    if (i == FONT_ROW) {
+      if (currentFamilyIndex_ < static_cast<int>(fonts_.size())) {
+        rowValues_[i] = fonts_[currentFamilyIndex_].displayName();
       }
-      case Tab::Style:
-        // Every visible Style row is on/off, so this tab is all switches and has no value text.
-        rowItems_[i].toggle = styleRowIsSwitch(static_cast<int>(styleRowAt(i)), checked);
-        break;
-      default:
-        break;
+    } else if (i == SIZE_ROW) {
+      if (currentSizeIndex_ < static_cast<int>(sizes_.size())) rowValues_[i] = sizes_[currentSizeIndex_].name;
+    } else if (i < LAYOUT_FIRST_ROW + layoutCount) {
+      const int layoutRow = static_cast<int>(layoutRowAt(i - LAYOUT_FIRST_ROW));
+      rowItems_[i].toggle = layoutRowIsSwitch(layoutRow, checked);
+      if (!rowItems_[i].toggle) rowValues_[i] = layoutValueText(layoutRow);
+    } else {
+      rowItems_[i].toggle = styleRowIsSwitch(static_cast<int>(styleRowAt(i - LAYOUT_FIRST_ROW - layoutCount)), checked);
     }
     if (rowItems_[i].toggle) rowItems_[i].toggleChecked = checked;
     rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
@@ -348,61 +331,49 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
   applySwitchStyle(props);
   // Titles match the value's font size (smallText) so both sides of a row
   // read as one unit; labels that still don't fit wrap onto a second line.
-  // maxLines=2 also marks the style explicitly set (see SettingsActivity).
   props.labelText = screen.theme().smallText;
   props.labelText.maxLines = 2;
-  syncTabListViewport(screen, props);
+  props.headerText = screen.theme().smallText;
+  props.headerText.font = fui::GfxRendererTarget::FONT_LABEL;  // the 8 pt UI font
+  props.headerUnderline = 0;
+  syncListViewport(screen, props);
   screen.list(props);
 }
 
 const char* TextSettingsActivity::confirmLabelText() const {
-  if (ringPos() == 0) {
-    // Confirm on the tab bar advances to the next tab.
-    return I18N.get(TAB_NAME_IDS[(static_cast<int>(tab_) + 1) % tabCount()]);
+  const int index = nav.selected;
+  const int layoutCount = visibleLayoutRows(nullptr);
+  if (index >= LAYOUT_FIRST_ROW + layoutCount) return tr(STR_TOGGLE);
+  if (index >= LAYOUT_FIRST_ROW) {
+    // The two booleans toggle in place; every other row opens a picker.
+    const LayoutRow row = layoutRowAt(index - LAYOUT_FIRST_ROW);
+    if (row == LayoutRow::ParaSpacing || row == LayoutRow::BookSideMargins) return tr(STR_TOGGLE);
   }
-  if (ringPos() - 1 < profileRows()) return tr(STR_SELECT);
-  switch (tab_) {
-    case Tab::Layout: {
-      // The two booleans toggle in place; every other row opens a picker.
-      const LayoutRow row = layoutRowAt(ringPos() - 1 - profileRows());
-      return (row == LayoutRow::ParaSpacing || row == LayoutRow::BookSideMargins) ? tr(STR_TOGGLE) : tr(STR_SELECT);
-    }
-    case Tab::Style:
-      return tr(STR_TOGGLE);
-    default:
-      return tr(STR_SELECT);
-  }
+  return tr(STR_SELECT);
 }
 
 void TextSettingsActivity::drawChrome() {
-  GUI.drawHeader(renderer, UITheme::getInstance().getHeaderRect(renderer, true, false), tr(STR_TEXT_SETTINGS));
+  GUI.drawHeader(renderer, UITheme::getInstance().getHeaderRect(renderer, true, false), textprofile::title(profile_));
 
-  const char* familyName = (currentFamilyIndex_ >= 0 && currentFamilyIndex_ < static_cast<int>(fonts_.size()))
-                               ? fonts_[currentFamilyIndex_].displayName()
-                               : "";
-  const char* sizeName = (currentSizeIndex_ >= 0 && currentSizeIndex_ < static_cast<int>(sizes_.size()))
-                             ? sizes_[currentSizeIndex_].name.c_str()
-                             : "";
-  // The two inputs are independent: a Japanese book read horizontally is (Japanese, false), and
-  // the reader passes its script and useVerticalText() separately. A forced-vertical book with no
-  // CJK tag previews in the Japanese face, the same face the page renders with.
-  // cppcheck-suppress knownConditionTrueFalse
-  const CjkScript previewScript = bookScript_ != CjkScript::None   ? bookScript_
-                                  : (verticalText_ || editingCjk_) ? CjkScript::Japanese
-                                                                   : CjkScript::None;
-  char labelBuf[128];
-  snprintf(labelBuf, sizeof(labelBuf), "%s \"%s, %s\"", tr(STR_PREVIEW), familyName, sizeName);
+  // The two inputs are independent: a Japanese book read horizontally is (Japanese, false). A
+  // forced-vertical book with no CJK tag previews in the Japanese face, the face the page renders with.
+  const CjkScript previewScript =
+      bookScript_ != CjkScript::None ? bookScript_ : (verticalText_ ? CjkScript::Japanese : CjkScript::None);
   const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  const Rect previewBounds{safeArea.x, afterHeader, safeArea.width, previewHeight};
+  const int side = metrics_.contentSidePadding;
+  const Rect box{safeArea.x + side, afterHeader, safeArea.width - 2 * side, previewHeight};
+  renderer.drawRect(box.x, box.y, box.width, box.height, true);
+  // Inside the 1px border, so the sample cannot draw over it.
+  const Rect previewBounds{box.x + 1, box.y + 1, box.width - 2, box.height - 2};
   const auto [savedX, savedY, savedWidth, savedHeight] = renderer.getClipRect();
   const int clipLeft = std::max(previewBounds.x, savedX);
   const int clipTop = std::max(previewBounds.y, savedY);
   const int clipRight = std::min(previewBounds.x + previewBounds.width, savedX + savedWidth);
   const int clipBottom = std::min(previewBounds.y + previewBounds.height, savedY + savedHeight);
   renderer.setClipRect(clipLeft, clipTop, std::max(0, clipRight - clipLeft), std::max(0, clipBottom - clipTop));
-  textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing,
-                              previewBounds, labelBuf, sdFontSystem.effectiveReaderFontId(previewScript),
-                              previewScript);
+  textsettings::renderPreview(renderer, previewLayout_, PREVIEW_INNER_PADDING, metrics_.verticalSpacing, previewBounds,
+                              nullptr, sdFontSystem.effectiveReaderFontId(previewScript),
+                              previewSample(profile_, previewScript));
   renderer.setClipRect(savedX, savedY, savedWidth, savedHeight);
 }
 
@@ -445,49 +416,8 @@ void TextSettingsActivity::applyFamily(int listIndex) {
   if (currentFamilyIndex_ != listIndex) return;  // switch failed — keep the old size list
 
   // The new family ships its own set of point sizes, and ensureLoaded() may have
-  // snapped the selection into it, so the Size tab's list and its nav position
-  // both have to be rebuilt.
+  // snapped the selection into it.
   rebuildSizeList();
-  tabNavs[static_cast<int>(Tab::Size)].selected = currentSizeIndex_ + 1 + (profileChoice_ ? 1 : 0);
-}
-
-void TextSettingsActivity::activateRow(int row) {
-  if (row < profileRows()) {
-    toggleProfile();
-    return;
-  }
-  row -= profileRows();
-  switch (tab_) {
-    case Tab::Family:
-      if (isManageFontsRow(row)) {
-        startActivityForResult(
-            std::make_unique<FontDownloadActivity>(renderer, mappedInput), [this](const ActivityResult&) {
-              // Fonts may have been installed or deleted while we were away.
-              rebuildFamilyList();
-              currentFamilyIndex_ = findCurrentFontIndex(fonts_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
-              rebuildSizeList();
-              requestUpdate();
-            });
-      } else if (row != currentFamilyIndex_) {
-        applyFamily(row);
-        requestUpdate();
-      }
-      break;
-    case Tab::Size:
-      if (row != currentSizeIndex_) {
-        applySize(row);
-        requestUpdate();
-      }
-      break;
-    case Tab::Layout:
-      confirmLayoutRow(static_cast<int>(layoutRowAt(row)));
-      break;
-    case Tab::Style:
-      confirmStyleRow(static_cast<int>(styleRowAt(row)));
-      break;
-    default:
-      break;
-  }
 }
 
 // Same RenderLock rationale as applyFamily(): a size change reloads the SD font
@@ -651,34 +581,7 @@ void TextSettingsActivity::confirmStyleRow(int row) {
   requestUpdate();
 }
 
-void TextSettingsActivity::switchTab(const int direction) {
-  const bool onTabBar = ringPos() == 0;
-  const int count = tabCount();
-  tab_ = static_cast<Tab>((static_cast<int>(tab_) + direction + count) % count);
-  rebuildRowItems();
-  auto& n = activeNav();
-  if (onTabBar) n.selected = 0;
-  n.followOnBuild = true;  // pull the new tab's viewport to its remembered selection
-  requestUpdate();
-}
-
-int TextSettingsActivity::listCount() const {
-  switch (tab_) {
-    case Tab::Family:
-      return static_cast<int>(fonts_.size());
-    case Tab::Size:
-      return static_cast<int>(sizes_.size()) + profileRows();
-    case Tab::Layout:
-      return visibleLayoutRows(nullptr) + profileRows();
-    case Tab::Style:
-      // CJK books keep Embedded Style and Anti-Aliasing; vertical text renders both too.
-      return cjkBook_ ? 2 : static_cast<int>(StyleRow::Count);
-    default:
-      return 0;
-  }
-}
-
-int TextSettingsActivity::tabCount() const { return static_cast<int>(Tab::Count); }
+int TextSettingsActivity::listCount() const { return LAYOUT_FIRST_ROW + visibleLayoutRows(nullptr) + styleRowCount(); }
 
 // Only the rows the book's layout engine reads, so a hidden row never keeps changing the page.
 // Vertical text uses line spacing, character spacing (the step down a column) and the screen
@@ -702,4 +605,60 @@ TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int visi
 TextSettingsActivity::StyleRow TextSettingsActivity::styleRowAt(const int visibleIndex) const {
   if (!cjkBook_) return static_cast<StyleRow>(visibleIndex);
   return visibleIndex == 0 ? StyleRow::EmbeddedStyle : StyleRow::AntiAliasing;
+}
+
+// --- TextProfileMenuActivity ---
+
+namespace {
+// Menu order; TextProfileId is the storage order.
+constexpr CrossPointSettings::TextProfileId MENU_PROFILES[] = {
+    CrossPointSettings::TextProfileId::Japanese, CrossPointSettings::TextProfileId::TraditionalChinese,
+    CrossPointSettings::TextProfileId::SimplifiedChinese, CrossPointSettings::TextProfileId::Korean,
+    CrossPointSettings::TextProfileId::Latin};
+}  // namespace
+
+int TextProfileMenuActivity::listCount() const { return static_cast<int>(std::size(MENU_PROFILES)); }
+
+const char* TextProfileMenuActivity::headerTitle() const { return tr(STR_TEXT_SETTINGS); }
+
+void TextProfileMenuActivity::buildScreen(UiScreen& screen) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  // Content: the safe area minus the header band GUI.drawHeader paints.
+  screen.setContentMarginFromScreen(fui::Insets{
+      static_cast<int16_t>(safe.y + metrics.topPadding + metrics.headerHeight),
+      static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
+      static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height)), static_cast<int16_t>(safe.x)});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  if (items_.empty()) {
+    items_.reserve(std::size(MENU_PROFILES));
+    for (int i = 0; i < listCount(); i++) {
+      fui::ListItem item;
+      item.label = textprofile::title(MENU_PROFILES[i]);
+      item.actionValue = static_cast<int16_t>(i);
+      items_.push_back(item);
+    }
+  }
+  fui::ListProps props;
+  props.items = items_.data();
+  props.count = static_cast<uint16_t>(items_.size());
+  props.action = ACTION_ROW;
+  props.inputMask = fui::InputTouch;
+  props.labelText = screen.theme().smallText;
+  props.labelText.maxLines = 2;
+  syncListViewport(screen, props);
+  screen.list(props);
+}
+
+void TextProfileMenuActivity::activateIndex(const int index) {
+  app.clearTapFlash();
+  const auto profile = MENU_PROFILES[index];
+  startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
+                                                                profile, textprofile::script(profile),
+                                                                /*verticalText=*/false, /*editStoredProfile=*/true),
+                         [this](const ActivityResult&) {
+                           // Not every row there saves, and the profile went back only in memory.
+                           SETTINGS.saveToFile();
+                           requestUpdate();
+                         });
 }

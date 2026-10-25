@@ -461,17 +461,8 @@ void SettingsActivity::toggleSelectedSetting() {
                                });
         break;
       case SettingAction::TextSettings:
-        // No book here, so the Size and Layout tabs offer Edit For: the Latin or the CJK profile.
-        startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                                      TextSettingsActivity::Tab::Family,
-                                                                      CjkScript::None, /*verticalText=*/false,
-                                                                      /*profileChoice=*/true),
-                               [this](const ActivityResult&) {
-                                 // Not every row there saves, and leaving with the CJK profile on
-                                 // screen swaps the profiles back only in memory.
-                                 SETTINGS.saveToFile();
-                                 rebuildSettings();
-                               });
+        startActivityForResult(std::make_unique<TextProfileMenuActivity>(renderer, mappedInput),
+                               [this](const ActivityResult&) { rebuildSettings(); });
         break;
       case SettingAction::Language:
         // Row labels are translated once in rebuildRowItems() and don't

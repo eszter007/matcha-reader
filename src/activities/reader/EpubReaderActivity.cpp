@@ -80,6 +80,7 @@
 #include "util/DictionaryRegistry.h"
 #include "util/PluginEvents.h"
 #include "util/ScreenshotUtil.h"
+#include "util/TextProfiles.h"
 
 namespace {
 // The toolbar's page snapshot is a convenience (closing the toolbar redraws without re-rendering);
@@ -328,39 +329,47 @@ EpubReaderActivity::ReaderPrefs EpubReaderActivity::capturePrefsFromSettings() {
   return p;
 }
 
-// The language is known only now, after the per-book prefs went in: a CJK book switches the four
-// profile settings to the CJK profile, keeping what the book pinned for itself (size, line spacing).
+// The language is known only now, after the per-book prefs went in: a book in another script
+// switches to its profile, keeping what the book pinned for itself (font, size, line spacing).
 void EpubReaderActivity::applyBookTextProfile() {
   latinTextProfile_ = SETTINGS.liveTextProfile();
   latinTextProfile_.fontPointSize = globalPrefsSnapshot.fontPointSize;
   latinTextProfile_.lineSpacing = globalPrefsSnapshot.lineSpacing;
-  textProfileCjk_ = isCjkBook();
-  if (textProfileCjk_) {
-    CrossPointSettings::TextProfile profile = SETTINGS.cjkTextProfile();
+  latinTextProfile_.fontFamily = globalPrefsSnapshot.fontFamily;
+  memcpy(latinTextProfile_.sdFontFamilyName, globalPrefsSnapshot.sdFontFamilyName,
+         sizeof(latinTextProfile_.sdFontFamilyName));
+  bookTextProfile_ = textprofile::forBook(bookScript(), effectiveLanguage());
+  if (bookTextProfile_ != CrossPointSettings::TextProfileId::Latin) {
+    CrossPointSettings::TextProfile profile = SETTINGS.textProfile(bookTextProfile_);
     if (bookPrefsApplied_) {
-      profile.fontPointSize = SETTINGS.fontPointSize;
-      profile.lineSpacing = SETTINGS.lineSpacing;
+      const auto pinned = SETTINGS.liveTextProfile();
+      profile.fontPointSize = pinned.fontPointSize;
+      profile.lineSpacing = pinned.lineSpacing;
+      profile.fontFamily = pinned.fontFamily;
+      memcpy(profile.sdFontFamilyName, pinned.sdFontFamilyName, sizeof(profile.sdFontFamilyName));
     }
     SETTINGS.setLiveTextProfile(profile);
     sdFontSystem.ensureLoaded(renderer);
-    LOG_DBG("ERS", "CJK text profile");
+    LOG_DBG("ERS", "Text profile %d", static_cast<int>(bookTextProfile_));
   }
   openTextProfile_ = SETTINGS.liveTextProfile();
 }
 
 // Whatever the reader changed while the book was open becomes its profile's value; values the
-// book merely pinned for itself do not.
+// book merely pinned for itself do not. The font stays the book's own: a profile's font is set in
+// Settings.
 void EpubReaderActivity::storeBookTextProfile() {
   const auto now = SETTINGS.liveTextProfile();
-  CrossPointSettings::TextProfile profile = textProfileCjk_ ? SETTINGS.cjkTextProfile() : latinTextProfile_;
+  const bool latin = bookTextProfile_ == CrossPointSettings::TextProfileId::Latin;
+  CrossPointSettings::TextProfile profile = latin ? latinTextProfile_ : SETTINGS.textProfile(bookTextProfile_);
   if (now.fontPointSize != openTextProfile_.fontPointSize) profile.fontPointSize = now.fontPointSize;
   if (now.lineSpacing != openTextProfile_.lineSpacing) profile.lineSpacing = now.lineSpacing;
   if (now.characterSpacing != openTextProfile_.characterSpacing) profile.characterSpacing = now.characterSpacing;
   if (now.wordSpacing != openTextProfile_.wordSpacing) profile.wordSpacing = now.wordSpacing;
-  if (textProfileCjk_) {
-    SETTINGS.setCjkTextProfile(profile);
-  } else {
+  if (latin) {
     latinTextProfile_ = profile;
+  } else {
+    SETTINGS.setTextProfile(bookTextProfile_, profile);
   }
 }
 
@@ -613,7 +622,7 @@ void EpubReaderActivity::onReaderExit() {
       saveBookPrefs(current);
     }
     storeBookTextProfile();
-    if (!(current == globalPrefsSnapshot) || textProfileCjk_) {
+    if (!(current == globalPrefsSnapshot) || bookTextProfile_ != CrossPointSettings::TextProfileId::Latin) {
       applyPrefsToSettings(globalPrefsSnapshot);
       SETTINGS.setLiveTextProfile(latinTextProfile_);
       SETTINGS.saveToFile();
@@ -6649,8 +6658,8 @@ void EpubReaderActivity::handleOverlayInput() {
         }
         dropSectionsKeepingPosition();  // room for the picker; reloaded on return
         startActivityForResult(
-            std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                   TextSettingsActivity::Tab::Family, bookScript(), useVerticalText()),
+            std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(), bookTextProfile_,
+                                                   bookScript(), useVerticalText()),
             [this](const ActivityResult&) {
               applyReaderTextSettings();
               overlay = Overlay::Text;  // back to the Text panel

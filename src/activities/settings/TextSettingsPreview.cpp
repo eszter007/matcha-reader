@@ -28,21 +28,6 @@ CssTextAlign toCssAlign(uint8_t align) {
   return static_cast<CssTextAlign>(align);
 }
 
-// Chinese faces carry no kana, so a Chinese book gets a Chinese sample in its own script.
-const char* sampleText(const CjkScript script) {
-  switch (script) {
-    case CjkScript::Japanese:
-      return I18N.get(StrId::STR_FONT_PREVIEW_TEXT_CJK);
-    case CjkScript::SimplifiedChinese:
-      return I18N.get(StrId::STR_FONT_PREVIEW_TEXT_ZH_HANS);
-    case CjkScript::TraditionalChinese:
-      return I18N.get(StrId::STR_FONT_PREVIEW_TEXT_ZH_HANT);
-    case CjkScript::None:
-      break;
-  }
-  return I18N.get(StrId::STR_FONT_PREVIEW_TEXT);
-}
-
 // Lay the sample text out through the reader engine into layout.lines
 void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, int textWidth, const char* text) {
   layout.lines.clear();
@@ -77,18 +62,20 @@ void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, in
 }  // namespace
 
 void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, Rect bounds,
-                   const char* caption, const int fontId, const CjkScript sampleScript) {
+                   const char* caption, const int fontId, const char* sample) {
   const int top = bounds.y;
   const int height = bounds.height;
   const int left = bounds.x + previewPadding;
   const int width = bounds.width - (previewPadding * 2);
   if (width <= 0 || height <= 0) return;
 
-  const int labelH = renderer.getTextHeight(UI_10_FONT_ID);
-  const int labelReserved = labelH + labelGap + previewPadding;
-
-  const int labelY = top + height - previewPadding - labelH;
-  renderer.drawText(UI_10_FONT_ID, left, labelY, caption);
+  // No caption: the sample fills the pane down to its bottom padding.
+  int labelReserved = previewPadding;
+  if (caption && caption[0] != '\0') {
+    const int labelH = renderer.getTextHeight(UI_10_FONT_ID);
+    labelReserved = labelH + labelGap + previewPadding;
+    renderer.drawText(UI_10_FONT_ID, left, top + height - previewPadding - labelH, caption);
+  }
 
   if (fontId == 0) return;
 
@@ -104,11 +91,10 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
   const int paragraphGap = SETTINGS.extraParagraphSpacing ? lineAdvance / 2 : 0;
 
   // Re-lay-out (and re-prewarm glyphs) only when a layout-affecting setting or the
-  // geometry changed; else reuse the cache. The prewarm inputs are (fontId, sample text
-  // <-sampleScript, styleMask<-focusReading), all of which are key fields, so a matching
-  // key means an identical prewarm call. This relies on nothing else evicting the SD
-  // glyph cache while this activity is up — true today: the only evictor is
-  // FontCacheManager::PrewarmScope, used solely by the reader/dictionary activities.
+  // geometry changed; else reuse the cache. The prewarm inputs are (fontId, sample, styleMask<-focusReading), all of
+  // which are key fields, so a matching key means an identical prewarm call. This relies on nothing else evicting the
+  // SD glyph cache while this activity is up — true today: the only evictor is FontCacheManager::PrewarmScope, used
+  // solely by the reader/dictionary activities.
   const PreviewKey key{.fontId = fontId,
                        .fontPointSize = SETTINGS.fontPointSize,
                        .screenMargin = SETTINGS.screenMargin,
@@ -121,12 +107,12 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
                        .wordSpacingPercent = SETTINGS.wordSpacing,
                        .focusReading = SETTINGS.focusReadingEnabled != 0,
                        .hyphenation = SETTINGS.hyphenationEnabled != 0,
-                       .sampleScript = sampleScript};
+                       .sample = sample};
   if (key != layout.key) {
     if (auto* fcm = renderer.getFontCacheManager()) {
-      fcm->prewarmCache(fontId, sampleText(sampleScript), SETTINGS.focusReadingEnabled ? 0x03 : 0x01);
+      fcm->prewarmCache(fontId, sample, SETTINGS.focusReadingEnabled ? 0x03 : 0x01);
     }
-    relayout(layout, renderer, fontId, textWidth, sampleText(sampleScript));
+    relayout(layout, renderer, fontId, textWidth, sample);
     layout.key = key;
   }
 
