@@ -71,7 +71,7 @@ class ReadingStatsStore {
 
   bool loadMainFile(size_t pendingRecords);
   bool mergeDownloadFile();
-  bool mergeBookDownload();
+  bool mergeBookDownload(const std::string& list);
   bool replayJournal();
 
  public:

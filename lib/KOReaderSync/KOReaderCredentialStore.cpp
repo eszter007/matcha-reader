@@ -30,6 +30,7 @@ void KOReaderCredentialStore::toJson(JsonDocument& doc) const {
   doc["syncBehavior"] = static_cast<uint8_t>(getSyncBehavior());
   doc["statsUploadedDay"] = statsUploadedDay;
   doc["statsBooksDay"] = statsBooksDay;
+  doc["statsBooksSince"] = statsBooksSince;
   doc["statsAccount"] = statsAccount;
   JsonArray headers = doc["headers"].to<JsonArray>();
   for (const auto& header : customHeaders) {
@@ -90,6 +91,7 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
   setSyncClippings(doc["syncClippings"] | false);
   statsUploadedDay = doc["statsUploadedDay"] | 0;
   statsBooksDay = doc["statsBooksDay"] | 0;
+  statsBooksSince = doc["statsBooksSince"] | 0u;
   statsAccount = doc["statsAccount"] | "";
 
   size_t headerIndex = 0;
@@ -158,13 +160,14 @@ int32_t KOReaderCredentialStore::getStatsBooksDay() const {
   return statsAccount == username + "@" + getBaseUrl() ? statsBooksDay : 0;
 }
 
-// Both markers belong to statsAccount: moving to another account restarts both.
+// The markers belong to statsAccount: moving to another account restarts them all.
 void KOReaderCredentialStore::stampStatsAccount() {
   const std::string account = username + "@" + getBaseUrl();
   if (statsAccount == account) return;
   statsAccount = account;
   statsUploadedDay = 0;
   statsBooksDay = 0;
+  statsBooksSince = 0;
 }
 
 void KOReaderCredentialStore::setStatsUploadedDay(const int32_t day) {
@@ -175,6 +178,15 @@ void KOReaderCredentialStore::setStatsUploadedDay(const int32_t day) {
 void KOReaderCredentialStore::setStatsBooksDay(const int32_t day) {
   stampStatsAccount();
   statsBooksDay = day;
+}
+
+uint32_t KOReaderCredentialStore::getStatsBooksSince() const {
+  return statsAccount == username + "@" + getBaseUrl() ? statsBooksSince : 0;
+}
+
+void KOReaderCredentialStore::setStatsBooksSince(const uint32_t until) {
+  stampStatsAccount();
+  statsBooksSince = until;
 }
 
 void KOReaderCredentialStore::setServerUrl(const std::string& url) {

@@ -52,6 +52,8 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   int32_t statsUploadedDay = 0;
   // Newest ReadingStatsStore::BookReading::lastReadDay whose book stats reached the server.
   int32_t statsBooksDay = 0;
+  // The server time of the last complete per-book download (its `until`), for fetching only what changed.
+  uint32_t statsBooksSince = 0;
   std::string statsAccount;
   void stampStatsAccount();
 
@@ -115,6 +117,8 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   // Same, for per-book stats; 0 sends every book.
   int32_t getStatsBooksDay() const;
   void setStatsBooksDay(int32_t day);
+  uint32_t getStatsBooksSince() const;
+  void setStatsBooksSince(uint32_t until);
 
   // Sync behavior
   void setSyncBehavior(KOReaderSyncBehavior behavior);

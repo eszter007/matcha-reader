@@ -165,9 +165,11 @@ void bookList() {
   assert(log.calls == "begin " + kokoro + " 1 4 ja;day 10-23 15;end;begin " + old + " 0 2 ;end;");
 
   BookListParser last(sink);
-  const std::string lastPage = R"({"items":[],"next":null})";
+  const std::string lastPage = R"({"items":[],"next":null,"until":1761300100})";
   last.feed(lastPage.data(), lastPage.size());
   assert(last.complete() && last.next()[0] == '\0');
+  assert(last.until() == 1761300100u);
+  assert(parser.until() == 0);  // a server without it
 }
 }  // namespace
 

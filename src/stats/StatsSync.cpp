@@ -105,8 +105,13 @@ bool downloadBooks() {
   auto http = makeUniqueNoThrow<freeink::SecureHttpClient>();
   if (!http || !heapForTls()) return false;
   http->setInsecure();
+  // Only what changed since the last download, when the list it has is whole and merged; else all of it.
+  const uint32_t since =
+      Storage.exists(bookdownload::path().c_str()) && !Storage.exists(bookdownload::newPath().c_str())
+          ? KOREADER_STORE.getStatsBooksSince()
+          : 0;
   bookdownload::Writer writer;
-  if (!writer.begin()) return false;
+  if (!writer.begin(bookdownload::newPath(), since > 0)) return false;
   const BookListParser::Sink sink{
       &writer,
       [](void* w, const uint32_t hash, const bool finished, const uint32_t sessions, const char* language) {
@@ -116,12 +121,13 @@ bool downloadBooks() {
       [](void* w) { return static_cast<bookdownload::Writer*>(w)->endBook(); }};
   std::string cursor;
   int books = 0;
+  uint32_t until = 0;
   for (int page = 0; page < MAX_BOOK_PAGES; page++) {
     // Heap, not stack: the parser holds a 2 KB token buffer. A fresh one per page.
     auto parser = makeUniqueNoThrow<BookListParser>(sink);
-    char path[96];
-    snprintf(path, sizeof(path), "/api/v1/stats/books?device_id=%s&limit=%d%s", statsSync::DEVICE_ID, BOOKS_PER_PAGE,
-             cursor.empty() ? "" : "&cursor=");
+    char path[128];
+    snprintf(path, sizeof(path), "/api/v1/stats/books?device_id=%s&limit=%d&since=%lu%s", statsSync::DEVICE_ID,
+             BOOKS_PER_PAGE, static_cast<unsigned long>(since), cursor.empty() ? "" : "&cursor=");
     if (!parser || !begin(*http, (std::string(path) + cursor).c_str())) {
       writer.abort();
       return false;
@@ -141,6 +147,8 @@ bool downloadBooks() {
       return false;
     }
     books += parser->books();
+    // The first page's time: anything uploaded while the rest were read comes again next time.
+    if (page == 0) until = parser->until();
     cursor = parser->next();
     if (cursor.empty()) break;
   }
@@ -149,7 +157,9 @@ bool downloadBooks() {
     LOG_ERR("STATS", "Downloaded book stats not saved");
     return false;
   }
-  LOG_INF("STATS", "Downloaded stats of %d books", books);
+  KOREADER_STORE.setStatsBooksSince(until);
+  KOREADER_STORE.saveToFile();
+  LOG_INF("STATS", "Downloaded stats of %d books%s", books, since > 0 ? " changed since the last refresh" : "");
   return true;
 }
 

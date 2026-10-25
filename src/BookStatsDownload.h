@@ -12,8 +12,9 @@
 // card to take back when they are next loaded (BookStats::load). Keyed by filename, the one name a book
 // keeps across devices; books not on the card are never written anywhere else.
 //
-// The download is written as a ".new" file; the next boot folds its languages and finished books into the
-// reading stats (ReadingStatsStore::compact()) and renames it to the file BookStats reads.
+// The download is written as a ".new" file, either the whole list or only the books changed since the last
+// one. The next boot combines it with the list it has (combine()), folds the result's languages and finished
+// books into the reading stats (ReadingStatsStore::compact()) and keeps it as the file BookStats reads.
 namespace bookdownload {
 
 constexpr size_t MAX_LANGUAGE = 15;
@@ -31,11 +32,11 @@ inline uint32_t nameHash(const std::string& pathOrName) { return bookNameHash(pa
 std::string newPath();  // written by the download, read once at boot
 std::string path();     // read by BookStats::load
 
-// Streams books into newPath(): beginBook(), the book's days in date order, endBook(); then commit().
-// A failed write leaves the previous files as they are.
+// Streams books into `file`: beginBook(), the book's days in date order, endBook(); then commit().
+// `increment`: only the books changed since the last download. A failed write leaves the previous files.
 class Writer {
  public:
-  bool begin();
+  bool begin(const std::string& file, bool increment);
   bool beginBook(uint32_t nameHash, bool finished, uint32_t sessions, const char* language);
   bool addDay(const BookDay& day);
   bool endBook();
@@ -44,6 +45,7 @@ class Writer {
 
  private:
   HalFile file;
+  std::string target;
   size_t countAt = 0;
   uint16_t count = 0;
   bool ok = false;
@@ -56,5 +58,13 @@ bool forEach(const std::string& file, std::vector<BookDay>& days, void* ctx,
 
 // The book saved under `nameHash` in path(), with its days. False when there is none.
 bool find(uint32_t nameHash, Book& book, std::vector<BookDay>& days);
+
+// The whole list once newPath() is taken in: newPath() itself when it is a whole list, else a temporary
+// file of path()'s books with the changed ones replaced. False when it cannot be built now.
+bool combine(std::string& combined);
+// Keeps `combined` as path() and drops newPath().
+bool keep(const std::string& combined);
+// Drops a combine() result that is not kept.
+void discard(const std::string& combined);
 
 }  // namespace bookdownload

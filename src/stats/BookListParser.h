@@ -28,10 +28,12 @@ class BookListParser {
   bool complete() const { return finished && sinkOk && !parser.hasError(); }
   // The cursor for the next page; empty on the last one.
   const char* next() const { return nextCursor; }
+  // The server's time for this answer, to pass as `since` next time; 0 from a server without it.
+  uint32_t until() const { return untilTime; }
   int books() const { return bookCount; }
 
  private:
-  enum class Key : uint8_t { NONE, FILENAME, LANGUAGE, SESSIONS, COMPLETED, DAILY, DATE, SECONDS, NEXT };
+  enum class Key : uint8_t { NONE, FILENAME, LANGUAGE, SESSIONS, COMPLETED, DAILY, DATE, SECONDS, NEXT, UNTIL };
   static constexpr uint8_t ROOT_DEPTH = 1;
   static constexpr uint8_t ITEM_DEPTH = 3;
   static constexpr uint8_t STATS_DEPTH = 4;
@@ -57,6 +59,7 @@ class BookListParser {
   bool sinkOk = true;
   int bookCount = 0;
   char nextCursor[192] = {};
+  uint32_t untilTime = 0;
   // The item being read.
   uint32_t nameHash = 0;
   bool hasName = false;

@@ -45,6 +45,7 @@ void BookListParser::onKey(void* ctx, const char* k, const size_t len) {
   self->key = Key::NONE;
   const uint8_t d = self->depth;
   if (d == ROOT_DEPTH && equals(k, len, "next")) self->key = Key::NEXT;
+  if (d == ROOT_DEPTH && equals(k, len, "until")) self->key = Key::UNTIL;
   if (d == ITEM_DEPTH && equals(k, len, "filename")) self->key = Key::FILENAME;
   if (d == ITEM_DEPTH && equals(k, len, "language")) self->key = Key::LANGUAGE;
   if (d == STATS_DEPTH && equals(k, len, "sessions")) self->key = Key::SESSIONS;
@@ -86,6 +87,7 @@ void BookListParser::onNumber(void* ctx, const char* value, const size_t len) {
   auto* self = static_cast<BookListParser*>(ctx);
   if (self->key == Key::SESSIONS) self->sessions = number(value, len);
   if (self->key == Key::SECONDS) self->seconds = number(value, len);
+  if (self->key == Key::UNTIL) self->untilTime = number(value, len);
   self->key = Key::NONE;
 }
 

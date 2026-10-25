@@ -1104,11 +1104,12 @@ bool ReadingStatsStore::compact() {
   bool ok = loadFromFile();
   bool downloadIntact = true;
   bool bookDownloadMerged = false;
+  std::string bookList;
   if (ok) {
     foldedJournalBytes = bytes;
     foldedJournalHash = hash;
     if (hasDownload) downloadIntact = mergeDownloadFile();
-    if (hasBookDownload) bookDownloadMerged = mergeBookDownload();
+    if (hasBookDownload && bookdownload::combine(bookList)) bookDownloadMerged = mergeBookDownload(bookList);
     ok = saveToFile();
   }
   if (ok && hasJournal) Storage.remove(journalPath().c_str());
@@ -1118,7 +1119,11 @@ bool ReadingStatsStore::compact() {
     Storage.remove(downloadPath().c_str());
   }
   // Folded in: from now on it is only the per-book copy BookStats::load() reads.
-  if (ok && bookDownloadMerged) Storage.replaceFile(bookdownload::newPath().c_str(), bookdownload::path().c_str());
+  if (ok && bookDownloadMerged) {
+    bookdownload::keep(bookList);
+  } else if (!bookList.empty()) {
+    bookdownload::discard(bookList);  // the download stays for the next boot
+  }
   if (!ok) LOG_ERR("STAT", "Stats journal not folded in; kept for the next try");
   release();
   return ok;
@@ -1145,9 +1150,10 @@ bool ReadingStatsStore::saveDownload(const std::vector<DailyReading>& downloaded
   return Storage.replaceFile(tmpPath.c_str(), downloadPath().c_str());
 }
 
-// The server's per-book download, for what the reading stats keep across books: minutes per language
+// The server's per-book list (the whole of it, see bookdownload::combine()), for what the reading stats keep
+// across books: minutes per language
 // per day (the sum of that language's books) and books finished that this card never finished.
-bool ReadingStatsStore::mergeBookDownload() {
+bool ReadingStatsStore::mergeBookDownload(const std::string& list) {
   struct LanguageDay {
     char language[4];
     int32_t epoch;
@@ -1166,7 +1172,7 @@ bool ReadingStatsStore::mergeBookDownload() {
   }
   ctx.days.reserve(ctx.limit);
   std::vector<BookDay> scratch;
-  bookdownload::forEach(bookdownload::newPath(), scratch, &ctx,
+  bookdownload::forEach(list, scratch, &ctx,
                         [](void* p, const bookdownload::Book& book, const std::vector<BookDay>& days) {
                           auto& c = *static_cast<Ctx*>(p);
                           if (book.finished) c.finished.push_back(book.nameHash);

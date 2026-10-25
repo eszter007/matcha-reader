@@ -4,12 +4,16 @@
 #include <Logging.h>
 #include <SdSystemDir.h>
 
+#include <algorithm>
 #include <cstring>
 
 namespace bookdownload {
 namespace {
 constexpr uint8_t MAGIC[4] = {'B', 'K', 'D', 'L'};
 constexpr uint8_t VERSION = 1;
+// magic(4) version(1) flags(1)
+constexpr size_t HEADER_BYTES = 6;
+constexpr uint8_t FLAG_INCREMENT = 1;
 constexpr size_t DAY_BYTES = 6;
 
 void putU16(uint8_t* p, const uint16_t v) { memcpy(p, &v, 2); }
@@ -58,23 +62,31 @@ bool readDays(HalFile& f, const uint16_t count, std::vector<BookDay>& days) {
   return true;
 }
 
-bool openChecked(const std::string& file, HalFile& f) {
-  uint8_t head[5];
-  return Storage.exists(file.c_str()) && Storage.openFileForRead("BKDL", file.c_str(), f) &&
-         f.read(head, sizeof(head)) == sizeof(head) && memcmp(head, MAGIC, 4) == 0 && head[4] == VERSION;
+bool openChecked(const std::string& file, HalFile& f, bool* increment = nullptr) {
+  uint8_t head[HEADER_BYTES];
+  if (!Storage.exists(file.c_str()) || !Storage.openFileForRead("BKDL", file.c_str(), f) ||
+      f.read(head, sizeof(head)) != sizeof(head) || memcmp(head, MAGIC, 4) != 0 || head[4] != VERSION) {
+    return false;
+  }
+  if (increment) *increment = (head[5] & FLAG_INCREMENT) != 0;
+  return true;
 }
+
+std::string combinedPath() { return path() + ".tmp"; }
 }  // namespace
 
 std::string newPath() { return sdsystem::path("bookstats_download.new"); }
 std::string path() { return sdsystem::path("bookstats_download.bin"); }
 
-bool Writer::begin() {
-  const std::string tmp = newPath() + ".tmp";
+bool Writer::begin(const std::string& path, const bool increment) {
+  target = path;
+  const std::string tmp = target + ".part";
   ok = Storage.openFileForWrite("BKDL", tmp.c_str(), file);
   if (!ok) return false;
-  uint8_t head[5];
+  uint8_t head[HEADER_BYTES];
   memcpy(head, MAGIC, 4);
   head[4] = VERSION;
+  head[5] = increment ? FLAG_INCREMENT : 0;
   ok = file.write(head, sizeof(head)) == sizeof(head);
   return ok;
 }
@@ -119,18 +131,18 @@ bool Writer::endBook() {
 }
 
 bool Writer::commit() {
-  const std::string tmp = newPath() + ".tmp";
+  const std::string tmp = target + ".part";
   ok = file.close() && ok;
   if (!ok) {
     Storage.remove(tmp.c_str());
     return false;
   }
-  return Storage.replaceFile(tmp.c_str(), newPath().c_str());
+  return Storage.replaceFile(tmp.c_str(), target.c_str());
 }
 
 void Writer::abort() {
   file.close();
-  Storage.remove((newPath() + ".tmp").c_str());
+  Storage.remove((target + ".part").c_str());
   ok = false;
 }
 
@@ -155,6 +167,65 @@ bool find(const uint32_t hash, Book& book, std::vector<BookDay>& days) {
     if (!f.seekCur(static_cast<int64_t>(book.dayCount) * DAY_BYTES)) return false;
   }
   return false;
+}
+
+namespace {
+struct CombineCtx {
+  std::vector<uint32_t> changed;  // the increment's books, whose old entries are left out
+  Writer* out = nullptr;
+  bool ok = true;
+};
+
+void copyBook(void* p, const Book& book, const std::vector<BookDay>& days) {
+  auto& c = *static_cast<CombineCtx*>(p);
+  c.ok = c.ok && c.out->beginBook(book.nameHash, book.finished, book.sessions, book.language);
+  for (const auto& d : days) c.ok = c.ok && c.out->addDay(d);
+  c.ok = c.ok && c.out->endBook();
+}
+}  // namespace
+
+bool combine(std::string& combined) {
+  HalFile f;
+  bool increment = false;
+  if (!openChecked(newPath(), f, &increment)) return false;
+  f.close();
+  if (!increment) {
+    combined = newPath();
+    return true;
+  }
+  CombineCtx ctx;
+  std::vector<BookDay> days;
+  if (!forEach(newPath(), days, &ctx, [](void* p, const Book& book, const std::vector<BookDay>&) {
+        static_cast<CombineCtx*>(p)->changed.push_back(book.nameHash);
+      })) {
+    return false;
+  }
+  Writer out;
+  combined = combinedPath();
+  if (!out.begin(combined, false)) return false;
+  ctx.out = &out;
+  // A missing or damaged old list keeps what it had up to there: the next whole download repairs it.
+  forEach(path(), days, &ctx, [](void* p, const Book& book, const std::vector<BookDay>& bookDays) {
+    const auto& changed = static_cast<CombineCtx*>(p)->changed;
+    if (std::find(changed.begin(), changed.end(), book.nameHash) == changed.end()) copyBook(p, book, bookDays);
+  });
+  forEach(newPath(), days, &ctx, copyBook);
+  if (!ctx.ok || !out.commit()) {
+    out.abort();
+    return false;
+  }
+  return true;
+}
+
+bool keep(const std::string& combined) {
+  if (combined != newPath() && !Storage.replaceFile(combined.c_str(), path().c_str())) return false;
+  if (combined == newPath()) return Storage.replaceFile(newPath().c_str(), path().c_str());
+  Storage.remove(newPath().c_str());
+  return true;
+}
+
+void discard(const std::string& combined) {
+  if (combined != newPath()) Storage.remove(combined.c_str());
 }
 
 }  // namespace bookdownload

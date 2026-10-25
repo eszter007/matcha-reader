@@ -675,9 +675,10 @@ TEST_F(StatsTest, CompactMergesSavedDownload) {
 namespace {
 // Writes a per-book download as Refresh Stats would, as the ".new" file the next boot folds in.
 void writeBookDownload(
-    const std::vector<std::tuple<std::string, bool, uint32_t, const char*, std::vector<BookDay>>>& books) {
+    const std::vector<std::tuple<std::string, bool, uint32_t, const char*, std::vector<BookDay>>>& books,
+    const bool increment = false) {
   bookdownload::Writer w;
-  ASSERT_TRUE(w.begin());
+  ASSERT_TRUE(w.begin(bookdownload::newPath(), increment));
   for (const auto& [name, finished, sessions, language, days] : books) {
     ASSERT_TRUE(w.beginBook(bookdownload::nameHash(name), finished, sessions, language));
     for (const auto& d : days) ASSERT_TRUE(w.addDay(d));
@@ -739,4 +740,30 @@ TEST_F(StatsTest, BookStatsTakeInDownload) {
   ASSERT_TRUE(READING_STATS_STORE.loadFromFile());
   EXPECT_TRUE(READING_STATS_STORE.isFinished("/books/a.epub"));
   EXPECT_EQ(READING_STATS_STORE.getBooksFinished(), 1);  // its stand-in went
+}
+
+// A download of only the changed books replaces those books in the list the card has; the language
+// tabs are rebuilt from the whole list, so an unchanged book's minutes still count.
+TEST_F(StatsTest, IncrementalBookDownloadCombines) {
+  auto& s = READING_STATS_STORE;
+  writeBookDownload({
+      {"a.epub", false, 1, "ja", {{Y, M, 1, 20}}},
+      {"b.epub", false, 1, "ja", {{Y, M, 1, 10}}},
+  });
+  ASSERT_TRUE(s.compact());
+  writeBookDownload({{"a.epub", true, 2, "ja", {{Y, M, 1, 25}, {Y, M, 2, 5}}}}, /*increment=*/true);
+  ASSERT_TRUE(s.compact());
+  EXPECT_FALSE(std::filesystem::exists(testRoot() + bookdownload::newPath()));
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 1), 35);  // a's new 25 plus b's 10, kept from the old list
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 2), 5);
+  EXPECT_EQ(s.getBooksFinished(), 1);
+  s.release();
+
+  bookdownload::Book book;
+  std::vector<BookDay> days;
+  ASSERT_TRUE(bookdownload::find(bookdownload::nameHash("a.epub"), book, days));
+  EXPECT_EQ(book.sessions, 2u);
+  EXPECT_EQ(days.size(), 2u);
+  EXPECT_TRUE(bookdownload::find(bookdownload::nameHash("b.epub"), book, days));
 }
