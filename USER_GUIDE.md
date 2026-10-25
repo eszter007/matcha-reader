@@ -1607,6 +1607,8 @@ With the CrossPoint sync server, **Sync Progress** also uploads these stats; see
 
 Go to Home → **Insights**. It shows your current streak, minutes this week, books finished, days read, total
 reading time, your longest streak and a calendar of the days you read.
+The streak counts the days in a row you read. If you have not read yet today, it still shows yesterday's count. It
+ends only after a whole day without reading.
 
 The tabs at the top split these numbers by language. **All** covers everything. After it comes one tab for each
 language you have read. Each tab has its own streak, calendar and totals, so reading an English book does not

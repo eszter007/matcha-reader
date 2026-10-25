@@ -227,7 +227,6 @@ int ReadingStatsStore::getStreak(const char* language, const uint16_t todayYear,
                                  const uint8_t todayDay) const {
   char lang[4];
   normalizeLanguage(language, lang);
-  if (getMinutesForDay(language, todayYear, todayMonth, todayDay) == 0) return 0;
 
   int expected = daysSinceEpoch(todayYear, todayMonth, todayDay);
   int streak = 0;
@@ -235,9 +234,9 @@ int ReadingStatsStore::getStreak(const char* language, const uint16_t todayYear,
     if (memcmp(it->language, lang, sizeof(lang)) != 0 || it->minutesRead == 0) continue;
     const int e = daysSinceEpoch(it->year, it->month, it->day);
     if (e > expected) continue;
-    if (e != expected) break;
+    if (e != expected && !(streak == 0 && e == expected - 1)) break;
     streak++;
-    expected--;
+    expected = e - 1;
   }
   return streak;
 }
@@ -356,16 +355,15 @@ int ReadingStatsStore::getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t
   // Backwards through the sorted history, rather than probing one candidate date per day.
   if (days.empty()) return 0;
   int expected = daysSinceEpoch(todayYear, todayMonth, todayDay);
-  if (getMinutesForDay(todayYear, todayMonth, todayDay) == 0) return 0;
-
   int streak = 0;
   for (auto it = days.rbegin(); it != days.rend(); ++it) {
     if (it->minutesRead == 0) continue;
     const int e = daysSinceEpoch(it->year, it->month, it->day);
     if (e > expected) continue;  // days after today (a clock jump) do not extend today's streak
-    if (e != expected) break;    // a gap ends it
+    // A gap ends it. Yesterday may start it: the streak holds until today is over.
+    if (e != expected && !(streak == 0 && e == expected - 1)) break;
     streak++;
-    expected--;
+    expected = e - 1;
   }
   return streak;
 }
@@ -983,7 +981,7 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
     takeDay(e, minutes);
   }
   for (; jd < journalDays.size(); jd++) takeDay(journalDays[jd].first, journalDays[jd].second);
-  out.streak = prev == today ? run : 0;
+  out.streak = prev >= today - 1 ? run : 0;  // as getStreak(): a streak ending yesterday still holds today
 
   // Finished books: hashes of their paths, then their languages from the per-book block.
   std::vector<uint32_t> finished;

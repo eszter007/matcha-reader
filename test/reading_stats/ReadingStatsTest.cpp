@@ -57,11 +57,17 @@ TEST_F(StatsTest, GapBreaksCurrentStreakButNotLongest) {
   EXPECT_EQ(s.getLongestStreak(), 6);
 }
 
-TEST_F(StatsTest, NotReadTodayMeansNoCurrentStreak) {
+// Not having read yet today keeps yesterday's streak; it ends only once a whole day is missed.
+TEST_F(StatsTest, StreakHoldsUntilTodayIsOver) {
   auto& s = READING_STATS_STORE;
   for (uint8_t d = 1; d <= 7; d++) s.addMinutes(Y, M, d, 10);
-  EXPECT_EQ(s.getStreak(Y, M, 8), 0);
+  EXPECT_EQ(s.getStreak(Y, M, 8), 7);
+  EXPECT_EQ(s.getStreak(Y, M, 9), 0);
   EXPECT_EQ(s.getLongestStreak(), 7);
+
+  for (uint8_t d = 5; d <= 7; d++) s.addLanguageMinutes("ja", 10, Y, M, d);
+  EXPECT_EQ(s.getStreak("ja", Y, M, 8), 3);
+  EXPECT_EQ(s.getStreak("ja", Y, M, 9), 0);
 }
 
 TEST_F(StatsTest, StreakCrossesMonthYearAndLeapDay) {
@@ -553,6 +559,8 @@ TEST_F(StatsTest, SummaryMatchesTheLoadedTables) {
   EXPECT_EQ(sum.booksFinished, s.getBooksFinished());
   EXPECT_EQ(sum.languageBooksFinished, s.getBooksFinished("ja"));
   EXPECT_EQ(sum.streak, 8);
+  EXPECT_EQ(s.summarize(Y, M, 9, "ja").streak, 8);  // not read yet today
+  EXPECT_EQ(s.summarize(Y, M, 10, "ja").streak, 0);
   EXPECT_EQ(sum.booksFinished, 3);
   EXPECT_EQ(sum.languageBooksFinished, 2);
 }
