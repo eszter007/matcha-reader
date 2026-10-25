@@ -13,6 +13,7 @@
 #include "components/icons/flame.h"
 #include "components/icons/stats_icons.h"
 #include "fontIds.h"
+#include "util/DateFormat.h"
 
 namespace StatsWidgets {
 
@@ -177,7 +178,7 @@ int drawMonthCalendar(const GfxRenderer& renderer, const int x, const int y, con
 
   // Month/year header with chevrons
   char monthBuf[64];
-  snprintf(monthBuf, sizeof(monthBuf), "%s %d", monthName(calMonth), calYear);
+  formatDate(monthBuf, sizeof(monthBuf), tr(STR_MONTH_YEAR_FORMAT), calYear, calMonth, 1, monthName(calMonth));
   const int monthW = renderer.getTextWidth(UI_12_FONT_ID, monthBuf, EpdFontFamily::BOLD);
   const int monthX = x + (w - monthW) / 2;
   const int monthY = y + 12;

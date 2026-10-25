@@ -15,6 +15,7 @@
 #include "components/icons/dictionaryIcons.h"
 #include "components/icons/stats_icons.h"
 #include "fontIds.h"
+#include "util/DateFormat.h"
 
 namespace {
 // Adapters that let StatsWidgets read a BookStats without knowing the type.
@@ -139,16 +140,16 @@ void BookStatsActivity::render(RenderLock&&) {
       // is then unknown rather than shown after the finish.
       const bool startKnown = !finished || std::tie(first.year, first.month, first.day) <=
                                                std::tie(marks.finishYear, marks.finishMonth, marks.finishDay);
-      char start[12] = {};
+      char start[24] = {};
       if (startKnown) {
         marks.startYear = first.year;
         marks.startMonth = first.month;
         marks.startDay = first.day;
-        snprintf(start, sizeof(start), "%04u.%02u.%02u", first.year, first.month, first.day);
+        formatDate(start, sizeof(start), tr(STR_DATE_FORMAT), first.year, first.month, first.day);
       }
       if (finished) {
-        char finish[12];
-        snprintf(finish, sizeof(finish), "%04u.%02u.%02u", marks.finishYear, marks.finishMonth, marks.finishDay);
+        char finish[24];
+        formatDate(finish, sizeof(finish), tr(STR_DATE_FORMAT), marks.finishYear, marks.finishMonth, marks.finishDay);
         snprintf(dateLine, sizeof(dateLine), startKnown ? "%s – %s" : "%s%s", start, finish);
       } else {
         snprintf(dateLine, sizeof(dateLine), tr(STR_STAT_SINCE_FORMAT), start);
