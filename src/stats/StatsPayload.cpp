@@ -88,7 +88,8 @@ void statsSync::buildGlobal(JsonDocument& doc, const std::vector<Day>& days, con
 }
 
 void statsSync::addBook(JsonDocument& doc, const std::string& documentHash, const std::vector<BookDay>& days,
-                        const uint32_t sessions, const bool finished, const BookDay* daily, const size_t dailyCount) {
+                        const uint32_t sessions, const bool finished, const BookDay* daily, const size_t dailyCount,
+                        const BookDay* finishDay) {
   doc["device_id"] = DEVICE_ID;
   JsonArray items = doc["items"].is<JsonArray>() ? doc["items"].as<JsonArray>() : doc["items"].to<JsonArray>();
   JsonObject item = items.add<JsonObject>();
@@ -111,7 +112,9 @@ void statsSync::addBook(JsonDocument& doc, const std::string& documentHash, cons
   item["start_manual"] = false;
   item["finish_manual"] = false;
   item["start_date"] = days.empty() ? 0 : unixDate(dayOf(days.front()));
-  item["finished_date"] = finished && !days.empty() ? unixDate(dayOf(days.back())) : 0;
+  // The finish day the device stored; the last reading day for a book finished before it kept one.
+  const BookDay* finishedOn = finishDay ? finishDay : (days.empty() ? nullptr : &days.back());
+  item["finished_date"] = finished && finishedOn ? unixDate(dayOf(*finishedOn)) : 0;
   weekdays(item, dow);
   if (dailyCount > 0) {
     JsonArray out = item["daily"].to<JsonArray>();

@@ -188,8 +188,11 @@ class ReadingStatsStore {
     int streak = 0;
     uint16_t booksFinished = 0;
     uint16_t languageBooksFinished = 0;  // for summarize()'s language; 0 without one
+    bool firstFinish = false;  // finishedPath's latest record is its first finish; false when unsure (table path)
   };
-  Summary summarize(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay, const char* language);
+  // finishedPath: a book just record()ed as finished, to learn whether this is a reopening.
+  Summary summarize(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay, const char* language,
+                    const char* finishedPath = nullptr);
 
   // Holds the full tables for as long as it lives (a stats screen). loaded() is false when they
   // could not be read or did not fit the heap.

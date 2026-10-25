@@ -83,7 +83,12 @@ void book() {
   assert(doc["items"][0]["completed"] == true);
   assert(doc["items"][1]["document"] == "fedcba9876543210fedcba9876543210");
   assert(doc["items"][1]["finished_date"] == 0);
-  assert(!doc["items"][0]["daily"].is<JsonArray>());  // no days asked for: none sent
+
+  // A stored finish day wins over the last reading day.
+  const BookDay finishDay{2026, 10, 3, 0};
+  statsSync::addBook(doc, "00112233445566778899aabbccddeeff", days, 1, true, nullptr, 0, &finishDay);
+  assert(doc["items"][2]["finished_date"] == 1790985600u);  // 2026-10-03
+  assert(!doc["items"][0]["daily"].is<JsonArray>());        // no days asked for: none sent
 
   // Days go out as the server's {date, seconds}, only the slice asked for.
   JsonDocument withDays;

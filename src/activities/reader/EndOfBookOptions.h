@@ -60,13 +60,13 @@ class EndOfBookOptions {
   struct Summary {
     uint32_t minutes = 0;
     int daySpan = 0;
-    int streak = 0;
     uint32_t lookups = 0;
     uint32_t sentences = 0;
     uint16_t booksFinished = 0;
     uint16_t languageBooksFinished = 0;
     std::string languageName;  // empty when the book declares no language
-    char finishedOn[12] = {};  // "2026.10.15", the date on the stamp
+    char startedOn[24] = {};   // first reading day, in the stamp's date format; empty when unknown or the same day
+    char finishedOn[24] = {};  // the date on the stamp, e.g. "15.10.2026", or "2026.10.15" in Japanese
   };
   Summary summary;
   void loadSummary(const std::string& bookPath, const char* bookLanguage);

@@ -47,9 +47,9 @@ constexpr size_t DAYS_PER_ITEM = 20;
 
 // Appends one book's snapshot from its BookStats days (sorted ascending) to a /stats/books body, with
 // `dailyCount` of those days from `daily` as the item's per-day seconds. finished: the book is on the finished
-// list; its last reading day stands in for the finish date, which the device does not record.
+// list; finishDay is the day the device stored, else the last reading day stands in for it.
 void addBook(JsonDocument& doc, const std::string& documentHash, const std::vector<BookDay>& days, uint32_t sessions,
-             bool finished, const BookDay* daily = nullptr, size_t dailyCount = 0);
+             bool finished, const BookDay* daily = nullptr, size_t dailyCount = 0, const BookDay* finishDay = nullptr);
 
 // Uploads the stats of every book read since the last upload (all of them the first time), then the daily
 // totals. Only for crosspoint-sync servers with credentials. Failures are logged and never fail the

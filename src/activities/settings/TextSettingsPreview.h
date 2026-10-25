@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 
+#include "components/themes/BaseTheme.h"
 #include "util/CjkScript.h"
 
 class GfxRenderer;
@@ -43,9 +44,8 @@ struct PreviewLayout {
 // whose script the selected face cannot carry, the page renders with a substitute, and a preview
 // that resolved its own font would promise a face and a size the page will not use.
 // sampleScript: lay out a Japanese or Chinese sample instead of the UI language's, for a CJK book
-// or the CJK text profile.
-void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, int top,
-                   int height, const char* familyName, const char* sizeName, int fontId,
-                   CjkScript sampleScript = CjkScript::None);
+// or the CJK text profile. The caption is borrowed for this draw; only the sample layout is cached.
+void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, Rect bounds,
+                   const char* caption, int fontId, CjkScript sampleScript = CjkScript::None);
 
 }  // namespace textsettings

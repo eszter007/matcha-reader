@@ -60,6 +60,17 @@ class BookStats {
   // saved for Anki. One SD write per call, so lookup screens batch theirs until they close.
   static bool addCounts(const char* bookPath, uint32_t lookups, uint32_t sentences);
 
+  // Adds reading minutes to the day and saves (the readers' periodic flush).
+  static bool addMinutes(const char* bookPath, uint16_t year, uint8_t month, uint8_t day, uint16_t minutes);
+
+  // Loads the book's stats into `out` and stores today as its finish day on a certain first finish.
+  // A stored day always wins. Without one, a reopened book shows its last reading day before today,
+  // which is not saved: a guess must not become the stored date.
+  static bool recordFinish(const char* bookPath, uint16_t year, uint8_t month, uint8_t day, bool firstFinish,
+                           BookStats& out);
+  // False when no finish day is stored or guessed.
+  bool getFinishDay(uint16_t& year, uint8_t& month, uint8_t& day) const;
+
   uint32_t getSessions() const { return sessions; }
   uint32_t getLookups() const { return lookups; }
   uint32_t getSentencesSaved() const { return sentencesSaved; }
@@ -91,4 +102,5 @@ class BookStats {
   uint32_t lookups = 0;
   uint32_t sentencesSaved = 0;
   std::vector<BookDay> days;
+  BookDay finished{};  // first finish day; year 0 when unknown (minutes unused)
 };

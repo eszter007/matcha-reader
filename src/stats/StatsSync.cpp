@@ -248,11 +248,14 @@ bool buildBatch(const std::vector<PendingBook>& books, BookCursor& at, const int
       docs++;
     }
     const size_t newDays = static_cast<size_t>(days.end() - firstNew);
+    BookDay finishDay{};
+    const bool hasFinishDay = stats.getFinishDay(finishDay.year, finishDay.month, finishDay.day);
     // One item even with no new day: the totals still change with each session.
     do {
       const size_t count = std::min(statsSync::DAYS_PER_ITEM, newDays - std::min(at.day, newDays));
       statsSync::addBook(statsDoc, hash, days, stats.getSessions(), book.finished,
-                         count > 0 ? &*(firstNew + static_cast<std::ptrdiff_t>(at.day)) : nullptr, count);
+                         count > 0 ? &*(firstNew + static_cast<std::ptrdiff_t>(at.day)) : nullptr, count,
+                         hasFinishDay ? &finishDay : nullptr);
       items++;
       at.day += count;
     } while (at.day < newDays && items < static_cast<int>(statsSync::ITEMS_PER_UPLOAD));
