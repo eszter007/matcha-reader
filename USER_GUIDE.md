@@ -1639,6 +1639,10 @@ days read, words looked up, sentences saved and a calendar of the days you read 
 day you started the book and the day you finished it, or "since" the start while you are still reading. On the
 calendar the start day has a dotted ring and the finish day a solid one.
 
+Dates are shown the way your interface language writes them, e.g. 17.10.2026 in German or 2026年10月17日 in
+Japanese (the end-of-book stamp uses the shorter 2026.10.17 there). The device stores them in one fixed format,
+so switching language changes only how they look.
+
 **Words looked up** counts each word whose entry you opened, once each time you open the lookup screen. Moving
 back and forth over the same word does not count it twice. **Sentences saved** counts the cards added to your
 sentence-mining file.

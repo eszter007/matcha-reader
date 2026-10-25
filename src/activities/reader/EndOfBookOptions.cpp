@@ -30,6 +30,7 @@
 #include "fontIds.h"
 #include "util/ButtonNavigator.h"
 #include "util/CjkScript.h"
+#include "util/DateFormat.h"
 #include "util/NextBookFinder.h"
 
 namespace {
@@ -358,13 +359,12 @@ void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* book
   uint16_t year = today.year;
   uint8_t month = today.month, day = today.day;
   stats.getFinishDay(year, month, day);
-  snprintf(summary.finishedOn, sizeof(summary.finishedOn), "%04u.%02u.%02u", static_cast<unsigned>(year),
-           static_cast<unsigned>(month), static_cast<unsigned>(day));
+  formatDate(summary.finishedOn, sizeof(summary.finishedOn), tr(STR_STAMP_DATE_FORMAT), year, month, day);
   if (!stats.getDays().empty() && std::tie(stats.getDays().front().year, stats.getDays().front().month,
                                            stats.getDays().front().day) <= std::tie(year, month, day)) {
     const BookDay& first = stats.getDays().front();
-    snprintf(summary.startedOn, sizeof(summary.startedOn), "%04u.%02u.%02u", static_cast<unsigned>(first.year),
-             static_cast<unsigned>(first.month), static_cast<unsigned>(first.day));
+    formatDate(summary.startedOn, sizeof(summary.startedOn), tr(STR_STAMP_DATE_FORMAT), first.year, first.month,
+               first.day);
     if (strcmp(summary.startedOn, summary.finishedOn) == 0) summary.startedOn[0] = '\0';
   }
 

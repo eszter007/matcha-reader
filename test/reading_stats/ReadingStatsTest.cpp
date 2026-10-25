@@ -14,6 +14,7 @@
 
 #include "BookStats.h"
 #include "ReadingStatsStore.h"
+#include "util/DateFormat.h"
 
 namespace {
 
@@ -690,4 +691,46 @@ TEST_F(StatsTest, BookFinishedEarlierShowsItsLastReadingDayUnsaved) {
 
   ASSERT_TRUE(b.load(path));
   EXPECT_FALSE(b.getFinishDay(y, m, d)) << "a guessed day must not be saved";
+}
+
+// ---- Date display ----
+
+TEST(DateFormat, PatternsPadAndCarryText) {
+  char out[32];
+  formatDate(out, sizeof(out), "DD.MM.YYYY", 2026, 3, 7);
+  EXPECT_STREQ(out, "07.03.2026");
+  formatDate(out, sizeof(out), "YYYY年M月D日", 2026, 3, 7);
+  EXPECT_STREQ(out, "2026年3月7日");
+  formatDate(out, sizeof(out), "N YYYY", 2026, 3, 1, "March");
+  EXPECT_STREQ(out, "March 2026");
+  formatDate(out, sizeof(out), "YYYY. N", 2026, 3, 1, "Március");
+  EXPECT_STREQ(out, "2026. március") << "a month name mid-phrase is lowercased";
+  formatDate(out, 6, "DD.MM.YYYY", 2026, 3, 7);
+  EXPECT_STREQ(out, "07.03") << "truncates to fit";
+}
+
+// Every language's patterns use only known tokens and fit the stamp's 24-byte buffers.
+TEST(DateFormat, EveryLanguageHasUsablePatterns) {
+  auto& i18n = I18n::getInstance();
+  for (uint8_t l = 0; l < static_cast<uint8_t>(Language::_COUNT); l++) {
+    ASSERT_TRUE(i18n.setLanguage(static_cast<Language>(l)));
+    char date[64], heading[64];
+    formatDate(date, sizeof(date), tr(STR_DATE_FORMAT), 2026, 12, 31);
+    formatDate(heading, sizeof(heading), tr(STR_MONTH_YEAR_FORMAT), 2026, 12, 1, tr(STR_MONTH_DEC));
+    const char* code = i18n.getLanguageName(static_cast<Language>(l));
+    EXPECT_NE(strstr(date, "2026"), nullptr) << code << ": " << date;
+    EXPECT_NE(strstr(date, "31"), nullptr) << code << ": " << date;
+    EXPECT_NE(strstr(date, "12"), nullptr) << code << ": " << date;
+    EXPECT_EQ(strpbrk(date, "YMDN"), nullptr) << code << " left a token: " << date;
+    EXPECT_LT(strlen(date), 24u) << code << ": " << date;
+    // The stamp's dates sit inside its ring: CJK languages use the dotted hanko form there.
+    char stamp[24];
+    formatDate(stamp, sizeof(stamp), tr(STR_STAMP_DATE_FORMAT), 2026, 12, 31);
+    EXPECT_EQ(strpbrk(stamp, "YMDN"), nullptr) << code << " left a token: " << stamp;
+    EXPECT_LE(strlen(stamp), 14u) << code << ": " << stamp << " is too wide for the stamp";
+    EXPECT_NE(strstr(heading, tr(STR_MONTH_DEC) + 1), nullptr)
+        << code << ": " << heading;  // case of the first letter may change
+    EXPECT_NE(strstr(heading, "2026"), nullptr) << code << ": " << heading;
+  }
+  i18n.setLanguage(Language::EN);
 }
