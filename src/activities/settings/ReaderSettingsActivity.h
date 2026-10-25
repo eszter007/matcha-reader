@@ -20,6 +20,8 @@ class ReaderSettingsActivity final : public UiTabListActivity {
   // Script of the book that pushed this screen (None from Home or a Latin book). CJK books use
   // the converted-dictionary flow, so the StarDict picker is omitted for them.
   CjkScript bookScript = CjkScript::None;
+  // The open book's text profile, from the reader that pushed this screen.
+  CrossPointSettings::TextProfileId bookTextProfile = CrossPointSettings::TextProfileId::Latin;
   std::string dictionaryLanguage;
   // Vertical Text / Furigana: per-book overrides that live on the pushing reader activity, not
   // in CrossPointSettings. showReaderToggles gates whether they appear at all (mirrors the
@@ -126,6 +128,8 @@ class ReaderSettingsActivity final : public UiTabListActivity {
   HomeTab tabBarTab() const override { return HomeTab::Settings; }
 
  public:
+  // The open book's text profile: Text Settings goes straight to it (finishOnBack screens only).
+  void setBookTextProfile(const CrossPointSettings::TextProfileId profile) { bookTextProfile = profile; }
   // initialCategory: category tab to open on (0=Display, 1=Reader, 2=Controls, 3=System).
   // finishOnBack: pop back to the pushing activity (e.g. the reader menu's "Reader Settings")
   // instead of replacing the stack with Home.

@@ -124,6 +124,7 @@ void TextSettingsActivity::onEnter() {
   if (editStoredProfile_ && profile_ != CrossPointSettings::TextProfileId::Latin) {
     RenderLock lock;
     latinWhileEditing_ = SETTINGS.liveTextProfile();
+    SETTINGS.holdLatinTextProfile(latinWhileEditing_);
     SETTINGS.setLiveTextProfile(SETTINGS.textProfile(profile_));
     swappedIn_ = true;
     sdFontSystem.ensureLoaded(renderer);
@@ -150,7 +151,16 @@ void TextSettingsActivity::onEnter() {
 void TextSettingsActivity::onExit() {
   if (swappedIn_) {
     RenderLock lock;
-    SETTINGS.setTextProfile(profile_, SETTINGS.liveTextProfile());
+    auto edited = SETTINGS.liveTextProfile();
+    // A font that failed to load is cleared from the live fields. That is not a choice, so the
+    // profile keeps its font unless one was picked here.
+    if (!familyChosen_) {
+      const auto stored = SETTINGS.textProfile(profile_);
+      edited.fontFamily = stored.fontFamily;
+      memcpy(edited.sdFontFamilyName, stored.sdFontFamilyName, sizeof(edited.sdFontFamilyName));
+    }
+    SETTINGS.setTextProfile(profile_, edited);
+    SETTINGS.releaseLatinTextProfile();
     SETTINGS.setLiveTextProfile(latinWhileEditing_);
     swappedIn_ = false;
     sdFontSystem.ensureLoaded(renderer);
@@ -259,7 +269,7 @@ void TextSettingsActivity::activateIndex(const int index) {
     std::vector<std::string> options;
     options.reserve(fonts_.size());
     for (const auto& font : fonts_) options.push_back(font.displayName());
-    optionPopup_.show(StrId::STR_FONT, options, currentFamilyIndex_, [this](const int idx) {
+    optionPopup_.show(StrId::STR_FONT, std::move(options), currentFamilyIndex_, [this](const int idx) {
       if (isManageFontsRow(idx)) {
         startActivityForResult(
             std::make_unique<FontDownloadActivity>(renderer, mappedInput), [this](const ActivityResult&) {
@@ -278,7 +288,7 @@ void TextSettingsActivity::activateIndex(const int index) {
     std::vector<std::string> options;
     options.reserve(sizes_.size());
     for (const auto& size : sizes_) options.push_back(size.name);
-    optionPopup_.show(StrId::STR_SIZE, options, currentSizeIndex_, [this](const int idx) {
+    optionPopup_.show(StrId::STR_SIZE, std::move(options), currentSizeIndex_, [this](const int idx) {
       if (idx != currentSizeIndex_) applySize(idx);
     });
     requestUpdate();
@@ -414,6 +424,7 @@ void TextSettingsActivity::applyFamily(int listIndex) {
   }
 
   if (currentFamilyIndex_ != listIndex) return;  // switch failed — keep the old size list
+  familyChosen_ = true;
 
   // The new family ships its own set of point sizes, and ensureLoaded() may have
   // snapped the selection into it.
@@ -605,60 +616,4 @@ TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int visi
 TextSettingsActivity::StyleRow TextSettingsActivity::styleRowAt(const int visibleIndex) const {
   if (!cjkBook_) return static_cast<StyleRow>(visibleIndex);
   return visibleIndex == 0 ? StyleRow::EmbeddedStyle : StyleRow::AntiAliasing;
-}
-
-// --- TextProfileMenuActivity ---
-
-namespace {
-// Menu order; TextProfileId is the storage order.
-constexpr CrossPointSettings::TextProfileId MENU_PROFILES[] = {
-    CrossPointSettings::TextProfileId::Japanese, CrossPointSettings::TextProfileId::TraditionalChinese,
-    CrossPointSettings::TextProfileId::SimplifiedChinese, CrossPointSettings::TextProfileId::Korean,
-    CrossPointSettings::TextProfileId::Latin};
-}  // namespace
-
-int TextProfileMenuActivity::listCount() const { return static_cast<int>(std::size(MENU_PROFILES)); }
-
-const char* TextProfileMenuActivity::headerTitle() const { return tr(STR_TEXT_SETTINGS); }
-
-void TextProfileMenuActivity::buildScreen(UiScreen& screen) {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  // Content: the safe area minus the header band GUI.drawHeader paints.
-  screen.setContentMarginFromScreen(fui::Insets{
-      static_cast<int16_t>(safe.y + metrics.topPadding + metrics.headerHeight),
-      static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
-      static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height)), static_cast<int16_t>(safe.x)});
-  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
-  if (items_.empty()) {
-    items_.reserve(std::size(MENU_PROFILES));
-    for (int i = 0; i < listCount(); i++) {
-      fui::ListItem item;
-      item.label = textprofile::title(MENU_PROFILES[i]);
-      item.actionValue = static_cast<int16_t>(i);
-      items_.push_back(item);
-    }
-  }
-  fui::ListProps props;
-  props.items = items_.data();
-  props.count = static_cast<uint16_t>(items_.size());
-  props.action = ACTION_ROW;
-  props.inputMask = fui::InputTouch;
-  props.labelText = screen.theme().smallText;
-  props.labelText.maxLines = 2;
-  syncListViewport(screen, props);
-  screen.list(props);
-}
-
-void TextProfileMenuActivity::activateIndex(const int index) {
-  app.clearTapFlash();
-  const auto profile = MENU_PROFILES[index];
-  startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                                profile, textprofile::script(profile),
-                                                                /*verticalText=*/false, /*editStoredProfile=*/true),
-                         [this](const ActivityResult&) {
-                           // Not every row there saves, and the profile went back only in memory.
-                           SETTINGS.saveToFile();
-                           requestUpdate();
-                         });
 }

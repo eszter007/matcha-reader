@@ -348,6 +348,7 @@ void EpubReaderActivity::applyBookTextProfile() {
       profile.fontFamily = pinned.fontFamily;
       memcpy(profile.sdFontFamilyName, pinned.sdFontFamilyName, sizeof(profile.sdFontFamilyName));
     }
+    SETTINGS.holdLatinTextProfile(latinTextProfile_);
     SETTINGS.setLiveTextProfile(profile);
     sdFontSystem.ensureLoaded(renderer);
     LOG_DBG("ERS", "Text profile %d", static_cast<int>(bookTextProfile_));
@@ -624,6 +625,7 @@ void EpubReaderActivity::onReaderExit() {
     storeBookTextProfile();
     if (!(current == globalPrefsSnapshot) || bookTextProfile_ != CrossPointSettings::TextProfileId::Latin) {
       applyPrefsToSettings(globalPrefsSnapshot);
+      SETTINGS.releaseLatinTextProfile();
       SETTINGS.setLiveTextProfile(latinTextProfile_);
       SETTINGS.saveToFile();
       // Re-sync the loaded SD font to the restored globals so the next
@@ -2118,38 +2120,38 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // EpubReaderMenuActivity::buildMenuItems) come back the same way the quick menu used to
       // carry them: a MenuResult, read via get_if since ReaderSettingsActivity only sets one when
       // showVerticalToggle() was true here, so std::monostate elsewhere is expected.
-      startActivityForResult(
-          std::make_unique<ReaderSettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
-                                                   /*finishOnBack=*/true, bookScript(), effectiveLanguage(),
-                                                   showVerticalToggle(), useVerticalText(), useFurigana(),
-                                                   /*mangaMode=*/false,
-                                                   /*hideMangaOnlySettings=*/true, StrId::STR_NONE_OPT,
-                                                   static_cast<int8_t>(languageOverride)),
-          [this](const ActivityResult& result) {
-            if (const auto* menu = std::get_if<MenuResult>(&result.data)) {
-              applyLanguageOverride(menu->languageOverride);
-              applyVerticalFuriganaOverride(menu->verticalOverride, menu->furiganaOverride);
-            }
-            // A Tategaki/Zhipai change applies to the open book unless it has its own choice.
-            if ((section || verticalSection) && useVerticalText() != (verticalSection != nullptr)) {
-              dropSectionsKeepingPosition();
-            }
-            sdFontSystem.ensureLoaded(renderer);
-            sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
-            // Reading Orientation now only changes via this screen (removed from the reader's
-            // own quick menu, which used to apply it straight from the popup via
-            // applyOrientation(menu.orientation)): pick up a change the same way onEnter()
-            // does, or it would silently wait for the book's next full open to take effect.
-            ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
-            // Return to the reader MENU (where the user came from), not the page. The list menu
-            // is built before the next render and reads the section, so after a switch from the
-            // toolbar style dropped it, go back to the page instead.
-            if (!usesToolbarMenu() && !section && !verticalSection) {
-              requestUpdate();
-              return;
-            }
-            openReaderMenu();
-          });
+      auto readerSettings = std::make_unique<ReaderSettingsActivity>(
+          renderer, mappedInput, /*initialCategory=*/1,
+          /*finishOnBack=*/true, bookScript(), effectiveLanguage(), showVerticalToggle(), useVerticalText(),
+          useFurigana(),
+          /*mangaMode=*/false,
+          /*hideMangaOnlySettings=*/true, StrId::STR_NONE_OPT, static_cast<int8_t>(languageOverride));
+      readerSettings->setBookTextProfile(bookTextProfile_);
+      startActivityForResult(std::move(readerSettings), [this](const ActivityResult& result) {
+        if (const auto* menu = std::get_if<MenuResult>(&result.data)) {
+          applyLanguageOverride(menu->languageOverride);
+          applyVerticalFuriganaOverride(menu->verticalOverride, menu->furiganaOverride);
+        }
+        // A Tategaki/Zhipai change applies to the open book unless it has its own choice.
+        if ((section || verticalSection) && useVerticalText() != (verticalSection != nullptr)) {
+          dropSectionsKeepingPosition();
+        }
+        sdFontSystem.ensureLoaded(renderer);
+        sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
+        // Reading Orientation now only changes via this screen (removed from the reader's
+        // own quick menu, which used to apply it straight from the popup via
+        // applyOrientation(menu.orientation)): pick up a change the same way onEnter()
+        // does, or it would silently wait for the book's next full open to take effect.
+        ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+        // Return to the reader MENU (where the user came from), not the page. The list menu
+        // is built before the next render and reads the section, so after a switch from the
+        // toolbar style dropped it, go back to the page instead.
+        if (!usesToolbarMenu() && !section && !verticalSection) {
+          requestUpdate();
+          return;
+        }
+        openReaderMenu();
+      });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {

@@ -424,7 +424,7 @@ font, size, spacing, margins, alignment, style options, images and orientation. 
 to that book only.
 
 - **Text Settings**: Opens a list of five text profiles: **Japanese**, **Traditional Chinese**, **Simplified
-  Chinese**, **Korean** and **Latin & Others Text Settings**. Pick one to change its options. A preview at the top
+  Chinese**, **Korean** and **Latin & Others**. Pick one to change its options. A preview at the top
   shows sample text in that profile's script with the current settings, and the options sit below it.
   - **Font**: the reading font. **Noto Serif** is built in. Fonts you add to the SD card are listed with it, and
     **Manage Fonts** is at the bottom. The list scrolls when it does not fit on the screen.
@@ -461,7 +461,7 @@ to that book only.
 - **Text profiles**: each of the five profiles keeps its own **font**, **font size**, **line spacing**, **character
   spacing** and **word spacing**, so a font that suits Japanese leaves your English books alone. A book uses the
   profile of its language: Japanese, traditional Chinese (Cantonese too), simplified Chinese, or Korean (a book tagged
-  `ko`). Every other book uses **Latin & Others**. Opened from inside a book, **Text Settings** goes straight to that
+  `ko` or `kor`). Every other book uses **Latin & Others**. Opened from inside a book, **Text Settings** goes straight to that
   book's profile. A size or spacing you change while reading goes to the book's profile too. A font you pick while
   reading stays with that book only: change a profile's font from **Settings → Reader → Text Settings**.
 

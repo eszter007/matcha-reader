@@ -9,6 +9,7 @@
 
 #include "GfxRenderer.h"
 #include "MappedInputManager.h"
+#include "activities/RenderLock.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 
@@ -28,6 +29,7 @@ class OptionPopup {
  public:
   void show(StrId titleId, const StrId* optionIds, int optionCount, int currentIndex,
             std::function<void(int)> onSelect) {
+    RenderLock lock;  // a render may still be reading the strings being replaced
     title = I18N.get(titleId);
     headline.clear();
     ownedStrings.resize(optionCount);
@@ -39,6 +41,7 @@ class OptionPopup {
 
   void show(const char* titleStr, const char* const* options, int optionCount, int currentIndex,
             std::function<void(int)> onSelect) {
+    RenderLock lock;  // a render may still be reading the strings being replaced
     title = titleStr;
     headline.clear();
     ownedStrings.resize(optionCount);
@@ -52,6 +55,7 @@ class OptionPopup {
   // It wraps to several lines under the caption; the dialog grows to fit.
   void show(const char* titleStr, const char* headlineStr, const char* const* options, int optionCount,
             int currentIndex, std::function<void(int)> onSelect) {
+    RenderLock lock;  // a render may still be reading the strings being replaced
     show(titleStr, options, optionCount, currentIndex, std::move(onSelect));
     headline = headlineStr ? headlineStr : "";
   }
@@ -60,15 +64,16 @@ class OptionPopup {
   // Wi-Fi forget-network prompt. Pass an empty title for a message-only look.
   void showMessage(const char* titleStr, const char* messageStr, const char* const* options, int optionCount,
                    int currentIndex, std::function<void(int)> onSelect) {
+    RenderLock lock;  // a render may still be reading the strings being replaced
     show(titleStr, options, optionCount, currentIndex, std::move(onSelect));
     message = messageStr ? messageStr : "";
   }
 
-  void show(StrId titleId, const std::vector<std::string>& options, int currentIndex,
-            std::function<void(int)> onSelect) {
+  void show(StrId titleId, std::vector<std::string> options, int currentIndex, std::function<void(int)> onSelect) {
+    RenderLock lock;  // a render may still be reading the strings being replaced
     title = I18N.get(titleId);
     headline.clear();
-    ownedStrings = options;
+    ownedStrings = std::move(options);
     activate(currentIndex, std::move(onSelect));
   }
 
@@ -142,12 +147,13 @@ class OptionPopup {
                      const std::function<void()>& requestUpdate) {
     if (!active) return false;
     const int count = static_cast<int>(ownedStrings.size());
-    followSelection = true;
     if (previous) {
+      followSelection = true;
       selectedIndex = (selectedIndex - 1 + count) % count;
       requestUpdate();
       return true;
     } else if (next) {
+      followSelection = true;
       selectedIndex = (selectedIndex + 1) % count;
       requestUpdate();
       return true;

@@ -108,6 +108,8 @@ class TextSettingsActivity final : public UiListActivity {
   const bool editStoredProfile_;
   // The live (Latin) values while another profile is swapped in for editing.
   bool swappedIn_ = false;
+  // A family was picked here (not just cleared by a failed load).
+  bool familyChosen_ = false;
   CrossPointSettings::TextProfile latinWhileEditing_{};
 
   // Row storage: rowItems_ (label/actionValue/heading) is rebuilt only when its backing data
@@ -136,18 +138,4 @@ class TextSettingsActivity final : public UiListActivity {
   ThemeMetrics metrics_ = {};
   int afterHeader = 0;
   int previewHeight = 0;
-};
-
-// The five text profiles, from Settings: picking one opens its Text Settings.
-class TextProfileMenuActivity final : public UiListActivity {
- public:
-  TextProfileMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : UiListActivity("TextProfiles", renderer, mappedInput) {}
-
- private:
-  int listCount() const override;
-  void buildScreen(UiScreen& screen) override;
-  void activateIndex(int index) override;
-  const char* headerTitle() const override;
-  std::vector<freeink::ui::ListItem> items_;
 };

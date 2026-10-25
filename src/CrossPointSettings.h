@@ -408,22 +408,33 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // the Latin profile; a book in another script swaps its profile in while it is open
   // (EpubReaderActivity), and Text Settings does the same while editing one from Settings.
   enum class TextProfileId : uint8_t { Latin, Japanese, TraditionalChinese, SimplifiedChinese, Korean, Count };
+  // Defaults match the live fields', so a settings file that never loads leaves usable profiles.
   struct TextProfile {
-    uint8_t fontPointSize;
-    uint8_t lineSpacing;
-    uint8_t characterSpacing;
-    uint8_t wordSpacing;
-    uint8_t fontFamily;
-    char sdFontFamilyName[32];
+    uint8_t fontPointSize = DEFAULT_FONT_POINT_SIZE;
+    uint8_t lineSpacing = NORMAL;
+    uint8_t characterSpacing = CHARACTER_SPACING_OFFSET;
+    uint8_t wordSpacing = 100;
+    uint8_t fontFamily = NOTOSERIF;
+    char sdFontFamilyName[32] = "";
     bool operator==(const TextProfile&) const = default;
   };
   TextProfile liveTextProfile() const;
   void setLiveTextProfile(const TextProfile& p);
-  // The stored profile; Latin's lives in the live fields, so it reads those.
+  // The stored profile. Latin's lives in the live fields, or in the held copy while another
+  // profile is swapped in.
   TextProfile textProfile(TextProfileId id) const;
   void setTextProfile(TextProfileId id, const TextProfile& p);
+  // While another profile sits in the live fields, the Latin values wait here, and saveToFile()
+  // writes them as the Latin settings instead of the swapped-in ones.
+  void holdLatinTextProfile(const TextProfile& latin) {
+    latinHeld = latin;
+    latinIsHeld = true;
+  }
+  void releaseLatinTextProfile() { latinIsHeld = false; }
   // Profiles other than Latin, indexed by TextProfileId - 1.
   TextProfile scriptTextProfiles[static_cast<int>(TextProfileId::Count) - 1]{};
+  TextProfile latinHeld{};
+  bool latinIsHeld = false;
   uint8_t paragraphAlignment = JUSTIFIED;
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
   uint8_t sleepTimeoutMinutes = 10;

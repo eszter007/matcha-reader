@@ -30,7 +30,8 @@ void copyToField(char* dest, const char* src, const size_t maxLen) {
   dest[maxLen - 1] = '\0';
 }
 
-// settings.json keys of textProfiles, indexed by TextProfileId (Latin is the top-level fields).
+// settings.json keys of textProfiles, indexed by TextProfileId. Latin is stored in the top-level
+// fields, so its entry is never written.
 constexpr const char* TEXT_PROFILE_KEYS[] = {"latin", "ja", "zh-Hant", "zh-Hans", "ko"};
 static_assert(std::size(TEXT_PROFILE_KEYS) == static_cast<size_t>(CrossPointSettings::TextProfileId::Count));
 
@@ -52,12 +53,17 @@ void CrossPointSettings::setLiveTextProfile(const TextProfile& p) {
 }
 
 CrossPointSettings::TextProfile CrossPointSettings::textProfile(const TextProfileId id) const {
-  return id == TextProfileId::Latin ? liveTextProfile() : scriptTextProfiles[static_cast<int>(id) - 1];
+  if (id != TextProfileId::Latin) return scriptTextProfiles[static_cast<int>(id) - 1];
+  return latinIsHeld ? latinHeld : liveTextProfile();
 }
 
 void CrossPointSettings::setTextProfile(const TextProfileId id, const TextProfile& p) {
   if (id == TextProfileId::Latin) {
-    setLiveTextProfile(p);
+    if (latinIsHeld) {
+      latinHeld = p;
+    } else {
+      setLiveTextProfile(p);
+    }
   } else {
     scriptTextProfiles[static_cast<int>(id) - 1] = p;
   }
@@ -132,6 +138,19 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // SD card font family name — not in SettingsList, save manually
   if (sdFontFamilyName[0] != '\0') {
     doc["sdFontFamilyName"] = sdFontFamilyName;
+  }
+  // A swapped-in profile is in the live fields; the Latin settings are the held ones.
+  if (latinIsHeld) {
+    doc["fontFamily"] = latinHeld.fontFamily;
+    doc["fontSize"] = latinHeld.fontPointSize;
+    doc["lineSpacing"] = latinHeld.lineSpacing;
+    doc["characterSpacing"] = latinHeld.characterSpacing;
+    doc["wordSpacing"] = latinHeld.wordSpacing;
+    if (latinHeld.sdFontFamilyName[0] != '\0') {
+      doc["sdFontFamilyName"] = latinHeld.sdFontFamilyName;
+    } else {
+      doc.remove("sdFontFamilyName");
+    }
   }
   JsonObject profiles = doc["textProfiles"].to<JsonObject>();
   for (int i = 1; i < static_cast<int>(TextProfileId::Count); i++) {
@@ -383,10 +402,13 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       TextProfile p = id == TextProfileId::Korean ? latin : cjk;
       const JsonVariantConst o = profiles[TEXT_PROFILE_KEYS[i]];
       if (!o.isNull()) {
-        p.fontPointSize = o["fontSize"] | p.fontPointSize;
+        const uint8_t size = o["fontSize"] | p.fontPointSize;
+        if (size >= 6 && size <= 72) p.fontPointSize = size;
         p.lineSpacing = clamp(o["lineSpacing"] | p.lineSpacing, (uint8_t)LINE_COMPRESSION_COUNT, p.lineSpacing);
-        p.characterSpacing = o["characterSpacing"] | p.characterSpacing;
-        p.wordSpacing = o["wordSpacing"] | p.wordSpacing;
+        p.characterSpacing = clamp(o["characterSpacing"] | p.characterSpacing,
+                                   (uint8_t)(2 * CHARACTER_SPACING_OFFSET + 1), p.characterSpacing);
+        const uint8_t words = o["wordSpacing"] | p.wordSpacing;
+        if (words >= WORD_SPACING_MIN && words <= WORD_SPACING_MAX) p.wordSpacing = words;
         p.fontFamily = clamp(o["fontFamily"] | p.fontFamily, BUILTIN_FONT_COUNT, (uint8_t)0);
         copyToField(p.sdFontFamilyName, o["sdFontFamilyName"] | "", sizeof(p.sdFontFamilyName));
       }

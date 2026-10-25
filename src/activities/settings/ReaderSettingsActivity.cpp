@@ -34,6 +34,7 @@
 #include "SettingsList.h"
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
+#include "TextProfileMenuActivity.h"
 #include "TextSettingsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/plugins/PluginCatalogActivity.h"
@@ -43,7 +44,6 @@
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
 #include "fontIds.h"
-#include "util/TextProfiles.h"
 
 namespace fui = freeink::ui;
 
@@ -681,11 +681,11 @@ void ReaderSettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::TextSettings: {
         // In a book, straight to the book's profile; from Settings, the profile menu.
-        auto next = finishOnBack
-                        ? std::unique_ptr<Activity>(std::make_unique<TextSettingsActivity>(
-                              renderer, mappedInput, &sdFontSystem.registry(),
-                              textprofile::forBook(bookScript, dictionaryLanguage), bookScript, verticalTextState))
-                        : std::make_unique<TextProfileMenuActivity>(renderer, mappedInput);
+        auto next =
+            finishOnBack
+                ? std::unique_ptr<Activity>(std::make_unique<TextSettingsActivity>(
+                      renderer, mappedInput, &sdFontSystem.registry(), bookTextProfile, bookScript, verticalTextState))
+                : std::make_unique<TextProfileMenuActivity>(renderer, mappedInput);
         startActivityForResult(std::move(next), [this](const ActivityResult&) {
           saveSettings();
           rebuildSettingsLists();
