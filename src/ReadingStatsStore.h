@@ -155,6 +155,8 @@ class ReadingStatsStore {
   uint16_t getMinutesForDay(const char* language, uint16_t year, uint8_t month, uint8_t day) const;
   uint32_t getTotalMinutes(const char* language) const;
   void markBookFinished(const std::string& bookPath);
+  // Takes a book (and its stand-in from the server) off the finished list: Mark as Unread.
+  void unmarkBookFinished(const std::string& bookPath);
 
   // ---- per-language views, mirroring the overall ones ----
   // Every language read, most-read first. Written into the caller's vector so the store keeps
@@ -215,6 +217,7 @@ class ReadingStatsStore {
     const char* bookPath = nullptr;      // book the minutes belong to
     const char* language = nullptr;      // that book's language tag
     const char* finishedPath = nullptr;  // book marked finished, or nullptr
+    bool unfinished = false;             // finishedPath comes off the finished list instead
   };
   static bool record(const Change& change);
   // Folds the journal and any saved download into the stats file (load, replay, merge, save, remove

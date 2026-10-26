@@ -4,10 +4,13 @@
 #include <Logging.h>
 #include <Memory.h>
 
+#include "BookStats.h"
+#include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
 #include "activities/home/BookStatsActivity.h"
 #include "activities/util/ConfirmationActivity.h"
+#include "components/StatsWidgets.h"
 #include "util/BookProgress.h"
 #include "util/DeleteUtils.h"
 
@@ -34,6 +37,28 @@ void promptDelete(Activity& host, GfxRenderer& renderer, MappedInputManager& inp
     if (RECENT_BOOKS.removeByPath(path)) RECENT_BOOKS.saveToFile();
     onChanged(true);
   });
+}
+
+// Insights follows: a book marked read counts as finished today, one marked unread no longer counts.
+void recordFinished(const std::string& path, const bool unfinished) {
+  const StatsWidgets::Today today = StatsWidgets::getToday();
+  ReadingStatsStore::Change change;
+  // The book field moves the book up for the next stats upload, which sends the change.
+  if (today.year >= 2020) {
+    change.year = today.year;
+    change.month = today.month;
+    change.day = today.day;
+  }
+  change.bookPath = path.c_str();
+  change.finishedPath = path.c_str();
+  change.unfinished = unfinished;
+  if (!ReadingStatsStore::record(change)) LOG_ERR("BAM", "Insights not updated for %s", path.c_str());
+  if (unfinished) {
+    BookStats::clearFinish(path.c_str());
+  } else if (today.year >= 2020) {
+    BookStats stats;
+    BookStats::recordFinish(path.c_str(), today.year, today.month, today.day, true, stats);
+  }
 }
 
 }  // namespace
@@ -65,11 +90,11 @@ void show(OptionPopup& popup, Activity& host, GfxRenderer& renderer, MappedInput
                                               [onChanged](const ActivityResult&) { onChanged(false); });
                    break;
                  case Action::MarkRead:
-                   markBookRead(path);
+                   if (markBookRead(path)) recordFinished(path, false);
                    onChanged(false);
                    break;
                  case Action::MarkUnread:
-                   markBookUnread(path);
+                   if (markBookUnread(path)) recordFinished(path, true);
                    onChanged(false);
                    break;
                  case Action::Delete:

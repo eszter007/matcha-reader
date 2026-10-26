@@ -39,9 +39,11 @@
 #include "activities/settings/ReaderSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookProgress.h"
 #include "util/BookmarkFile.h"
 #include "util/BookmarkUtil.h"
 #include "util/CjkScript.h"
+#include "util/RemoteProgress.h"
 #include "util/ScreenshotUtil.h"
 
 namespace {
@@ -164,6 +166,7 @@ void MangaReaderActivity::onEnter() {
   // full-size page into the card instead of blitting the cached one.
   RECENT_BOOKS.addBook(book->getFolder(), book->getTitle(), bookAuthor, book->getThumbBmpPath());
   BookStats::recordOpen(book->getFolder().c_str());
+  enterPercent = mangaProgressPercent(book->getFolder());
 
   readingSessionStartMs = millis();
 
@@ -221,6 +224,7 @@ void MangaReaderActivity::onExit() {
   }
 
   saveProgress();
+  if (book) remoteProgress::readHere(book->getFolder(), enterPercent, mangaProgressPercent(book->getFolder()));
   flushReaderSession();
   endOfBookOptionsReady.store(false, std::memory_order_release);
   endOfBookOptions.reset();

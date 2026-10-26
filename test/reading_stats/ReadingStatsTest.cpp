@@ -1059,3 +1059,68 @@ TEST_F(StatsTest, FinishWithoutReadingCountsInItsLanguage) {
   EXPECT_EQ(s.getBooksFinished("ja"), 2);
   s.release();
 }
+
+// Mark as Unread takes a book off the finished list, from the journal and from the file, and its stand-in
+// with it when it was finished on another device.
+TEST_F(StatsTest, MarkedUnreadIsNoLongerFinished) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.record({Y, M, 1, 9, "/a.epub", "ja", "/a.epub"}));
+  ASSERT_TRUE(s.record({Y, M, 2, 9, "/b.epub", "ja", "/b.epub"}));
+  const ReadingStatsStore::Change unread{Y, M, 3, 0, "/a.epub", nullptr, "/a.epub", true};
+  ASSERT_TRUE(s.record(unread));
+  for (int pass = 0; pass < 2; pass++) {
+    const auto a = s.summarize(Y, M, 3, "ja", "/a.epub");
+    EXPECT_FALSE(a.alreadyFinished);
+    EXPECT_EQ(s.summarize(Y, M, 3, "ja", "/c.epub").booksFinished, 1);
+    ASSERT_TRUE(s.loadFromFile());
+    EXPECT_FALSE(s.isFinished("/a.epub"));
+    EXPECT_TRUE(s.isFinished("/b.epub"));
+    EXPECT_EQ(s.getBooksFinished(), 1);
+    EXPECT_EQ(s.getBooksFinished("ja"), 1);
+    s.release();
+    ASSERT_TRUE(s.compact());  // the second pass reads the same from the file
+  }
+
+  // Finished elsewhere, counted under its stand-in.
+  writeBookDownload({{"elsewhere.epub", true, 2, "ja", {{Y, M, 2, 20}}}});
+  ASSERT_TRUE(s.compact());
+  EXPECT_TRUE(s.summarize(Y, M, 4, "ja", "/books/elsewhere.epub").alreadyFinished);
+  const ReadingStatsStore::Change unreadElsewhere{
+      Y, M, 4, 0, "/books/elsewhere.epub", nullptr, "/books/elsewhere.epub", true};
+  ASSERT_TRUE(s.record(unreadElsewhere));
+  EXPECT_FALSE(s.summarize(Y, M, 4, "ja", "/books/elsewhere.epub").alreadyFinished);
+  EXPECT_EQ(s.summarize(Y, M, 4, "ja", "/c.epub").booksFinished, 1);
+  ASSERT_TRUE(s.compact());
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getBooksFinished(), 1);
+  s.release();
+}
+
+// Mark as Unread also forgets the book's finish day, so a later finish stores its own.
+TEST_F(StatsTest, MarkedUnreadForgetsTheFinishDay) {
+  const char* path = "/again.epub";
+  ASSERT_TRUE(BookStats::addMinutes(path, Y, M, 6, 30));
+  BookStats b;
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 7, true, b));
+  ASSERT_TRUE(BookStats::clearFinish(path));
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 9, true, b));
+  uint16_t y = 0;
+  uint8_t m = 0, d = 0;
+  ASSERT_TRUE(b.getFinishDay(y, m, d));
+  EXPECT_EQ(d, 9);
+}
+
+// Marked unread without a clock, the book still goes in the next stats upload: it takes the newest day.
+TEST_F(StatsTest, UnreadWithoutClockStillUploads) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.record({Y, M, 1, 9, "/old.epub", "ja", "/old.epub"}));
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/new.epub", "ja", nullptr}));
+  const ReadingStatsStore::Change unread{0, 0, 0, 0, "/old.epub", nullptr, "/old.epub", true};
+  ASSERT_TRUE(s.record(unread));
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_FALSE(s.isFinished("/old.epub"));
+  int32_t oldDay = 0, newDay = 0;
+  for (const auto& b : s.getBooks()) (b.path == "/old.epub" ? oldDay : newDay) = b.lastReadDay;
+  EXPECT_EQ(oldDay, newDay);
+  s.release();
+}

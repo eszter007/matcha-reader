@@ -19,7 +19,9 @@
 #include "SdCardFontSystem.h"
 #include "XtcReaderActivity.h"
 #include "activities/util/BmpViewerActivity.h"
+#include "util/BookProgress.h"
 #include "util/PluginEvents.h"
+#include "util/RemoteProgress.h"
 
 ReaderActivity::ReaderActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
                                std::string bookPath, const bool allowFastInitialRefresh)
@@ -103,6 +105,7 @@ void ReaderActivity::onEnter() {
   }
 
   readingSessionStartMs = millis();
+  enterPercent = loadOwnBookProgress(bookPath);
   onReaderEnter();
   BookStats::recordOpen(bookPath.c_str());
   requestUpdate();
@@ -137,6 +140,8 @@ void ReaderActivity::onExit() {
   const int exitPercent = hasBook() ? getScreenshotInfo().progressPercent : 0;
   const bool hadBook = hasBook();
   onReaderExit();
+  // Read from the saved progress, as on entry, so a book opened without moving compares equal.
+  if (hadBook) remoteProgress::readHere(bookPath, enterPercent, loadOwnBookProgress(bookPath));
 
   // Keep rebuildable font buffers from pinning the heap between reading sessions.
   if (auto* fontCache = renderer.getFontCacheManager()) {

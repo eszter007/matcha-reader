@@ -2,7 +2,12 @@
 
 #include <string>
 
-// Saved reading percentage, or -1 when unavailable. Never builds reading caches.
+// This reader's own saved percentage, or -1 when unavailable. Never builds reading caches.
+int loadOwnBookProgress(const std::string& path);
+
+// Saved reading percentage, or -1 when unavailable; the furthest of this and the progress elsewhere
+// (remoteProgress).
+// Never builds reading caches.
 int loadBookProgress(const std::string& path);
 
 // Cache directory a book's progress and layout files live in, whatever its type, or empty for a
@@ -10,10 +15,9 @@ int loadBookProgress(const std::string& path);
 std::string bookCachePath(const std::string& path);
 
 // Mark a book finished / not started. "Read" writes a progress record every reader and both
-// grids agree is 100%; "unread" removes the record, which is what a book that was never opened
-// looks like. Both return false when the book has no cache to write into -- a book that has
-// never been opened has no cache directory, and creating one just to say "unread" would be
-// inventing state.
+// grids agree is 100%, or, when the book's cache cannot place its end (never opened, or laid out by
+// an older firmware), puts it in the progress index (remoteProgress). "Unread" removes the record and the index entry,
+// which is what a book that was never opened looks like.
 bool markBookRead(const std::string& path);
 bool markBookUnread(const std::string& path);
 

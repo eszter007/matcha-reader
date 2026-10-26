@@ -653,6 +653,7 @@ void CoverLibraryActivity::finishLibraryScan() {
 void CoverLibraryActivity::loadBookProgress() {
   // Progress is filled progressively from loop() -- ~5 file reads per book made the old
   // upfront pass a visible chunk of the Library open time.
+  remoteBooks.load();
   markAllProgressPending();
 }
 
@@ -751,6 +752,11 @@ void CoverLibraryActivity::loadShelfBooks(const std::string& folderPath) {
 }
 
 int CoverLibraryActivity::readProgressPercent(const std::string& bookPath) const {
+  const int percent = readLocalProgressPercent(bookPath);
+  return std::max(percent, remoteBooks.percent(bookPath));
+}
+
+int CoverLibraryActivity::readLocalProgressPercent(const std::string& bookPath) const {
   std::string cachePath;
   if (FsHelpers::hasReflowableBookExtension(bookPath)) {
     cachePath = "/.crosspoint/epub_" + std::to_string(std::hash<std::string>{}(bookPath));

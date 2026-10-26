@@ -10,6 +10,7 @@
 
 #include <algorithm>
 
+#include "RemoteProgress.h"
 #include "activities/home/EpubProgressUtil.h"
 #include "activities/reader/ProgressFile.h"
 
@@ -54,12 +55,11 @@ std::string bookCachePath(const std::string& path) {
   return {};
 }
 
-bool markBookRead(const std::string& path) {
-  const std::string cachePath = bookCachePath(path);
-  if (cachePath.empty() || !Storage.exists(cachePath.c_str())) {
-    LOG_ERR("PROG", "No cache to mark read: %s", path.c_str());
-    return false;
-  }
+namespace {
+// The progress record every reader and both grids read as 100%. False when the book's cache cannot say
+// where its end is: never opened, or laid out by an older firmware.
+bool writeFinishedProgress(const std::string& path, const std::string& cachePath) {
+  if (!Storage.exists(cachePath.c_str())) return false;
 
   if (manga::MangaBook::isMangaFolder(path)) {
     // Manga progress is the current page; the last page is the finished state.
@@ -111,17 +111,26 @@ bool markBookRead(const std::string& path) {
   writeLe32(data, lastPage);
   return ProgressFile::writeAtomic(cachePath, data, sizeof(data));
 }
+}  // namespace
+
+bool markBookRead(const std::string& path) {
+  const std::string cachePath = bookCachePath(path);
+  if (cachePath.empty()) return false;
+  // Without a record to write, the progress index holds it.
+  return writeFinishedProgress(path, cachePath) || remoteProgress::markRead(path);
+}
 
 bool markBookUnread(const std::string& path) {
   const std::string cachePath = bookCachePath(path);
   if (cachePath.empty()) return false;
+  remoteProgress::forget(path);
   const std::string progressPath = cachePath + "/progress.bin";
   // Absent already counts as unread, so a book that was never opened is not an error.
   if (!Storage.exists(progressPath.c_str())) return true;
   return Storage.remove(progressPath.c_str());
 }
 
-int loadBookProgress(const std::string& path) {
+int loadOwnBookProgress(const std::string& path) {
   if (FsHelpers::hasReflowableBookExtension(path)) {
     // From the cache alone, as the Library reads it. Opening the book for this ran once per
     // cover on Home, on the loop task: every open re-reads the metadata cache, and a book whose
@@ -145,4 +154,9 @@ int loadBookProgress(const std::string& path) {
     return xtc->calculateProgress(page);
   }
   return mangaProgressPercent(path);
+}
+
+int loadBookProgress(const std::string& path) {
+  const int percent = loadOwnBookProgress(path);
+  return std::max(percent, remoteProgress::percent(path));
 }

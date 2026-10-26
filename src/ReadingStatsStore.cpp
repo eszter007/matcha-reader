@@ -31,6 +31,9 @@ static constexpr uint8_t JOURNAL_RECORD_MAGIC = 0xA5;
 static constexpr uint8_t JOURNAL_HEADER_MAGIC = 0x5A;
 static constexpr size_t JOURNAL_HEADER_BYTES = 5;
 static constexpr size_t MAX_STORED_PATH = 500;
+// Leads a journal record's finished path that comes off the finished list (Change::unfinished). Never the
+// first byte of a path.
+static constexpr char UNFINISHED_MARK = '\x01';
 // record() runs on the main loop, the end-of-book summary on the render task; one journal writer
 // at a time, and no fold while a record is being appended. Recursive: compact() and the summary's
 // table path hold it while recoverInterruptedSave() takes it again.
@@ -392,8 +395,19 @@ void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
   if (stale != finishedBookPaths.end()) finishedBookPaths.erase(stale);
   finishedBookPaths.push_back(bookPath);
   // max(), not assignment: after a truncated load the path list can hold fewer entries than the
-  // count the file's header reported, and a finished-book tally must never count down.
+  // count the file's header reported, and a finished-book tally must never count down (only Mark as
+  // Unread takes a book off: unmarkBookFinished()).
   booksFinished = std::max(booksFinished, static_cast<uint16_t>(finishedBookPaths.size()));
+}
+
+void ReadingStatsStore::unmarkBookFinished(const std::string& bookPath) {
+  const std::string remote = remoteFinishedPath(bookdownload::nameHash(bookPath));
+  const auto end = std::remove_if(finishedBookPaths.begin(), finishedBookPaths.end(),
+                                  [&](const std::string& p) { return p == bookPath || p == remote; });
+  const auto removed = static_cast<uint16_t>(finishedBookPaths.end() - end);
+  finishedBookPaths.erase(end, finishedBookPaths.end());
+  booksFinished = std::max(static_cast<uint16_t>(booksFinished > removed ? booksFinished - removed : 0),
+                           static_cast<uint16_t>(finishedBookPaths.size()));
 }
 
 uint16_t ReadingStatsStore::getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const {
@@ -848,11 +862,24 @@ bool ReadingStatsStore::replayJournal() {
         addLanguageMinutes(r.language.c_str(), r.minutes, r.year, r.month, r.day);
       }
       addBookMinutes(r.bookPath.c_str(), r.language.c_str(), r.minutes, r.year, r.month, r.day);
-    } else if (!r.finishedPath.empty() && !r.language.empty()) {
-      // A finish carries its book's language, so a book finished without reading time counts in it.
+    } else if (!r.finishedPath.empty() && r.year >= 2020) {
+      // A finish carries its book's language, so a book finished without reading time counts in it. Its
+      // day also moves the book up for the next stats upload, which sends the change.
       addBookMinutes(r.bookPath.c_str(), r.language.c_str(), 0, r.year, r.month, r.day);
+    } else if (!r.finishedPath.empty() && !r.bookPath.empty()) {
+      // No clock: the newest day any book has still puts it in the next upload.
+      const auto newest = std::max_element(books.begin(), books.end(), [](const BookReading& a, const BookReading& b) {
+        return a.lastReadDay < b.lastReadDay;
+      });
+      for (auto& b : books) {
+        if (b.path == r.bookPath) b.lastReadDay = newest->lastReadDay;
+      }
     }
-    if (!r.finishedPath.empty()) markBookFinished(r.finishedPath);
+    if (!r.finishedPath.empty() && r.finishedPath[0] == UNFINISHED_MARK) {
+      unmarkBookFinished(r.finishedPath.substr(1));
+    } else if (!r.finishedPath.empty()) {
+      markBookFinished(r.finishedPath);
+    }
   }
   return true;
 }
@@ -886,9 +913,17 @@ void ReadingStatsStore::release() {
 
 bool ReadingStatsStore::record(const Change& change) {
   std::string rec;
+  // An unfinished book goes in the finished-path field behind its mark.
+  std::string unfinished;
+  if (change.unfinished && change.finishedPath) {
+    unfinished.reserve(1 + strnlen(change.finishedPath, MAX_STORED_PATH));
+    unfinished.push_back(UNFINISHED_MARK);
+    unfinished.append(change.finishedPath, strnlen(change.finishedPath, MAX_STORED_PATH - 1));
+  }
+  const char* finishedField = change.unfinished && change.finishedPath ? unfinished.c_str() : change.finishedPath;
   rec.reserve(JOURNAL_HEADER_BYTES + 13 + MAX_STORED_LANGUAGE +
               (change.bookPath ? strnlen(change.bookPath, MAX_STORED_PATH) : 0) +
-              (change.finishedPath ? strnlen(change.finishedPath, MAX_STORED_PATH) : 0));
+              (finishedField ? strnlen(finishedField, MAX_STORED_PATH) : 0));
   rec.push_back(static_cast<char>(JOURNAL_RECORD_MAGIC));
   rec.append(reinterpret_cast<const char*>(&change.year), 2);
   rec.push_back(static_cast<char>(change.month));
@@ -896,7 +931,7 @@ bool ReadingStatsStore::record(const Change& change) {
   rec.append(reinterpret_cast<const char*>(&change.minutes), 2);
   appendString(rec, change.language, MAX_STORED_LANGUAGE);
   appendString(rec, change.bookPath, MAX_STORED_PATH);
-  appendString(rec, change.finishedPath, MAX_STORED_PATH);
+  appendString(rec, finishedField, MAX_STORED_PATH);
 
   std::lock_guard<std::recursive_mutex> lock(journalMutex());
   HalFile f;
@@ -984,6 +1019,8 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
     uint16_t minutes;
     uint32_t book;      // hash of the book path, 0 for none
     uint32_t finished;  // hash of the finished path, 0 for none
+    bool unfinished;    // `finished` and its stand-in `standIn` come off the list instead
+    uint32_t standIn;
     char language[4];
     bool hasLanguage;
   };
@@ -996,10 +1033,18 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
       journal.reserve(countJournalRecords());
       JournalRecord r;
       while (readRecord(j, r)) {
-        Entry e{daysSinceEpoch(r.year, r.month, r.day), r.minutes, 0, 0, {}, !r.language.empty()};
+        Entry e{daysSinceEpoch(r.year, r.month, r.day), r.minutes, 0, 0, false, 0, {}, !r.language.empty()};
+        e.unfinished = !r.finishedPath.empty() && r.finishedPath[0] == UNFINISHED_MARK;
         // A finish names its book too, with its language: see replayJournal().
-        if (!r.bookPath.empty() && (r.minutes > 0 || !r.finishedPath.empty())) e.book = pathHash(r.bookPath);
-        if (!r.finishedPath.empty()) e.finished = pathHash(r.finishedPath);
+        if (!r.bookPath.empty() && (r.minutes > 0 || (!r.finishedPath.empty() && !e.unfinished))) {
+          e.book = pathHash(r.bookPath);
+        }
+        if (e.unfinished) {
+          e.finished = pathHash(r.finishedPath.substr(1));
+          e.standIn = pathHash(remoteFinishedPath(bookdownload::nameHash(r.finishedPath.substr(1))));
+        } else if (!r.finishedPath.empty()) {
+          e.finished = pathHash(r.finishedPath);
+        }
         normalizeLanguage(r.language.c_str(), e.language);
         if (r.minutes > 0 && r.year < 2020) e.minutes = 0;  // dropped from days, as on replay
         journal.push_back(e);
@@ -1079,6 +1124,15 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
   }
   uint16_t finishedCount = hasFile ? (pathsIntact ? static_cast<uint16_t>(finished.size()) : headerFinished) : 0;
   for (const auto& e : journal) {
+    if (e.unfinished) {  // as unmarkBookFinished()
+      const auto end = std::remove_if(finished.begin(), finished.end(),
+                                      [&e](const uint32_t h) { return h == e.finished || h == e.standIn; });
+      const auto removed = static_cast<uint16_t>(finished.end() - end);
+      finished.erase(end, finished.end());
+      finishedCount = std::max(static_cast<uint16_t>(finishedCount > removed ? finishedCount - removed : 0),
+                               static_cast<uint16_t>(finished.size()));
+      continue;
+    }
     if (!e.finished || std::find(finished.begin(), finished.end(), e.finished) != finished.end()) continue;
     finished.push_back(e.finished);
     finishedCount = std::max(finishedCount, static_cast<uint16_t>(finished.size()));  // as markBookFinished()

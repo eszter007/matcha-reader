@@ -106,4 +106,5 @@ class ReaderActivity : public Activity {
 
  private:
   unsigned long readingSessionStartMs = 0;
+  int enterPercent = -1;  // the book's saved progress when it was opened
 };

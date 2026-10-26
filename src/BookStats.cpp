@@ -306,6 +306,19 @@ bool BookStats::addMinutes(const char* path, const uint16_t year, const uint8_t 
   return b.save();
 }
 
+bool BookStats::clearFinish(const char* path) {
+  if (!path || !*path) return false;
+  std::lock_guard<std::mutex> lock(fileMutex());
+  BookStats b;
+  if (!b.load(path)) return false;
+  if (b.finished.year == 0 && !b.hasFinishCounts) return true;
+  b.finished = {};
+  b.hasFinishCounts = false;
+  b.finishLookups = 0;
+  b.finishSentences = 0;
+  return b.save();
+}
+
 bool BookStats::recordFinish(const char* path, const uint16_t year, const uint8_t month, const uint8_t day,
                              const bool firstFinish, BookStats& out) {
   if (!path || !*path) return false;

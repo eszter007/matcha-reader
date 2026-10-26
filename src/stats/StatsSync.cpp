@@ -19,6 +19,8 @@
 #include "CrossPointSettings.h"
 #include "DailyStatsParser.h"
 #include "OverviewParser.h"
+#include "ProgressChangesParser.h"
+#include "util/RemoteProgress.h"
 
 namespace {
 // Same floor as KOReaderSyncClient and clippingSync.
@@ -225,6 +227,57 @@ bool downloadBooks(freeink::SecureHttpClient& http) {
   return true;
 }
 
+// Changes per page of the progress feed; the server also stops a page before 8 KB.
+constexpr int CHANGES_PER_PAGE = 20;
+// Pages read per sync at most: the first one goes through every book on the account, and what is left
+// comes with the next sync.
+constexpr int MAX_CHANGE_PAGES = 50;
+
+// Each book's newest progress on any device, from the server's progress feed into the progress index (the
+// Library's badges), loaded by the caller before TLS took its buffers. Only what changed since the last pull.
+// What is applied is saved with its cursor, so a failure costs only the pages after it, which come again
+// next time.
+void pullProgress(freeink::SecureHttpClient& http, remoteProgress::Feed& feed) {
+  const uint64_t start = feed.cursor();
+  const ProgressChangesParser::Sink sink{&feed, [](void* f, const uint32_t* keys, const size_t count, const float pct) {
+                                           auto* index = static_cast<remoteProgress::Feed*>(f);
+                                           for (size_t i = 0; i < count; i++) {
+                                             if (!index->set(keys[i], remoteProgress::percentOf(pct))) return false;
+                                           }
+                                           return true;
+                                         }};
+  int changes = 0;
+  for (int page = 0; page < MAX_CHANGE_PAGES; page++) {
+    // Heap, not stack: the parser holds a 2 KB token buffer. A fresh one per page.
+    auto parser = makeUniqueNoThrow<ProgressChangesParser>(sink);
+    char path[96];
+    snprintf(path, sizeof(path), "/api/v1/progress/changes?since=%llu&limit=%d",
+             static_cast<unsigned long long>(feed.cursor()), CHANGES_PER_PAGE);
+    if (!parser || !begin(http, path)) break;
+    const int status = http.sendRequest("GET", nullptr, 0, [&](const uint8_t* data, const size_t length) {
+      parser->feed(reinterpret_cast<const char*>(data), length);
+      return true;
+    });
+    if (status == 404) {
+      LOG_INF("STATS", "Server has no progress feed; other devices' progress not synced");
+      break;
+    }
+    if (status != 200 || !http.responseComplete() || !parser->complete()) {
+      LOG_ERR("STATS", "Progress feed stopped: HTTP %d", status);
+      break;
+    }
+    feed.advance(parser->cursor());
+    changes += parser->changes();
+    if (!parser->more()) break;
+  }
+  if (feed.overflowed()) LOG_ERR("STATS", "Progress index full; some books left out");
+  if (feed.cursor() != start && !feed.save()) {
+    LOG_ERR("STATS", "Progress index not saved");
+    return;
+  }
+  LOG_INF("STATS", "Progress feed: %d changes", changes);
+}
+
 // Where the upload stands: the book being sent and how many of its new days already went.
 struct BookCursor {
   size_t book = 0;
@@ -371,6 +424,11 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
   std::sort(books.begin(), books.end(),
             [](const PendingBook& a, const PendingBook& b) { return a.lastReadDay < b.lastReadDay; });
 
+  // The progress index too: loaded once TLS holds its buffers, it would need a large block next to them.
+  remoteProgress::Feed feed;
+  const bool feedReady = feed.begin(accountKey());
+  if (!feedReady) LOG_ERR("STATS", "Not enough heap for the progress index");
+
   auto http = makeUniqueNoThrow<freeink::SecureHttpClient>();
   if (!http || !heapForTls()) return false;
   http->setInsecure();
@@ -421,6 +479,7 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
   }
   // Only after a complete upload: then the server holds everything the baselines count.
   if (ok) downloadOverview(*http, baselines);
+  if (feedReady) pullProgress(*http, feed);
   // Free the TLS session before the progress request that follows.
   http->end();
   http.reset();
