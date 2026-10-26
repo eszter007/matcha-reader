@@ -61,13 +61,13 @@ void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, in
 
 }  // namespace
 
-void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, Rect bounds,
-                   const char* caption, const int fontId, const char* sample) {
+int renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, Rect bounds,
+                  const char* caption, const int fontId, const char* sample) {
   const int top = bounds.y;
   const int height = bounds.height;
   const int left = bounds.x + previewPadding;
   const int width = bounds.width - (previewPadding * 2);
-  if (width <= 0 || height <= 0) return;
+  if (width <= 0 || height <= 0) return top;
 
   // No caption: the sample fills the pane down to its bottom padding.
   int labelReserved = previewPadding;
@@ -77,14 +77,14 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
     renderer.drawText(UI_10_FONT_ID, left, top + height - previewPadding - labelH, caption);
   }
 
-  if (fontId == 0) return;
+  if (fontId == 0) return top;
 
   const int lineH = renderer.getTextHeight(fontId);
-  if (lineH <= 0) return;
+  if (lineH <= 0) return top;
 
   const int textLeft = left + SETTINGS.screenMargin;
   const int textWidth = width - 2 * SETTINGS.screenMargin;
-  if (textWidth <= 0) return;
+  if (textWidth <= 0) return top;
 
   const float compression = SETTINGS.getReaderLineCompression();
   const int lineAdvance = std::max(1, renderer.getLineHeight(fontId, compression));
@@ -118,15 +118,18 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
 
   // Draw the sample twice so the paragraph gap is visible
   int y = top + previewPadding;
+  int textBottom = top;
   const int textBottomLimit = top + height - labelReserved;
   for (int paragraph = 0; paragraph < 2; paragraph++) {
     for (const auto& line : layout.lines) {
-      if (y + lineH > textBottomLimit) return;
+      if (y + lineH > textBottomLimit) return textBottom;
       line->render(renderer, fontId, textLeft, y);
+      textBottom = y + lineH;
       y += lineAdvance;
     }
     y += paragraphGap;
   }
+  return textBottom;
 }
 
 }  // namespace textsettings

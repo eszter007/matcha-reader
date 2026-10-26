@@ -137,4 +137,5 @@ class TextSettingsActivity final : public UiListActivity {
   ThemeMetrics metrics_ = {};
   int afterHeader = 0;
   int previewHeight = 0;
+  int boxHeight_ = 0;  // the preview box as last drawn, at most previewHeight
 };

@@ -135,6 +135,7 @@ void TextSettingsActivity::onEnter() {
   afterHeader = safeArea.y + metrics_.topPadding + metrics_.headerHeight + metrics_.verticalSpacing;
   const int usableHeight = safeBottom - afterHeader - metrics_.verticalSpacing;
   previewHeight = usableHeight * metrics_.previewHeightPercent / 100;
+  boxHeight_ = previewHeight;
 
   layoutHeading_ = upperHeading(tr(STR_LAYOUT));
   styleHeading_ = upperHeading(tr(STR_STYLE));
@@ -300,7 +301,8 @@ void TextSettingsActivity::activateIndex(const int index) {
 
 void TextSettingsActivity::buildScreen(UiScreen& screen) {
   const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  const int listTop = afterHeader + previewHeight + metrics_.verticalSpacing;
+  // drawChrome() runs first in every render and sizes the box.
+  const int listTop = afterHeader + boxHeight_ + metrics_.verticalSpacing;
   const int rightInset = renderer.getScreenWidth() - (safeArea.x + safeArea.width);
   const int bottomInset = renderer.getScreenHeight() - (safeArea.y + safeArea.height);
   screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(listTop), static_cast<int16_t>(rightInset),
@@ -345,6 +347,9 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
   props.headerText = screen.theme().smallText;
   props.headerText.font = fui::GfxRendererTarget::FONT_LABEL;  // the 8 pt UI font
   props.headerUnderline = 0;
+  // The heading sits on its first row (no band under it) with room above, so it reads as that row's.
+  props.headerRowHeight = static_cast<int16_t>(screen.target().lineHeight(props.headerText.font));
+  props.sectionGap = 28;
   syncListViewport(screen, props);
   screen.list(props);
 }
@@ -370,8 +375,8 @@ void TextSettingsActivity::drawChrome() {
       bookScript_ != CjkScript::None ? bookScript_ : (verticalText_ ? CjkScript::Japanese : CjkScript::None);
   const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   const int side = metrics_.contentSidePadding;
+  // previewHeight is the most the box may take; it shrinks to the lines the sample fills.
   const Rect box{safeArea.x + side, afterHeader, safeArea.width - 2 * side, previewHeight};
-  renderer.drawRect(box.x, box.y, box.width, box.height, true);
   // Inside the 1px border, so the sample cannot draw over it.
   const Rect previewBounds{box.x + 1, box.y + 1, box.width - 2, box.height - 2};
   const auto [savedX, savedY, savedWidth, savedHeight] = renderer.getClipRect();
@@ -380,10 +385,12 @@ void TextSettingsActivity::drawChrome() {
   const int clipRight = std::min(previewBounds.x + previewBounds.width, savedX + savedWidth);
   const int clipBottom = std::min(previewBounds.y + previewBounds.height, savedY + savedHeight);
   renderer.setClipRect(clipLeft, clipTop, std::max(0, clipRight - clipLeft), std::max(0, clipBottom - clipTop));
-  textsettings::renderPreview(renderer, previewLayout_, PREVIEW_INNER_PADDING, metrics_.verticalSpacing, previewBounds,
-                              nullptr, sdFontSystem.effectiveReaderFontId(previewScript),
-                              previewSample(profile_, previewScript));
+  const int textBottom = textsettings::renderPreview(
+      renderer, previewLayout_, PREVIEW_INNER_PADDING, metrics_.verticalSpacing, previewBounds, nullptr,
+      sdFontSystem.effectiveReaderFontId(previewScript), previewSample(profile_, previewScript));
   renderer.setClipRect(savedX, savedY, savedWidth, savedHeight);
+  boxHeight_ = std::min(previewHeight, textBottom + PREVIEW_INNER_PADDING + 1 - box.y);
+  renderer.drawRect(box.x, box.y, box.width, boxHeight_, true);
 }
 
 // Button hints live here rather than at the end of drawChrome(): UiListActivity draws the footer

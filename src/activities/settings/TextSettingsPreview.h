@@ -44,7 +44,8 @@ struct PreviewLayout {
 // that resolved its own font would promise a face and a size the page will not use.
 // sample: the text to lay out, in the script of the profile being edited; it must outlive the
 // layout, which is keyed on the pointer. The caption (nullptr for none) is borrowed for this draw.
-void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, Rect bounds,
-                   const char* caption, int fontId, const char* sample);
+// Returns the bottom of the last sample line drawn (bounds.y when none was).
+int renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, Rect bounds,
+                  const char* caption, int fontId, const char* sample);
 
 }  // namespace textsettings
