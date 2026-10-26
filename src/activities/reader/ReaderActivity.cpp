@@ -175,7 +175,9 @@ void ReaderActivity::loop() {
     finish();
     return;
   }
-  ReaderUtils::flushReadingStats(readingSessionStartMs, false, bookPath.c_str(), getBookLanguage());
+  // The end-of-book screen is not reading: what came before it is recorded, its own time is not.
+  ReaderUtils::flushReadingStats(readingSessionStartMs, isAtEndOfBook(), bookPath.c_str(), getBookLanguage());
+  if (isAtEndOfBook()) readingSessionStartMs = millis();
   // Here rather than in each format's readerLoop(): every reader routes through this, and the
   // write it defers (APP_STATE + Recent Books) belongs on the loop task, not the render task.
   rememberBookOnceRendered();

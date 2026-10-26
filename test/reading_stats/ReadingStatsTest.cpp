@@ -439,16 +439,23 @@ TEST_F(StatsTest, Version2FileLoadsWithZeroCounters) {
   EXPECT_EQ(b.getSentencesSaved(), 0u);
 }
 
-TEST_F(StatsTest, DaySpanCountsCalendarDaysFirstToLast) {
+// The stamp counts the days actually read up to the finish, not the calendar span, and a reopening
+// after the finish day adds nothing.
+TEST_F(StatsTest, TotalsThroughCountReadingDaysUpToTheFinish) {
   BookStats b;
   ASSERT_TRUE(b.load("/Japanese/span.epub"));
-  EXPECT_EQ(b.getDaySpan(), 0);
-  b.recordMinutes(2026, 2, 27, 5);
-  EXPECT_EQ(b.getDaySpan(), 1) << "one reading day is a one-day read";
-  b.recordMinutes(2026, 3, 2, 5);
-  EXPECT_EQ(b.getDaySpan(), 4) << "Feb 27 to Mar 2, across a non-leap February";
-  b.recordMinutes(2027, 3, 2, 5);
-  EXPECT_EQ(b.getDaySpan(), 369);
+  uint32_t minutes = 1;
+  int daysRead = 1;
+  b.totalsThrough(2026, 10, 24, minutes, daysRead);
+  EXPECT_EQ(minutes, 0u);
+  EXPECT_EQ(daysRead, 0);
+  b.recordMinutes(2026, 10, 20, 300);
+  b.recordMinutes(2026, 10, 22, 400);
+  b.recordMinutes(2026, 10, 24, 635);
+  b.recordMinutes(2026, 10, 27, 3);  // reopened after finishing
+  b.totalsThrough(2026, 10, 24, minutes, daysRead);
+  EXPECT_EQ(minutes, 1335u);
+  EXPECT_EQ(daysRead, 3) << "three reading days between the 20th and the 24th, not five calendar days";
 }
 
 // What the reader records goes to the journal; a load replays it, and compact() folds it into the

@@ -348,10 +348,9 @@ void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* book
   stamp_ = stampFor(bookLanguage);
 
   BookStats stats;
-  if (BookStats::recordFinish(bookPath.c_str(), today.year, today.month, today.day, recorded && totals.firstFinish,
-                              stats)) {
-    summary.minutes = stats.getTotalMinutes();
-    summary.daySpan = stats.getDaySpan();
+  const bool haveStats = BookStats::recordFinish(bookPath.c_str(), today.year, today.month, today.day,
+                                                 recorded && totals.firstFinish, stats);
+  if (haveStats) {
     summary.lookups = stats.getLookups();
     summary.sentences = stats.getSentencesSaved();
   }
@@ -359,6 +358,8 @@ void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* book
   uint16_t year = today.year;
   uint8_t month = today.month, day = today.day;
   stats.getFinishDay(year, month, day);
+  // Time and days of the read that finished it: reopening the book later adds nothing to the stamp.
+  if (haveStats) stats.totalsThrough(year, month, day, summary.minutes, summary.daysRead);
   formatDate(summary.finishedOn, sizeof(summary.finishedOn), tr(STR_STAMP_DATE_FORMAT), year, month, day);
   if (!stats.getDays().empty() && std::tie(stats.getDays().front().year, stats.getDays().front().month,
                                            stats.getDays().front().day) <= std::tie(year, month, day)) {
@@ -504,7 +505,7 @@ void EndOfBookOptions::drawStub(const int x, const int y, const int w, const int
   cells[count++].label = tr(STR_EOB_READING_TIME);
   // Time and days always show, so the stub keeps its shape after a short read. A book finished the
   // day it was started still took a day. Lookups join them when there are any; two cells centre.
-  snprintf(cells[count].value, sizeof(cells[0].value), "%d", std::max(summary.daySpan, 1));
+  snprintf(cells[count].value, sizeof(cells[0].value), "%d", std::max(summary.daysRead, 1));
   cells[count++].label = tr(STR_EOB_DAYS_TO_FINISH);
   if (summary.lookups > 0) {
     snprintf(cells[count].value, sizeof(cells[0].value), "%lu", static_cast<unsigned long>(summary.lookups));

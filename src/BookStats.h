@@ -74,8 +74,9 @@ class BookStats {
   uint32_t getSessions() const { return sessions; }
   uint32_t getLookups() const { return lookups; }
   uint32_t getSentencesSaved() const { return sentencesSaved; }
-  // Calendar days from the first reading day to the last, both included; 0 with no history.
-  int getDaySpan() const;
+  // Minutes and reading days up to and including a day: the read that finished the book, without
+  // reopenings after it.
+  void totalsThrough(uint16_t year, uint8_t month, uint8_t day, uint32_t& minutes, int& daysRead) const;
   uint32_t getTotalMinutes() const;
   int getDaysRead() const { return static_cast<int>(days.size()); }
   // Mean minutes per opening, rounded. Zero-minute opens stay in the divisor: excluding them

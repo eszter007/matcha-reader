@@ -59,7 +59,7 @@ class EndOfBookOptions {
   // loaded, read and dropped there rather than held for the life of the screen.
   struct Summary {
     uint32_t minutes = 0;
-    int daySpan = 0;
+    int daysRead = 0;  // up to the finish day
     uint32_t lookups = 0;
     uint32_t sentences = 0;
     uint16_t booksFinished = 0;

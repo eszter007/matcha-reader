@@ -318,17 +318,15 @@ bool BookStats::getFinishDay(uint16_t& year, uint8_t& month, uint8_t& day) const
   return true;
 }
 
-int BookStats::getDaySpan() const {
-  if (days.empty()) return 0;
-  // Days since 0000-03-01 (Howard Hinnant's days_from_civil), enough for a difference.
-  const auto serial = [](const BookDay& d) {
-    const int y = d.year - (d.month <= 2 ? 1 : 0);
-    const int era = y / 400;
-    const int yoe = y - era * 400;
-    const int doy = (153 * (d.month + (d.month > 2 ? -3 : 9)) + 2) / 5 + d.day - 1;
-    return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  };
-  return serial(days.back()) - serial(days.front()) + 1;
+void BookStats::totalsThrough(const uint16_t year, const uint8_t month, const uint8_t day, uint32_t& minutes,
+                              int& daysRead) const {
+  minutes = 0;
+  daysRead = 0;
+  for (const BookDay& d : days) {
+    if (std::tie(d.year, d.month, d.day) > std::tie(year, month, day)) break;  // days run oldest first
+    minutes += d.minutes;
+    if (d.minutes > 0) daysRead++;
+  }
 }
 
 uint32_t BookStats::getTotalMinutes() const {
