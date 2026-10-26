@@ -938,3 +938,27 @@ TEST_F(StatsTest, AccountOverviewCountsEveryDevice) {
   EXPECT_EQ(s.getTotalMinutes(), 15u);
   EXPECT_EQ(s.getStreak(Y, M, 8), 2);
 }
+
+// A reopened finished book keeps the stamp number it got when it was finished, both while the finishes
+// are still in the journal and once they are in the file: two Japanese books, an English one, a third
+// Japanese one.
+TEST_F(StatsTest, SummaryKeepsAReopenedBooksPlace) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/a.epub", "ja", "/a.epub"}));
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/b.epub", "ja", "/b.epub"}));
+  ASSERT_TRUE(s.record({Y, M, 6, 9, "/e.epub", "en", "/e.epub"}));
+  ASSERT_TRUE(s.record({Y, M, 7, 9, "/c.epub", "ja", "/c.epub"}));
+  for (int pass = 0; pass < 2; pass++) {
+    const auto newest = s.summarize(Y, M, 7, "ja", "/c.epub");
+    EXPECT_EQ(newest.booksFinished, 4);
+    EXPECT_EQ(newest.languageBooksFinished, 3);
+    ASSERT_TRUE(s.record({Y, M, 8, 0, nullptr, nullptr, "/b.epub"}));  // reopened at its end
+    const auto second = s.summarize(Y, M, 8, "ja", "/b.epub");
+    EXPECT_EQ(second.booksFinished, 2);
+    EXPECT_EQ(second.languageBooksFinished, 2);
+    const auto first = s.summarize(Y, M, 8, "ja", "/a.epub");
+    EXPECT_EQ(first.booksFinished, 1);
+    EXPECT_EQ(first.languageBooksFinished, 1);
+    ASSERT_TRUE(s.compact());  // the second pass reads the same from the file
+  }
+}

@@ -984,6 +984,22 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
       t.streak = getStreak(todayYear, todayMonth, todayDay);
       t.booksFinished = getBooksFinished();
       if (lang[0]) t.languageBooksFinished = getBooksFinished(lang);
+      // A book finished before keeps its place: count up to it, not every finish since.
+      const auto it = finishedPath ? std::find(finishedBookPaths.begin(), finishedBookPaths.end(), finishedPath)
+                                   : finishedBookPaths.end();
+      if (it != finishedBookPaths.end() && it + 1 != finishedBookPaths.end()) {
+        t.booksFinished = static_cast<uint16_t>(it - finishedBookPaths.begin() + 1);
+        if (lang[0]) {
+          t.languageBooksFinished = static_cast<uint16_t>(
+              std::count_if(finishedBookPaths.begin(), it + 1, [this, &lang](const std::string& p) {
+                const auto b =
+                    std::find_if(books.begin(), books.end(), [&p](const BookReading& r) { return r.path == p; });
+                char bookLang[4];
+                normalizeLanguage(b == books.end() ? "" : b->language.c_str(), bookLang);
+                return b != books.end() && memcmp(bookLang, lang, sizeof(lang)) == 0;
+              }));
+        }
+      }
     }
     release();
     return t;
@@ -1101,6 +1117,16 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
     finishedCount = std::max(finishedCount, static_cast<uint16_t>(finished.size()));  // as markBookFinished()
   }
   out.booksFinished = finishedCount;
+  // A book finished before keeps its place in the finish order; the newest finish is the total, as Insights
+  // counts it.
+  size_t place = finished.size();
+  if (finishedPath && *finishedPath) {
+    const auto it = std::find(finished.begin(), finished.end(), pathHash(finishedPath));
+    if (it != finished.end() && it + 1 != finished.end()) {
+      place = static_cast<size_t>(it - finished.begin());
+      out.booksFinished = static_cast<uint16_t>(place + 1);
+    }
+  }
 
   if (lang[0]) {
     // Language per finished book: from the per-book block, then as the journal sets it.
@@ -1135,7 +1161,12 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
       memcpy(it->second.data(), e.language, 4);
     }
     for (const auto& x : finishedLang) {
-      if (memcmp(x.second.data(), lang, 4) == 0) out.languageBooksFinished++;
+      if (memcmp(x.second.data(), lang, 4) != 0) continue;
+      if (place < finished.size() && std::find(finished.begin(), finished.end(), x.first) - finished.begin() >
+                                         static_cast<std::ptrdiff_t>(place)) {
+        continue;  // finished after the book this stamp is for
+      }
+      out.languageBooksFinished++;
     }
   }
   return out;

@@ -216,8 +216,10 @@ class ReadingStatsStore {
   // tables built: that screen runs with the book still in memory. Same values as the getters.
   struct Summary {
     int streak = 0;
+    // The stamp's "Nth book": finishedPath's place in the finish order when it was finished before (a
+    // reopening keeps its number), else every finished book.
     uint16_t booksFinished = 0;
-    uint16_t languageBooksFinished = 0;  // for summarize()'s language; 0 without one
+    uint16_t languageBooksFinished = 0;  // the same within summarize()'s language; 0 without one
     bool firstFinish = false;  // finishedPath's latest record is its first finish; false when unsure (table path)
   };
   // finishedPath: a book just record()ed as finished, to learn whether this is a reopening.
