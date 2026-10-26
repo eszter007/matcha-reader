@@ -7,6 +7,7 @@
 #include <WiFi.h>
 
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -28,6 +29,13 @@ void StatsSyncActivity::onEnter() {
     return;
   }
   restartOnExit = true;
+  // Resident SD fonts (a Japanese title on Home) leave too little heap for TLS once Wi-Fi is up:
+  // 89KB free before Wi-Fi left a 17KB block, and both requests were refused. The restart on
+  // exit loads them again.
+  {
+    RenderLock lock(*this);
+    sdFontSystem.releaseAllResidentFonts(renderer);
+  }
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) {
                            // Left from loop(): replacing this activity inside its own callback is unsafe.
