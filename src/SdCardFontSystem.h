@@ -290,6 +290,10 @@ class SdCardFontSystem {
   void addTtfSources(TtfEpdFont& font);
   // Close/free all style sources.
   void freeTtfSources();
+  // The selected TTF as the dictionary panel's fallback at its own size, for what the built-in
+  // panel font lacks (IPA, rarer Latin). False when no TTF is loaded or the face failed to build.
+  bool mapTtfForLookup(GfxRenderer& renderer, int primaryFontId, uint8_t pointSize);
+  void releaseTtfLookup(GfxRenderer& renderer);
   // ReadFn for streamed sources: serves the PSRAM prefix cache first, SD after.
   static unsigned long prefixRead(void* ctx, unsigned long offset, unsigned char* buffer, unsigned long count);
 #endif  // CROSSPOINT_VECTOR_FONTS
@@ -353,6 +357,13 @@ class SdCardFontSystem {
   // UI-size TTF fallbacks (share ttfSources_); parallel to their renderer font ids.
   std::vector<std::unique_ptr<TtfEpdFont>> ttfUi_;
   std::vector<int> ttfUiIds_;
+  // Panel-size faces for a word lookup session (body and header); share ttfSources_.
+  struct TtfLookupFace {
+    std::unique_ptr<TtfEpdFont> font;
+    int fontId = 0;
+    uint8_t pointSize = 0;
+  };
+  TtfLookupFace ttfLookup_[2];
 #endif  // CROSSPOINT_VECTOR_FONTS
 };
 

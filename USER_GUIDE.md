@@ -918,7 +918,7 @@ Put 480x800 images (X4) or 528x792 images (X3) in `.sleep-overlay` on the card, 
 
 You can add fonts from the SD card. Use them for a different look, or for Chinese, Japanese, Korean and other scripts that the built-in fonts do not cover.
 
-Fonts come in `.cpfont` files, one file per size. You can convert any TTF or OTF font yourself with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) in your browser. On boards with extra memory (PSRAM), the device can also read `.ttf`, `.otf` and `.ttc` files directly, without converting them.
+Fonts come in `.cpfont` files, one file per size. You can convert any TTF or OTF font yourself with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) in your browser. On boards with extra memory (PSRAM), the device can also read `.ttf`, `.otf` and `.ttc` files directly, without converting them. The dictionary panel then uses that font too, for characters its own font lacks such as IPA, except in Japanese and Chinese books.
 
 **Ways to install a font**
 
