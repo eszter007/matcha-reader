@@ -175,7 +175,9 @@ void ReaderActivity::loop() {
     finish();
     return;
   }
-  ReaderUtils::flushReadingStats(readingSessionStartMs, false, bookPath.c_str(), getBookLanguage());
+  // The end-of-book screen is not reading: what came before it is recorded, its own time is not.
+  ReaderUtils::flushReadingStats(readingSessionStartMs, isAtEndOfBook(), bookPath.c_str(), getBookLanguage(),
+                                 isAtEndOfBook());
   // Here rather than in each format's readerLoop(): every reader routes through this, and the
   // write it defers (APP_STATE + Recent Books) belongs on the loop task, not the render task.
   rememberBookOnceRendered();
@@ -250,6 +252,8 @@ bool ReaderActivity::renderEndOfBook(const char* logTag) {
   if (endOfBookOptions) {
     // Only the first render loads: the cover check reads the SD card, and every redraw comes here.
     if (!endOfBookOptions->menuActive()) {
+      // The stamp counts the read up to this screen, so its last minutes go in first.
+      ReaderUtils::flushReadingStats(readingSessionStartMs, true, bookPath.c_str(), getBookLanguage(), true);
       endOfBookOptions->loadOnce(bookPath, getBookTitle(), getBookLanguage(),
                                  prepareEndOfBookCover(EndOfBookOptions::COVER_HEIGHT));
     }

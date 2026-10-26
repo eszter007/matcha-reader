@@ -63,9 +63,10 @@ class BookStats {
   // Adds reading minutes to the day and saves (the readers' periodic flush).
   static bool addMinutes(const char* bookPath, uint16_t year, uint8_t month, uint8_t day, uint16_t minutes);
 
-  // Loads the book's stats into `out` and stores today as its finish day on a certain first finish.
-  // A stored day always wins. Without one, a reopened book shows its last reading day before today,
-  // which is not saved: a guess must not become the stored date.
+  // Loads the book's stats into `out` and stores today as its finish day on a first finish, with the
+  // lookup and sentence counts at that moment. A stored day always wins. Without one, a reopened book
+  // shows its last reading day before today, which is not saved: a guess must not become the stored
+  // date. A book finished before the counts were kept has them frozen from this visit.
   static bool recordFinish(const char* bookPath, uint16_t year, uint8_t month, uint8_t day, bool firstFinish,
                            BookStats& out);
   // False when no finish day is stored or guessed.
@@ -74,8 +75,12 @@ class BookStats {
   uint32_t getSessions() const { return sessions; }
   uint32_t getLookups() const { return lookups; }
   uint32_t getSentencesSaved() const { return sentencesSaved; }
-  // Calendar days from the first reading day to the last, both included; 0 with no history.
-  int getDaySpan() const;
+  // The counts when the book was finished; the current ones before that.
+  uint32_t getLookupsAtFinish() const { return hasFinishCounts ? finishLookups : lookups; }
+  uint32_t getSentencesAtFinish() const { return hasFinishCounts ? finishSentences : sentencesSaved; }
+  // The read that finished the book, up to and including the finish day: its minutes, and the calendar
+  // days from its first reading day to the finish (0 with none). Reopenings after it add nothing.
+  void readUntil(uint16_t year, uint8_t month, uint8_t day, uint32_t& minutes, int& daysToFinish) const;
   uint32_t getTotalMinutes() const;
   int getDaysRead() const { return static_cast<int>(days.size()); }
   // Mean minutes per opening, rounded. Zero-minute opens stay in the divisor: excluding them
@@ -103,4 +108,7 @@ class BookStats {
   uint32_t sentencesSaved = 0;
   std::vector<BookDay> days;
   BookDay finished{};  // first finish day; year 0 when unknown (minutes unused)
+  bool hasFinishCounts = false;
+  uint32_t finishLookups = 0;
+  uint32_t finishSentences = 0;
 };

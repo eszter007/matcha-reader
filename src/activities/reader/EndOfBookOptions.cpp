@@ -336,29 +336,46 @@ void drawIconWhite(const GfxRenderer& renderer, const uint8_t* bitmap, const int
 EndOfBookOptions::EndOfBookOptions(GfxRenderer& renderer) : renderer(renderer) {}
 
 void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* bookLanguage) {
-  ReadingStatsStore::Change update;
-  update.finishedPath = bookPath.c_str();
-  const bool recorded = READING_STATS_STORE.record(update);
-
   const StatsWidgets::Today today = StatsWidgets::getToday();
-  // Streamed from the file: the reader is still in memory, so no tables are built here.
-  const ReadingStatsStore::Summary totals =
+  // Streamed from the file: the reader is still in memory, so no tables are built here. Asked before
+  // anything is recorded, so a reopened book is told from a first finish and not recorded again.
+  ReadingStatsStore::Summary totals =
       READING_STATS_STORE.summarize(today.year, today.month, today.day, bookLanguage, bookPath.c_str());
+  // Only a list read in full can tell a first finish: otherwise no date is stored for it, but its finish is
+  // still recorded (a second record of the same book is ignored).
+  const bool firstFinish = totals.listRead && !totals.alreadyFinished;
+  if (!totals.alreadyFinished) {
+    ReadingStatsStore::Change update;
+    update.year = today.year;
+    update.month = today.month;
+    update.day = today.day;
+    update.bookPath = bookPath.c_str();  // with its language, which a finish without reading time lacks
+    update.language = bookLanguage;
+    update.finishedPath = bookPath.c_str();
+    if (READING_STATS_STORE.record(update)) {
+      totals = READING_STATS_STORE.summarize(today.year, today.month, today.day, bookLanguage, bookPath.c_str());
+    } else {
+      // Not on record this time; the stamp still shows the finish it is for.
+      totals.booksFinished++;
+      totals.languageBooksFinished++;
+    }
+  }
   summary.booksFinished = totals.booksFinished;
   stamp_ = stampFor(bookLanguage);
 
   BookStats stats;
-  if (BookStats::recordFinish(bookPath.c_str(), today.year, today.month, today.day, recorded && totals.firstFinish,
-                              stats)) {
-    summary.minutes = stats.getTotalMinutes();
-    summary.daySpan = stats.getDaySpan();
-    summary.lookups = stats.getLookups();
-    summary.sentences = stats.getSentencesSaved();
-  }
-  // The stamp keeps the day the book was first finished.
+  const bool haveStats =
+      BookStats::recordFinish(bookPath.c_str(), today.year, today.month, today.day, firstFinish, stats);
+  // The stamp keeps the day the book was first finished, and the read that finished it: reopening the
+  // book later, or looking words up in it, adds nothing.
   uint16_t year = today.year;
   uint8_t month = today.month, day = today.day;
   stats.getFinishDay(year, month, day);
+  if (haveStats) {
+    stats.readUntil(year, month, day, summary.minutes, summary.daysToFinish);
+    summary.lookups = stats.getLookupsAtFinish();
+    summary.sentences = stats.getSentencesAtFinish();
+  }
   formatDate(summary.finishedOn, sizeof(summary.finishedOn), tr(STR_STAMP_DATE_FORMAT), year, month, day);
   if (!stats.getDays().empty() && std::tie(stats.getDays().front().year, stats.getDays().front().month,
                                            stats.getDays().front().day) <= std::tie(year, month, day)) {
@@ -504,7 +521,7 @@ void EndOfBookOptions::drawStub(const int x, const int y, const int w, const int
   cells[count++].label = tr(STR_EOB_READING_TIME);
   // Time and days always show, so the stub keeps its shape after a short read. A book finished the
   // day it was started still took a day. Lookups join them when there are any; two cells centre.
-  snprintf(cells[count].value, sizeof(cells[0].value), "%d", std::max(summary.daySpan, 1));
+  snprintf(cells[count].value, sizeof(cells[0].value), "%d", std::max(summary.daysToFinish, 1));
   cells[count++].label = tr(STR_EOB_DAYS_TO_FINISH);
   if (summary.lookups > 0) {
     snprintf(cells[count].value, sizeof(cells[0].value), "%lu", static_cast<unsigned long>(summary.lookups));

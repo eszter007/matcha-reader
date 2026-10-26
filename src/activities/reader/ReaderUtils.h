@@ -10,6 +10,7 @@
 
 #include <cctype>
 #include <ctime>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -50,13 +51,21 @@ constexpr unsigned long READING_STATS_FLUSH_MS = 5UL * 60UL * 1000UL;
 // Both are optional: an empty bookPath records only the per-day total, and an empty language is
 // the normal case for books that declare none (TXT/XTC, manga converted before meta.bin carried
 // a language tag) -- it is filled in on a later flush if the book ever starts declaring one.
-inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = false, const char* bookPath = nullptr,
-                              const char* language = nullptr) {
-  if (sessionStartMs == 0) return;
+// True when no whole minute is left pending: none had accrued, or they were recorded. pause: the time
+// from here on is not reading (the end-of-book screen), so the session restarts once nothing is
+// pending. The render task flushes too, before it builds the end-of-book stamp, hence the lock.
+inline bool flushReadingStats(unsigned long& sessionStartMs, const bool force = false, const char* bookPath = nullptr,
+                              const char* language = nullptr, const bool pause = false) {
+  static std::mutex flushMutex;
+  std::lock_guard<std::mutex> lock(flushMutex);
+  if (sessionStartMs == 0) return true;
   const unsigned long elapsed = millis() - sessionStartMs;
-  if (!force && elapsed < READING_STATS_FLUSH_MS) return;
+  if (!force && elapsed < READING_STATS_FLUSH_MS) return false;
   const uint16_t minutes = static_cast<uint16_t>(elapsed / 60000UL);
-  if (minutes == 0) return;
+  if (minutes == 0) {
+    if (pause) sessionStartMs = millis();
+    return true;
+  }
   // Local-midnight day boundary, so an evening session doesn't get logged against
   // "tomorrow" (UTC midnight is 9am in Japan). Reads the process TZ rule that
   // timezones::applyToClock() installs, which is DST-aware and follows the zone the
@@ -74,12 +83,13 @@ inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = 
   update.bookPath = bookPath;
   update.language = language;
   // Not written: keep the minutes pending (sessionStartMs unchanged) for the next flush.
-  if (!READING_STATS_STORE.record(update)) return;
+  if (!READING_STATS_STORE.record(update)) return false;
   // Per-book day history (see BookStats). Loaded and dropped here: nothing stays in DRAM.
   if (bookPath && *bookPath && !BookStats::addMinutes(bookPath, update.year, update.month, update.day, minutes)) {
     LOG_ERR("STATS", "book stats update failed (%u min not attributed)", minutes);
   }
-  sessionStartMs += static_cast<unsigned long>(minutes) * 60000UL;
+  sessionStartMs = pause ? millis() : sessionStartMs + static_cast<unsigned long>(minutes) * 60000UL;
+  return true;
 }
 enum ReaderTouchAction : freeink::ui::ActionId {
   READER_TOUCH_PREV = 1,

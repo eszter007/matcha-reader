@@ -523,6 +523,11 @@ bool MangaReaderActivity::renderEndOfBook() {
   }
   renderer.clearScreen();
   if (endOfBookOptions) {
+    // The stamp counts the read up to this screen, so its last minutes go in first.
+    if (!endOfBookOptions->menuActive()) {
+      ReaderUtils::flushReadingStats(readingSessionStartMs, true, book->getFolder().c_str(),
+                                     book->getLanguage().c_str(), true);
+    }
     endOfBookOptions->loadOnce(book->getFolder(), book->getTitle(), book->getLanguage().c_str(), "");
     endOfBookOptions->render(renderer, mappedInput);
   } else {
@@ -547,9 +552,11 @@ void MangaReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOptio
 
 void MangaReaderActivity::loop() {
   // Crash-proof stats: flush whole minutes every few minutes so an exit path that
-  // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
-  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/false, book ? book->getFolder().c_str() : nullptr,
-                                 book ? book->getLanguage().c_str() : nullptr);
+  // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day. The end-of-book
+  // screen is not reading: what came before it is recorded, its own time is not.
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/isAtEndOfBook(),
+                                 book ? book->getFolder().c_str() : nullptr,
+                                 book ? book->getLanguage().c_str() : nullptr, /*pause=*/isAtEndOfBook());
 
   // Publish any finished prefetch-worker result (panelDims slot + done flags) under the loop
   // task's normal locking rules. Runs before everything else so a completed warm is visible to
