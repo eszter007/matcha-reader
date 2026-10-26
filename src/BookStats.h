@@ -69,6 +69,8 @@ class BookStats {
   // date. A book finished before the counts were kept has them frozen from this visit.
   static bool recordFinish(const char* bookPath, uint16_t year, uint8_t month, uint8_t day, bool firstFinish,
                            BookStats& out);
+  // Forgets the finish day and the counts kept with it (Mark as Unread).
+  static bool clearFinish(const char* bookPath);
   // False when no finish day is stored or guessed.
   bool getFinishDay(uint16_t& year, uint8_t& month, uint8_t& day) const;
 

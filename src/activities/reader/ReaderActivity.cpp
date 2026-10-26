@@ -19,6 +19,7 @@
 #include "SdCardFontSystem.h"
 #include "XtcReaderActivity.h"
 #include "activities/util/BmpViewerActivity.h"
+#include "util/FinishedIndex.h"
 #include "util/PluginEvents.h"
 
 ReaderActivity::ReaderActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -105,6 +106,8 @@ void ReaderActivity::onEnter() {
   readingSessionStartMs = millis();
   onReaderEnter();
   BookStats::recordOpen(bookPath.c_str());
+  // Opened here: from now on its own progress counts, not a finish elsewhere.
+  finishedIndex::forget(bookPath);
   requestUpdate();
 }
 

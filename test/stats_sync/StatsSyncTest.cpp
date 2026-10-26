@@ -9,6 +9,7 @@
 #include "stats/BookListParser.h"
 #include "stats/DailyStatsParser.h"
 #include "stats/OverviewParser.h"
+#include "stats/ProgressChangesParser.h"
 #include "stats/StatsSync.h"
 
 using statsSync::Day;
@@ -210,6 +211,46 @@ void bookList() {
   assert(last.until() == 1761300100u);
   assert(parser.until() == 0);  // a server without it
 }
+// A page of the progress feed: each document's keys (hash, then aliases) and its percentage, in any chunking.
+void progressChanges() {
+  const std::string body =
+      R"({"cursor":4812,"more":true,"changes":[)"
+      R"({"document":"a1b2c3d4e5f60718293a4b5c6d7e8f90","aliases":["ffeeddccbbaa99887766554433221100"],)"
+      R"("percentage":1,"progress":"/body/DocFragment[12]","position":{"spine":3,"page":[1,2]},"device":"Phone",)"
+      R"("device_id":"phone","timestamp":1791234567},)"
+      R"({"document":"0123456789abcdef0123456789abcdef","aliases":[],"percentage":0.4213,"position":null},)"
+      R"({"document":"not-a-hash","percentage":1},)"                             // no usable key: skipped
+      R"({"document":"99999999aaaaaaaabbbbbbbbcccccccc","percentage":null}]})";  // no percentage: skipped
+  struct Log {
+    std::string calls;
+  } log;
+  const ProgressChangesParser::Sink sink{&log, [](void* c, const uint32_t* keys, const size_t n, const float pct) {
+                                           auto& l = static_cast<Log*>(c)->calls;
+                                           for (size_t i = 0; i < n; i++) l += std::to_string(keys[i]) + " ";
+                                           l += std::to_string(static_cast<int>(pct * 100 + 0.5f)) + ";";
+                                           return true;
+                                         }};
+  ProgressChangesParser parser(sink);
+  for (size_t i = 0; i < body.size(); i += 3) parser.feed(body.data() + i, std::min<size_t>(3, body.size() - i));
+  assert(parser.complete());
+  assert(parser.cursor() == 4812 && parser.more() && parser.changes() == 2);
+  assert(log.calls == std::to_string(0xa1b2c3d4u) + " " + std::to_string(0xffeeddccu) + " 100;" +
+                          std::to_string(0x01234567u) + " 42;");
+
+  // A sink that refuses a change, or a page cut short, does not count as read.
+  const ProgressChangesParser::Sink full{nullptr, [](void*, const uint32_t*, size_t, float) { return false; }};
+  ProgressChangesParser refused(full);
+  refused.feed(body.data(), body.size());
+  assert(!refused.complete());
+  ProgressChangesParser cut(sink);
+  cut.feed(body.data(), body.size() / 2);
+  assert(!cut.complete());
+
+  const std::string last = R"({"cursor":4900,"more":false,"changes":[]})";
+  ProgressChangesParser end(sink);
+  end.feed(last.data(), last.size());
+  assert(end.complete() && end.cursor() == 4900 && !end.more() && end.changes() == 0);
+}
 }  // namespace
 
 int main() {
@@ -219,6 +260,7 @@ int main() {
   download();
   overview();
   bookList();
+  progressChanges();
   puts("stats sync tests passed");
   return 0;
 }

@@ -28,6 +28,7 @@
 #include "fontIds.h"
 #include "network/WifiPowerSaveGuard.h"
 #include "stats/StatsSync.h"
+#include "util/FinishedIndex.h"
 #include "util/PluginEvents.h"
 #include "util/PluginHttp.h"
 
@@ -208,6 +209,8 @@ void KOReaderSyncActivity::performSync() {
     }
     requestUpdateAndWait();
     statsSync::run(epubPath, documentHash);
+    // The feed may have just marked this book finished elsewhere; it is open here, so its own progress counts.
+    finishedIndex::forget(epubPath);
   }
 
   {
