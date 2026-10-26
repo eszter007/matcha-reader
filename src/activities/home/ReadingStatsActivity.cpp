@@ -90,7 +90,7 @@ void ReadingStatsActivity::ringSetFocus(const TabRing::Focus focus, const bool a
 void ReadingStatsActivity::onEnter() {
   Activity::onEnter();
   tabBand_.begin();
-  stats_.emplace(statsSync::showAllDevices());
+  stats_.emplace(statsSync::insightsAccountKey());
   languages.clear();
   if (SETTINGS.showLanguageStats) READING_STATS_STORE.getLanguages(languages);
   if (SETTINGS.hideUnknownLanguages) {

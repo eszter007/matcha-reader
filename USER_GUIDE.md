@@ -1731,12 +1731,13 @@ recorded them.
 Books are matched by file name, so keep the same name on every device. The server only has per-book days and
 languages if it supports them; an older server brings back the **All** tab only.
 
-With **Settings → Insights → Insights data** on **All devices** (the default), each sync also fetches the account's
-numbers as the CrossPoint app counts them, overall and per language: reading days, streaks, books finished, reading
-time and this week. Insights and the **Insights** sleep screen then show those, so a day read on any device or in the app
-counts, and a language read only elsewhere gets its own tab. What you read on this reader after the sync is added on
-top until the next one. Other devices' numbers are only shown, never uploaded as this reader's. Until the account you
-are signed in with has synced once, Insights shows this device only.
+With **Settings → Insights → Insights data** on **All devices** (the default), every sync that sends your stats,
+**Sync Progress** as well as **Refresh Insights**, also fetches the account's numbers as the CrossPoint app counts
+them, overall and per language: reading days, streaks, books finished, reading time and this week. Insights and the
+**Insights** sleep screen then show those, so a day read on any device or in the app counts, and a language read
+only elsewhere gets its own tab. What you read or finish on this reader after that sync is added on top until the
+next one; reading on other devices shows after your next sync. Other devices' numbers are only shown, never uploaded
+as this reader's. Until the account you are signed in with has synced once, Insights shows this device only.
 
 ## 8. Current Limitations & Roadmap
 
