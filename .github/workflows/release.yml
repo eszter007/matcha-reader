@@ -240,7 +240,7 @@ jobs:
             echo
             echo '### 1. Download the file for your language'
             echo
-            echo 'Only that one file, e.g. `RU.cplang` for Русский. No unzipping needed.'
+            echo 'Only that one file, e.g. `IT.cplang` for Italiano. No unzipping needed.'
             echo
             echo '### 2. Copy it to the SD card'
             echo
@@ -252,7 +252,7 @@ jobs:
             echo 'SD card'
             echo '└── .crosspoint'
             echo '    └── lang'
-            echo '        └── RU.cplang'
+            echo '        └── IT.cplang'
             echo '```'
             echo
             echo 'Folders that start with a dot are hidden on most computers. On a Mac press Cmd+Shift+. in'
