@@ -80,6 +80,7 @@
 #include "util/DictionaryRegistry.h"
 #include "util/PluginEvents.h"
 #include "util/ScreenshotUtil.h"
+#include "util/TextProfiles.h"
 
 namespace {
 // The toolbar's page snapshot is a convenience (closing the toolbar redraws without re-rendering);
@@ -328,39 +329,78 @@ EpubReaderActivity::ReaderPrefs EpubReaderActivity::capturePrefsFromSettings() {
   return p;
 }
 
-// The language is known only now, after the per-book prefs went in: a CJK book switches the four
-// profile settings to the CJK profile, keeping what the book pinned for itself (size, line spacing).
+// The language is known only now, after the per-book prefs went in: a book in another script
+// switches to its profile, keeping what the book pinned for itself (font, size, line spacing).
 void EpubReaderActivity::applyBookTextProfile() {
   latinTextProfile_ = SETTINGS.liveTextProfile();
   latinTextProfile_.fontPointSize = globalPrefsSnapshot.fontPointSize;
   latinTextProfile_.lineSpacing = globalPrefsSnapshot.lineSpacing;
-  textProfileCjk_ = isCjkBook();
-  if (textProfileCjk_) {
-    CrossPointSettings::TextProfile profile = SETTINGS.cjkTextProfile();
+  latinTextProfile_.fontFamily = globalPrefsSnapshot.fontFamily;
+  memcpy(latinTextProfile_.sdFontFamilyName, globalPrefsSnapshot.sdFontFamilyName,
+         sizeof(latinTextProfile_.sdFontFamilyName));
+  bookTextProfile_ = textprofile::forBook(bookScript(), effectiveLanguage());
+  if (bookTextProfile_ != CrossPointSettings::TextProfileId::Latin) {
+    CrossPointSettings::TextProfile profile = SETTINGS.textProfile(bookTextProfile_);
     if (bookPrefsApplied_) {
-      profile.fontPointSize = SETTINGS.fontPointSize;
-      profile.lineSpacing = SETTINGS.lineSpacing;
+      const auto pinned = SETTINGS.liveTextProfile();
+      profile.fontPointSize = pinned.fontPointSize;
+      profile.lineSpacing = pinned.lineSpacing;
+      profile.fontFamily = pinned.fontFamily;
+      memcpy(profile.sdFontFamilyName, pinned.sdFontFamilyName, sizeof(profile.sdFontFamilyName));
     }
+    SETTINGS.holdLatinTextProfile(latinTextProfile_);
     SETTINGS.setLiveTextProfile(profile);
     sdFontSystem.ensureLoaded(renderer);
-    LOG_DBG("ERS", "CJK text profile");
+    LOG_DBG("ERS", "Text profile %d", static_cast<int>(bookTextProfile_));
   }
   openTextProfile_ = SETTINGS.liveTextProfile();
 }
 
 // Whatever the reader changed while the book was open becomes its profile's value; values the
-// book merely pinned for itself do not.
+// book merely pinned for itself do not. The font stays the book's own: a profile's font is set in
+// Settings.
 void EpubReaderActivity::storeBookTextProfile() {
   const auto now = SETTINGS.liveTextProfile();
-  CrossPointSettings::TextProfile profile = textProfileCjk_ ? SETTINGS.cjkTextProfile() : latinTextProfile_;
+  const bool latin = bookTextProfile_ == CrossPointSettings::TextProfileId::Latin;
+  CrossPointSettings::TextProfile profile = latin ? latinTextProfile_ : SETTINGS.textProfile(bookTextProfile_);
   if (now.fontPointSize != openTextProfile_.fontPointSize) profile.fontPointSize = now.fontPointSize;
   if (now.lineSpacing != openTextProfile_.lineSpacing) profile.lineSpacing = now.lineSpacing;
   if (now.characterSpacing != openTextProfile_.characterSpacing) profile.characterSpacing = now.characterSpacing;
   if (now.wordSpacing != openTextProfile_.wordSpacing) profile.wordSpacing = now.wordSpacing;
-  if (textProfileCjk_) {
-    SETTINGS.setCjkTextProfile(profile);
-  } else {
+  if (latin) {
     latinTextProfile_ = profile;
+  } else {
+    SETTINGS.setTextProfile(bookTextProfile_, profile);
+  }
+}
+
+// Runs once per open book: on exit, or earlier when KOReader Sync frees the book first.
+void EpubReaderActivity::restoreGlobalReaderSettings() {
+  // Per-book reader prefs: pin the current reading settings to this book, then
+  // restore the global defaults. Settings edited while reading (via the pushed
+  // settings screen or the orientation shortcut) saved themselves into the
+  // global file mid-session; re-saving after the restore keeps the global page
+  // as the untouched default for books without their own prefs.
+  //
+  // Deliberately AFTER the section resets: restoring can swap the SD font, and
+  // SdCardFontSystem's loadFamily fails (and clears the selection) under a
+  // tight heap. With the chapter freed first, the load gets the coalesced heap
+  // instead of running at the worst moment with the whole book still resident.
+  if (!epub) return;
+  const ReaderPrefs current = capturePrefsFromSettings();
+  ReaderPrefs existing;
+  if (!loadBookPrefs(existing) || !(existing == current)) {
+    saveBookPrefs(current);
+  }
+  storeBookTextProfile();
+  if (!(current == globalPrefsSnapshot) || bookTextProfile_ != CrossPointSettings::TextProfileId::Latin) {
+    applyPrefsToSettings(globalPrefsSnapshot);
+    SETTINGS.releaseLatinTextProfile();  // returns the held copy of latinTextProfile_
+    SETTINGS.setLiveTextProfile(latinTextProfile_);
+    SETTINGS.saveToFile();
+    // Re-sync the loaded SD font to the restored globals so the next
+    // consumer (home UI thumbnails, TXT/XTC readers) sees a consistent state.
+    sdFontSystem.ensureLoaded(renderer);
   }
 }
 
@@ -596,32 +636,7 @@ void EpubReaderActivity::onReaderExit() {
   verticalSection.reset();
   CLIPPINGS.unload();
 
-  // Per-book reader prefs: pin the current reading settings to this book, then
-  // restore the global defaults. Settings edited while reading (via the pushed
-  // settings screen or the orientation shortcut) saved themselves into the
-  // global file mid-session; re-saving after the restore keeps the global page
-  // as the untouched default for books without their own prefs.
-  //
-  // Deliberately AFTER the section resets: restoring can swap the SD font, and
-  // SdCardFontSystem's loadFamily fails (and clears the selection) under a
-  // tight heap. With the chapter freed first, the load gets the coalesced heap
-  // instead of running at the worst moment with the whole book still resident.
-  if (epub) {
-    const ReaderPrefs current = capturePrefsFromSettings();
-    ReaderPrefs existing;
-    if (!loadBookPrefs(existing) || !(existing == current)) {
-      saveBookPrefs(current);
-    }
-    storeBookTextProfile();
-    if (!(current == globalPrefsSnapshot) || textProfileCjk_) {
-      applyPrefsToSettings(globalPrefsSnapshot);
-      SETTINGS.setLiveTextProfile(latinTextProfile_);
-      SETTINGS.saveToFile();
-      // Re-sync the loaded SD font to the restored globals so the next
-      // consumer (home UI thumbnails, TXT/XTC readers) sees a consistent state.
-      sdFontSystem.ensureLoaded(renderer);
-    }
-  }
+  restoreGlobalReaderSettings();
 
   if (pendingReadFolderMove && epub) {
     const std::string srcPath = epub->getPath();
@@ -2109,38 +2124,38 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // EpubReaderMenuActivity::buildMenuItems) come back the same way the quick menu used to
       // carry them: a MenuResult, read via get_if since ReaderSettingsActivity only sets one when
       // showVerticalToggle() was true here, so std::monostate elsewhere is expected.
-      startActivityForResult(
-          std::make_unique<ReaderSettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
-                                                   /*finishOnBack=*/true, bookScript(), effectiveLanguage(),
-                                                   showVerticalToggle(), useVerticalText(), useFurigana(),
-                                                   /*mangaMode=*/false,
-                                                   /*hideMangaOnlySettings=*/true, StrId::STR_NONE_OPT,
-                                                   static_cast<int8_t>(languageOverride)),
-          [this](const ActivityResult& result) {
-            if (const auto* menu = std::get_if<MenuResult>(&result.data)) {
-              applyLanguageOverride(menu->languageOverride);
-              applyVerticalFuriganaOverride(menu->verticalOverride, menu->furiganaOverride);
-            }
-            // A Tategaki/Zhipai change applies to the open book unless it has its own choice.
-            if ((section || verticalSection) && useVerticalText() != (verticalSection != nullptr)) {
-              dropSectionsKeepingPosition();
-            }
-            sdFontSystem.ensureLoaded(renderer);
-            sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
-            // Reading Orientation now only changes via this screen (removed from the reader's
-            // own quick menu, which used to apply it straight from the popup via
-            // applyOrientation(menu.orientation)): pick up a change the same way onEnter()
-            // does, or it would silently wait for the book's next full open to take effect.
-            ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
-            // Return to the reader MENU (where the user came from), not the page. The list menu
-            // is built before the next render and reads the section, so after a switch from the
-            // toolbar style dropped it, go back to the page instead.
-            if (!usesToolbarMenu() && !section && !verticalSection) {
-              requestUpdate();
-              return;
-            }
-            openReaderMenu();
-          });
+      auto readerSettings = std::make_unique<ReaderSettingsActivity>(
+          renderer, mappedInput, /*initialCategory=*/1,
+          /*finishOnBack=*/true, bookScript(), effectiveLanguage(), showVerticalToggle(), useVerticalText(),
+          useFurigana(),
+          /*mangaMode=*/false,
+          /*hideMangaOnlySettings=*/true, StrId::STR_NONE_OPT, static_cast<int8_t>(languageOverride));
+      readerSettings->setBookTextProfile(bookTextProfile_);
+      startActivityForResult(std::move(readerSettings), [this](const ActivityResult& result) {
+        if (const auto* menu = std::get_if<MenuResult>(&result.data)) {
+          applyLanguageOverride(menu->languageOverride);
+          applyVerticalFuriganaOverride(menu->verticalOverride, menu->furiganaOverride);
+        }
+        // A Tategaki/Zhipai change applies to the open book unless it has its own choice.
+        if ((section || verticalSection) && useVerticalText() != (verticalSection != nullptr)) {
+          dropSectionsKeepingPosition();
+        }
+        sdFontSystem.ensureLoaded(renderer);
+        sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
+        // Reading Orientation now only changes via this screen (removed from the reader's
+        // own quick menu, which used to apply it straight from the popup via
+        // applyOrientation(menu.orientation)): pick up a change the same way onEnter()
+        // does, or it would silently wait for the book's next full open to take effect.
+        ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+        // Return to the reader MENU (where the user came from), not the page. The list menu
+        // is built before the next render and reads the section, so after a switch from the
+        // toolbar style dropped it, go back to the page instead.
+        if (!usesToolbarMenu() && !section && !verticalSection) {
+          requestUpdate();
+          return;
+        }
+        openReaderMenu();
+      });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
@@ -2394,6 +2409,8 @@ bool EpubReaderActivity::launchKOReaderSync() {
     }
     // The destructor can no longer save the back-stack once epub is gone.
     if (footnoteDepth > 0) saveLinkStack();
+    // Exit skips this once epub is gone, which would leave this book's settings in place.
+    restoreGlobalReaderSettings();
     epub.reset();
     // Also release the resident font caches (SD font slab + advance tables -- tens of KB on a
     // Japanese book). Freeing the Epub alone leaves those pinned, fragmenting the heap so WiFi +
@@ -6649,8 +6666,8 @@ void EpubReaderActivity::handleOverlayInput() {
         }
         dropSectionsKeepingPosition();  // room for the picker; reloaded on return
         startActivityForResult(
-            std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                   TextSettingsActivity::Tab::Family, bookScript(), useVerticalText()),
+            std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(), bookTextProfile_,
+                                                   bookScript(), useVerticalText()),
             [this](const ActivityResult&) {
               applyReaderTextSettings();
               overlay = Overlay::Text;  // back to the Text panel

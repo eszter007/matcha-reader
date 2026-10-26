@@ -82,15 +82,17 @@ class EpubReaderActivity final : public ReaderActivity {
   };
   std::string paceFilePath() const override { return epub ? epub->getCachePath() + "/pace.bin" : std::string(); }
   ReaderPrefs globalPrefsSnapshot;
-  // Text profiles: a CJK book reads with the CJK profile (CrossPointSettings::cjkTextProfile).
-  // latinTextProfile_ is the Latin profile as it was on open; openTextProfile_ the four values the
-  // book opened with, so on close only what the reader changed goes back into the book's profile.
-  bool textProfileCjk_ = false;
+  // Text profiles: a book reads with its script's profile (CrossPointSettings::textProfile).
+  // latinTextProfile_ is the Latin profile as it was on open; openTextProfile_ the values the book
+  // opened with, so on close only what the reader changed goes back into the book's profile.
+  CrossPointSettings::TextProfileId bookTextProfile_ = CrossPointSettings::TextProfileId::Latin;
   bool bookPrefsApplied_ = false;
   CrossPointSettings::TextProfile latinTextProfile_{};
   CrossPointSettings::TextProfile openTextProfile_{};
   void applyBookTextProfile();
   void storeBookTextProfile();
+  // Pins the reading settings to the book and puts the global ones back. Needs epub.
+  void restoreGlobalReaderSettings();
   static ReaderPrefs capturePrefsFromSettings();
   static void applyPrefsToSettings(const ReaderPrefs& prefs);
   bool loadBookPrefs(ReaderPrefs& out) const;

@@ -34,6 +34,7 @@
 #include "SettingsList.h"
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
+#include "TextProfileMenuActivity.h"
 #include "TextSettingsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/plugins/PluginCatalogActivity.h"
@@ -678,16 +679,19 @@ void ReaderSettingsActivity::toggleCurrentSetting() {
                                  rebuildSettingsLists();
                                });
         break;
-      case SettingAction::TextSettings:
-        startActivityForResult(
-            std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                   TextSettingsActivity::Tab::Family, bookScript, verticalTextState,
-                                                   /*profileChoice=*/!finishOnBack),
-            [this](const ActivityResult&) {
-              saveSettings();
-              rebuildSettingsLists();
-            });
+      case SettingAction::TextSettings: {
+        // In a book, straight to the book's profile; from Settings, the profile menu.
+        auto next =
+            finishOnBack
+                ? std::unique_ptr<Activity>(std::make_unique<TextSettingsActivity>(
+                      renderer, mappedInput, &sdFontSystem.registry(), bookTextProfile, bookScript, verticalTextState))
+                : std::make_unique<TextProfileMenuActivity>(renderer, mappedInput);
+        startActivityForResult(std::move(next), [this](const ActivityResult&) {
+          saveSettings();
+          rebuildSettingsLists();
+        });
         break;
+      }
       case SettingAction::Language:
         // Row labels are translated once in rebuildRowItems() and don't
         // re-run on Pop (see ActivityManager::loop()), so a language switch

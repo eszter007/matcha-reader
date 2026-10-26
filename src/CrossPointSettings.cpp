@@ -30,7 +30,53 @@ void copyToField(char* dest, const char* src, const size_t maxLen) {
   dest[maxLen - 1] = '\0';
 }
 
+// settings.json keys of textProfiles, indexed by TextProfileId. Latin is stored in the top-level
+// fields, so its entry is never written.
+constexpr const char* TEXT_PROFILE_KEYS[] = {"latin", "ja", "zh-Hant", "zh-Hans", "ko"};
+static_assert(std::size(TEXT_PROFILE_KEYS) == static_cast<size_t>(CrossPointSettings::TextProfileId::Count));
+
 }  // namespace
+
+CrossPointSettings::TextProfile CrossPointSettings::liveTextProfile() const {
+  TextProfile p{fontPointSize, lineSpacing, characterSpacing, wordSpacing, fontFamily, {}};
+  copyToField(p.sdFontFamilyName, sdFontFamilyName, sizeof(p.sdFontFamilyName));
+  return p;
+}
+
+void CrossPointSettings::setLiveTextProfile(const TextProfile& p) {
+  fontPointSize = p.fontPointSize;
+  lineSpacing = p.lineSpacing;
+  characterSpacing = p.characterSpacing;
+  wordSpacing = p.wordSpacing;
+  fontFamily = p.fontFamily;
+  copyToField(sdFontFamilyName, p.sdFontFamilyName, sizeof(sdFontFamilyName));
+}
+
+void CrossPointSettings::holdLatinTextProfile(const TextProfile& latin) {
+  if (latinIsHeld) {
+    LOG_ERR("CPS", "Latin text profile already held; keeping the first");
+    return;
+  }
+  latinHeld = latin;
+  latinIsHeld = true;
+}
+
+CrossPointSettings::TextProfile CrossPointSettings::textProfile(const TextProfileId id) const {
+  if (id != TextProfileId::Latin) return scriptTextProfiles[static_cast<int>(id) - 1];
+  return latinIsHeld ? latinHeld : liveTextProfile();
+}
+
+void CrossPointSettings::setTextProfile(const TextProfileId id, const TextProfile& p) {
+  if (id == TextProfileId::Latin) {
+    if (latinIsHeld) {
+      latinHeld = p;
+    } else {
+      setLiveTextProfile(p);
+    }
+  } else {
+    scriptTextProfiles[static_cast<int>(id) - 1] = p;
+  }
+}
 
 void CrossPointSettings::validateFrontButtonMapping(CrossPointSettings& settings) {
   const uint8_t mapping[] = {settings.frontButtonBack, settings.frontButtonConfirm, settings.frontButtonLeft,
@@ -101,6 +147,30 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // SD card font family name — not in SettingsList, save manually
   if (sdFontFamilyName[0] != '\0') {
     doc["sdFontFamilyName"] = sdFontFamilyName;
+  }
+  // A swapped-in profile is in the live fields; the Latin settings are the held ones.
+  if (latinIsHeld) {
+    doc["fontFamily"] = latinHeld.fontFamily;
+    doc["fontSize"] = latinHeld.fontPointSize;
+    doc["lineSpacing"] = latinHeld.lineSpacing;
+    doc["characterSpacing"] = latinHeld.characterSpacing;
+    doc["wordSpacing"] = latinHeld.wordSpacing;
+    if (latinHeld.sdFontFamilyName[0] != '\0') {
+      doc["sdFontFamilyName"] = latinHeld.sdFontFamilyName;
+    } else {
+      doc.remove("sdFontFamilyName");
+    }
+  }
+  JsonObject profiles = doc["textProfiles"].to<JsonObject>();
+  for (int i = 1; i < static_cast<int>(TextProfileId::Count); i++) {
+    const TextProfile& p = scriptTextProfiles[i - 1];
+    JsonObject o = profiles[TEXT_PROFILE_KEYS[i]].to<JsonObject>();
+    o["fontSize"] = p.fontPointSize;
+    o["lineSpacing"] = p.lineSpacing;
+    o["characterSpacing"] = p.characterSpacing;
+    o["wordSpacing"] = p.wordSpacing;
+    o["fontFamily"] = p.fontFamily;
+    if (p.sdFontFamilyName[0] != '\0') o["sdFontFamilyName"] = p.sdFontFamilyName;
   }
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, save manually
   if (dictionaryName[0] != '\0') {
@@ -207,13 +277,6 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   const int savedWidth = hasSavedWidth ? indentSpaces.as<int>() : 0;
   paragraphIndentSpaces = migrateParagraphIndentSpaces(hasSavedWidth, savedWidth, extraParagraphSpacing != 0);
   if (!hasSavedWidth || savedWidth < 0 || savedWidth > 5) needsResave = true;
-
-  // No CJK text profile saved yet: start it from the current settings, so nothing changes until
-  // the reader adjusts one profile.
-  if (doc["cjkFontPointSize"].isNull()) {
-    setCjkTextProfile(liveTextProfile());
-    needsResave = true;
-  }
 
   // Older files stored one combined touch mode under "touchReaderControls": 0=off, 1=tap,
   // 2=swipe, 3=inverted tap, 4=inverted swipe (Matcha-only, for right-to-left vertical text).
@@ -329,6 +392,38 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   if (storedFontFamily >= BUILTIN_FONT_COUNT) needsResave = true;
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, load manually
   copyToField(dictionaryName, doc["dictionaryName"] | "", sizeof(dictionaryName));
+
+  // Text profiles. Before there were five, Japanese and Chinese shared one CJK profile without a
+  // font: those three start from it with the current font, Korean from the Latin settings.
+  {
+    const TextProfile latin = liveTextProfile();
+    TextProfile cjk = latin;
+    if (!doc["cjkFontPointSize"].isNull()) {
+      cjk.fontPointSize = doc["cjkFontPointSize"] | latin.fontPointSize;
+      cjk.lineSpacing = doc["cjkLineSpacing"] | latin.lineSpacing;
+      cjk.characterSpacing = doc["cjkCharacterSpacing"] | latin.characterSpacing;
+      cjk.wordSpacing = doc["cjkWordSpacing"] | latin.wordSpacing;
+    }
+    const JsonVariantConst profiles = doc["textProfiles"];
+    if (profiles.isNull()) needsResave = true;
+    for (int i = 1; i < static_cast<int>(TextProfileId::Count); i++) {
+      const auto id = static_cast<TextProfileId>(i);
+      TextProfile p = id == TextProfileId::Korean ? latin : cjk;
+      const JsonVariantConst o = profiles[TEXT_PROFILE_KEYS[i]];
+      if (!o.isNull()) {
+        const uint8_t size = o["fontSize"] | p.fontPointSize;
+        if (size >= 6 && size <= 72) p.fontPointSize = size;
+        p.lineSpacing = clamp(o["lineSpacing"] | p.lineSpacing, (uint8_t)LINE_COMPRESSION_COUNT, p.lineSpacing);
+        p.characterSpacing = clamp(o["characterSpacing"] | p.characterSpacing,
+                                   (uint8_t)(2 * CHARACTER_SPACING_OFFSET + 1), p.characterSpacing);
+        const uint8_t words = o["wordSpacing"] | p.wordSpacing;
+        if (words >= WORD_SPACING_MIN && words <= WORD_SPACING_MAX) p.wordSpacing = words;
+        p.fontFamily = clamp(o["fontFamily"] | p.fontFamily, BUILTIN_FONT_COUNT, (uint8_t)0);
+        copyToField(p.sdFontFamilyName, o["sdFontFamilyName"] | "", sizeof(p.sdFontFamilyName));
+      }
+      scriptTextProfiles[i - 1] = p;
+    }
+  }
   // Language -- stored as code string for stability across enum reorders.
   if (doc["language"].is<const char*>()) {
     language = static_cast<uint8_t>(I18n::languageFromCode(doc["language"].as<const char*>()));

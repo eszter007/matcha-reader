@@ -403,35 +403,40 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // available size (and persists the snap) whenever the family changes.
   uint8_t fontPointSize = DEFAULT_FONT_POINT_SIZE;
   uint8_t lineSpacing = NORMAL;
-  // CJK text profile: the four settings Japanese and Chinese books keep apart from Latin ones. The
-  // live fields (fontPointSize, lineSpacing, characterSpacing, wordSpacing) hold the Latin profile;
-  // a CJK book swaps these in while it is open (EpubReaderActivity). A settings file without them
-  // starts the CJK profile as a copy of the Latin one.
-  uint8_t cjkFontPointSize = DEFAULT_FONT_POINT_SIZE;
-  uint8_t cjkLineSpacing = NORMAL;
-  uint8_t cjkCharacterSpacing = CHARACTER_SPACING_OFFSET;
-  uint8_t cjkWordSpacing = 100;
+  // Text profiles: books in each script keep their own font, size and spacing. The live fields
+  // (fontFamily, sdFontFamilyName, fontPointSize, lineSpacing, characterSpacing, wordSpacing) hold
+  // the Latin profile; a book in another script swaps its profile in while it is open
+  // (EpubReaderActivity), and Text Settings does the same while editing one from Settings.
+  enum class TextProfileId : uint8_t { Latin, Japanese, TraditionalChinese, SimplifiedChinese, Korean, Count };
+  // Defaults match the live fields', so a settings file that never loads leaves usable profiles.
   struct TextProfile {
-    uint8_t fontPointSize;
-    uint8_t lineSpacing;
-    uint8_t characterSpacing;
-    uint8_t wordSpacing;
+    uint8_t fontPointSize = DEFAULT_FONT_POINT_SIZE;
+    uint8_t lineSpacing = NORMAL;
+    uint8_t characterSpacing = CHARACTER_SPACING_OFFSET;
+    uint8_t wordSpacing = 100;
+    uint8_t fontFamily = NOTOSERIF;
+    char sdFontFamilyName[32] = "";
     bool operator==(const TextProfile&) const = default;
   };
-  TextProfile liveTextProfile() const { return {fontPointSize, lineSpacing, characterSpacing, wordSpacing}; }
-  void setLiveTextProfile(const TextProfile& p) {
-    fontPointSize = p.fontPointSize;
-    lineSpacing = p.lineSpacing;
-    characterSpacing = p.characterSpacing;
-    wordSpacing = p.wordSpacing;
+  TextProfile liveTextProfile() const;
+  void setLiveTextProfile(const TextProfile& p);
+  // The stored profile. Latin's lives in the live fields, or in the held copy while another
+  // profile is swapped in.
+  TextProfile textProfile(TextProfileId id) const;
+  void setTextProfile(TextProfileId id, const TextProfile& p);
+  // While another profile sits in the live fields, the Latin values wait here, and saveToFile()
+  // writes them as the Latin settings instead of the swapped-in ones.
+  // One swap at a time: a second hold would replace the real Latin values with a swapped-in profile.
+  void holdLatinTextProfile(const TextProfile& latin);
+  // Ends the hold and returns the Latin values for the live fields.
+  TextProfile releaseLatinTextProfile() {
+    latinIsHeld = false;
+    return latinHeld;
   }
-  TextProfile cjkTextProfile() const { return {cjkFontPointSize, cjkLineSpacing, cjkCharacterSpacing, cjkWordSpacing}; }
-  void setCjkTextProfile(const TextProfile& p) {
-    cjkFontPointSize = p.fontPointSize;
-    cjkLineSpacing = p.lineSpacing;
-    cjkCharacterSpacing = p.characterSpacing;
-    cjkWordSpacing = p.wordSpacing;
-  }
+  // Profiles other than Latin, indexed by TextProfileId - 1.
+  TextProfile scriptTextProfiles[static_cast<int>(TextProfileId::Count) - 1]{};
+  TextProfile latinHeld{};
+  bool latinIsHeld = false;
   uint8_t paragraphAlignment = JUSTIFIED;
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
   uint8_t sleepTimeoutMinutes = 10;
