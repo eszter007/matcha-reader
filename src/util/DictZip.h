@@ -3,7 +3,6 @@
 #include <HalStorage.h>
 
 #include <cstdint>
-#include <vector>
 
 // Random-access reader for dictzip (.dict.dz) files: gzip with an extra "RA"
 // field holding a chunk table, so any byte range can be decompressed without
@@ -11,10 +10,11 @@
 namespace DictZip {
 
 struct Info {
-  uint32_t dataOffset = 0;             // file offset where compressed chunk data starts
-  uint32_t totalSize = 0;              // uncompressed size (gzip ISIZE trailer)
-  uint16_t chunkLength = 0;            // uncompressed bytes per chunk
-  std::vector<uint32_t> chunkOffsets;  // cumulative compressed offsets, chunkCount+1 entries
+  uint32_t dataOffset = 0;   // file offset where compressed chunk data starts
+  uint32_t totalSize = 0;    // uncompressed size (gzip ISIZE trailer)
+  uint16_t chunkLength = 0;  // uncompressed bytes per chunk
+  uint16_t chunkCount = 0;
+  uint32_t tableOffset = 0;  // file offset of the chunk table: chunkCount 16-bit compressed sizes
   bool valid = false;
 };
 
