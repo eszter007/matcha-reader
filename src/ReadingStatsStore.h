@@ -34,6 +34,20 @@ struct LanguageDaily {
   uint16_t minutesRead;
 };
 
+// The sync account's numbers from the server's overview (GET /api/v1/stats/overview), counting
+// every device: one digest for all languages, then one per language. Days count from 2000-01-01.
+struct StatsDigest {
+  char code[4];       // primary subtag, lowercase; empty for all languages
+  int32_t anchorDay;  // the server's today when it answered
+  uint16_t days;      // bits used in history
+  uint16_t longestStreak;
+  uint16_t booksFinished;
+  uint32_t readingDays;
+  uint32_t minutes;
+  uint32_t weekMinutes;  // Monday through anchorDay
+  uint8_t history[92];   // bit N, LSB first: day anchorDay - N was a reading day
+};
+
 class ReadingStatsStore {
   static ReadingStatsStore instance;
 
@@ -64,6 +78,18 @@ class ReadingStatsStore {
   static constexpr size_t MAX_LANG_DAYS = 2500;
   std::vector<LanguageDaily> languageDays;  // sorted ascending by date
   bool loaded = false;                      // set by loadFromFile(), cleared by release()
+  // The account digests ([0] all languages), loaded only for display: with them the getters count
+  // a day read on any device, plus this reader's own minutes since the server answered.
+  std::vector<StatsDigest> account;
+  void loadAccount();
+  const StatsDigest* accountFor(const char* language) const;  // nullptr language: all languages
+  bool readOn(const char* language, const StatsDigest* g, uint16_t year, uint8_t month, uint8_t day) const;
+  template <typename F>
+  void eachLocalDay(const char* language, F&& f) const;
+  int accountStreak(const char* language, const StatsDigest& g, uint16_t y, uint8_t m, uint8_t d) const;
+  int accountDaysRead(const char* language, const StatsDigest& g) const;
+  uint32_t accountMinutes(const char* language, const StatsDigest& g) const;
+  uint16_t accountWeekMinutes(const char* language, const StatsDigest& g, uint16_t y, uint8_t m, uint8_t d) const;
   // The journal prefix (byte count and hash) this file already holds; replay starts after it.
   // Stored after the last block, where older readers stop.
   uint32_t foldedJournalBytes = 0;
@@ -132,7 +158,7 @@ class ReadingStatsStore {
   int getLongestStreak() const;
   int getDaysRead() const;
   uint32_t getTotalMinutes() const;
-  uint16_t getBooksFinished() const { return booksFinished; }
+  uint16_t getBooksFinished() const;
   bool isFinished(const std::string& bookPath) const;
   const std::vector<DailyReading>& getDays() const { return days; }
 
@@ -181,6 +207,10 @@ class ReadingStatsStore {
   static bool hasPendingDownload();
   // A stats file exists: what a download since the last one would add to.
   static bool hasStatsFile();
+  // The server's overview for the sync account, for the All devices view; removeAccount() drops it
+  // when another account signs in.
+  static bool saveAccount(const std::vector<StatsDigest>& digests);
+  static void removeAccount();
 
   // The numbers the end-of-book summary shows, read straight from the file and the journal with no
   // tables built: that screen runs with the book still in memory. Same values as the getters.
@@ -198,7 +228,11 @@ class ReadingStatsStore {
   // could not be read or did not fit the heap.
   class Loaded {
    public:
-    Loaded() : ok_(getInstance().loadFromFile()) {}
+    // withAccount: the getters also count the sync account's other devices (Insights' "All devices").
+    // Display only: never with a save or upload.
+    explicit Loaded(const bool withAccount = false) : ok_(getInstance().loadFromFile()) {
+      if (ok_ && withAccount) getInstance().loadAccount();
+    }
     ~Loaded() { getInstance().release(); }
     Loaded(const Loaded&) = delete;
     Loaded& operator=(const Loaded&) = delete;

@@ -293,6 +293,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t screenInverted = 0;
   // Per-language tabs on the Insights screen. Display only: stats are tracked per language either way.
   uint8_t showLanguageStats = 1;
+  // Drops the Unknown tab: time on books with no language tag, which the sync account has no group for.
+  uint8_t hideUnknownLanguages = 1;
+  // Insights and the Stats sleep screen: 1 counts every device's reading on the sync account, 0 this
+  // device's own. Display only: uploads always send this device's own days.
+  uint8_t insightsAllDevices = 1;
   // Sleep screen cover mode settings
   uint8_t sleepScreenCoverMode = FIT;
   // Sleep screen cover filter

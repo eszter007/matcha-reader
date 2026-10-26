@@ -8,7 +8,7 @@ It includes everything in upstream CrossPoint. You can try it in the [simulator]
   <img src="docs/images/screenshots/vertical-text.png" width="200" alt="Vertical Japanese text">
   <img src="docs/images/screenshots/word-lookup.png" width="200" alt="Dictionary word lookup panel">
   <img src="docs/images/screenshots/manga-full-page.png" width="200" alt="Manga reader, full page">
-  <img src="docs/images/screenshots/insights.png" width="200" alt="Reading stats, split by language across the tabs">
+  <img src="docs/images/screenshots/insights.png" width="200" alt="Reading insights, split by language across the tabs">
 </p>
 
 **Runs on:** Xteink X4, X3, X4 Pro and X4 Classic, Seeed reTerminal Sticky, M5PaperMono, Metalio 3.97", EEGO A4 (both variants), BOOX Picco.
@@ -106,7 +106,7 @@ Read panel by panel, each scaled to fill the screen, and look up any word right 
 
 ### Library and home
 
-Every book on the card as a cover grid, manga beside EPUBs, with a **Shelves** tab for folders. The **Cover Grid** theme adds a tab bar for Home, Library, File Transfer, Insights and Settings. Long-press a cover for stats, Mark as Read and Delete. CrossPoint's own list view is still there. See [Guide §3.1](USER_GUIDE.md#31-home-screen) and [§3.4](USER_GUIDE.md#34-library-screen).
+Every book on the card as a cover grid, manga beside EPUBs, with a **Shelves** tab for folders. The **Cover Grid** theme adds a tab bar for Home, Library, File Transfer, Insights and Settings. Long-press a cover for insights, Mark as Read and Delete. CrossPoint's own list view is still there. See [Guide §3.1](USER_GUIDE.md#31-home-screen) and [§3.4](USER_GUIDE.md#34-library-screen).
 
 <p align="center">
   <img src="docs/images/screenshots/tab-home.png" width="150" alt="Home tab: the cover grid">
@@ -116,14 +116,14 @@ Every book on the card as a cover grid, manga beside EPUBs, with a **Shelves** t
   <img src="docs/images/screenshots/tab-settings.png" width="150" alt="Settings tab">
 </p>
 
-### Reading stats
+### Reading insights
 
-Streak, minutes this week, books finished and a calendar, split by language. Each book has its own stats, and finishing one opens a summary with the next books in its folder. The **Stats** sleep screen puts your hours read, streak and minutes this week on a split-flap board. With the CrossPoint sync server, **Sync Progress** also uploads these stats: your daily reading time, streak and finished books, and every book's time, sessions and finished status. The CrossPoint app shows them in full, and **Refresh Stats** in Insights brings them back to a new or reset device: streak, calendar, language tabs, books finished and each book's stats. Dictionary lookups and saved sentences stay on the device that recorded them. See [Guide §7](USER_GUIDE.md#7-reading-stats), [§3.6.11](USER_GUIDE.md#syncing-while-reading) and [§3.7](USER_GUIDE.md#37-sleep-screen).
+Streak, minutes this week, books finished and a calendar, split by language. Each book has its own insights, and finishing one opens a summary with the next books in its folder. The **Insights** sleep screen puts your hours read, streak and minutes this week on a split-flap board. With the CrossPoint sync server, **Sync Progress** also uploads these insights: your daily reading time, streak and finished books, and every book's time, sessions and finished status. The CrossPoint app shows them in full, and **Refresh Insights** in Insights brings them back to a new or reset device: streak, calendar, language tabs, books finished and each book's insights. With **Insights data** on All devices, Insights shows your whole account as the app counts it, every device and language. Dictionary lookups and saved sentences stay on the device that recorded them. See [Guide §7](USER_GUIDE.md#7-reading-insights), [§3.6.11](USER_GUIDE.md#syncing-while-reading) and [§3.7](USER_GUIDE.md#37-sleep-screen).
 
 <p align="center">
-  <img src="docs/images/screenshots/insights.png" width="240" alt="Insights with streak, stat cards and calendar">
-  <img src="docs/images/screenshots/book-stats.png" width="240" alt="Per-book stats for one book">
-  <img src="docs/images/screenshots/end-of-book.png" width="240" alt="End-of-book screen: the finished book as a torn ticket with a 読了 stamp, its stats, and the next book">
+  <img src="docs/images/screenshots/insights.png" width="240" alt="Insights with streak, insight cards and calendar">
+  <img src="docs/images/screenshots/book-stats.png" width="240" alt="Per-book insights for one book">
+  <img src="docs/images/screenshots/end-of-book.png" width="240" alt="End-of-book screen: the finished book as a torn ticket with a 読了 stamp, its insights, and the next book">
   <img src="docs/images/screenshots/sleep-screen-departures.png" width="240" alt="Departures sleep screen: hours read, day streak and minutes this week on split-flap tiles, with the cat">
 </p>
 
@@ -214,4 +214,4 @@ This fork tracks upstream CrossPoint and merges new releases. Nearly everything 
 
 Built on [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader), open-source e-reader firmware, community-built and fully hackable.
 
-Dictionary data from [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) and [Jitendex](https://github.com/stephenmk/Jitendex), under their respective licences. The Matcha cat is all rights reserved, and not covered by the MIT License; see [assets/images/LICENSE](assets/images/LICENSE). Icons by [Tabler Icons](https://tabler.io/icons) (MIT). The end-of-book stamps (読了, 读完, 讀完, 睇完) are lettered in Noto Serif [JP](https://fonts.google.com/noto/specimen/Noto+Serif+JP), [SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC) and [HK](https://fonts.google.com/noto/specimen/Noto+Serif+HK) (SIL Open Font License). The Stats sleep screen is lettered in [Barlow Condensed](https://github.com/jpt/barlow) and [Noto Sans JP](https://fonts.google.com/noto/specimen/Noto+Sans+JP) (SIL Open Font License).
+Dictionary data from [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) and [Jitendex](https://github.com/stephenmk/Jitendex), under their respective licences. The Matcha cat is all rights reserved, and not covered by the MIT License; see [assets/images/LICENSE](assets/images/LICENSE). Icons by [Tabler Icons](https://tabler.io/icons) (MIT). The end-of-book stamps (読了, 读完, 讀完, 睇完) are lettered in Noto Serif [JP](https://fonts.google.com/noto/specimen/Noto+Serif+JP), [SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC) and [HK](https://fonts.google.com/noto/specimen/Noto+Serif+HK) (SIL Open Font License). The Insights sleep screen is lettered in [Barlow Condensed](https://github.com/jpt/barlow) and [Noto Sans JP](https://fonts.google.com/noto/specimen/Noto+Sans+JP) (SIL Open Font License).

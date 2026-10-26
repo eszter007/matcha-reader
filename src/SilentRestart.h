@@ -11,9 +11,10 @@
 // comes back exactly as it was, regardless of the Restore Light on Wake
 // preference.
 
-void silentRestart();            // home screen
-void silentRestartToReader();    // currently-open EPUB (APP_STATE.openEpubPath)
-void silentRestartToSettings();  // settings screen
+void silentRestart();          // home screen
+void silentRestartToReader();  // currently-open EPUB (APP_STATE.openEpubPath)
+// Settings, opened on a SettingsSection value; -1 is Connectivity, where the Wi-Fi rows are.
+void silentRestartToSettings(int section = -1);
 // A tab screen of the Cover Grid theme: a bottom-bar tab, or one of the Library's own tabs.
 void silentRestartToHomeTab(int homeTab);        // HomeTab value
 void silentRestartToLibraryTab(int libraryTab);  // LibraryTabs::Tab value

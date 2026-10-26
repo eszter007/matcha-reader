@@ -70,6 +70,8 @@ bool showOnDevice(const SettingInfo& setting) {
       SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_OFF) {
     return false;
   }
+  // Only the language tabs have an Unknown one to hide.
+  if (setting.valuePtr == &CrossPointSettings::hideUnknownLanguages && !SETTINGS.showLanguageStats) return false;
   // Both only feed the CrossPoint list view: the cover grid keeps its own index and lists every
   // book the card scan finds, so a book dropped from recents is simply found again.
   if ((setting.valuePtr == &CrossPointSettings::libraryUseMetadata ||

@@ -37,6 +37,7 @@
 #include "fontIds.h"
 #include "images/DeparturesType.h"
 #include "images/MoonIcon.h"
+#include "stats/StatsSync.h"
 
 namespace {
 // Metalio: B/W sleep images use the full 0xF7 waveform instead of HALF (two
@@ -1156,7 +1157,7 @@ void SleepActivity::renderDeparturesSleepScreen() const {
   uint16_t weekMinutes = 0;
   {
     // The reader has exited by now, so the tables have the heap to themselves.
-    const ReadingStatsStore::Loaded stats;
+    const ReadingStatsStore::Loaded stats(statsSync::showAllDevices());
     hours = READING_STATS_STORE.getTotalMinutes() / 60;
     streak = READING_STATS_STORE.getStreak(today.year, today.month, today.day);
     weekMinutes = READING_STATS_STORE.getMinutesThisWeek(today.year, today.month, today.day);
