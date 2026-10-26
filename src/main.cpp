@@ -227,7 +227,10 @@ void silentRestart() { silentRestartTo(SILENT_REBOOT_TARGET_HOME, "home"); }
 
 void silentRestartToReader() { silentRestartTo(SILENT_REBOOT_TARGET_READER, "reader"); }
 
-void silentRestartToSettings() { silentRestartTo(SILENT_REBOOT_TARGET_SETTINGS, "settings"); }
+// The section rides in the tab byte, plus one: 0 is Connectivity.
+void silentRestartToSettings(const int section) {
+  silentRestartTo(SILENT_REBOOT_TARGET_SETTINGS, "settings", static_cast<uint32_t>(section + 1));
+}
 
 void silentRestartToJoinNetwork() {
   if (deepSleepInProgress) return;
@@ -934,8 +937,10 @@ void setup() {
     // resume that flow directly instead of landing on home.
     activityManager.goToJoinNetwork();
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_SETTINGS) {
-    // Back out of the WiFi rows and the user is where they left off, not on Home.
-    activityManager.goToSettings(SettingsSection::Connectivity);
+    // Back out of the WiFi rows (or Sync Stats) and the user is where they left off, not on Home.
+    const bool known = silentRebootTab >= 1 && silentRebootTab <= SETTINGS_SECTION_COUNT;
+    activityManager.goToSettings(known ? static_cast<SettingsSection>(silentRebootTab - 1)
+                                       : SettingsSection::Connectivity);
   } else if (resume == BootResume::Silent) {
     // target == home (or reader with no open book): land on home — don't fall
     // through to the sleep-wake "resume reader" logic, which fires on stale

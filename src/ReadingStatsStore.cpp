@@ -20,6 +20,10 @@ static std::string statsPath() { return sdsystem::path("reading_stats.bin"); }
 static std::string journalPath() { return sdsystem::path("reading_stats.log"); }
 // Server minutes waiting for mergeDownload(): a uint16_t count, then DailyReading records.
 static std::string downloadPath() { return sdsystem::path("reading_stats_download.bin"); }
+// The sync account's overview: a version byte, a count, then StatsDigest records.
+static std::string accountPath() { return sdsystem::path("reading_stats_account.bin"); }
+static constexpr uint8_t ACCOUNT_VERSION = 1;
+static constexpr uint8_t MAX_DIGESTS = 21;  // all languages plus the server's 20 groups
 // Journal records start with this byte, so a torn or foreign tail is recognised and ignored.
 static constexpr uint8_t JOURNAL_RECORD_MAGIC = 0xA5;
 // A journal opens with this byte and a random nonce, so no two journals share a prefix: the fold
@@ -237,6 +241,7 @@ uint16_t ReadingStatsStore::getMinutesForDay(const char* language, const uint16_
 }
 
 uint32_t ReadingStatsStore::getTotalMinutes(const char* language) const {
+  if (const auto* g = accountFor(language)) return accountMinutes(language, *g);
   char lang[4];
   normalizeLanguage(language, lang);
   return std::accumulate(languageDays.begin(), languageDays.end(), uint32_t{0},
@@ -259,6 +264,21 @@ void ReadingStatsStore::getLanguages(std::vector<LanguageSummary>& out) const {
     s.minutes = e.minutesRead;
     out.push_back(s);
   }
+  // Languages read on other devices get a tab too, and every tab sorts by the account's minutes.
+  for (size_t i = 1; i < account.size(); i++) {
+    const auto it = std::find_if(out.begin(), out.end(), [&](const LanguageSummary& s) {
+      return memcmp(s.code, account[i].code, sizeof(s.code)) == 0;
+    });
+    if (it != out.end()) continue;
+    LanguageSummary s{};
+    memcpy(s.code, account[i].code, sizeof(s.code));
+    out.push_back(s);
+  }
+  if (!account.empty()) {
+    for (auto& s : out) {
+      if (s.code[0]) s.minutes = getTotalMinutes(s.code);
+    }
+  }
   // Most-read first, so the wanted tab is the one you land on.
   std::sort(out.begin(), out.end(),
             [](const LanguageSummary& a, const LanguageSummary& b) { return a.minutes > b.minutes; });
@@ -266,6 +286,7 @@ void ReadingStatsStore::getLanguages(std::vector<LanguageSummary>& out) const {
 
 int ReadingStatsStore::getStreak(const char* language, const uint16_t todayYear, const uint8_t todayMonth,
                                  const uint8_t todayDay) const {
+  if (const auto* g = accountFor(language)) return accountStreak(language, *g, todayYear, todayMonth, todayDay);
   char lang[4];
   normalizeLanguage(language, lang);
   if (getMinutesForDay(language, todayYear, todayMonth, todayDay) == 0) return 0;
@@ -300,10 +321,13 @@ int ReadingStatsStore::getLongestStreak(const char* language) const {
     prev = ep;
     if (cur > maxStreak) maxStreak = cur;
   }
-  return maxStreak;
+  // The server's run already counts this reader's uploaded days.
+  const auto* g = accountFor(language);
+  return g ? std::max<int>(maxStreak, g->longestStreak) : maxStreak;
 }
 
 int ReadingStatsStore::getDaysRead(const char* language) const {
+  if (const auto* g = accountFor(language)) return accountDaysRead(language, *g);
   char lang[4];
   normalizeLanguage(language, lang);
   return static_cast<int>(std::count_if(languageDays.begin(), languageDays.end(), [&lang](const LanguageDaily& e) {
@@ -313,6 +337,7 @@ int ReadingStatsStore::getDaysRead(const char* language) const {
 
 uint16_t ReadingStatsStore::getMinutesThisWeek(const char* language, const uint16_t todayYear, const uint8_t todayMonth,
                                                const uint8_t todayDay) const {
+  if (const auto* g = accountFor(language)) return accountWeekMinutes(language, *g, todayYear, todayMonth, todayDay);
   const int dow = (dowFromDate(todayYear, todayMonth, todayDay) + 6) % 7;  // ISO Mon=0
   // Wider accumulator: per-day minutes saturate at UINT16_MAX, so seven of them can exceed it.
   // Wrapping would show a small plausible number rather than an obvious fault.
@@ -333,15 +358,19 @@ void ReadingStatsStore::getWeekStatus(const char* language, const uint16_t today
     uint16_t y = todayYear;
     uint8_t m = todayMonth, d = todayDay;
     subtractDays(y, m, d, todayDow - i);
-    readDays[i] = getMinutesForDay(language, y, m, d) > 0;
+    readDays[i] = readOn(language, accountFor(language), y, m, d);
   }
 }
 
 void ReadingStatsStore::getMonthStatus(const char* language, const uint16_t year, const uint8_t month,
                                        bool out[32]) const {
+  for (int i = 0; i < 32; i++) out[i] = false;
+  if (const auto* g = accountFor(language)) {
+    for (int d = 1; d <= daysInMonth(year, month); d++) out[d] = readOn(language, g, year, month, d);
+    return;
+  }
   char lang[4];
   normalizeLanguage(language, lang);
-  for (int i = 0; i < 32; i++) out[i] = false;
   for (const auto& e : languageDays) {
     if (memcmp(e.language, lang, sizeof(lang)) != 0 || e.minutesRead == 0) continue;
     if (e.year == year && e.month == month && e.day >= 1 && e.day <= 31) out[e.day] = true;
@@ -360,6 +389,7 @@ int ReadingStatsStore::getDaysReadInMonth(const char* language, const uint16_t y
 }
 
 uint16_t ReadingStatsStore::getBooksFinished(const char* language) const {
+  const auto* g = accountFor(language);
   char lang[4];
   normalizeLanguage(language, lang);
   uint16_t count = 0;
@@ -370,7 +400,13 @@ uint16_t ReadingStatsStore::getBooksFinished(const char* language) const {
     normalizeLanguage(it->language.c_str(), bookLang);
     if (memcmp(bookLang, lang, sizeof(lang)) == 0) count++;
   }
-  return count;
+  // The server's count includes this reader's uploaded finishes.
+  return g ? std::max(count, g->booksFinished) : count;
+}
+
+uint16_t ReadingStatsStore::getBooksFinished() const {
+  const auto* g = accountFor(nullptr);
+  return g ? std::max(booksFinished, g->booksFinished) : booksFinished;
 }
 
 void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
@@ -398,6 +434,7 @@ uint16_t ReadingStatsStore::getMinutesForDay(uint16_t year, uint8_t month, uint8
 }
 
 int ReadingStatsStore::getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const {
+  if (const auto* g = accountFor(nullptr)) return accountStreak(nullptr, *g, todayYear, todayMonth, todayDay);
   // Backwards through the sorted history, rather than probing one candidate date per day.
   if (days.empty()) return 0;
   int expected = daysSinceEpoch(todayYear, todayMonth, todayDay);
@@ -432,17 +469,23 @@ int ReadingStatsStore::getLongestStreak() const {
     prev = e;
     if (cur > maxStreak) maxStreak = cur;
   }
-  return maxStreak;
+  const auto* g = accountFor(nullptr);
+  return g ? std::max<int>(maxStreak, g->longestStreak) : maxStreak;
 }
 
-int ReadingStatsStore::getDaysRead() const { return static_cast<int>(days.size()); }
+int ReadingStatsStore::getDaysRead() const {
+  if (const auto* g = accountFor(nullptr)) return accountDaysRead(nullptr, *g);
+  return static_cast<int>(days.size());
+}
 
 uint32_t ReadingStatsStore::getTotalMinutes() const {
+  if (const auto* g = accountFor(nullptr)) return accountMinutes(nullptr, *g);
   return std::accumulate(days.begin(), days.end(), uint32_t{0},
                          [](const uint32_t sum, const DailyReading& d) { return sum + d.minutesRead; });
 }
 
 uint16_t ReadingStatsStore::getMinutesThisWeek(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const {
+  if (const auto* g = accountFor(nullptr)) return accountWeekMinutes(nullptr, *g, todayYear, todayMonth, todayDay);
   int dow = (dowFromDate(todayYear, todayMonth, todayDay) + 6) % 7;  // ISO Mon=0
   uint32_t total = 0;  // see the per-language overload: seven saturated days overflow a uint16
   for (int i = 0; i <= dow; i++) {
@@ -461,25 +504,21 @@ void ReadingStatsStore::getWeekStatus(uint16_t todayYear, uint8_t todayMonth, ui
     uint16_t y = todayYear;
     uint8_t m = todayMonth, d = todayDay;
     subtractDays(y, m, d, todayDow - i);
-    readDays[i] = getMinutesForDay(y, m, d) > 0;
+    readDays[i] = readOn(nullptr, accountFor(nullptr), y, m, d);
   }
 }
 
 void ReadingStatsStore::getMonthStatus(uint16_t year, uint8_t month, bool out[32]) const {
   for (int i = 0; i < 32; i++) out[i] = false;
-  int dim = daysInMonth(year, month);
-  for (int d = 1; d <= dim; d++) {
-    out[d] = getMinutesForDay(year, month, static_cast<uint8_t>(d)) > 0;
-  }
+  const auto* g = accountFor(nullptr);
+  const int dim = daysInMonth(year, month);
+  for (int d = 1; d <= dim; d++) out[d] = readOn(nullptr, g, year, month, static_cast<uint8_t>(d));
 }
 
 int ReadingStatsStore::getDaysReadInMonth(uint16_t year, uint8_t month) const {
-  int count = 0;
-  int dim = daysInMonth(year, month);
-  for (int d = 1; d <= dim; d++) {
-    if (getMinutesForDay(year, month, static_cast<uint8_t>(d)) > 0) count++;
-  }
-  return count;
+  bool status[32];
+  getMonthStatus(year, month, status);
+  return static_cast<int>(std::count(status + 1, status + 32, true));
 }
 
 bool ReadingStatsStore::saveToFile() const {
@@ -876,6 +915,7 @@ void ReadingStatsStore::release() {
   std::vector<std::string>().swap(finishedBookPaths);
   std::vector<BookReading>().swap(books);
   std::vector<LanguageDaily>().swap(languageDays);
+  std::vector<StatsDigest>().swap(account);
   booksFinished = 0;
   foldedJournalBytes = 0;
   foldedJournalHash = 0;
@@ -1172,6 +1212,143 @@ bool ReadingStatsStore::saveDownload(const std::vector<DailyReading>& downloaded
     return false;
   }
   return Storage.replaceFile(tmpPath.c_str(), downloadPath().c_str());
+}
+
+bool ReadingStatsStore::saveAccount(const std::vector<StatsDigest>& digests) {
+  const std::string tmpPath = accountPath() + ".tmp";
+  HalFile f;
+  if (!Storage.openFileForWrite("STAT", tmpPath.c_str(), f)) return false;
+  const uint8_t header[2] = {ACCOUNT_VERSION, static_cast<uint8_t>(std::min<size_t>(digests.size(), MAX_DIGESTS))};
+  bool ok = f.write(header, 2) == 2;
+  for (uint8_t i = 0; ok && i < header[1]; i++) {
+    ok = f.write(reinterpret_cast<const uint8_t*>(&digests[i]), sizeof(StatsDigest)) == sizeof(StatsDigest);
+  }
+  ok = f.close() && ok;
+  if (!ok) {
+    Storage.remove(tmpPath.c_str());
+    return false;
+  }
+  return Storage.replaceFile(tmpPath.c_str(), accountPath().c_str());
+}
+
+void ReadingStatsStore::removeAccount() { Storage.remove(accountPath().c_str()); }
+
+void ReadingStatsStore::loadAccount() {
+  HalFile f;
+  uint8_t header[2] = {};
+  if (!Storage.openFileForRead("STAT", accountPath().c_str(), f) || f.read(header, 2) != 2 ||
+      header[0] != ACCOUNT_VERSION || header[1] == 0 || header[1] > MAX_DIGESTS) {
+    return;  // never synced: this reader's own days only
+  }
+  // At most 21 records of about 130 bytes, held while a stats screen is open.
+  if (!tableFits(header[1] * sizeof(StatsDigest))) {
+    LOG_ERR("STAT", "Not enough heap for the account stats");
+    return;
+  }
+  account.resize(header[1]);
+  for (auto& g : account) {
+    if (f.read(reinterpret_cast<uint8_t*>(&g), sizeof(g)) != sizeof(g)) {
+      account.clear();
+      return;
+    }
+    // Matched the way local days are bucketed, so "JA" or "jp" from the server finds the ja tab.
+    char raw[4];
+    memcpy(raw, g.code, sizeof(raw));
+    raw[3] = '\0';
+    normalizeLanguage(raw, g.code);
+    g.days = std::min<uint16_t>(g.days, sizeof(g.history) * 8);
+  }
+  if (account[0].code[0] != '\0') account.clear();  // the first is always all languages
+}
+
+const StatsDigest* ReadingStatsStore::accountFor(const char* language) const {
+  if (account.empty()) return nullptr;
+  if (!language) return &account[0];
+  char lang[4];
+  normalizeLanguage(language, lang);
+  if (lang[0] == '\0') return nullptr;  // the server has no "unknown language" group
+  const auto it = std::find_if(account.begin() + 1, account.end(),
+                               [&lang](const StatsDigest& g) { return memcmp(g.code, lang, sizeof(lang)) == 0; });
+  return it == account.end() ? nullptr : &*it;
+}
+
+namespace {
+int32_t day2000(const uint16_t y, const uint8_t m, const uint8_t d) {
+  return daysSinceEpoch(y, m, d) - daysSinceEpoch(2000, 1, 1);
+}
+
+bool accountRead(const StatsDigest& g, const int32_t day) {
+  const int32_t n = g.anchorDay - day;
+  return n >= 0 && n < g.days && (g.history[n >> 3] >> (n & 7) & 1) != 0;
+}
+}  // namespace
+
+bool ReadingStatsStore::readOn(const char* language, const StatsDigest* g, const uint16_t year, const uint8_t month,
+                               const uint8_t day) const {
+  const uint16_t own = language ? getMinutesForDay(language, year, month, day) : getMinutesForDay(year, month, day);
+  return own > 0 || (g && accountRead(*g, day2000(year, month, day)));
+}
+
+// This reader's own reading days (days since 2000, minutes), overall or for one language.
+template <typename F>
+void ReadingStatsStore::eachLocalDay(const char* language, F&& f) const {
+  if (!language) {
+    for (const auto& d : days) {
+      if (d.minutesRead > 0) f(day2000(d.year, d.month, d.day), d.minutesRead);
+    }
+    return;
+  }
+  char lang[4];
+  normalizeLanguage(language, lang);
+  for (const auto& e : languageDays) {
+    if (e.minutesRead > 0 && memcmp(e.language, lang, sizeof(lang)) == 0)
+      f(day2000(e.year, e.month, e.day), e.minutesRead);
+  }
+}
+
+// As the app counts it: a day counts when any device read on it, and until today is read the
+// streak runs to yesterday.
+int ReadingStatsStore::accountStreak(const char* language, const StatsDigest& g, uint16_t y, uint8_t m,
+                                     uint8_t d) const {
+  if (!readOn(language, &g, y, m, d)) subtractDays(y, m, d, 1);
+  int streak = 0;
+  while (streak < static_cast<int>(MAX_DAYS) && readOn(language, &g, y, m, d)) {
+    streak++;
+    subtractDays(y, m, d, 1);
+  }
+  return streak;
+}
+
+// The server's count, plus this reader's days it did not have yet (read since it answered).
+int ReadingStatsStore::accountDaysRead(const char* language, const StatsDigest& g) const {
+  uint32_t extra = 0;
+  eachLocalDay(language, [&](const int32_t day, uint16_t) {
+    if (day > g.anchorDay - g.days && !accountRead(g, day)) extra++;
+  });
+  return static_cast<int>(g.readingDays + extra);
+}
+
+// The server's minutes, plus this reader's own since the server's today: that day's are already
+// partly counted, so later ones only.
+uint32_t ReadingStatsStore::accountMinutes(const char* language, const StatsDigest& g) const {
+  uint32_t total = g.minutes;
+  eachLocalDay(language, [&](const int32_t day, const uint16_t minutes) {
+    if (day > g.anchorDay) total += minutes;
+  });
+  return total;
+}
+
+uint16_t ReadingStatsStore::accountWeekMinutes(const char* language, const StatsDigest& g, const uint16_t y,
+                                               const uint8_t m, const uint8_t d) const {
+  const int32_t today = day2000(y, m, d);
+  const int32_t monday = today - (dowFromDate(y, m, d) + 6) % 7;
+  // A server answer from an earlier week counts nothing towards this one.
+  uint32_t total = g.anchorDay >= monday && g.anchorDay <= today ? g.weekMinutes : 0;
+  const int32_t from = std::max(monday, g.anchorDay + 1);
+  eachLocalDay(language, [&](const int32_t day, const uint16_t minutes) {
+    if (day >= from && day <= today) total += minutes;
+  });
+  return static_cast<uint16_t>(std::min<uint32_t>(total, UINT16_MAX));
 }
 
 // The server's per-book list (the whole of it, see bookdownload::combine()), for what the reading stats keep

@@ -8,6 +8,7 @@
 
 #include "stats/BookListParser.h"
 #include "stats/DailyStatsParser.h"
+#include "stats/OverviewParser.h"
 #include "stats/StatsSync.h"
 
 using statsSync::Day;
@@ -129,6 +130,38 @@ void download() {
   assert(!truncated.complete());
 }
 
+// The account digest and one per language group, in any chunking; groups past the capacity dropped.
+void overview() {
+  const std::string body =
+      R"({"anchor_day":9793,"days":730,"history_b64":"CwAA","reading_days":53,"current_streak":2,)"
+      R"("longest_streak":6,"books_finished":496,"finished_this_year":31,"pages_read":142177,"seconds":2880,)"
+      R"("sessions":0,"today_seconds":420,"week_seconds":1500,"groups":{)"
+      R"("ja":{"anchor_day":9793,"days":730,"history_b64":"Aw==","reading_days":3,"books_finished":1,)"
+      R"("longest_streak":3,"seconds":1200,"week_seconds":600},)"
+      R"("toolong":{"anchor_day":9793,"reading_days":9},)"
+      R"("de":{"anchor_day":9793,"reading_days":1},"en":{"anchor_day":9793,"reading_days":2}}})";
+  std::vector<StatsDigest> digests;
+  digests.reserve(3);
+  OverviewParser parser(digests);
+  for (size_t i = 0; i < body.size(); i += 6) parser.feed(body.data() + i, std::min<size_t>(6, body.size() - i));
+  assert(parser.complete());
+  assert(digests.size() == 3);
+  const StatsDigest& all = digests[0];
+  assert(all.code[0] == '\0' && all.anchorDay == 9793 && all.days == 730);
+  assert(all.history[0] == 0x0B && all.history[1] == 0);
+  assert(all.readingDays == 53 && all.longestStreak == 6 && all.booksFinished == 496);
+  assert(all.minutes == 48 && all.weekMinutes == 25);
+  assert(std::string(digests[1].code) == "ja" && digests[1].history[0] == 0x03 && digests[1].minutes == 20);
+  assert(digests[1].weekMinutes == 10 && digests[1].readingDays == 3);
+  assert(std::string(digests[2].code) == "de" && digests[2].readingDays == 1);  // "en" did not fit
+
+  std::vector<StatsDigest> cut;
+  cut.reserve(1);
+  OverviewParser truncated(cut);
+  truncated.feed(body.data(), body.size() / 2);
+  assert(!truncated.complete());
+}
+
 // A page of the book list arrives as begin/day/end calls, book by book, in any chunking.
 void bookList() {
   const std::string body =
@@ -184,6 +217,7 @@ int main() {
   global();
   book();
   download();
+  overview();
   bookList();
   puts("stats sync tests passed");
   return 0;

@@ -25,6 +25,7 @@
 #include "components/icons/flame.h"
 #include "components/icons/stats_icons.h"
 #include "fontIds.h"
+#include "stats/StatsSync.h"
 
 namespace {
 using StatsWidgets::dayLabel;
@@ -89,9 +90,14 @@ void ReadingStatsActivity::ringSetFocus(const TabRing::Focus focus, const bool a
 void ReadingStatsActivity::onEnter() {
   Activity::onEnter();
   tabBand_.begin();
-  stats_.emplace();
+  stats_.emplace(statsSync::showAllDevices());
   languages.clear();
   if (SETTINGS.showLanguageStats) READING_STATS_STORE.getLanguages(languages);
+  if (SETTINGS.hideUnknownLanguages) {
+    languages.erase(std::remove_if(languages.begin(), languages.end(),
+                                   [](const ReadingStatsStore::LanguageSummary& l) { return l.code[0] == '\0'; }),
+                    languages.end());
+  }
   tabLabels.clear();
   tabLabels.reserve(languages.size() + 1);
   tabLabels.emplace_back(tr(STR_STATS_TAB_ALL));

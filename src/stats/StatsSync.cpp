@@ -16,7 +16,9 @@
 
 #include "BookListParser.h"
 #include "BookStatsDownload.h"
+#include "CrossPointSettings.h"
 #include "DailyStatsParser.h"
+#include "OverviewParser.h"
 
 namespace {
 // Same floor as KOReaderSyncClient and clippingSync.
@@ -115,6 +117,52 @@ std::string urlEncode(const std::string& v) {
     }
   }
   return out;
+}
+
+// Minutes UTC is ahead of local time, as JS getTimezoneOffset() gives it: the server's `tz`.
+int utcOffsetMinutes() {
+  const time_t now = time(nullptr);
+  tm local{};
+  tm utc{};
+  localtime_r(&now, &local);
+  gmtime_r(&now, &utc);
+  const int32_t days = statsSync::daysSince2000(local.tm_year + 1900, local.tm_mon + 1, local.tm_mday) -
+                       statsSync::daysSince2000(utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday);
+  return -((days * 24 + local.tm_hour - utc.tm_hour) * 60 + local.tm_min - utc.tm_min);
+}
+
+// The account's numbers as the server's Stats page counts them, every device and every source, for
+// Insights' "All devices" view. Display only: never merged into this reader's stats. Best effort: on
+// failure the view keeps the last answer.
+void downloadOverview(freeink::SecureHttpClient& http) {
+  // All languages plus the server's 20 groups, about 2.7 KB.
+  std::vector<StatsDigest> digests;
+  if (HalMemory::getDefaultHeap().largestBlockBytes < 21 * sizeof(StatsDigest) + 1024) {
+    LOG_ERR("STATS", "Not enough heap for the account overview");
+    return;
+  }
+  digests.reserve(21);
+  auto parser = makeUniqueNoThrow<OverviewParser>(digests);
+  // Two years of reading days, as the calendar pages back through: 730 bits of the 736 a digest holds.
+  static_assert(sizeof(StatsDigest::history) * 8 >= 730, "history too small");
+  char path[96];
+  snprintf(path, sizeof(path), "/api/v1/stats/overview?tz=%d&days=730&group_by=language&week_start=1",
+           utcOffsetMinutes());
+  if (!parser || !begin(http, path)) return;
+  const int status = http.sendRequest("GET", nullptr, 0, [&](const uint8_t* data, const size_t length) {
+    parser->feed(reinterpret_cast<const char*>(data), length);
+    return true;
+  });
+  if (status != 200 || !http.responseComplete() || !parser->complete()) {
+    LOG_ERR("STATS", "Account overview download failed: HTTP %d", status);
+    return;
+  }
+  parser.reset();
+  if (!ReadingStatsStore::saveAccount(digests)) {
+    LOG_ERR("STATS", "Account overview not saved");
+    return;
+  }
+  LOG_INF("STATS", "Downloaded the account overview, %zu languages", digests.size() - 1);
 }
 
 // This reader's own rows of the server's book list, page by page into the download file
@@ -404,6 +452,9 @@ bool statsSync::download() {
   char path[96];
   snprintf(path, sizeof(path), "/api/v1/stats/global?device_id=%s&since=%lu", DEVICE_ID,
            static_cast<unsigned long>(since));
+  // A new account (or the first download) must not keep the last account's overview, even when
+  // this download's fetch of it fails.
+  if (KOREADER_STORE.getStatsDaysSince() == 0) ReadingStatsStore::removeAccount();
   if (!begin(*http, path)) return false;
   // Streamed: without the filters (an older server) it holds every device's whole history.
   const int status = http->sendRequest("GET", nullptr, 0, [&](const uint8_t* data, const size_t length) {
@@ -425,8 +476,11 @@ bool statsSync::download() {
   KOREADER_STORE.saveToFile();
   LOG_INF("STATS", "Downloaded %zu days of reading stats", days.size());
   std::vector<DailyReading>().swap(days);
-  // Same connection: the book list follows on it without another handshake.
+  // Same connection for the rest: no further handshake.
+  downloadOverview(*http);
   const bool books = downloadBooks(*http);
   http->end();
   return books;
 }
+
+bool statsSync::showAllDevices() { return SETTINGS.insightsAllDevices != 0 && KOREADER_STORE.getStatsDaysSince() != 0; }

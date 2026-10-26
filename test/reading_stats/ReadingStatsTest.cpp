@@ -5,6 +5,7 @@
 #include <SdSystemDir.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -871,4 +872,69 @@ TEST(DateFormat, EveryLanguageHasUsablePatterns) {
     EXPECT_NE(strstr(heading, "2026"), nullptr) << code << ": " << heading;
   }
   i18n.setLanguage(Language::EN);
+}
+
+namespace {
+// A digest as the server's overview would give it, answered on 2026-08-07 (day 9715 since 2000).
+StatsDigest digest(const char* code, const std::vector<int>& readBack, const uint32_t readingDays,
+                   const uint16_t longest, const uint16_t finished, const uint32_t minutes, const uint32_t week) {
+  StatsDigest g{};
+  strncpy(g.code, code, sizeof(g.code) - 1);
+  g.anchorDay = 9715;
+  g.days = 730;
+  for (const int n : readBack) g.history[n >> 3] |= 1 << (n & 7);
+  g.readingDays = readingDays;
+  g.longestStreak = longest;
+  g.booksFinished = finished;
+  g.minutes = minutes;
+  g.weekMinutes = week;
+  return g;
+}
+}  // namespace
+
+// With the account loaded, a day read on any device counts, and this reader's minutes after the
+// server answered are added to its totals; without it, nothing changes.
+TEST_F(StatsTest, AccountOverviewCountsEveryDevice) {
+  auto& s = READING_STATS_STORE;
+  // This reader: Friday 7 and Saturday 8 August, both Japanese.
+  s.addMinutes(Y, M, 7, 10);
+  s.addMinutes(Y, M, 8, 5);
+  s.addLanguageMinutes("ja", 10, Y, M, 7);
+  s.addLanguageMinutes("ja", 5, Y, M, 8);
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  // The account, the day before: read on the 7th, 6th and 4th (bits 0, 1, 3); German only on the server.
+  ASSERT_TRUE(
+      ReadingStatsStore::saveAccount({digest("", {0, 1, 3}, 40, 9, 3, 600, 100),
+                                      digest("ja", {0, 1}, 10, 2, 1, 300, 50), digest("de", {3}, 5, 1, 0, 900, 0)}));
+  {
+    const ReadingStatsStore::Loaded stats(true);
+    ASSERT_TRUE(stats.loaded());
+    EXPECT_EQ(s.getStreak(Y, M, 8), 3);  // 8th here, 7th both, 6th elsewhere
+    EXPECT_EQ(s.getStreak(Y, M, 9), 3);  // the 9th not read yet: the streak runs to yesterday
+    EXPECT_EQ(s.getDaysRead(), 41);      // the 8th is new to the server
+    EXPECT_EQ(s.getTotalMinutes(), 605u);
+    EXPECT_EQ(s.getMinutesThisWeek(Y, M, 8), 105);
+    EXPECT_EQ(s.getLongestStreak(), 9);
+    EXPECT_EQ(s.getBooksFinished(), 3);
+    bool week[7];
+    s.getWeekStatus(Y, M, 8, 5, week);
+    const bool expected[7] = {false, true, false, true, true, true, false};
+    EXPECT_TRUE(std::equal(week, week + 7, expected));
+    EXPECT_EQ(s.getDaysReadInMonth(Y, M), 4);
+
+    EXPECT_EQ(s.getStreak("ja", Y, M, 8), 3);
+    EXPECT_EQ(s.getDaysRead("ja"), 11);
+    EXPECT_EQ(s.getTotalMinutes("ja"), 305u);
+    EXPECT_EQ(s.getMinutesThisWeek("ja", Y, M, 8), 55);
+    std::vector<ReadingStatsStore::LanguageSummary> languages;
+    s.getLanguages(languages);
+    ASSERT_EQ(languages.size(), 2u);
+    EXPECT_STREQ(languages[0].code, "de");  // read elsewhere, and most
+    EXPECT_STREQ(languages[1].code, "ja");
+  }
+  const ReadingStatsStore::Loaded own;
+  ASSERT_TRUE(own.loaded());
+  EXPECT_EQ(s.getTotalMinutes(), 15u);
+  EXPECT_EQ(s.getStreak(Y, M, 8), 2);
 }

@@ -64,4 +64,8 @@ bool run(const std::string& bookPath, const std::string& documentHash);
 // rules as run(); false when nothing was saved.
 bool download();
 
+// Insights' "All devices" setting is on and the signed-in account has downloaded at least once, so the
+// saved overview belongs to it: another account's, or one from before a sign-out, is never shown.
+bool showAllDevices();
+
 }  // namespace statsSync

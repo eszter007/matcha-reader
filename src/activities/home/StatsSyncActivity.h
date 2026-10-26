@@ -19,7 +19,7 @@ class StatsSyncActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  enum State { SYNCING, NO_ACCOUNT, FAILED, CANCELLED };
+  enum State { SYNCING, DONE, NO_ACCOUNT, FAILED, CANCELLED };
   State state = SYNCING;
   const bool fromSettings;
   // Set once WiFi was joined here; leaving then restarts back into Insights.

@@ -414,6 +414,15 @@ other three only affect the CrossPoint List. The cover grid always shows every b
 - **Show language stats** (on by default): Shows a tab per language in [Insights](#71-insights). Turn it off to see only
   the totals for all languages. Stats are still recorded per language, so turning it back on brings the tabs back.
 
+- **Hide unknown languages** (on by default, shown while language stats are on): Hides the **Unknown** tab, which
+  holds time on books that declare no language, e.g. TXT and XTC files. The CrossPoint app has no such group either.
+  The time still counts in the **All** tab.
+
+- **Insights data** (All devices by default): **All devices** shows your whole sync account in
+  [Insights](#71-insights) and on the **Stats** sleep screen, as the CrossPoint app counts it: every device, the app's
+  own reader and imported time. **This device** shows only what this reader recorded. See
+  [Syncing Stats Between Devices](#74-syncing-stats-between-devices).
+
 - **Sync Stats**: Joins Wi-Fi and syncs your reading stats with the CrossPoint sync server, the same as **Refresh
   Stats** in Insights. See [Syncing Stats Between Devices](#74-syncing-stats-between-devices).
 
@@ -1623,7 +1632,8 @@ The tabs at the top split these numbers by language. **All** covers everything. 
 language you have read. Each tab has its own streak, calendar and totals, so reading an English book does not
 break your Japanese streak.
 
-To hide the language tabs and keep only the totals, turn off **Settings → Insights → Show language stats**.
+To hide the language tabs and keep only the totals, turn off **Settings → Insights → Show language stats**. Books
+that declare no language get an **Unknown** tab only with **Hide unknown languages** turned off.
 
 A tab shows the language's name if the firmware has a translation for it, e.g. `ja` shows as 日本語. Otherwise it
 shows the language code, such as `ZH`. Books with no language tag (TXT, XTC and manga converted without
@@ -1695,7 +1705,7 @@ Books finished before the finish day was saved show their last reading day befor
 
 With the CrossPoint sync server set up (see [Syncing While Reading](#syncing-while-reading)), select **Refresh Stats**
 at the bottom of Insights or **Settings → Insights → Sync Stats**. The device joins Wi-Fi, sends its stats and fetches
-the reading time saved on the server, then restarts back to where you started.
+the reading time saved on the server, shows **Done** and restarts back to where you started.
 
 What comes back is what any CrossPoint reader on your account uploaded:
 
@@ -1712,6 +1722,13 @@ recorded them.
 
 Books are matched by file name, so keep the same name on every device. The server only has per-book days and
 languages if it supports them; an older server brings back the **All** tab only.
+
+With **Settings → Insights → Insights data** on **All devices** (the default), each sync also fetches the account's
+numbers as the CrossPoint app counts them, overall and per language: reading days, streaks, books finished, reading
+time and this week. Insights and the **Stats** sleep screen then show those, so a day read on any device or in the app
+counts, and a language read only elsewhere gets its own tab. What you read on this reader after the sync is added on
+top until the next one. Other devices' numbers are only shown, never uploaded as this reader's. Until the account you
+are signed in with has synced once, Insights shows this device only.
 
 ## 8. Current Limitations & Roadmap
 

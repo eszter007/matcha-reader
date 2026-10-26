@@ -11,6 +11,7 @@
 #include "SilentRestart.h"
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "activities/settings/SettingsSection.h"
 #include "components/HomeTabBar.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -53,7 +54,7 @@ void StatsSyncActivity::onExit() {
       delay(30);
     }
     if (fromSettings) {
-      silentRestartToSettings();
+      silentRestartToSettings(static_cast<int>(SettingsSection::Insights));
     } else {
       silentRestartToHomeTab(static_cast<int>(HomeTab::Stats));
     }
@@ -80,6 +81,10 @@ void StatsSyncActivity::runSync() {
   // A saved download is merged at boot, so it needs the restart even when WiFi was already up.
   if (downloaded) restartOnExit = true;
   if (downloaded && uploaded) {
+    // The restart then returns to where the sync started; "Done" is the only sign it went through.
+    state = DONE;
+    requestUpdateAndWait();
+    delay(1000);
     leave();
     return;
   }
@@ -117,6 +122,9 @@ void StatsSyncActivity::render(RenderLock&&) {
     case NO_ACCOUNT:
       renderer.drawCenteredText(UI_12_FONT_ID, midY, tr(STR_SET_CREDENTIALS_FIRST), true, EpdFontFamily::BOLD);
       break;
+    case DONE:
+      renderer.drawCenteredText(UI_12_FONT_ID, midY, tr(STR_DONE), true, EpdFontFamily::BOLD);
+      break;
     case CANCELLED:
       break;
     case FAILED:
@@ -124,7 +132,7 @@ void StatsSyncActivity::render(RenderLock&&) {
       renderer.drawCenteredText(UI_10_FONT_ID, midY + 10, tr(STR_TRY_AGAIN_LATER));
       break;
   }
-  if (state != SYNCING) {
+  if (state != SYNCING && state != DONE) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }

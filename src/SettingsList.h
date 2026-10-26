@@ -386,6 +386,11 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
           // The Insights section of Settings.
           SettingInfo::Toggle(StrId::STR_SHOW_LANGUAGE_STATS, &CrossPointSettings::showLanguageStats,
                               "showLanguageStats", StrId::STR_STATS),
+          SettingInfo::Toggle(StrId::STR_HIDE_UNKNOWN_LANGUAGES, &CrossPointSettings::hideUnknownLanguages,
+                              "hideUnknownLanguages", StrId::STR_STATS),
+          SettingInfo::Enum(StrId::STR_INSIGHTS_DATA, &CrossPointSettings::insightsAllDevices,
+                            {StrId::STR_INSIGHTS_THIS_DEVICE, StrId::STR_INSIGHTS_ALL_DEVICES}, "insightsAllDevices",
+                            StrId::STR_STATS),
 
       });
     }();
