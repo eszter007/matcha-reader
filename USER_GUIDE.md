@@ -73,11 +73,11 @@ This guide covers the **CrossPoint** firmware as shipped in Matcha Reader: the b
     - [6.5 Books in Other Languages](#65-books-in-other-languages)
     - [6.6 Manga, Manhua and Comics](#66-manga-manhua-and-comics)
     - [6.7 Dictionary Files and Language Selection](#67-dictionary-files-and-language-selection)
-  - [7. Reading Stats](#7-reading-stats)
+  - [7. Reading Insights](#7-reading-insights)
     - [7.1 Insights](#71-insights)
-    - [7.2 Per-book Stats](#72-per-book-stats)
+    - [7.2 Per-book Insights](#72-per-book-insights)
     - [7.3 What the Numbers Do Not Cover](#73-what-the-numbers-do-not-cover)
-    - [7.4 Syncing Stats Between Devices](#74-syncing-stats-between-devices)
+    - [7.4 Syncing Insights Between Devices](#74-syncing-insights-between-devices)
   - [8. Current Limitations & Roadmap](#8-current-limitations--roadmap)
   - [9. Troubleshooting Issues & Escaping Bootloop](#9-troubleshooting-issues--escaping-bootloop)
 
@@ -108,7 +108,7 @@ Turn on **Power + Up Syncs Clock** in **Settings → Controls → Shortcuts**. I
 * When the new time appears, press **Back**. If you started in a book, you go back to the book.
 * The same sync is also available as **Sync Clock Now** in **Settings → System → Clock**.
 
-Some devices, such as the X4, have no clock chip. Their clock drifts during sleep and resets on a restart, which makes the reading stats wrong. A sync fixes it.
+Some devices, such as the X4, have no clock chip. Their clock drifts during sleep and resets on a restart, which makes the reading insights wrong. A sync fixes it.
 
 **Settings → System → Clock → Show in Header** shows the time at the top of menu screens, on the opposite side from the battery. Some themes have no room for it. The time updates whenever the screen redraws. On the X4 it shows the device's own time even when that time has drifted, so a wrong time there means you should sync.
 
@@ -160,14 +160,14 @@ Home is where you start. From here you can open:
 * **[Browse Files](#33-browse-files-screen)**
 * **OPDS Browser** (online book catalogs), or **Plugins** if you have plugins installed
 * **[File Transfer](#35-file-transfer-screen)**
-* **Insights** (your [reading stats](#7-reading-stats))
+* **Insights** (your [reading insights](#7-reading-insights))
 * **[Settings](#36-settings)**
 
 In the **Cover Grid** theme, Home shows book covers instead of a menu. The book you are reading sits in a large card at the top, and the others follow below. The first time the device sees a book, it makes the cover in the background. Until a cover is ready, you see the book's title in its place. Pressing a button pauses this work. If a cover fails, the device tries again the next time you open Home.
 
 **Book options:** Long-press a cover on Home, in the Library or in a shelf. On a device without touch, select the cover and hold **Confirm** for one second. The menu stays open when you let go. It offers:
 
-* **View Stats**
+* **View Insights**
 * **Mark as Read** and **Mark as Unread**. You only see the one that would change something, so a finished book has no **Mark as Read**.
 * **Delete**. The device asks you to confirm first. Deleting also removes the book's saved reading data.
 
@@ -374,7 +374,7 @@ any profile of **Settings → Reader → Text Settings**.
   - **Quick Resume**: the page you were reading stays on screen with a small moon icon. Waking the device takes you
     straight back to that page.
   - **Transparent**: one of your pictures drawn on top of the current screen. See [Sleep Screen](#37-sleep-screen).
-  - **Stats**: your reading statistics, such as hours read, your daily streak and minutes read this week.
+  - **Insights**: your reading insights, such as hours read, your daily streak and minutes read this week.
 
 - **Sleep Screen Cover Mode**: How a cover fits the screen on the cover sleep screens.
   - **Fit** (default): the whole cover, centred, with white borders where needed.
@@ -411,20 +411,20 @@ other three only affect the CrossPoint List. The cover grid always shows every b
 
 #### 3.6.5 Insights
 
-- **Show language stats** (on by default): Shows a tab per language in [Insights](#71-insights). Turn it off to see only
-  the totals for all languages. Stats are still recorded per language, so turning it back on brings the tabs back.
+- **Show language insights** (on by default): Shows a tab per language in [Insights](#71-insights). Turn it off to see only
+  the totals for all languages. Insights are still recorded per language, so turning it back on brings the tabs back.
 
-- **Hide unknown languages** (on by default, shown while language stats are on): Hides the **Unknown** tab, which
+- **Hide unknown languages** (on by default, shown while language insights are on): Hides the **Unknown** tab, which
   holds time on books that declare no language, e.g. TXT and XTC files. The CrossPoint app has no such group either.
   The time still counts in the **All** tab.
 
 - **Insights data** (All devices by default): **All devices** shows your whole sync account in
-  [Insights](#71-insights) and on the **Stats** sleep screen, as the CrossPoint app counts it: every device, the app's
+  [Insights](#71-insights) and on the **Insights** sleep screen, as the CrossPoint app counts it: every device, the app's
   own reader and imported time. **This device** shows only what this reader recorded. See
-  [Syncing Stats Between Devices](#74-syncing-stats-between-devices).
+  [Syncing Insights Between Devices](#74-syncing-insights-between-devices).
 
-- **Sync Stats**: Joins Wi-Fi and syncs your reading stats with the CrossPoint sync server, the same as **Refresh
-  Stats** in Insights. See [Syncing Stats Between Devices](#74-syncing-stats-between-devices).
+- **Sync Insights**: Joins Wi-Fi and syncs your reading insights with the CrossPoint sync server, the same as **Refresh
+  Insights** in Insights. See [Syncing Insights Between Devices](#74-syncing-insights-between-devices).
 
 #### 3.6.6 Reader
 
@@ -842,7 +842,7 @@ For a shortcut, set **Settings → Controls → Shortcuts → Long-Press Menu** 
 
 **Sync Clippings** is off by default. Turn it on only with a CrossPoint sync server that supports clippings. **Sync Progress** then also uploads and downloads this book's clippings. Leave it off for ordinary KOSync servers.
 
-With the CrossPoint sync server, **Sync Progress** also uploads your reading stats: minutes per day, total time, books finished and your longest streak, plus each book's reading time, sessions and finished status (as the finish date it sends the day on the end-of-book stamp, or your last reading day for books finished before that day was saved). The CrossPoint app then shows your measured reading time, overall and per book. Stats are only sent once the clock is set (see [Syncing the Clock](#syncing-the-clock)). The first sync sends up to two years of history and the stats of every book in your reading stats, so it takes longer than usual; later syncs only send the days and books read since. If the upload fails, your progress still syncs and the next sync picks up where it stopped. Your stats then live on the server too, so switching to another reader or resetting this one loses nothing: the CrossPoint app keeps showing your whole history, and **Refresh Stats** brings your daily reading time back to the device (see [Syncing Stats Between Devices](#74-syncing-stats-between-devices)). Dictionary lookups and saved sentences are not synced. Time of day and pages are not recorded on the device, so those charts in the app stay empty for it. All CrossPoint readers on one account count as one device. Ordinary KOSync servers get no stats.
+With the CrossPoint sync server, **Sync Progress** also uploads your reading insights: minutes per day, total time, books finished and your longest streak, plus each book's reading time, sessions and finished status (as the finish date it sends the day on the end-of-book stamp, or your last reading day for books finished before that day was saved). The CrossPoint app then shows your measured reading time, overall and per book. Insights are only sent once the clock is set (see [Syncing the Clock](#syncing-the-clock)). The first sync sends up to two years of history and the insights of every book in your reading insights, so it takes longer than usual; later syncs only send the days and books read since. If the upload fails, your progress still syncs and the next sync picks up where it stopped. Your insights then live on the server too, so switching to another reader or resetting this one loses nothing: the CrossPoint app keeps showing your whole history, and **Refresh Insights** brings your daily reading time back to the device (see [Syncing Insights Between Devices](#74-syncing-insights-between-devices)). Dictionary lookups and saved sentences are not synced. Time of day and pages are not recorded on the device, so those charts in the app stay empty for it. All CrossPoint readers on one account count as one device. Ordinary KOSync servers get no insights.
 
 ### 3.7 Sleep Screen
 
@@ -859,7 +859,7 @@ Choose what the screen shows while the device sleeps in **Settings → Sleep →
 | **Quick Resume**   | Leaves the current screen as it is, so the page you were on stays visible.                                      |
 | **Transparent**    | A picture drawn on top of the current page (see [Transparent sleep screen](#transparent-sleep-screen)). Shows **Dark** if no usable picture is found. |
 | **Cover + Transparent** | The transparent picture drawn on top of the cover of the last book you opened, from any screen. Behaves like **Transparent** if that book has no cover, and shows the plain cover if no usable picture is found. On the X4 the cover is drawn in dithered black and white under the picture. |
-| **Stats**          | Your reading stats styled as a train departures board: total hours read, current day streak and minutes this week. The board's words are always in English and Japanese. |
+| **Insights**          | Your reading insights styled as a train departures board: total hours read, current day streak and minutes this week. The board's words are always in English and Japanese. |
 
 #### Cover settings
 
@@ -898,7 +898,7 @@ Keep these pictures apart from your normal sleep images, because they work diffe
 
 #### Custom logo
 
-You can replace the cat on the start-up screen and on the **Dark**, **Light** and **Stats** sleep screens with your own drawing. No setting needed.
+You can replace the cat on the start-up screen and on the **Dark**, **Light** and **Insights** sleep screens with your own drawing. No setting needed.
 
 1. Make a BMP image called `logo.bmp`.
 2. Put it in the device's system folder on the SD card. That is the folder holding `reading_stats.bin` and `bookstats`, usually the hidden `.system` folder (a folder called `system` works too).
@@ -910,7 +910,7 @@ Tips for the image:
 - Draw on a plain white background. A 32-bit BMP with transparency is placed on white.
 - On the dark screens it gets a white outline, like the cat. The white around the drawing turns black, while white areas inside the drawing (a face, a book page) stay white.
 - The start-up screen shows only black and white, so it can start quickly. Light gray parts vanish there, so use dark lines.
-- The **Stats** screen may show the logo smaller, or leave it out if there is no room.
+- The **Insights** screen may show the logo smaller, or leave it out if there is no room.
 - Still seeing the cat? The file is probably bigger than 800 pixels on a side, compressed, or damaged. The serial log names the reason.
 
 #### Transparent sleep screen
@@ -1544,7 +1544,7 @@ Two options change how panels are shown:
 
 Manga converted without full-page images always opens in panel view.
 
-Reaching the last page marks the manga as finished in your reading stats, the same as an EPUB.
+Reaching the last page marks the manga as finished in your reading insights, the same as an EPUB.
 
 ### 6.7 Dictionary Files and Language Selection
 
@@ -1616,12 +1616,12 @@ Older setups still work. A dictionary folder placed directly under `dictionaries
 still be chosen as the fallback dictionary. Japanese files in the old `dict/` folder are still found.
 
 
-## 7. Reading Stats
+## 7. Reading Insights
 
 Reading time is saved every five minutes and again when you close a book. If the battery runs out or the device
 crashes, you lose at most the last few minutes. Manga counts the same as EPUBs.
 
-With the CrossPoint sync server, **Sync Progress** also uploads these stats; see [Syncing While Reading](#syncing-while-reading).
+With the CrossPoint sync server, **Sync Progress** also uploads these insights; see [Syncing While Reading](#syncing-while-reading).
 
 ### 7.1 Insights
 
@@ -1632,7 +1632,7 @@ The tabs at the top split these numbers by language. **All** covers everything. 
 language you have read. Each tab has its own streak, calendar and totals, so reading an English book does not
 break your Japanese streak.
 
-To hide the language tabs and keep only the totals, turn off **Settings → Insights → Show language stats**. Books
+To hide the language tabs and keep only the totals, turn off **Settings → Insights → Show language insights**. Books
 that declare no language get an **Unknown** tab only with **Hide unknown languages** turned off.
 
 A tab shows the language's name if the firmware has a translation for it, e.g. `ja` shows as 日本語. Otherwise it
@@ -1643,20 +1643,20 @@ shows the language code, such as `ZH`. Books with no language tag (TXT, XTC and 
 | --- | --- |
 | Confirm | Next tab. After the last tab, the cursor moves into the bottom tab bar (Cover Grid theme). |
 | Left / Right | Previous or next month in the calendar. The button hints show which month you will move to. |
-| Up / Down | Scroll. At the end of the page, Down selects **Refresh Stats** and the next Down moves the cursor into the bottom tab bar. From there, Down goes back to the top of the page and Up to its end. |
+| Up / Down | Scroll. At the end of the page, Down selects **Refresh Insights** and the next Down moves the cursor into the bottom tab bar. From there, Down goes back to the top of the page and Up to its end. |
 | Back | Back one screen. Hold it to go Home. |
 
 On a touch device, tap a tab or swipe left and right across the page to switch tabs. Tap the arrows next to the
 month to change it.
 
-**Refresh Stats** at the bottom of the page syncs your stats with the CrossPoint sync server; see
-[Syncing Stats Between Devices](#74-syncing-stats-between-devices).
+**Refresh Insights** at the bottom of the page syncs your insights with the CrossPoint sync server; see
+[Syncing Insights Between Devices](#74-syncing-insights-between-devices).
 
-<p align="center"><img src="docs/images/screenshots/insights.png" width="260" alt="Insights with streak, stat cards and calendar"></p>
+<p align="center"><img src="docs/images/screenshots/insights.png" width="260" alt="Insights with streak, insight cards and calendar"></p>
 
-### 7.2 Per-book Stats
+### 7.2 Per-book Insights
 
-Long-press a book in the Library and choose **View Stats**. You see sessions, total reading time, average session,
+Long-press a book in the Library and choose **View Insights**. You see sessions, total reading time, average session,
 days read, words looked up, sentences saved and a calendar of the days you read that book. The header shows the
 day you started the book and the day you finished it, or "since" the start while you are still reading. On the
 calendar the start day has a dotted ring and the finish day a solid one.
@@ -1673,10 +1673,10 @@ A session is one opening of the book. Opening the reader menu or settings in bet
 Waking the device from sleep back into the book does, so an evening with a few sleeps in it shows as several
 sessions.
 
-Books you read before per-book stats existed show "No reading recorded yet" until you open them again. Your
+Books you read before per-book insights existed show "No reading recorded yet" until you open them again. Your
 Insights totals still include that reading.
 
-<p align="center"><img src="docs/images/screenshots/book-stats.png" width="260" alt="Per-book stats for one book"></p>
+<p align="center"><img src="docs/images/screenshots/book-stats.png" width="260" alt="Per-book insights for one book"></p>
 
 #### Finishing a book
 
@@ -1689,7 +1689,7 @@ and, if any, the words you looked up and the sentences you saved. Below that you
 
 Books finished before the finish day was saved show their last reading day before today instead.
 
-<p align="center"><img src="docs/images/screenshots/end-of-book.png" width="260" alt="End-of-book screen with the book's stats and the next books"></p>
+<p align="center"><img src="docs/images/screenshots/end-of-book.png" width="260" alt="End-of-book screen with the book's insights and the next books"></p>
 
 ### 7.3 What the Numbers Do Not Cover
 
@@ -1701,10 +1701,10 @@ Books finished before the finish day was saved show their last reading day befor
 - The device keeps about ten years of overall history and a few years of history per language. Older days are
   dropped.
 
-### 7.4 Syncing Stats Between Devices
+### 7.4 Syncing Insights Between Devices
 
-With the CrossPoint sync server set up (see [Syncing While Reading](#syncing-while-reading)), select **Refresh Stats**
-at the bottom of Insights or **Settings → Insights → Sync Stats**. The device joins Wi-Fi, sends its stats and fetches
+With the CrossPoint sync server set up (see [Syncing While Reading](#syncing-while-reading)), select **Refresh Insights**
+at the bottom of Insights or **Settings → Insights → Sync Insights**. The device joins Wi-Fi, sends its insights and fetches
 the reading time saved on the server, shows **Done** and restarts back to where you started.
 
 What comes back is what any CrossPoint reader on your account uploaded:
@@ -1713,8 +1713,8 @@ What comes back is what any CrossPoint reader on your account uploaded:
   calendar;
 - the language tabs, from each book's days and language;
 - books finished, including ones not on this card;
-- each book's own stats (days, sessions, finished), for the books on the card. A book takes them in the next time you
-  open it or its stats.
+- each book's own insights (days, sessions, finished), for the books on the card. A book takes them in the next time you
+  open it or its insights.
 
 A day that already has more minutes on the device keeps them, so syncing twice never counts anything double. The
 numbers show after the restart that ends the sync. Dictionary lookups and saved sentences stay on the device that
@@ -1725,7 +1725,7 @@ languages if it supports them; an older server brings back the **All** tab only.
 
 With **Settings → Insights → Insights data** on **All devices** (the default), each sync also fetches the account's
 numbers as the CrossPoint app counts them, overall and per language: reading days, streaks, books finished, reading
-time and this week. Insights and the **Stats** sleep screen then show those, so a day read on any device or in the app
+time and this week. Insights and the **Insights** sleep screen then show those, so a day read on any device or in the app
 counts, and a language read only elsewhere gets its own tab. What you read on this reader after the sync is added on
 top until the next one. Other devices' numbers are only shown, never uploaded as this reader's. Until the account you
 are signed in with has synced once, Insights shows this device only.
@@ -1796,6 +1796,6 @@ set as Back) together with the Power button. The device starts on the Home scree
 book. If a book crashes while opening, the next start goes to Home on its own.
 
 **Broken cache or settings:** delete the `.crosspoint` folder on the SD card. This also removes your reading
-positions, saved Wi-Fi networks and settings. Your reading stats are kept. To lose less, delete only part of it:
+positions, saved Wi-Fi networks and settings. Your reading insights are kept. To lose less, delete only part of it:
 `settings.json` resets your settings, `state.json` resets what the device remembers between restarts, and the
 `epub_*` folders hold each book's prepared pages and reading position.
