@@ -9,6 +9,7 @@
 #include <HalGPIO.h>
 #include <HalMemory.h>
 #include <HalStorage.h>
+#include <HiddenItems.h>
 #include <I18n.h>
 #include <LibraryBuilder.h>
 #include <Logging.h>
@@ -131,10 +132,6 @@ void releaseRequestArguments(WebServer* server) {
   static_cast<CrossPointHttpServer*>(server)->releaseRequestArguments();
 }
 
-// Folders/files to hide from the web interface file browser
-// Note: Items starting with "." are automatically hidden
-constexpr const char* HIDDEN_ITEMS[] = {"System Volume Information", "XTCache"};
-
 constexpr uint16_t UDP_PORTS[] = {54982, 48123, 39001, 44044, 59678};
 constexpr uint16_t LOCAL_UDP_PORT = 8134;
 
@@ -180,7 +177,7 @@ String normalizeWebPath(const String& inputPath) {
 // Matches the on-device browser, which only ever special-cases
 // "System Volume Information".
 bool isProtectedItemName(const String& name) {
-  for (const auto* item : HIDDEN_ITEMS) {
+  for (const auto* item : FsHelpers::HIDDEN_ITEMS) {
     if (name.equals(item)) {
       return true;
     }
@@ -722,7 +719,7 @@ void CrossPointWebServer::scanFiles(const char* path, const std::function<void(F
     // either way.
     bool shouldHide = !SETTINGS.showHiddenFiles && fileName.startsWith(".");
     if (!shouldHide) {
-      for (const auto* item : HIDDEN_ITEMS) {
+      for (const auto* item : FsHelpers::HIDDEN_ITEMS) {
         if (fileName.equals(item)) {
           shouldHide = true;
           break;
@@ -860,7 +857,7 @@ void CrossPointWebServer::handleDownload() const {
     server->send(403, "text/plain", "Cannot access system files");
     return;
   }
-  for (const auto* item : HIDDEN_ITEMS) {
+  for (const auto* item : FsHelpers::HIDDEN_ITEMS) {
     if (itemName.equals(item)) {
       server->send(403, "text/plain", "Cannot access protected items");
       return;

@@ -6,6 +6,7 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
+#include <HiddenItems.h>
 #include <I18n.h>
 #include <JpegToBmpConverter.h>
 #include <MangaPanel.h>
@@ -572,7 +573,10 @@ void CoverLibraryActivity::scanDirectoryEntry() {
 
   file.getName(scan_.nameBuf.data(), scan_.nameBuf.size());
   const char* name = scan_.nameBuf.data();
-  if (name[0] == '.' || strcmp(name, "System Volume Information") == 0 || strcmp(name, "dict") == 0) return;
+  if (name[0] == '.' || strcmp(name, "dict") == 0) return;
+  for (const auto* item : FsHelpers::HIDDEN_ITEMS) {
+    if (strcmp(name, item) == 0) return;
+  }
 
   std::string fullPath = scan_.activeDirPath;
   if (fullPath.back() != '/') fullPath += '/';
