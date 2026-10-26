@@ -446,6 +446,11 @@ void SdCardFontSystem::ensureWordLookupFonts(GfxRenderer& renderer, const int pr
   const bool selectedCovers = !selected.empty() && loadedFamilyCovers(manager_, selected, cjkProbe());
   const bool useCompanion = !fallbackManager_.currentFamilyName().empty() && !selectedCovers;
   SdCardFontManager& mgr = useCompanion ? fallbackManager_ : manager_;
+#if CROSSPOINT_VECTOR_FONTS
+  // A TTF reader font is not in the .cpfont manager. In a book with no companion it is the face
+  // the reader draws, so the panel borrows it the same way.
+  if (!useCompanion && mapTtfForLookup(renderer, primaryFontId, pointSize)) return;
+#endif
   if (mgr.currentFamilyName().empty()) return;
   const auto* family = registry_.findFamily(mgr.currentFamilyName());
   if (!family) return;
@@ -548,6 +553,9 @@ void SdCardFontSystem::unloadLookupVariant(GfxRenderer& renderer) {
 
 void SdCardFontSystem::releaseWordLookupFallback(GfxRenderer& renderer) {
   unloadLookupVariant(renderer);
+#if CROSSPOINT_VECTOR_FONTS
+  releaseTtfLookup(renderer);
+#endif
   lookupVariantTried_ = false;
   if (lookupUiLent_) {
     for (size_t i = 0; i < std::size(kUiFontSizes); i++) {
@@ -1105,7 +1113,47 @@ void SdCardFontSystem::freeTtfSources() {
   }
 }
 
+bool SdCardFontSystem::mapTtfForLookup(GfxRenderer& renderer, const int primaryFontId, const uint8_t pointSize) {
+  if (!ttf_ || ttfFamily_.empty()) return false;
+  int id = ttfPointSize_ == pointSize ? ttfFontId_ : 0;  // the reader face at the panel's size
+  for (const auto& face : ttfLookup_) {
+    if (id == 0 && face.font && face.pointSize == pointSize) id = face.fontId;
+  }
+  if (id == 0) {
+    const auto free =
+        std::find_if(std::begin(ttfLookup_), std::end(ttfLookup_), [](const TtfLookupFace& f) { return !f.font; });
+    if (free == std::end(ttfLookup_)) return false;
+    auto f = makeUniqueNoThrow<TtfEpdFont>();
+    if (!f) {
+      LOG_ERR("SDFS", "OOM: TtfEpdFont for lookup @%upt", pointSize);
+      return false;
+    }
+    addTtfSources(*f);
+    // A definition is a few hundred glyphs at most.
+    if (!f->load(pointSize, /*twoBit=*/true, /*glyphCacheBytes=*/64 * 1024, /*maxGlyphs=*/512)) return false;
+    // Salted like the UI faces: the panel size can equal the reader's or a UI size.
+    id = computeTtfFontId((ttfFamily_ + "\x01lookup").c_str(), pointSize);
+    renderer.insertFont(id, f->family());
+    renderer.registerTtfFont(id, f.get());
+    *free = {std::move(f), id, pointSize};
+  }
+  renderer.setFallbackFont(primaryFontId, id);
+  // The release clears this mapping; releaseTtfLookup() frees the faces.
+  rememberLookupMapping(primaryFontId, id, /*companion=*/false, /*loaded=*/false);
+  return true;
+}
+
+void SdCardFontSystem::releaseTtfLookup(GfxRenderer& renderer) {
+  for (auto& face : ttfLookup_) {
+    if (!face.font) continue;
+    renderer.unregisterTtfFont(face.fontId);
+    renderer.removeFont(face.fontId);
+    face = {};
+  }
+}
+
 void SdCardFontSystem::unloadTtf(GfxRenderer& renderer) {
+  releaseTtfLookup(renderer);  // they borrow ttfSources_ too
   if (ttfFamily_.empty() && ttfFontId_ == 0 && ttfUiIds_.empty()) return;
   // UI-size fallbacks first (they borrow ttfSources_).
   for (const int id : ttfUiIds_) {

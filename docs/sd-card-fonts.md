@@ -109,6 +109,10 @@ file in the same family folder takes priority over TTF/OTF/TTC files, so keep
 the two formats in separate folders. If both font roots contain the same family
 name, the copy in `/.fonts/` takes priority.
 
+The dictionary panel falls back to the selected direct font at the panel's size
+for characters its built-in font lacks (IPA, rarer Latin), except in a CJK book,
+where the CJK companion font takes that place.
+
 Direct fonts use the standard reader sizes: 12, 14, 16, and 18 pt. The **Fonts**
 tab in File Transfer accepts `.cpfont` files only. Copy direct fonts to the SD
 card instead. To remove a loose font file, delete that file from the SD card.
