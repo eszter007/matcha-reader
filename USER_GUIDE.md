@@ -1574,10 +1574,10 @@ StarDict files placed straight into `fr/` without a name folder are not picked u
 **Unpack compressed StarDict dictionaries.** Many come as a compressed `.dict.dz`. Looking a word up in one needs a
 32 KB block of free memory, which a reader with a book open often lacks, and the lookup then fails with **Not Enough
 Memory**. An unpacked `.dict` needs no such block. When you upload a `.dict.dz` through **File Transfer**, keep
-**Unpack dictionary** ticked and the browser unpacks it before sending. If you copy files to the card yourself, unpack
-it first: on macOS and Linux run `gzip -dc name.dict.dz > name.dict`. On Windows, 7-Zip's **Extract Here** does it;
-name the result `name.dict`. The `.dict` is about seven times larger. The reader uses it whenever it is there, so the
-`.dict.dz` can go.
+**Unpack dictionary** ticked: the browser unpacks it, uploads only the `.dict`, and deletes an older `.dict.dz` of
+the same name from that folder. If you copy files to the card yourself, unpack it first: on macOS and Linux run
+`gzip -dc name.dict.dz > name.dict`. On Windows, 7-Zip's **Extract Here** does it; name the result `name.dict`. The
+`.dict` is about seven times larger. The reader uses it whenever it is there, so the `.dict.dz` can go.
 
 **Japanese and Chinese** need converted files in `dictionaries/jp/`, `dictionaries/zh/` and `dictionaries/yue/`.
 A plain StarDict file will not work for them, because the reader uses the dictionary to work out where each word
