@@ -889,6 +889,9 @@ bool ReadingStatsStore::replayJournal() {
         addLanguageMinutes(r.language.c_str(), r.minutes, r.year, r.month, r.day);
       }
       addBookMinutes(r.bookPath.c_str(), r.language.c_str(), r.minutes, r.year, r.month, r.day);
+    } else if (!r.finishedPath.empty() && !r.language.empty()) {
+      // A finish carries its book's language, so a book finished without reading time counts in it.
+      addBookMinutes(r.bookPath.c_str(), r.language.c_str(), 0, r.year, r.month, r.day);
     }
     if (!r.finishedPath.empty()) markBookFinished(r.finishedPath);
   }
@@ -985,8 +988,17 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
       t.booksFinished = getBooksFinished();
       if (lang[0]) t.languageBooksFinished = getBooksFinished(lang);
       // A book finished before keeps its place: count up to it, not every finish since.
-      const auto it = finishedPath ? std::find(finishedBookPaths.begin(), finishedBookPaths.end(), finishedPath)
-                                   : finishedBookPaths.end();
+      auto it = finishedPath ? std::find(finishedBookPaths.begin(), finishedBookPaths.end(), finishedPath)
+                             : finishedBookPaths.end();
+      // Finished on another device: counted under its stand-in until it is finished here.
+      bool viaStandIn = false;
+      if (finishedPath && it == finishedBookPaths.end()) {
+        it = std::find(finishedBookPaths.begin(), finishedBookPaths.end(),
+                       remoteFinishedPath(bookdownload::nameHash(finishedPath)));
+        viaStandIn = it != finishedBookPaths.end();
+      }
+      t.listRead = true;
+      t.alreadyFinished = it != finishedBookPaths.end();
       if (it != finishedBookPaths.end() && it + 1 != finishedBookPaths.end()) {
         t.booksFinished = static_cast<uint16_t>(it - finishedBookPaths.begin() + 1);
         if (lang[0]) {
@@ -998,6 +1010,8 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
                 normalizeLanguage(b == books.end() ? "" : b->language.c_str(), bookLang);
                 return b != books.end() && memcmp(bookLang, lang, sizeof(lang)) == 0;
               }));
+          // A stand-in has no language of its own; the book this stamp is for is in this one.
+          if (viaStandIn) t.languageBooksFinished++;
         }
       }
     }
@@ -1024,7 +1038,8 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
       JournalRecord r;
       while (readRecord(j, r)) {
         Entry e{daysSinceEpoch(r.year, r.month, r.day), r.minutes, 0, 0, {}, !r.language.empty()};
-        if (r.minutes > 0 && !r.bookPath.empty()) e.book = pathHash(r.bookPath);
+        // A finish names its book too, with its language: see replayJournal().
+        if (!r.bookPath.empty() && (r.minutes > 0 || !r.finishedPath.empty())) e.book = pathHash(r.bookPath);
         if (!r.finishedPath.empty()) e.finished = pathHash(r.finishedPath);
         normalizeLanguage(r.language.c_str(), e.language);
         if (r.minutes > 0 && r.year < 2020) e.minutes = 0;  // dropped from days, as on replay
@@ -1104,13 +1119,6 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
     }
   }
   uint16_t finishedCount = hasFile ? (pathsIntact ? static_cast<uint16_t>(finished.size()) : headerFinished) : 0;
-  if (finishedPath && *finishedPath) {
-    // A first finish: not in the file, and finished exactly once in the journal.
-    const uint32_t h = pathHash(finishedPath);
-    out.firstFinish =
-        (!hasFile || pathsIntact) && std::find(finished.begin(), finished.end(), h) == finished.end() &&
-        std::count_if(journal.begin(), journal.end(), [h](const Entry& e) { return e.finished == h; }) == 1;
-  }
   for (const auto& e : journal) {
     if (!e.finished || std::find(finished.begin(), finished.end(), e.finished) != finished.end()) continue;
     finished.push_back(e.finished);
@@ -1120,8 +1128,22 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
   // A book finished before keeps its place in the finish order; the newest finish is the total, as Insights
   // counts it.
   size_t place = finished.size();
+  bool viaStandIn = false;
   if (finishedPath && *finishedPath) {
-    const auto it = std::find(finished.begin(), finished.end(), pathHash(finishedPath));
+    // A list cut short by a damaged file cannot tell whether the book is in it: the tables can.
+    if (hasFile && !pathsIntact) {
+      f.close();
+      return fromTables();
+    }
+    auto it = std::find(finished.begin(), finished.end(), pathHash(finishedPath));
+    // Finished on another device: counted under its stand-in until it is finished here.
+    if (it == finished.end()) {
+      it = std::find(finished.begin(), finished.end(),
+                     pathHash(remoteFinishedPath(bookdownload::nameHash(finishedPath))));
+      viaStandIn = it != finished.end();
+    }
+    out.listRead = true;
+    out.alreadyFinished = it != finished.end();
     if (it != finished.end() && it + 1 != finished.end()) {
       place = static_cast<size_t>(it - finished.begin());
       out.booksFinished = static_cast<uint16_t>(place + 1);
@@ -1168,6 +1190,8 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
       }
       out.languageBooksFinished++;
     }
+    // A stand-in has no language of its own; the book this stamp is for is in this one.
+    if (viaStandIn) out.languageBooksFinished++;
   }
   return out;
 }

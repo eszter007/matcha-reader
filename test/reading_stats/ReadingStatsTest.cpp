@@ -439,23 +439,25 @@ TEST_F(StatsTest, Version2FileLoadsWithZeroCounters) {
   EXPECT_EQ(b.getSentencesSaved(), 0u);
 }
 
-// The stamp counts the days actually read up to the finish, not the calendar span, and a reopening
-// after the finish day adds nothing.
-TEST_F(StatsTest, TotalsThroughCountReadingDaysUpToTheFinish) {
+// The stamp tells how long the read took, from its first reading day to the finish, and a reopening
+// after the finish day adds nothing to it.
+TEST_F(StatsTest, ReadUntilTheFinish) {
   BookStats b;
   ASSERT_TRUE(b.load("/Japanese/span.epub"));
   uint32_t minutes = 1;
-  int daysRead = 1;
-  b.totalsThrough(2026, 10, 24, minutes, daysRead);
+  int days = 1;
+  b.readUntil(2026, 10, 24, minutes, days);
   EXPECT_EQ(minutes, 0u);
-  EXPECT_EQ(daysRead, 0);
+  EXPECT_EQ(days, 0);
   b.recordMinutes(2026, 10, 20, 300);
   b.recordMinutes(2026, 10, 22, 400);
   b.recordMinutes(2026, 10, 24, 635);
   b.recordMinutes(2026, 10, 27, 3);  // reopened after finishing
-  b.totalsThrough(2026, 10, 24, minutes, daysRead);
+  b.readUntil(2026, 10, 24, minutes, days);
   EXPECT_EQ(minutes, 1335u);
-  EXPECT_EQ(daysRead, 3) << "three reading days between the 20th and the 24th, not five calendar days";
+  EXPECT_EQ(days, 5) << "the 20th to the 24th";
+  b.readUntil(2027, 3, 2, minutes, days);
+  EXPECT_EQ(days, 134) << "across a year end and a non-leap February";
 }
 
 // What the reader records goes to the journal; a load replays it, and compact() folds it into the
@@ -785,20 +787,31 @@ TEST_F(StatsTest, IncrementalBookDownloadCombines) {
 // The end-of-book screen records the finish, then asks whether it was a reopening of a finished book.
 TEST_F(StatsTest, SummaryTellsAReopenedFinishedBook) {
   auto& s = READING_STATS_STORE;
+  EXPECT_FALSE(s.summarize(Y, M, 5, "en", "/a.epub").alreadyFinished);  // asked before the first finish
   ASSERT_TRUE(s.record({Y, M, 5, 9, "/a.epub", "en", "/a.epub"}));
-  EXPECT_TRUE(s.summarize(Y, M, 5, "en", "/a.epub").firstFinish);
-
-  ASSERT_TRUE(s.record({Y, M, 6, 0, nullptr, nullptr, "/a.epub"}));  // reopened, still in the journal
-  EXPECT_FALSE(s.summarize(Y, M, 6, "en", "/a.epub").firstFinish);
+  EXPECT_TRUE(s.summarize(Y, M, 6, "en", "/a.epub").alreadyFinished);  // in the journal
 
   ASSERT_TRUE(s.compact());
-  ASSERT_TRUE(s.record({Y, M, 7, 0, nullptr, nullptr, "/a.epub"}));  // reopened after the fold into the file
-  EXPECT_FALSE(s.summarize(Y, M, 7, "en", "/a.epub").firstFinish);
+  EXPECT_TRUE(s.summarize(Y, M, 7, "en", "/a.epub").alreadyFinished);  // in the file
 
-  ASSERT_TRUE(s.record({Y, M, 7, 0, nullptr, nullptr, "/b.epub"}));
   const auto b = s.summarize(Y, M, 7, "en", "/b.epub");
-  EXPECT_TRUE(b.firstFinish);
-  EXPECT_EQ(b.booksFinished, 2u);
+  EXPECT_FALSE(b.alreadyFinished);
+  EXPECT_EQ(b.booksFinished, 1u);
+}
+
+// The stamp's lookups and sentences stop at the finish: looking words up in a finished book later adds
+// to the book's stats, not to its stamp.
+TEST_F(StatsTest, FinishCountsStayAtTheFinish) {
+  const char* path = "/Japanese/counted.epub";
+  ASSERT_TRUE(BookStats::addMinutes(path, Y, M, 6, 30));
+  ASSERT_TRUE(BookStats::addCounts(path, 40, 3));
+  BookStats b;
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 7, true, b));
+  ASSERT_TRUE(BookStats::addCounts(path, 5, 1));  // reopened later
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 9, false, b));
+  EXPECT_EQ(b.getLookups(), 45u);
+  EXPECT_EQ(b.getLookupsAtFinish(), 40u);
+  EXPECT_EQ(b.getSentencesAtFinish(), 3u);
 }
 
 // The 読了 stamp keeps the first finish day: later visits, flushes and counters must not move it.
@@ -968,4 +981,37 @@ TEST_F(StatsTest, SummaryKeepsAReopenedBooksPlace) {
     EXPECT_EQ(first.languageBooksFinished, 1);
     ASSERT_TRUE(s.compact());  // the second pass reads the same from the file
   }
+}
+
+// A book finished on another device and brought in by a refresh counts as finished when this card
+// reaches its end: no first finish is recorded, and it keeps the place its stand-in has.
+TEST_F(StatsTest, SummaryKnowsABookFinishedElsewhere) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.record({Y, M, 1, 9, "/here.epub", "ja", "/here.epub"}));
+  ASSERT_TRUE(s.compact());
+  writeBookDownload({{"elsewhere.epub", true, 2, "ja", {{Y, M, 2, 20}}}});
+  ASSERT_TRUE(s.compact());
+  ASSERT_TRUE(s.record({Y, M, 3, 9, "/later.epub", "ja", "/later.epub"}));
+  const auto sum = s.summarize(Y, M, 4, "ja", "/books/elsewhere.epub");
+  EXPECT_TRUE(sum.listRead);
+  EXPECT_TRUE(sum.alreadyFinished);
+  EXPECT_EQ(sum.booksFinished, 2);
+  EXPECT_EQ(sum.languageBooksFinished, 2);
+}
+
+// A book finished without any reading time still counts in its language: its finish carries it.
+TEST_F(StatsTest, FinishWithoutReadingCountsInItsLanguage) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.record({Y, M, 1, 1, "/a.epub", "ja", "/a.epub"}));
+  ReadingStatsStore::Change finishOnly{Y, M, 2, 0, "/b.epub", "ja", "/b.epub"};
+  ASSERT_TRUE(s.record(finishOnly));
+  for (int pass = 0; pass < 2; pass++) {
+    const auto sum = s.summarize(Y, M, 2, "ja", "/b.epub");
+    EXPECT_EQ(sum.booksFinished, 2);
+    EXPECT_EQ(sum.languageBooksFinished, 2);
+    ASSERT_TRUE(s.compact());  // the second pass reads the same from the file
+  }
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getBooksFinished("ja"), 2);
+  s.release();
 }

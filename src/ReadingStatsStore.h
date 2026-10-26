@@ -220,9 +220,13 @@ class ReadingStatsStore {
     // reopening keeps its number), else every finished book.
     uint16_t booksFinished = 0;
     uint16_t languageBooksFinished = 0;  // the same within summarize()'s language; 0 without one
-    bool firstFinish = false;  // finishedPath's latest record is its first finish; false when unsure (table path)
+    // finishedPath is in the finished list (file or journal), also as the stand-in for a book finished on
+    // another device. Only meaningful with listRead: the list could not be read when that is false.
+    bool alreadyFinished = false;
+    bool listRead = false;
   };
-  // finishedPath: a book just record()ed as finished, to learn whether this is a reopening.
+  // finishedPath: the book the end-of-book screen is for. Asked before recording its finish, it tells a
+  // first finish from a reopening.
   Summary summarize(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay, const char* language,
                     const char* finishedPath = nullptr);
 

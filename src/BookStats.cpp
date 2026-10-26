@@ -27,9 +27,11 @@ constexpr size_t V2_HEADER_BYTES = 15;
 // + lookups(4) + sentencesSaved(4)
 constexpr size_t HEADER_BYTES = V2_HEADER_BYTES + 8;
 constexpr size_t DAY_RECORD_BYTES = 6;
-// After the day records: year(2) + month(1) + day(1) of the first finish. Older readers stop
-// before it and drop it on their next save.
+// After the day records: year(2) + month(1) + day(1) of the first finish, then optionally the lookup
+// and sentence counts at that finish (4 + 4). Older readers stop before what they do not know and
+// drop it on their next save.
 constexpr size_t FINISH_BYTES = 4;
+constexpr size_t FINISH_COUNTS_BYTES = 8;
 
 // The render task records a finish while the main loop flushes minutes into the same file.
 std::mutex& fileMutex() {
@@ -91,6 +93,7 @@ bool BookStats::loadLocal(const char* path) {
   sentencesSaved = 0;
   days.clear();
   finished = {};
+  hasFinishCounts = false;
   if (bookPath.empty()) return false;
 
   const std::string file = filePathFor(path);
@@ -158,6 +161,12 @@ bool BookStats::loadLocal(const char* path) {
   uint8_t fin[FINISH_BYTES];
   if (complete && f.read(fin, FINISH_BYTES) == FINISH_BYTES && getU16(fin) >= 2020) {
     finished = {getU16(fin), fin[2], fin[3], 0};
+    uint8_t counts[FINISH_COUNTS_BYTES];
+    if (f.read(counts, FINISH_COUNTS_BYTES) == FINISH_COUNTS_BYTES) {
+      hasFinishCounts = true;
+      finishLookups = getU32(counts);
+      finishSentences = getU32(counts + 4);
+    }
   }
   // save() trims by keeping the tail, so the order has to hold for a file we did not write.
   // Normally one comparison pass.
@@ -231,6 +240,12 @@ bool BookStats::save() const {
     fin[2] = finished.month;
     fin[3] = finished.day;
     if (f.write(fin, FINISH_BYTES) != FINISH_BYTES) return false;
+    if (hasFinishCounts) {
+      uint8_t counts[FINISH_COUNTS_BYTES];
+      putU32(counts, finishLookups);
+      putU32(counts + 4, finishSentences);
+      if (f.write(counts, FINISH_COUNTS_BYTES) != FINISH_COUNTS_BYTES) return false;
+    }
   }
   f.close();
   return true;
@@ -296,12 +311,22 @@ bool BookStats::recordFinish(const char* path, const uint16_t year, const uint8_
   if (!path || !*path) return false;
   std::lock_guard<std::mutex> lock(fileMutex());
   if (!out.load(path)) return false;
-  if (out.finished.year != 0) return true;
+  const auto freezeCounts = [&out] {
+    out.hasFinishCounts = true;
+    out.finishLookups = out.lookups;
+    out.finishSentences = out.sentencesSaved;
+    if (!out.save()) LOG_ERR("BSTAT", "finish not saved for %s", out.bookPath.c_str());
+  };
+  if (out.finished.year != 0) {
+    if (!out.hasFinishCounts) freezeCounts();  // finished before the counts were kept
+    return true;
+  }
   const BookDay today{year, month, day, 0};
   if (firstFinish) {
     if (year < 2020) return true;  // clock not set: nothing worth keeping
     out.finished = today;
-    return out.save();
+    freezeCounts();
+    return true;
   }
   // Finished before dates were kept, or unsure: the last reading day before this visit's reading.
   const auto last =
@@ -318,15 +343,25 @@ bool BookStats::getFinishDay(uint16_t& year, uint8_t& month, uint8_t& day) const
   return true;
 }
 
-void BookStats::totalsThrough(const uint16_t year, const uint8_t month, const uint8_t day, uint32_t& minutes,
-                              int& daysRead) const {
+void BookStats::readUntil(const uint16_t year, const uint8_t month, const uint8_t day, uint32_t& minutes,
+                          int& daysToFinish) const {
+  // Days since 0000-03-01 (Howard Hinnant's days_from_civil), enough for a difference.
+  const auto serial = [](const uint16_t yy, const uint8_t mm, const uint8_t dd) {
+    const int y = yy - (mm <= 2 ? 1 : 0);
+    const int era = y / 400;
+    const int yoe = y - era * 400;
+    const int doy = (153 * (mm + (mm > 2 ? -3 : 9)) + 2) / 5 + dd - 1;
+    return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  };
   minutes = 0;
-  daysRead = 0;
+  daysToFinish = 0;
+  const BookDay* first = nullptr;
   for (const BookDay& d : days) {
     if (std::tie(d.year, d.month, d.day) > std::tie(year, month, day)) break;  // days run oldest first
     minutes += d.minutes;
-    if (d.minutes > 0) daysRead++;
+    if (!first && d.minutes > 0) first = &d;
   }
+  if (first) daysToFinish = serial(year, month, day) - serial(first->year, first->month, first->day) + 1;
 }
 
 uint32_t BookStats::getTotalMinutes() const {
