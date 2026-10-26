@@ -1796,7 +1796,7 @@
             <span>Unpack dictionary</span>
           </label>
           <div class="convert-info">Lookups on the reader then need much less memory. The file gets about 7&times;
-            bigger, so the upload takes longer. The reader uses the unpacked .dict, so you can delete the .dict.dz.</div>
+            bigger, so the upload takes longer. Only the .dict is uploaded, and an older .dict.dz in this folder is deleted.</div>
         </div>
       <!-- Image Picker Section - in picker-columns for two-column layout -->
       <div class="image-picker-section" id="imagePickerSection" style="display:none;">
@@ -4149,6 +4149,30 @@ function reserveAvailableUploadFilename(fileName, usedFileNames) {
   return candidateName;
 }
 
+// Unpacks a gzip file in the browser, reporting compressed bytes read. Null when the upload is
+// cancelled meanwhile: a large dictionary takes a while, and the dialog stays locked until then.
+async function unpackGzip(file, onProgress) {
+  let read = 0;
+  const counted = file.stream().pipeThrough(new TransformStream({
+    transform(chunk, controller) {
+      read += chunk.byteLength;
+      onProgress(read);
+      controller.enqueue(chunk);
+    }
+  }));
+  const reader = counted.pipeThrough(new DecompressionStream('gzip')).getReader();
+  const parts = [];
+  for (;;) {
+    if (operationCancelled) {
+      await reader.cancel();
+      return null;
+    }
+    const { done, value } = await reader.read();
+    if (done) return new Blob(parts);
+    parts.push(value);
+  }
+}
+
 async function fetchExistingUploadNames() {
   const response = await fetch('/api/files?path=' + encodeURIComponent(currentPath) + '&_=' + Date.now());
   if (!response.ok) {
@@ -6171,11 +6195,21 @@ async function uploadFile() {
 
     // A .dict.dz is plain gzip. Unpacked, the reader looks words up without the 32 KB block
     // decompression needs, which a reader with a book open often lacks.
+    // A .dict.dz of the same name already in the folder goes once the .dict is up: the reader
+    // would ignore it anyway.
+    let staleDictZip = null;
     if (unpackDict && file.name.toLowerCase().endsWith('.dict.dz')) {
       progressText.style.color = '';
       progressText.textContent = `Unpacking ${file.name} (${currentIndex + 1}/${files.length})...`;
       try {
-        const unpacked = await new Response(file.stream().pipeThrough(new DecompressionStream('gzip'))).blob();
+        const unpacked = await unpackGzip(file, (read) => {
+          progressFill.style.width = Math.round((read / file.size) * 100) + '%';
+        });
+        if (!unpacked) {
+          if (uploadGeneration === myGeneration) restoreAfterCancel();
+          return;
+        }
+        if (usedFileNames.has(file.name.normalize('NFC').toLowerCase())) staleDictZip = file.name;
         file = new File([unpacked], file.name.slice(0, -3), { type: 'application/octet-stream', lastModified: file.lastModified });
       } catch (error) {
         console.warn(`[Upload] Could not unpack ${file.name}, uploading it as is:`, error);
@@ -6212,8 +6246,20 @@ async function uploadFile() {
         saveToFileBatchLog(file.name, ok, ok ? convOriginalSize : 0, ok ? convNewSize : 0);
       }
 
-      currentIndex++;
-      uploadNextFile();
+      const next = () => {
+        currentIndex++;
+        uploadNextFile();
+      };
+      if (!staleDictZip) {
+        next();
+        return;
+      }
+      const stalePath = (currentPath.endsWith('/') ? currentPath : currentPath + '/') + staleDictZip;
+      fetch('/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'paths=' + encodeURIComponent(JSON.stringify([stalePath]))
+      }).catch(() => console.warn(`[Upload] Could not delete ${stalePath}`)).finally(next);
     };
 
     const onError = (error) => {
