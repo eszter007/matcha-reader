@@ -890,25 +890,39 @@ StatsDigest digest(const char* code, const std::vector<int>& readBack, const uin
   g.weekMinutes = week;
   return g;
 }
+
+constexpr uint32_t ACCOUNT = 0x1234567;
+
+// The sync on the 7th: this card had read 10 minutes of Japanese that day and finished four books,
+// uploaded them, then fetched the overview. Read on the 7th, 6th and 4th (bits 0, 1, 3) across
+// devices; German only elsewhere.
+void syncOnTheSeventh() {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(Y, M, 7, 10);
+  s.addLanguageMinutes("ja", 10, Y, M, 7);
+  for (const char* name : {"/a.epub", "/b.epub", "/c.epub", "/d.epub"}) s.markBookFinished(name);
+  std::vector<AccountBaseline> baselines;
+  s.accountBaselines(baselines);
+  std::vector<StatsDigest> digests = {digest("", {0, 1, 3}, 40, 9, 3, 600, 100),
+                                      digest("JA", {0, 1}, 10, 2, 1, 300, 50), digest("de", {3}, 5, 1, 0, 900, 0)};
+  ASSERT_TRUE(ReadingStatsStore::saveAccount(digests, baselines, ACCOUNT));
+}
 }  // namespace
 
-// With the account loaded, a day read on any device counts, and this reader's minutes after the
-// server answered are added to its totals; without it, nothing changes.
+// With the account loaded, a day read on any device counts, and what this card reads after the sync
+// adds on top of the server's numbers; without it, this card's own numbers.
 TEST_F(StatsTest, AccountOverviewCountsEveryDevice) {
   auto& s = READING_STATS_STORE;
-  // This reader: Friday 7 and Saturday 8 August, both Japanese.
-  s.addMinutes(Y, M, 7, 10);
+  syncOnTheSeventh();
+  // After the sync: 5 more minutes on the 8th, a fifth book finished, and an XTC file (no language).
   s.addMinutes(Y, M, 8, 5);
-  s.addLanguageMinutes("ja", 10, Y, M, 7);
   s.addLanguageMinutes("ja", 5, Y, M, 8);
+  s.addLanguageMinutes("", 3, Y, M, 8);
+  s.markBookFinished("/e.epub");
   ASSERT_TRUE(s.saveToFile());
   READING_STATS_STORE = ReadingStatsStore{};
-  // The account, the day before: read on the 7th, 6th and 4th (bits 0, 1, 3); German only on the server.
-  ASSERT_TRUE(
-      ReadingStatsStore::saveAccount({digest("", {0, 1, 3}, 40, 9, 3, 600, 100),
-                                      digest("ja", {0, 1}, 10, 2, 1, 300, 50), digest("de", {3}, 5, 1, 0, 900, 0)}));
   {
-    const ReadingStatsStore::Loaded stats(true);
+    const ReadingStatsStore::Loaded stats(ACCOUNT);
     ASSERT_TRUE(stats.loaded());
     EXPECT_EQ(s.getStreak(Y, M, 8), 3);  // 8th here, 7th both, 6th elsewhere
     EXPECT_EQ(s.getStreak(Y, M, 9), 3);  // the 9th not read yet: the streak runs to yesterday
@@ -916,7 +930,7 @@ TEST_F(StatsTest, AccountOverviewCountsEveryDevice) {
     EXPECT_EQ(s.getTotalMinutes(), 605u);
     EXPECT_EQ(s.getMinutesThisWeek(Y, M, 8), 105);
     EXPECT_EQ(s.getLongestStreak(), 9);
-    EXPECT_EQ(s.getBooksFinished(), 3);
+    EXPECT_EQ(s.getBooksFinished(), 4);  // the server's three, and the one finished since
     bool week[7];
     s.getWeekStatus(Y, M, 8, 5, week);
     const bool expected[7] = {false, true, false, true, true, true, false};
@@ -927,9 +941,10 @@ TEST_F(StatsTest, AccountOverviewCountsEveryDevice) {
     EXPECT_EQ(s.getDaysRead("ja"), 11);
     EXPECT_EQ(s.getTotalMinutes("ja"), 305u);
     EXPECT_EQ(s.getMinutesThisWeek("ja", Y, M, 8), 55);
+    EXPECT_EQ(s.getLongestStreak("ja"), 3);  // the run since the sync outgrew the server's 2
     std::vector<ReadingStatsStore::LanguageSummary> languages;
     s.getLanguages(languages);
-    ASSERT_EQ(languages.size(), 2u);
+    ASSERT_EQ(languages.size(), 3u);
     EXPECT_STREQ(languages[0].code, "de");  // read elsewhere, and most
     EXPECT_STREQ(languages[1].code, "ja");
   }
@@ -937,4 +952,33 @@ TEST_F(StatsTest, AccountOverviewCountsEveryDevice) {
   ASSERT_TRUE(own.loaded());
   EXPECT_EQ(s.getTotalMinutes(), 15u);
   EXPECT_EQ(s.getStreak(Y, M, 8), 2);
+  EXPECT_EQ(s.getBooksFinished(), 5);
+}
+
+// Another account's overview is never shown.
+TEST_F(StatsTest, AccountOverviewOfAnotherAccountIgnored) {
+  auto& s = READING_STATS_STORE;
+  syncOnTheSeventh();
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  const ReadingStatsStore::Loaded stats(ACCOUNT + 2);
+  ASSERT_TRUE(stats.loaded());
+  EXPECT_EQ(s.getTotalMinutes(), 10u);
+  EXPECT_EQ(s.getBooksFinished(), 4);
+}
+
+// A refresh's download folded in at boot is the server's data, not reading done here since the sync:
+// the totals stay where they were.
+TEST_F(StatsTest, AccountOverviewIgnoresFoldedDownload) {
+  auto& s = READING_STATS_STORE;
+  syncOnTheSeventh();
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  // Another CrossPoint reader on the account read 20 minutes on the 6th; the server counted them.
+  ASSERT_TRUE(ReadingStatsStore::saveDownload({{Y, M, 6, 20}, {Y, M, 7, 10}}));
+  ASSERT_TRUE(s.compact());
+  const ReadingStatsStore::Loaded stats(ACCOUNT);
+  ASSERT_TRUE(stats.loaded());
+  EXPECT_EQ(s.getTotalMinutes(), 600u);
+  EXPECT_EQ(s.getMinutesThisWeek(Y, M, 8), 100);
 }

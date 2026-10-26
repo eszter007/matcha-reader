@@ -46,6 +46,18 @@ struct StatsDigest {
   uint32_t minutes;
   uint32_t weekMinutes;  // Monday through anchorDay
   uint8_t history[92];   // bit N, LSB first: day anchorDay - N was a reading day
+  // This card's own counts when the server answered, right after they were uploaded: what this card
+  // adds beyond them is reading the server does not have yet.
+  uint32_t baselineFinished;
+  uint32_t baselineMinutes;
+};
+
+// This card's own totals for one language ("" = all languages), the baseline an overview fetched
+// right after the upload is saved with.
+struct AccountBaseline {
+  char code[4];
+  uint32_t finished;
+  uint32_t minutes;
 };
 
 class ReadingStatsStore {
@@ -81,8 +93,17 @@ class ReadingStatsStore {
   // The account digests ([0] all languages), loaded only for display: with them the getters count
   // a day read on any device, plus this reader's own minutes since the server answered.
   std::vector<StatsDigest> account;
-  void loadAccount();
+  void loadAccount(uint32_t accountKey);
+  static bool readAccountFile(std::vector<StatsDigest>& out, uint32_t& accountKey);
+  static bool writeAccountFile(const std::vector<StatsDigest>& digests, uint32_t accountKey);
+  // compact(): what folding in a download adds to this card's counts is server data, so it moves the
+  // baselines along with it.
+  void shiftAccountBaselines(const std::vector<AccountBaseline>& before) const;
   const StatsDigest* accountFor(const char* language) const;  // nullptr language: all languages
+  // This card's own numbers, whatever account view is loaded; nullptr language: all languages.
+  uint32_t localMinutes(const char* language) const;
+  uint32_t localFinished(const char* language) const;
+  uint16_t localWeekMinutes(const char* language, uint16_t y, uint8_t m, uint8_t d) const;
   bool readOn(const char* language, const StatsDigest* g, uint16_t year, uint8_t month, uint8_t day) const;
   template <typename F>
   void eachLocalDay(const char* language, F&& f) const;
@@ -90,6 +111,8 @@ class ReadingStatsStore {
   int accountDaysRead(const char* language, const StatsDigest& g) const;
   uint32_t accountMinutes(const char* language, const StatsDigest& g) const;
   uint16_t accountWeekMinutes(const char* language, const StatsDigest& g, uint16_t y, uint8_t m, uint8_t d) const;
+  uint32_t accountFinished(const char* language, const StatsDigest& g) const;
+  int accountRecentRun(const char* language, const StatsDigest& g) const;
   // The journal prefix (byte count and hash) this file already holds; replay starts after it.
   // Stored after the last block, where older readers stop.
   uint32_t foldedJournalBytes = 0;
@@ -207,10 +230,13 @@ class ReadingStatsStore {
   static bool hasPendingDownload();
   // A stats file exists: what a download since the last one would add to.
   static bool hasStatsFile();
-  // The server's overview for the sync account, for the All devices view; removeAccount() drops it
-  // when another account signs in.
-  static bool saveAccount(const std::vector<StatsDigest>& digests);
-  static void removeAccount();
+  // This card's own totals, all languages first, for the overview the same sync fetches after uploading
+  // them. Needs the tables loaded without an account view.
+  void accountBaselines(std::vector<AccountBaseline>& out) const;
+  // The server's overview for the account `accountKey` names, each digest paired with its baseline (0 for
+  // a language this card never read).
+  static bool saveAccount(std::vector<StatsDigest>& digests, const std::vector<AccountBaseline>& baselines,
+                          uint32_t accountKey);
 
   // The numbers the end-of-book summary shows, read straight from the file and the journal with no
   // tables built: that screen runs with the book still in memory. Same values as the getters.
@@ -228,10 +254,10 @@ class ReadingStatsStore {
   // could not be read or did not fit the heap.
   class Loaded {
    public:
-    // withAccount: the getters also count the sync account's other devices (Insights' "All devices").
-    // Display only: never with a save or upload.
-    explicit Loaded(const bool withAccount = false) : ok_(getInstance().loadFromFile()) {
-      if (ok_ && withAccount) getInstance().loadAccount();
+    // accountKey: the getters also count that sync account's other devices (Insights' "All devices"), when
+    // its overview is saved; 0 for this card's own numbers. Display only: never with a save or upload.
+    explicit Loaded(const uint32_t accountKey = 0) : ok_(getInstance().loadFromFile()) {
+      if (ok_ && accountKey != 0) getInstance().loadAccount(accountKey);
     }
     ~Loaded() { getInstance().release(); }
     Loaded(const Loaded&) = delete;

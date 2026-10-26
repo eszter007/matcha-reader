@@ -133,8 +133,8 @@ int utcOffsetMinutes() {
 
 // The account's numbers as the server's Stats page counts them, every device and every source, for
 // Insights' "All devices" view. Display only: never merged into this reader's stats. Best effort: on
-// failure the view keeps the last answer.
-void downloadOverview(freeink::SecureHttpClient& http) {
+// failure the view keeps the last answer and its baselines, which still belong together.
+void downloadOverview(freeink::SecureHttpClient& http, const std::vector<AccountBaseline>& baselines) {
   // All languages plus the server's 20 groups, about 2.7 KB.
   std::vector<StatsDigest> digests;
   if (HalMemory::getDefaultHeap().largestBlockBytes < 21 * sizeof(StatsDigest) + 1024) {
@@ -158,7 +158,7 @@ void downloadOverview(freeink::SecureHttpClient& http) {
     return;
   }
   parser.reset();
-  if (!ReadingStatsStore::saveAccount(digests)) {
+  if (!ReadingStatsStore::saveAccount(digests, baselines, statsSync::accountKey())) {
     LOG_ERR("STATS", "Account overview not saved");
     return;
   }
@@ -340,6 +340,7 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
     return false;
   }
   books.reserve(ReadingStatsStore::MAX_BOOKS);
+  std::vector<AccountBaseline> baselines;
   const int32_t booksFrom = KOREADER_STORE.getStatsBooksDay();
   {
     ReadingStatsStore::Loaded stats;
@@ -357,6 +358,8 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
     }
     totals.booksFinished = READING_STATS_STORE.getBooksFinished();
     totals.longestStreak = READING_STATS_STORE.getLongestStreak();
+    // What is uploaded below: the overview fetched after it counts exactly this much of this reader.
+    READING_STATS_STORE.accountBaselines(baselines);
     // Books read on or after the marker's day (it may have grown since) and the open book.
     for (const auto& b : READING_STATS_STORE.getBooks()) {
       if (b.lastReadDay >= booksFrom || b.path == bookPath) {
@@ -416,6 +419,8 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
     from += count;
     if (from >= days.size()) break;
   }
+  // Only after a complete upload: then the server holds everything the baselines count.
+  if (ok) downloadOverview(*http, baselines);
   // Free the TLS session before the progress request that follows.
   http->end();
   http.reset();
@@ -452,9 +457,6 @@ bool statsSync::download() {
   char path[96];
   snprintf(path, sizeof(path), "/api/v1/stats/global?device_id=%s&since=%lu", DEVICE_ID,
            static_cast<unsigned long>(since));
-  // A new account (or the first download) must not keep the last account's overview, even when
-  // this download's fetch of it fails.
-  if (KOREADER_STORE.getStatsDaysSince() == 0) ReadingStatsStore::removeAccount();
   if (!begin(*http, path)) return false;
   // Streamed: without the filters (an older server) it holds every device's whole history.
   const int status = http->sendRequest("GET", nullptr, 0, [&](const uint8_t* data, const size_t length) {
@@ -476,11 +478,19 @@ bool statsSync::download() {
   KOREADER_STORE.saveToFile();
   LOG_INF("STATS", "Downloaded %zu days of reading stats", days.size());
   std::vector<DailyReading>().swap(days);
-  // Same connection for the rest: no further handshake.
-  downloadOverview(*http);
+  // Same connection for the book list: no further handshake.
   const bool books = downloadBooks(*http);
   http->end();
   return books;
 }
 
-bool statsSync::showAllDevices() { return SETTINGS.insightsAllDevices != 0 && KOREADER_STORE.getStatsDaysSince() != 0; }
+uint32_t statsSync::accountKey() {
+  if (!KOREADER_STORE.hasCredentials()) return 0;
+  // FNV-1a over user@server: the overview is the account's, not this card's.
+  const std::string account = KOREADER_STORE.getUsername() + "@" + KOREADER_STORE.getBaseUrl();
+  uint32_t h = 2166136261u;
+  for (const char c : account) h = (h ^ static_cast<uint8_t>(c)) * 16777619u;
+  return h | 1;  // never 0, which means no account view
+}
+
+uint32_t statsSync::insightsAccountKey() { return SETTINGS.insightsAllDevices != 0 ? accountKey() : 0; }

@@ -57,6 +57,8 @@ void addBook(JsonDocument& doc, const std::string& documentHash, const std::vect
 // server treats every CrossPoint reader on one account as the same device. bookPath is the open book; it is
 // sent even when read before the last upload, under documentHash.
 // True when everything was sent.
+// After a complete upload, the same connection also fetches the account's overview for Insights, saved
+// with this reader's totals as they were uploaded: what is read here afterwards adds on top of it.
 bool run(const std::string& bookPath, const std::string& documentHash);
 
 // Downloads the daily minutes this reader's account uploaded (the last HISTORY_DAYS) and saves them
@@ -64,8 +66,11 @@ bool run(const std::string& bookPath, const std::string& documentHash);
 // rules as run(); false when nothing was saved.
 bool download();
 
-// Insights' "All devices" setting is on and the signed-in account has downloaded at least once, so the
-// saved overview belongs to it: another account's, or one from before a sign-out, is never shown.
-bool showAllDevices();
+// The signed-in sync account's key, as the saved overview records it; 0 without credentials.
+uint32_t accountKey();
+
+// The key to load Insights with (ReadingStatsStore::Loaded): the account's with the "All devices"
+// setting on, else 0 for this reader's own numbers.
+uint32_t insightsAccountKey();
 
 }  // namespace statsSync
