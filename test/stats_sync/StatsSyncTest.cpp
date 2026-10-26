@@ -11,6 +11,7 @@
 #include "stats/OverviewParser.h"
 #include "stats/ProgressChangesParser.h"
 #include "stats/StatsSync.h"
+#include "util/RemoteProgress.h"
 
 using statsSync::Day;
 
@@ -245,6 +246,11 @@ void progressChanges() {
   ProgressChangesParser cut(sink);
   cut.feed(body.data(), body.size() / 2);
   assert(!cut.complete());
+
+  // Badge percents: finished from 98% on, as the server counts it; never 100 below that.
+  assert(remoteProgress::percentOf(1.0f) == 100 && remoteProgress::percentOf(0.98f) == 100);
+  assert(remoteProgress::percentOf(0.979f) == 97 && remoteProgress::percentOf(0.5f) == 50);
+  assert(remoteProgress::percentOf(0.0f) == 0 && remoteProgress::percentOf(-1.0f) == 0);
 
   const std::string last = R"({"cursor":4900,"more":false,"changes":[]})";
   ProgressChangesParser end(sink);

@@ -844,7 +844,7 @@ For a shortcut, set **Settings → Controls → Shortcuts → Long-Press Menu** 
 
 With the CrossPoint sync server, **Sync Progress** also uploads your reading insights: minutes per day, total time, books finished and your longest streak, plus each book's reading time, sessions and finished status (as the finish date it sends the day on the end-of-book stamp, or your last reading day for books finished before that day was saved). The CrossPoint app then shows your measured reading time, overall and per book. Insights are only sent once the clock is set (see [Syncing the Clock](#syncing-the-clock)). The first sync sends up to two years of history and the insights of every book in your reading insights, so it takes longer than usual; later syncs only send the days and books read since. If the upload fails, your progress still syncs and the next sync picks up where it stopped. Your insights then live on the server too, so switching to another reader or resetting this one loses nothing: the CrossPoint app keeps showing your whole history, and **Refresh Insights** brings your daily reading time back to the device (see [Syncing Insights Between Devices](#74-syncing-insights-between-devices)). Dictionary lookups and saved sentences are not synced. Time of day and pages are not recorded on the device, so those charts in the app stay empty for it. All CrossPoint readers on one account count as one device. Ordinary KOSync servers get no insights.
 
-With the CrossPoint sync server, each sync that sends your insights (**Sync Progress**, **Refresh Insights** or **Sync Insights**) also asks the server which books changed their reading position on another device, e.g. the CrossPoint app, KOReader or another reader. A book finished there shows **Read** in the Library and on Home, even if you never opened it on this reader. Once you open it here, this reader's own progress shows again. Books are matched by their file name, and also by their content when **Document Matching** is set to **Binary**. The first sync goes through every book on your account, so it takes longer. A book marked as finished in the app without a reading position does not count.
+With the CrossPoint sync server, each sync that sends your insights (**Sync Progress**, **Refresh Insights** or **Sync Insights**) also asks the server which books changed their reading position on another device, e.g. the CrossPoint app, KOReader or another reader. The badges in the Library and on Home then show the furthest position: 60% on your phone beats 50% here, and a book finished there shows **Read**, even if you never opened it on this reader. To start a book over, use **Mark as Unread**. Books are matched by their file name, and also by their content when **Document Matching** is set to **Binary**. The first sync goes through every book on your account, so it takes longer. A book marked as finished in the app without a reading position does not count.
 
 ### 3.7 Sleep Screen
 
@@ -1723,7 +1723,7 @@ What comes back is what any CrossPoint reader on your account uploaded:
   calendar;
 - the language tabs, from each book's days and language;
 - books finished, including ones not on this card;
-- which books were finished on other devices, shown as **Read** in the Library and on Home;
+- how far you got in each book on other devices, for the badges in the Library and on Home;
 - each book's own insights (days, sessions, finished), for the books on the card. A book takes them in the next time you
   open it or its insights.
 

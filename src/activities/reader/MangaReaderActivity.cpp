@@ -42,7 +42,6 @@
 #include "util/BookmarkFile.h"
 #include "util/BookmarkUtil.h"
 #include "util/CjkScript.h"
-#include "util/FinishedIndex.h"
 #include "util/ScreenshotUtil.h"
 
 namespace {
@@ -165,8 +164,6 @@ void MangaReaderActivity::onEnter() {
   // full-size page into the card instead of blitting the cached one.
   RECENT_BOOKS.addBook(book->getFolder(), book->getTitle(), bookAuthor, book->getThumbBmpPath());
   BookStats::recordOpen(book->getFolder().c_str());
-  // Opened here: from now on its own progress counts, not a finish elsewhere.
-  finishedIndex::forget(book->getFolder());
 
   readingSessionStartMs = millis();
 

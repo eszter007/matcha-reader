@@ -18,7 +18,7 @@
 #include "components/UITheme.h"  // TabInfo, Rect
 #include "components/UiTabBand.h"
 #include "util/ButtonNavigator.h"
-#include "util/FinishedIndex.h"
+#include "util/RemoteProgress.h"
 
 class CoverLibraryActivity final : public Activity, public TabRing::Host {
  private:
@@ -127,7 +127,7 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
   std::atomic<int> gridCoverHeight_{0};
 
   void loadRecentBooks();
-  finishedIndex::Snapshot finishedBooks;  // reloaded with the badges
+  remoteProgress::Snapshot remoteBooks;  // reloaded with the badges
   void loadBookProgress();
   // A pointer-style selector belongs to key navigation. Touch users act on what they
   // touch, so a highlight sitting on some other cover is just noise -- and worse, it
@@ -154,7 +154,7 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
   [[nodiscard]] int shelfRowAtPoint(int x, int y, int contentTop, int contentHeight) const;
   void loadShelves();
   void loadShelfBooks(const std::string& folderPath);
-  // This device's progress, raised to 100 for a book finished elsewhere (finishedIndex).
+  // The furthest of this device's progress and the progress elsewhere (remoteProgress).
   int readProgressPercent(const std::string& bookPath) const;
   int readLocalProgressPercent(const std::string& bookPath) const;
   void fillPageProgressNow(std::vector<BookProgress>& progress, const std::vector<RecentBook>* books,

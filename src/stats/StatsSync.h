@@ -59,7 +59,7 @@ void addBook(JsonDocument& doc, const std::string& documentHash, const std::vect
 // True when everything was sent.
 // After a complete upload, the same connection also fetches the account's overview for Insights, saved
 // with this reader's totals as they were uploaded: what is read here afterwards adds on top of it. Then it
-// pulls the progress changes since the last sync into the finished index (books finished on any device).
+// pulls the progress changes since the last sync into the progress index (how far each book got on any device).
 bool run(const std::string& bookPath, const std::string& documentHash);
 
 // Downloads the daily minutes this reader's account uploaded (the last HISTORY_DAYS) and saves them

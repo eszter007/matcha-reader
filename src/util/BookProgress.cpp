@@ -10,7 +10,7 @@
 
 #include <algorithm>
 
-#include "FinishedIndex.h"
+#include "RemoteProgress.h"
 #include "activities/home/EpubProgressUtil.h"
 #include "activities/reader/ProgressFile.h"
 
@@ -116,14 +116,14 @@ bool writeFinishedProgress(const std::string& path, const std::string& cachePath
 bool markBookRead(const std::string& path) {
   const std::string cachePath = bookCachePath(path);
   if (cachePath.empty()) return false;
-  // Without a record to write, the finished index holds it until the book is opened.
-  return writeFinishedProgress(path, cachePath) || finishedIndex::markRead(path);
+  // Without a record to write, the progress index holds it.
+  return writeFinishedProgress(path, cachePath) || remoteProgress::markRead(path);
 }
 
 bool markBookUnread(const std::string& path) {
   const std::string cachePath = bookCachePath(path);
   if (cachePath.empty()) return false;
-  finishedIndex::forget(path);
+  remoteProgress::forget(path);
   const std::string progressPath = cachePath + "/progress.bin";
   // Absent already counts as unread, so a book that was never opened is not an error.
   if (!Storage.exists(progressPath.c_str())) return true;
@@ -160,5 +160,5 @@ int loadLocalProgress(const std::string& path) {
 
 int loadBookProgress(const std::string& path) {
   const int percent = loadLocalProgress(path);
-  return percent < 100 && finishedIndex::contains(path) ? 100 : percent;
+  return std::max(percent, remoteProgress::percent(path));
 }

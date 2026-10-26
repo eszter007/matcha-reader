@@ -653,7 +653,7 @@ void CoverLibraryActivity::finishLibraryScan() {
 void CoverLibraryActivity::loadBookProgress() {
   // Progress is filled progressively from loop() -- ~5 file reads per book made the old
   // upfront pass a visible chunk of the Library open time.
-  finishedBooks.load();
+  remoteBooks.load();
   markAllProgressPending();
 }
 
@@ -753,7 +753,7 @@ void CoverLibraryActivity::loadShelfBooks(const std::string& folderPath) {
 
 int CoverLibraryActivity::readProgressPercent(const std::string& bookPath) const {
   const int percent = readLocalProgressPercent(bookPath);
-  return percent < 100 && finishedBooks.has(bookPath) ? 100 : percent;
+  return std::max(percent, remoteBooks.percent(bookPath));
 }
 
 int CoverLibraryActivity::readLocalProgressPercent(const std::string& bookPath) const {

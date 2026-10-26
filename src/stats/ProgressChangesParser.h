@@ -6,7 +6,7 @@
 #include <cstdint>
 
 // Streams one page of GET /api/v1/progress/changes: for each document, the keys it is known by (its hash
-// and its aliases, see finishedIndex::keyOf) and its newest percentage.
+// and its aliases, see remoteProgress::keyOf) and its newest percentage.
 class ProgressChangesParser {
  public:
   static constexpr size_t MAX_KEYS = 8;  // a document and up to 7 aliases; more are dropped

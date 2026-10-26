@@ -3,7 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "util/FinishedIndex.h"
+#include "util/RemoteProgress.h"
 
 namespace {
 bool equals(const char* value, const size_t len, const char* expected) {
@@ -24,7 +24,7 @@ ProgressChangesParser::ProgressChangesParser(const Sink& sink)
       sink(sink) {}
 
 void ProgressChangesParser::addKey(const char* value, const size_t len) {
-  const uint32_t k = finishedIndex::keyOf(value, len);
+  const uint32_t k = remoteProgress::keyOf(value, len);
   if (k != 0 && keyCount < MAX_KEYS) keys[keyCount++] = k;
 }
 
