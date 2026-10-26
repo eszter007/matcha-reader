@@ -130,8 +130,7 @@ bool markBookUnread(const std::string& path) {
   return Storage.remove(progressPath.c_str());
 }
 
-namespace {
-int loadLocalProgress(const std::string& path) {
+int loadOwnBookProgress(const std::string& path) {
   if (FsHelpers::hasReflowableBookExtension(path)) {
     // From the cache alone, as the Library reads it. Opening the book for this ran once per
     // cover on Home, on the loop task: every open re-reads the metadata cache, and a book whose
@@ -156,9 +155,8 @@ int loadLocalProgress(const std::string& path) {
   }
   return mangaProgressPercent(path);
 }
-}  // namespace
 
 int loadBookProgress(const std::string& path) {
-  const int percent = loadLocalProgress(path);
+  const int percent = loadOwnBookProgress(path);
   return std::max(percent, remoteProgress::percent(path));
 }

@@ -219,6 +219,11 @@ bool forget(const std::string& path) {
   return writeIndex(account, cursor, keys, percents);
 }
 
+void readHere(const std::string& path, const int enterPercent, const int exitPercent) {
+  if (exitPercent < 0 || exitPercent >= 100 || exitPercent == enterPercent) return;
+  if (percent(path) == 100) forget(path);
+}
+
 bool Feed::begin(const uint32_t accountKey) {
   uint32_t savedAccount = 0;
   bool readable;

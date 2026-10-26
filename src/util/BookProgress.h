@@ -2,6 +2,9 @@
 
 #include <string>
 
+// This reader's own saved percentage, or -1 when unavailable. Never builds reading caches.
+int loadOwnBookProgress(const std::string& path);
+
 // Saved reading percentage, or -1 when unavailable; the furthest of this and the progress elsewhere
 // (remoteProgress).
 // Never builds reading caches.

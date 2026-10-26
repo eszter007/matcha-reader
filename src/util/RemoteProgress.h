@@ -64,6 +64,10 @@ int percent(const std::string& path);
 bool markRead(const std::string& path);
 // Takes the book out of the index (Mark as Unread). True when it was in it.
 bool forget(const std::string& path);
+// A reading session here moved a book from `enterPercent` to `exitPercent` (this reader's own progress). When
+// the book counts as finished elsewhere and it now stands below the end, that is a restart: it leaves the
+// index, so this reader's progress shows again. Opening it without moving keeps the finish.
+void readHere(const std::string& path, int enterPercent, int exitPercent);
 
 // The progress feed's side: the index in memory while a sync applies pages of changes.
 class Feed {
