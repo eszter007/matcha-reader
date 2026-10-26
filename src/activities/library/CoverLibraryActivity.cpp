@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <iterator>
 #include <memory>
 
 #include "HapticFeedback.h"
@@ -573,9 +574,10 @@ void CoverLibraryActivity::scanDirectoryEntry() {
 
   file.getName(scan_.nameBuf.data(), scan_.nameBuf.size());
   const char* name = scan_.nameBuf.data();
-  if (name[0] == '.' || strcmp(name, "dict") == 0) return;
-  for (const auto* item : FsHelpers::HIDDEN_ITEMS) {
-    if (strcmp(name, item) == 0) return;
+  if (name[0] == '.' || strcmp(name, "dict") == 0 ||
+      std::any_of(std::begin(FsHelpers::HIDDEN_ITEMS), std::end(FsHelpers::HIDDEN_ITEMS),
+                  [name](const char* item) { return strcmp(name, item) == 0; })) {
+    return;
   }
 
   std::string fullPath = scan_.activeDirPath;
