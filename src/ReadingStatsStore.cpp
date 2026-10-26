@@ -868,10 +868,11 @@ bool ReadingStatsStore::replayJournal() {
       addBookMinutes(r.bookPath.c_str(), r.language.c_str(), 0, r.year, r.month, r.day);
     } else if (!r.finishedPath.empty() && !r.bookPath.empty()) {
       // No clock: the newest day any book has still puts it in the next upload.
-      int32_t newest = INT32_MIN;
-      for (const auto& b : books) newest = std::max(newest, b.lastReadDay);
+      const auto newest = std::max_element(books.begin(), books.end(), [](const BookReading& a, const BookReading& b) {
+        return a.lastReadDay < b.lastReadDay;
+      });
       for (auto& b : books) {
-        if (b.path == r.bookPath) b.lastReadDay = newest;
+        if (b.path == r.bookPath) b.lastReadDay = newest->lastReadDay;
       }
     }
     if (!r.finishedPath.empty() && r.finishedPath[0] == UNFINISHED_MARK) {
