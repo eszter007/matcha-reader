@@ -40,10 +40,10 @@ void OverviewParser::onKey(void* ctx, const char* k, const size_t len) {
   static constexpr struct {
     const char* name;
     Key key;
-  } FIELDS[] = {{"anchor_day", Key::ANCHOR},        {"days", Key::DAYS},
-                {"history_b64", Key::HISTORY},      {"reading_days", Key::READING_DAYS},
-                {"longest_streak", Key::LONGEST},   {"books_finished", Key::FINISHED},
-                {"seconds", Key::SECONDS},          {"week_seconds", Key::WEEK}};
+  } FIELDS[] = {{"anchor_day", Key::ANCHOR},      {"days", Key::DAYS},
+                {"history_b64", Key::HISTORY},    {"reading_days", Key::READING_DAYS},
+                {"longest_streak", Key::LONGEST}, {"books_finished", Key::FINISHED},
+                {"seconds", Key::SECONDS},        {"week_seconds", Key::WEEK}};
   for (const auto& f : FIELDS) {
     if (equals(k, len, f.name)) self->key = f.key;
   }
@@ -107,8 +107,7 @@ void OverviewParser::onObjectStart(void* ctx) {
   self->depth++;
   if (self->depth == ROOT_DEPTH && self->out.empty() && self->out.capacity() > 0) self->out.push_back(StatsDigest{});
   if (self->depth == GROUPS_DEPTH && self->key == Key::GROUPS) self->inGroups = true;
-  if (self->depth == GROUP_DEPTH && self->inGroups && self->pendingCode[0] &&
-      self->out.size() < self->out.capacity()) {
+  if (self->depth == GROUP_DEPTH && self->inGroups && self->pendingCode[0] && self->out.size() < self->out.capacity()) {
     StatsDigest g{};
     memcpy(g.code, self->pendingCode, sizeof(g.code));
     self->out.push_back(g);
