@@ -1912,9 +1912,175 @@ uint32_t CssParser::blockSelectorHash(const char* s, const size_t len) {
   return h == 0 ? 1 : h;  // 0 is the "any tag" / "no class" marker
 }
 
+CssParser::VerticalBlockStyle CssParser::verticalBlockStyleOf(const CssStyle& css) {
+  const auto emOf = [](const CssLength& l) { return l.unit == CssUnit::Em || l.unit == CssUnit::Rem ? l.value : 0.0f; };
+  VerticalBlockStyle vs;
+  if (css.defined.marginTop) vs.startEm = emOf(css.marginTop);
+  if (css.defined.marginRight) vs.beforeEm = emOf(css.marginRight);
+  if (css.defined.marginLeft) vs.afterEm = emOf(css.marginLeft);
+  if (css.defined.paddingTop && css.defined.textIndent && emOf(css.textIndent) < 0) {
+    vs.hangEm = emOf(css.paddingTop);
+  }
+  // A negative indent is the hanging form above, not a first-line indent.
+  if (css.defined.textIndent) vs.indentEm = std::max(0.0f, emOf(css.textIndent));
+  if (css.defined.textAlign && css.textAlign == CssTextAlign::Center) vs.alignCenter = true;
+  if (css.defined.border) vs.borderEdges = CssStyle::edgeMaskOf(css.borderEdges);
+  return vs;
+}
+
+void CssParser::addVerticalRule(std::vector<VerticalBlockRule>& out, std::string_view selector, const CssStyle& css) {
+  // Only unscoped and "v|"-scoped selectors feed the vertical engine.
+  if (selector.size() >= 2 && selector[1] == '|') {
+    if (selector[0] != 'v') return;
+    selector.remove_prefix(2);
+  }
+  // Compound selectors (v16+) are skipped: the vertical engine matches a block by its own
+  // tag/class alone and tracks no ancestor chain, so it could not honour one -- and keeping
+  // them would spend entries of the bounded `out` cap on rules that can never match there.
+  if (selector.empty() || selector.find(CssSelector::DESCENDANT_COMBINATOR) != std::string_view::npos ||
+      selector.find(CssSelector::CHILD_COMBINATOR) != std::string_view::npos) {
+    return;
+  }
+  const VerticalBlockStyle vs = verticalBlockStyleOf(css);
+  if (!vs.any()) return;
+
+  VerticalBlockRule rule;
+  rule.style = vs;
+  if (selector[0] == '.') {
+    rule.classHash = blockSelectorHash(selector.data() + 1, selector.size() - 1);
+  } else {
+    const size_t dot = selector.find('.');
+    rule.tagHash = blockSelectorHash(selector.data(), dot == std::string_view::npos ? selector.size() : dot);
+    if (dot != std::string_view::npos) {
+      rule.classHash = blockSelectorHash(selector.data() + dot + 1, selector.size() - dot - 1);
+    }
+  }
+
+  // Merge with an existing entry for the same selector (later record overrides per property).
+  for (auto& entry : out) {
+    if (entry.tagHash != rule.tagHash || entry.classHash != rule.classHash) continue;
+    auto& existing = entry.style;
+    if (vs.startEm > 0) existing.startEm = vs.startEm;
+    if (vs.beforeEm > 0) existing.beforeEm = vs.beforeEm;
+    if (vs.afterEm > 0) existing.afterEm = vs.afterEm;
+    if (vs.hangEm > 0) existing.hangEm = vs.hangEm;
+    existing.alignCenter = existing.alignCenter || vs.alignCenter;
+    if (vs.borderEdges != 0) existing.borderEdges = vs.borderEdges;
+    if (vs.indentEm >= 0) existing.indentEm = vs.indentEm;
+    return;
+  }
+  // Within the capacity the caller reserved: growing it would need room for two copies.
+  if (out.size() < out.capacity()) out.push_back(rule);
+}
+
+bool CssParser::extractStyleBlocks(const std::string& htmlPath, const std::string& cssPath) {
+  HalFile in;
+  if (!Storage.openFileForRead("CSS", htmlPath, in)) return false;
+  HalFile out;
+  bool opened = false;
+  size_t written = 0;
+  // A small state machine over the stream: outside, inside a <style ...> start tag, or in its body.
+  static constexpr char OPEN[] = "<style";
+  static constexpr char CLOSE[] = "</style";
+  enum class State : uint8_t { Outside, StartTag, Body } state = State::Outside;
+  size_t match = 0;  // how much of OPEN / CLOSE the bytes so far have matched
+  char pending[sizeof(CLOSE)];
+  uint8_t buf[256];
+  int n;
+  while ((n = in.read(buf, sizeof(buf))) > 0) {
+    for (int i = 0; i < n; i++) {
+      const char c = static_cast<char>(buf[i]);
+      const char lower = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+      if (state == State::Outside) {
+        if (lower == OPEN[match]) {
+          if (++match == sizeof(OPEN) - 1) {
+            state = State::StartTag;
+            match = 0;
+          }
+        } else {
+          match = lower == OPEN[0] ? 1 : 0;
+        }
+      } else if (state == State::StartTag) {
+        if (c == '>') state = State::Body;
+      } else {
+        // Hold back what might begin </style; write it out once it turns out not to.
+        if (lower == CLOSE[match]) {
+          pending[match++] = c;
+          if (match == sizeof(CLOSE) - 1) {
+            state = State::Outside;
+            match = 0;
+            if (opened && out.write(reinterpret_cast<const uint8_t*>("\n"), 1) == 1) written++;
+          }
+          continue;
+        }
+        if (!opened) {
+          if (!Storage.openFileForWrite("CSS", cssPath, out)) return false;
+          opened = true;
+        }
+        if (written + match + 1 > MAX_CHAPTER_STYLE_BYTES) {
+          LOG_ERR("CSS", "Chapter <style> past %u bytes; the rest is not applied",
+                  static_cast<unsigned>(MAX_CHAPTER_STYLE_BYTES));
+          return written > 0;
+        }
+        if (match > 0) {
+          out.write(reinterpret_cast<const uint8_t*>(pending), match);
+          written += match;
+          match = 0;
+          if (lower == CLOSE[0]) {
+            pending[match++] = c;
+            continue;
+          }
+        }
+        out.write(reinterpret_cast<const uint8_t*>(&c), 1);
+        written++;
+      }
+    }
+  }
+  return written > 0;
+}
+
+bool CssParser::loadStyleBlocks(const std::string& htmlPath) {
+  const std::string tmp = cachePath + "/.chapter.css";
+  if (!extractStyleBlocks(htmlPath, tmp)) {
+    Storage.remove(tmp.c_str());
+    return false;
+  }
+  HalFile file;
+  const bool ok = Storage.openFileForRead("CSS", tmp, file) && loadFromStream(file);
+  file.close();
+  Storage.remove(tmp.c_str());
+  return ok;
+}
+
+size_t CssParser::appendChapterVerticalStyles(const std::string& htmlPath, std::vector<VerticalBlockRule>& out) {
+  clear();
+  if (!loadStyleBlocks(htmlPath)) {
+    releasePools();
+    return 0;
+  }
+  const size_t before = out.size();
+  const auto order = sourceOrder();
+  for (uint16_t i = 0; i < entryCount_; ++i) {
+    const uint16_t entry = order ? order[i] : i;
+    addVerticalRule(out, selectorAt(entry), styleAt(entry));
+  }
+  releasePools();
+  return out.size() - before;
+}
+
 size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, const size_t maxOut,
                                         const StylesheetFilter* stylesheets) const {
   out.clear();
+  // Reserve the bounded worst case once. Without it the vector doubles its way to maxOut
+  // (1, 2, 4 ... 256), and every step is an allocate-copy-free that both churns the heap and
+  // raises the peak to ~1.5x the final table. Checked here, right before the reserve: reserve()
+  // aborts under -fno-exceptions, and the caller's earlier check does not see what was allocated
+  // since. The caller tells this refusal apart by the capacity it left.
+  if (out.capacity() < maxOut) {
+    if (ESP.getMaxAllocHeap() < maxOut * sizeof(VerticalBlockRule) + 1024) return 0;
+    out.reserve(maxOut);
+  }
+
   if (cachePath.empty()) return 0;
 
   HalFile file;
@@ -1927,20 +2093,6 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
   if (ruleCount > MAX_CACHED_RULES) return 0;
   StylesheetFilter applied;
   if (!readStylesheetTable(file, stylesheets, applied)) return 0;
-
-  auto emOf = [](const float v, const uint8_t unit) -> float {
-    return unit == static_cast<uint8_t>(CssUnit::Em) || unit == static_cast<uint8_t>(CssUnit::Rem) ? v : 0.0f;
-  };
-
-  // Reserve the bounded worst case once. Without it the vector doubles its way to maxOut
-  // (1, 2, 4 ... 256), and every step is an allocate-copy-free that both churns the heap and
-  // raises the peak to ~1.5x the final table. Checked here, right before the reserve: reserve()
-  // aborts under -fno-exceptions, and the caller's earlier check does not see what was allocated
-  // since. The caller tells this refusal apart by the capacity it left.
-  if (out.capacity() < maxOut) {
-    if (ESP.getMaxAllocHeap() < maxOut * sizeof(VerticalBlockRule) + 1024) return 0;
-    out.reserve(maxOut);
-  }
 
   std::string selector;
   for (uint16_t i = 0; i < ruleCount && out.size() < maxOut; i++) {
@@ -1993,67 +2145,24 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
     // Read in full first: skipping must leave the stream at the next record.
     if (!applied.allows(source)) continue;
 
-    // Only unscoped and "v|"-scoped selectors feed the vertical engine.
-    if (selector.size() >= 2 && selector[1] == '|') {
-      if (selector[0] != 'v') continue;
-      selector.erase(0, 2);
-    }
-
-    // Compound selectors (v16+) are skipped: the vertical engine matches a block by its own
-    // tag/class alone and tracks no ancestor chain, so it could not honour one -- and keeping
-    // them would spend entries of the bounded `out` cap on rules that can never match there.
-    if (selector.find(CssSelector::DESCENDANT_COMBINATOR) != std::string::npos ||
-        selector.find(CssSelector::CHILD_COMBINATOR) != std::string::npos) {
-      continue;
-    }
-
-    VerticalBlockStyle vs;
-    const bool defTextIndent = definedBits & (1u << 4);
-    const bool defMarginTop = definedBits & (1u << 5);
-    const bool defMarginLeft = definedBits & (1u << 7);
-    const bool defMarginRight = definedBits & (1u << 8);
-    const bool defPaddingTop = definedBits & (1u << 9);
-    if (defMarginTop) vs.startEm = emOf(lens[1].v, lens[1].u);
-    if (defMarginRight) vs.beforeEm = emOf(lens[4].v, lens[4].u);
-    if (defMarginLeft) vs.afterEm = emOf(lens[3].v, lens[3].u);
-    if (defPaddingTop && defTextIndent && emOf(lens[0].v, lens[0].u) < 0) {
-      vs.hangEm = emOf(lens[5].v, lens[5].u);
-    }
-    // A negative indent is the hanging form above, not a first-line indent.
-    if (defTextIndent) vs.indentEm = std::max(0.0f, emOf(lens[0].v, lens[0].u));
-    if ((definedBits & (1u << 0)) && enums[0] == static_cast<uint8_t>(CssTextAlign::Center)) vs.alignCenter = true;
-    if (definedBits & (1u << 18)) vs.borderEdges = CssStyle::edgeMaskOf(borderVal);
-    if (!vs.any()) continue;
-
-    VerticalBlockRule rule;
-    rule.style = vs;
-    if (selector[0] == '.') {
-      rule.classHash = blockSelectorHash(selector.c_str() + 1, selector.size() - 1);
-    } else {
-      const size_t dot = selector.find('.');
-      rule.tagHash = blockSelectorHash(selector.c_str(), dot == std::string::npos ? selector.size() : dot);
-      if (dot != std::string::npos) {
-        rule.classHash = blockSelectorHash(selector.c_str() + dot + 1, selector.size() - dot - 1);
-      }
-    }
-
-    // Merge with an existing entry for the same selector (later record overrides per property).
-    bool merged = false;
-    for (auto& entry : out) {
-      if (entry.tagHash == rule.tagHash && entry.classHash == rule.classHash) {
-        auto& existing = entry.style;
-        if (vs.startEm > 0) existing.startEm = vs.startEm;
-        if (vs.beforeEm > 0) existing.beforeEm = vs.beforeEm;
-        if (vs.afterEm > 0) existing.afterEm = vs.afterEm;
-        if (vs.hangEm > 0) existing.hangEm = vs.hangEm;
-        existing.alignCenter = existing.alignCenter || vs.alignCenter;
-        if (vs.borderEdges != 0) existing.borderEdges = vs.borderEdges;
-        if (vs.indentEm >= 0) existing.indentEm = vs.indentEm;
-        merged = true;
-        break;
-      }
-    }
-    if (!merged) out.push_back(rule);
+    // Only what the vertical engine reads, as a style: see verticalBlockStyleOf().
+    CssStyle css;
+    const auto lengthOf = [](const RawLen& l) { return CssLength{l.v, static_cast<CssUnit>(l.u)}; };
+    css.textAlign = static_cast<CssTextAlign>(enums[0]);
+    css.defined.textAlign = (definedBits & (1u << 0)) != 0;
+    css.textIndent = lengthOf(lens[0]);
+    css.defined.textIndent = (definedBits & (1u << 4)) != 0;
+    css.marginTop = lengthOf(lens[1]);
+    css.defined.marginTop = (definedBits & (1u << 5)) != 0;
+    css.marginLeft = lengthOf(lens[3]);
+    css.defined.marginLeft = (definedBits & (1u << 7)) != 0;
+    css.marginRight = lengthOf(lens[4]);
+    css.defined.marginRight = (definedBits & (1u << 8)) != 0;
+    css.paddingTop = lengthOf(lens[5]);
+    css.defined.paddingTop = (definedBits & (1u << 9)) != 0;
+    css.borderEdges = borderVal;
+    css.defined.border = (definedBits & (1u << 18)) != 0;
+    addVerticalRule(out, selector, css);
   }
   if (out.size() >= maxOut) {
     LOG_ERR("CSS", "collectVerticalStyles hit the %u-entry cap; later rules (e.g. borders) may be dropped",

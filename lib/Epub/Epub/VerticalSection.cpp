@@ -481,7 +481,18 @@ struct TextExtractor {
   // forms the CSS map stores: "tag", ".class", "tag.class" (case-insensitive, class-attr token
   // match). Returns true if anything matched.
   bool resolveBlockStyle(const char* name, const char** atts, VerticalBlockParams& params) const {
-    if (!blockStyles || blockStyles->empty()) return false;
+    bool matched = false;
+    if (blockStyles && !blockStyles->empty()) matched = resolveRules(name, atts, params);
+    // The element's own style="" goes over its rules.
+    CssParser::VerticalBlockStyle own;
+    if (inlineBlockStyle(atts, own) && own.any()) {
+      matched = true;
+      applyBlockStyle(own, params);
+    }
+    return matched;
+  }
+
+  bool resolveRules(const char* name, const char** atts, VerticalBlockParams& params) const {
     // The element's tag and class tokens, hashed once; rules match on the same hashes.
     const uint32_t tagHash = CssParser::blockSelectorHash(name, strlen(name));
     constexpr int MAX_CLASSES = 16;
@@ -504,28 +515,48 @@ struct TextExtractor {
           std::find(classHashes, classHashes + classCount, rule.classHash) == classHashes + classCount) {
         continue;
       }
-      const auto& vs = rule.style;
       matched = true;
-      if (vs.startEm > 0) params.startEm = vs.startEm;
-      if (vs.beforeEm > 0) params.beforeEm = vs.beforeEm;
-      if (vs.afterEm > 0) params.afterEm = vs.afterEm;
-      if (vs.hangEm > 0) params.hangEm = vs.hangEm;
-      params.alignCenter = params.alignCenter || vs.alignCenter;
-      if (vs.borderEdges != 0) params.borderEdges = vs.borderEdges;
+      applyBlockStyle(rule.style, params);
     }
     return matched;
+  }
+
+  static void applyBlockStyle(const CssParser::VerticalBlockStyle& vs, VerticalBlockParams& params) {
+    if (vs.startEm > 0) params.startEm = vs.startEm;
+    if (vs.beforeEm > 0) params.beforeEm = vs.beforeEm;
+    if (vs.afterEm > 0) params.afterEm = vs.afterEm;
+    if (vs.hangEm > 0) params.hangEm = vs.hangEm;
+    params.alignCenter = params.alignCenter || vs.alignCenter;
+    if (vs.borderEdges != 0) params.borderEdges = vs.borderEdges;
+  }
+
+  // The element's style="" attribute, as the vertical engine reads styles. False without one.
+  static bool inlineBlockStyle(const char** atts, CssParser::VerticalBlockStyle& out) {
+    for (int i = 0; atts && atts[i]; i += 2) {
+      if (strcasecmp(atts[i], "style") != 0 || !atts[i + 1] || !*atts[i + 1]) continue;
+      out = CssParser::verticalBlockStyleOf(CssParser::parseInlineStyle(atts[i + 1]));
+      return true;
+    }
+    return false;
   }
 
   // This element's own text-indent, in quarter ems (capped at the 7 bits a character carries). False
   // when no rule sets it, so it inherits its parent's.
   bool resolveIndent(const char* name, const char** atts, uint8_t& quarters) const {
+    const auto toQuarters = [](const float em) { return static_cast<uint8_t>(std::min(127.0f, em * 4 + 0.5f)); };
+    // The element's own style="" wins over its rules.
+    CssParser::VerticalBlockStyle own;
+    if (inlineBlockStyle(atts, own) && own.indentEm >= 0) {
+      quarters = toQuarters(own.indentEm);
+      return true;
+    }
     if (!blockStyles || blockStyles->empty()) return false;
     const uint32_t tagHash = CssParser::blockSelectorHash(name, strlen(name));
     bool found = false;
     for (const auto& rule : *blockStyles) {
       if (rule.style.indentEm < 0 || (rule.tagHash != 0 && rule.tagHash != tagHash)) continue;
       if (rule.classHash != 0 && !hasClassHash(atts, rule.classHash)) continue;
-      quarters = static_cast<uint8_t>(std::min(127.0f, rule.style.indentEm * 4 + 0.5f));
+      quarters = toQuarters(rule.style.indentEm);
       found = true;
     }
     return found;
@@ -2079,6 +2110,9 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
       if (b.blockStyles.capacity() < STYLED_BLOCK_TABLE_ENTRIES) {
         LOG_ERR("VSC", "Styled-block table refused at reserve (maxAlloc=%u); building unstyled", ESP.getMaxAllocHeap());
         lastBuildUnstyledForHeap_ = true;
+      } else if (const size_t own = epub->getCssParser()->appendChapterVerticalStyles(b.tmpHtmlPath, b.blockStyles)) {
+        // The chapter's own <style> blocks, after the book's stylesheets.
+        LOG_DBG("VSC", "%u styled-block selectors from the chapter's <style>", static_cast<unsigned>(own));
       }
       if (!b.blockStyles.empty()) {
         LOG_DBG("VSC", "%u styled-block selectors active", static_cast<unsigned>(b.blockStyles.size()));
