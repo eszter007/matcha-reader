@@ -111,7 +111,11 @@ namespace {
 // with the outer element's params, so a sibling after an inner box is no longer framed with it.
 // v150: no format change. Upstream merge: static GIF images are decoded, so a GIF page stores
 // the image's own size (and rotation) instead of the full-page placeholder.
-constexpr uint8_t VSECTION_FILE_VERSION = 150;
+// v151: no format change. Group ruby's glyphs after the first carry RUBY_CONTINUE, so the group stays
+// in one column and its annotation is set over the whole group; a reading longer than its base and
+// what its neighbours may take spaces the base out (JLREQ 3.3), and jukugo with such a reading is
+// set as group ruby.
+constexpr uint8_t VSECTION_FILE_VERSION = 151;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -243,6 +247,9 @@ struct TextExtractor {
   std::string rubyElemBase;
   std::string rubyElemRuby;
   int rubyElemRunCount = 0;
+  // Runs this <ruby> element added, from currentRuns[rubyElemFirstRun] (jukugo, see endElement).
+  size_t rubyElemFirstRun = 0;
+  size_t rubyElemRuns = 0;
 
   // Style tracking — each entry records the elementDepth at which
   // bold/italic was activated. On endElement, if we're leaving that
@@ -364,6 +371,30 @@ struct TextExtractor {
       midParagraph = true;
     }
     currentRuns.push_back(std::move(run));
+  }
+
+  // Jukugo ruby (one reading per character of a compound) where one reading is longer than its
+  // character: set as group ruby over the whole compound, as JLREQ 3.3.7 permits and simple-ruby
+  // prescribes, rather than spacing that character out on its own.
+  void mergeJukugo() {
+    const auto chars = [](const std::string& t) {
+      return std::count_if(t.begin(), t.end(), [](const char c) { return (static_cast<uint8_t>(c) & 0xC0) != 0x80; });
+    };
+    const size_t first = rubyElemFirstRun;
+    if (rubyElemRuns < 2 || currentRuns.size() != first + rubyElemRuns) return;  // drained mid-element
+    bool longer = false;
+    for (size_t i = first; i < currentRuns.size(); i++) {
+      const RubyRun& r = currentRuns[i];
+      if (r.rubyText.empty() || r.style != currentRuns[first].style) return;
+      if (chars(r.rubyText) > 2 * chars(r.baseText)) longer = true;
+    }
+    if (!longer) return;
+    RubyRun& head = currentRuns[first];
+    for (size_t i = first + 1; i < currentRuns.size(); i++) {
+      head.baseText += currentRuns[i].baseText;
+      head.rubyText += currentRuns[i].rubyText;
+    }
+    currentRuns.erase(currentRuns.begin() + static_cast<std::ptrdiff_t>(first + 1), currentRuns.end());
   }
 
   void flushCurrentText() {
@@ -593,6 +624,8 @@ struct TextExtractor {
       self->rubyElemBase.clear();
       self->rubyElemRuby.clear();
       self->rubyElemRunCount = 0;
+      self->rubyElemFirstRun = self->currentRuns.size();
+      self->rubyElemRuns = 0;
     } else if (strcasecmp(name, "rt") == 0) {
       self->inRt = true;
       self->rubyAnnotation.clear();
@@ -727,6 +760,7 @@ struct TextExtractor {
         }
         self->pushRun(RubyRun{std::move(self->rubyBase), std::move(self->rubyAnnotation), self->currentStyle(),
                               self->hasEmphasis(), self->rubyBaseOffset});
+        self->rubyElemRuns++;
         self->rubyBase.clear();
         self->rubyBase.reserve(RUBY_RESERVE_HINT);
       }
@@ -750,6 +784,7 @@ struct TextExtractor {
       self->rubyElemBase.clear();
       self->rubyElemRuby.clear();
       self->rubyElemRunCount = 0;
+      self->mergeJukugo();
       self->inRuby = false;
       // Furigana-dense text accumulates many small runs without currentText ever growing;
       // stream them onward at the same cadence as the byte bound (see SOFT_FLUSH_RUNS).
@@ -1973,6 +2008,7 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
       furiganaEnabled ? kGapQuarterEmsWithRuby[clampedLineSpacing] : kGapQuarterEmsPlain[clampedLineSpacing];
   b.layout.setColumnGapPx(std::max(2, emPx * gapQuarterEms / 4));
   b.layout.setCharacterSpacingPx(spec.characterSpacing);
+  b.layout.setRubyShown(furiganaEnabled);
   // The first column's ruby sits in the right margin (JLREQ Fig 2.37) and is half an em wide.
   // Where the margin is narrower than that -- a large font at a small screen margin -- the ruby
   // would be drawn back over its own base characters, so the text area gives up the shortfall
