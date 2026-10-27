@@ -404,6 +404,8 @@ class VerticalParsedText {
   // Extra right-side padding (in pixels) reserved for vertical ruby so it
   // doesn't clip against the right edge.
   void setRightPaddingPx(int padPx) { rightPaddingPx_ = (padPx < 0) ? 0 : padPx; }
+  // Furigana is drawn: a reading longer than its base spaces the base out (JLREQ 3.3.8).
+  void setRubyShown(const bool shown) { rubyShown_ = shown; }
 
  private:
   const GfxRenderer& renderer_;
@@ -413,6 +415,7 @@ class VerticalParsedText {
   int columnGapPx_ = 0;
   int characterSpacingPx_ = 0;
   int rightPaddingPx_ = 0;
+  bool rubyShown_ = false;
 
   struct PendingChar {
     uint32_t codepoint;
