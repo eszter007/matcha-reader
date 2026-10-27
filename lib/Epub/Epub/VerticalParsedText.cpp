@@ -770,10 +770,14 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
         std::string slice;
         for (size_t r = rubyStart; r < rubyEnd; r++) utf8AppendCodepoint(rubyCps[r], slice);
         if (!canPushStreamChar()) return;
+        // Group ruby: the characters after the first are marked, so layout keeps the group in one
+        // column and the renderer sets the annotation over the whole group (JLREQ 3.3.6). Each
+        // still carries its share, which keeps a group split across a page drawable.
+        const uint8_t style = k > 0 ? static_cast<uint8_t>(run.style | EpdFontFamily::RUBY_CONTINUE) : run.style;
         PendingChar pc{Kinsoku::verticalFormOf(baseCps[k]),
                        paragraphIndex,
                        static_cast<uint32_t>(baseOffsets[k]),
-                       run.style,
+                       style,
                        run.emphasis,
                        run.indentQuarters,
                        0,
@@ -2230,6 +2234,102 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     // "Nothing placed in this column yet" is the real condition -- glyphs are appended in layout
     // order, so the last glyph sitting in an earlier column (or an empty page) means this
     // character would be the column's first.
+    // Ruby (JLREQ 3.3): a group stays in one column, and a reading longer than its base plus what
+    // its neighbours may take spaces the base out to it. A column it does not fit ends early and is
+    // spread to its foot, like one oidashi pushed a character out of. Anything longer than a whole
+    // column still breaks.
+    constexpr uint8_t CONT = EpdFontFamily::RUBY_CONTINUE;
+    if (idx >= suppressKinsokuUntilIdx && (pc.style & CONT) == 0 &&
+        (pc.rubyLen > 0 || (idx + 1 < boundaryLimit && (stream_[idx + 1].style & CONT) != 0))) {
+      size_t groupEnd = idx + 1;
+      while (groupEnd < boundaryLimit && (stream_[groupEnd].style & CONT) != 0) groupEnd++;
+      const int n = static_cast<int>(groupEnd - idx);
+      const int gapPx = rowPitchPx - cellPx;
+      const int basePx = n * cellPx + (n - 1) * gapPx;
+      // Ruby is half the body size and set solid (VerticalTextBlock::render draws it so).
+      const int rubyLineH = (cellPx + 1) / 2;
+      int rubyChars = 0;
+      for (size_t k = idx; k < groupEnd; k++) {
+        const auto& c = stream_[k];
+        for (uint32_t b = 0; b < c.rubyLen; b++) {
+          if ((static_cast<uint8_t>(rubyPool_[c.rubyOffset + b]) & 0xC0) != 0x80) rubyChars++;
+        }
+      }
+      const int rubyPx = rubyShown_ ? rubyChars * rubyLineH : 0;
+      const auto hasRuby = [&](const size_t at) {
+        return stream_[at].rubyLen > 0 || (stream_[at].style & CONT) != 0 ||
+               (at + 1 < stream_.size() && (stream_[at + 1].style & CONT) != 0);
+      };
+      // How far the reading may hang over a neighbour (3.3.8): one ruby character over kana, or
+      // over the blank half of a closing bracket or 、。 before it and an opening bracket after it.
+      const auto hangOver = [&](const size_t at, const bool before) {
+        if (at >= boundaryLimit || stream_[at].paragraphIndex != pc.paragraphIndex || hasRuby(at)) return 0;
+        const uint32_t cp = stream_[at].codepoint;
+        const bool kana = (cp >= 0x3041 && cp <= 0x309F) || (cp >= 0x30A1 && cp <= 0x30FA);
+        const int shift = Kinsoku::verticalShiftType(cp);
+        return kana || (before ? (shift == 1 || shift == 2) : shift == 3) ? rubyLineH : 0;
+      };
+      const int startRow = cur.columnStartRow(false);
+      // The base's length with the reading set against it; whole rows it takes.
+      const auto fit = [&](const bool atHead, const bool atFoot, int& spanPx) {
+        const int before = atHead || idx == 0 ? 0 : hangOver(idx - 1, true);
+        const int after = atFoot ? 0 : hangOver(groupEnd, false);
+        spanPx = std::max(basePx, rubyPx - before - after);
+        return (spanPx + gapPx + rowPitchPx - 1) / rowPitchPx;
+      };
+      bool atHead = page.glyphs.empty() || page.glyphs.back().column < column;
+      int spanPx = basePx;
+      int rows = fit(atHead, false, spanPx);
+      if (row + rows >= cur.rowsAvailable()) rows = fit(atHead, true, spanPx);  // ends at the foot
+      int freshSpan = basePx;
+      if (!atHead && row > startRow && row + rows > cur.rowsAvailable() &&
+          startRow + fit(true, false, freshSpan) <= cur.rowsAvailable()) {
+        if (column < 64) oidashiColumns_ |= uint64_t{1} << column;
+        column++;
+        row = 0;
+        cur.finalizePageIfNeeded();
+        row = cur.columnStartRow(false);
+        atHead = true;
+        rows = fit(true, false, spanPx);
+        if (row + rows >= cur.rowsAvailable()) rows = fit(true, true, spanPx);
+      }
+      if (spanPx > basePx && row + rows <= cur.rowsAvailable()) {
+        // Spaced 1:2:1: half as much at each end as between two characters. The base stays centred
+        // on its reading, so at a column head the reading starts with the column (3.3.9).
+        const int extra = spanPx - basePx;
+        const int unit = extra / (2 * n);
+        int offset = unit;
+        for (size_t k = idx; k < groupEnd; k++) {
+          const uint16_t r = static_cast<uint16_t>(row + offset / rowPitchPx);
+          const size_t before = page.glyphs.size();
+          cur.placeUprightAt(stream_[k], column, r);
+          if (page.glyphs.size() > before) {
+            VerticalGlyph& placed = page.glyphs.back();
+            placed.y = static_cast<uint16_t>(std::max(0, static_cast<int>(placed.y) + offset - (r - row) * rowPitchPx));
+          }
+          offset += rowPitchPx + 2 * unit;
+        }
+        row = static_cast<uint16_t>(row + rows);
+        // The rows were rounded up: the rest of the column slides back up by the difference.
+        const int slack = rows * rowPitchPx - (spanPx + gapPx);
+        if (slack > 0) {
+          if (shiftColumn != column) {
+            columnYShift = 0;
+            shiftColumn = column;
+          }
+          columnYShift += slack;
+        }
+        if (row >= cur.rowsAvailable()) {
+          column++;
+          row = 0;
+          cur.finalizePageIfNeeded();
+          row = cur.columnStartRow(false);
+        }
+        idx = groupEnd;
+        continue;
+      }
+    }
+
     const bool startingNewColumn = page.glyphs.empty() || page.glyphs.back().column < column;
     // The second half of a dash or leader pair is held to the first like a character that may not
     // start a column.
