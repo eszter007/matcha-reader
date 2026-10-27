@@ -903,12 +903,9 @@ struct VerticalParsedText::LayoutCursor {
     int reduction = geom.cellPx / 2;
 
     // 。and 、 carry their own trailing half em inside their em, so a following mark closes onto
-    // it: an opening bracket wants exactly that half (figure 3), a closing bracket or another
-    // 。/、 is set solid (1, 2), a middle dot keeps a quarter.
-    if (Kinsoku::verticalShiftType(prev.codepoint) == 1) {
-      if (thisHalf == 2) return;
-      reduction = (thisHalf == 3) ? geom.cellPx / 4 : geom.cellPx / 2;
-    }
+    // it: an opening bracket keeps half an em between them (figure 3), a closing bracket or
+    // another 。/、 is set solid (1, 2), a middle dot keeps a quarter.
+    if (Kinsoku::verticalShiftType(prev.codepoint) == 1 && thisHalf == 3) reduction = geom.cellPx / 4;
     columnYShift += reduction;
     shiftColumn = columnArg;
   }
