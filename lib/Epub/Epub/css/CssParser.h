@@ -285,19 +285,35 @@ class CssParser {
     float hangEm = 0;          // v padding-top + negative text-indent: hanging indent for wrapped lines
     bool alignCenter = false;  // text-align: center -> column content vertically centered
     uint8_t borderEdges = 0;   // CssStyle::BORDER_* edge mask; vertical rendering stays solid
+    float indentEm = -1;       // text-indent: a paragraph's first column starts this far down; -1 = not set
     [[nodiscard]] bool any() const {
-      return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || borderEdges != 0;
+      return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || borderEdges != 0 ||
+             indentEm >= 0;
     }
   };
 
   // One styled-block rule, keyed by hashes rather than the selector text: the vertical engine only
   // matches "tag", ".class" and "tag.class", so a tag hash (0 = any tag) and a class hash (0 = no
-  // class) say everything a selector string did, in 28 bytes and without a heap string per rule.
+  // class) say everything a selector string did, in 32 bytes and without a heap string per rule.
   struct VerticalBlockRule {
     uint32_t tagHash = 0;
     uint32_t classHash = 0;
     VerticalBlockStyle style;
   };
+
+  // What the vertical engine takes from a style: its block indents, hanging indent, text-indent,
+  // centring and borders, in em. The rules in the cache and a style="" attribute map the same way.
+  [[nodiscard]] static VerticalBlockStyle verticalBlockStyleOf(const CssStyle& css);
+
+  // A chapter's own <style> blocks: the stylesheets inside its HTML, which the book's CSS cache does
+  // not hold. Capped, so one chapter cannot take the heap.
+  static constexpr size_t MAX_CHAPTER_STYLE_BYTES = 16 * 1024;
+  // Adds the rules of htmlPath's <style> blocks to the loaded table (a horizontal chapter build),
+  // after the book's stylesheets so they win ties as they would in a browser. False when there are none.
+  bool loadStyleBlocks(const std::string& htmlPath);
+  // The same rules for the vertical engine, merged into `out` within its reserved capacity. Uses and
+  // then frees this parser's table: the vertical build keeps none. Returns how many were added.
+  size_t appendChapterVerticalStyles(const std::string& htmlPath, std::vector<VerticalBlockRule>& out);
   // Case-insensitive FNV-1a over a selector piece (tag name or class token). Never 0.
   static uint32_t blockSelectorHash(const char* s, size_t len);
 
@@ -361,6 +377,10 @@ class CssParser {
   // Lookup over a run of pieces (a simple selector is a run of one).
   [[nodiscard]] const CssStyle* findStyle(const std::string_view* pieces, size_t count) const;
   [[nodiscard]] std::unique_ptr<uint16_t[]> sourceOrder() const;
+  // One rule into the vertical engine's table: v|-scoped or unscoped, tag/class selectors only.
+  static void addVerticalRule(std::vector<VerticalBlockRule>& out, std::string_view selector, const CssStyle& css);
+  // Copies every <style> block's contents from the HTML into cssPath. False when there is none.
+  static bool extractStyleBlocks(const std::string& htmlPath, const std::string& cssPath);
   [[nodiscard]] std::string_view selectorAt(size_t index) const;
   [[nodiscard]] const CssStyle& styleAt(size_t index) const;
   PoolResult ensureEntryCapacity(size_t needed);

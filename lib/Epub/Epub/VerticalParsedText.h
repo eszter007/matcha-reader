@@ -243,6 +243,8 @@ class VerticalParsedText {
     // layouts -- that shared meaning is the whole point: it is what lets a reading position
     // survive a vertical/horizontal switch. See VerticalPage::visibleTextOffset.
     uint32_t visibleTextOffset = 0;
+    // The book's text-indent (CSS) for a paragraph that starts in this run, in quarter ems.
+    uint8_t indentQuarters = 0;
   };
 
   // continuesPreviousParagraph: pass true when this call carries the NEXT CHUNK of a paragraph
@@ -422,7 +424,9 @@ class VerticalParsedText {
     uint32_t paragraphIndex;
     uint32_t byteOffset;
     uint8_t style;
-    bool emphasis;
+    uint8_t emphasis : 1;
+    // The book's text-indent for a paragraph starting at this character, in quarter ems.
+    uint8_t indentQuarters : 7;
     // This character's share of its ruby, as a span of rubyPool_ (0 = none). A span rather than a
     // std::string keeps the entry at 24 bytes instead of 44: stream_ reserves 512 of them for the
     // whole build.

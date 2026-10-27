@@ -747,6 +747,11 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
           return false;
         }
       }
+      // The chapter's own <style> blocks, after the book's stylesheets.
+      if (ctx->cssParser->loadStyleBlocks(ctx->parsePath)) {
+        LOG_DBG("SCT", "Chapter <style> blocks loaded (%u rules in all)",
+                static_cast<unsigned>(ctx->cssParser->ruleCount()));
+      }
     }
   }
 

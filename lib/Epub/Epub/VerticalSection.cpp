@@ -115,7 +115,11 @@ namespace {
 // in one column and its annotation is set over the whole group; a reading longer than its base and
 // what its neighbours may take spaces the base out (JLREQ 3.3), and jukugo with such a reading is
 // set as group ruby.
-constexpr uint8_t VSECTION_FILE_VERSION = 151;
+// v152: no format change. An opening bracket after 。 or 、 keeps half an em between them, not a
+// whole em (JLREQ 3.1.4). Dash pairs, a number and its unit, and a sign before a number are no longer
+// split across columns, a character that may not start a column moves its predecessor across a page
+// break too (3.1.7, 3.1.10), and a paragraph's first column honours the book's CSS text-indent.
+constexpr uint8_t VSECTION_FILE_VERSION = 152;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -188,6 +192,16 @@ struct TextExtractor {
   // Styled-block detection: (selector -> vertical layout params) distilled from the CSS cache.
   // boxOpenedAtDepth is the elementDepth of the styled element while inside one, else -1.
   const std::vector<CssParser::VerticalBlockRule>* blockStyles = nullptr;
+  // The text-indent of the block elements open now, innermost last (CSS inherits it). Runs carry it
+  // so the layout can indent each paragraph's first column.
+  struct IndentLevel {
+    int depth;
+    uint8_t quarters;
+  };
+  static constexpr int MAX_INDENT_LEVELS = 16;
+  IndentLevel indentLevels[MAX_INDENT_LEVELS] = {};
+  int indentCount = 0;
+  uint8_t currentIndent() const { return indentCount > 0 ? indentLevels[indentCount - 1].quarters : 0; }
   int boxOpenedAtDepth = -1;
   // Whether the open styled block has had any text yet. Until it has, styled elements nested in it
   // (EBPAJ wraps a rule in indent divs: start-1em > k-solid-top > start-1em) merge into it.
@@ -370,6 +384,7 @@ struct TextExtractor {
       currentRuns.clear();
       midParagraph = true;
     }
+    run.indentQuarters = currentIndent();
     currentRuns.push_back(std::move(run));
   }
 
@@ -497,7 +512,18 @@ struct TextExtractor {
   // forms the CSS map stores: "tag", ".class", "tag.class" (case-insensitive, class-attr token
   // match). Returns true if anything matched.
   bool resolveBlockStyle(const char* name, const char** atts, VerticalBlockParams& params) const {
-    if (!blockStyles || blockStyles->empty()) return false;
+    bool matched = false;
+    if (blockStyles && !blockStyles->empty()) matched = resolveRules(name, atts, params);
+    // The element's own style="" goes over its rules.
+    CssParser::VerticalBlockStyle own;
+    if (inlineBlockStyle(atts, own) && own.any()) {
+      matched = true;
+      applyBlockStyle(own, params);
+    }
+    return matched;
+  }
+
+  bool resolveRules(const char* name, const char** atts, VerticalBlockParams& params) const {
     // The element's tag and class tokens, hashed once; rules match on the same hashes.
     const uint32_t tagHash = CssParser::blockSelectorHash(name, strlen(name));
     constexpr int MAX_CLASSES = 16;
@@ -520,16 +546,65 @@ struct TextExtractor {
           std::find(classHashes, classHashes + classCount, rule.classHash) == classHashes + classCount) {
         continue;
       }
-      const auto& vs = rule.style;
       matched = true;
-      if (vs.startEm > 0) params.startEm = vs.startEm;
-      if (vs.beforeEm > 0) params.beforeEm = vs.beforeEm;
-      if (vs.afterEm > 0) params.afterEm = vs.afterEm;
-      if (vs.hangEm > 0) params.hangEm = vs.hangEm;
-      params.alignCenter = params.alignCenter || vs.alignCenter;
-      if (vs.borderEdges != 0) params.borderEdges = vs.borderEdges;
+      applyBlockStyle(rule.style, params);
     }
     return matched;
+  }
+
+  static void applyBlockStyle(const CssParser::VerticalBlockStyle& vs, VerticalBlockParams& params) {
+    if (vs.startEm > 0) params.startEm = vs.startEm;
+    if (vs.beforeEm > 0) params.beforeEm = vs.beforeEm;
+    if (vs.afterEm > 0) params.afterEm = vs.afterEm;
+    if (vs.hangEm > 0) params.hangEm = vs.hangEm;
+    params.alignCenter = params.alignCenter || vs.alignCenter;
+    if (vs.borderEdges != 0) params.borderEdges = vs.borderEdges;
+  }
+
+  // The element's style="" attribute, as the vertical engine reads styles. False without one.
+  static bool inlineBlockStyle(const char** atts, CssParser::VerticalBlockStyle& out) {
+    for (int i = 0; atts && atts[i]; i += 2) {
+      if (strcasecmp(atts[i], "style") != 0 || !atts[i + 1] || !*atts[i + 1]) continue;
+      out = CssParser::verticalBlockStyleOf(CssParser::parseInlineStyle(atts[i + 1]));
+      return true;
+    }
+    return false;
+  }
+
+  // This element's own text-indent, in quarter ems (capped at the 7 bits a character carries). False
+  // when no rule sets it, so it inherits its parent's.
+  bool resolveIndent(const char* name, const char** atts, uint8_t& quarters) const {
+    const auto toQuarters = [](const float em) { return static_cast<uint8_t>(std::min(127.0f, em * 4 + 0.5f)); };
+    // The element's own style="" wins over its rules.
+    CssParser::VerticalBlockStyle own;
+    if (inlineBlockStyle(atts, own) && own.indentEm >= 0) {
+      quarters = toQuarters(own.indentEm);
+      return true;
+    }
+    if (!blockStyles || blockStyles->empty()) return false;
+    const uint32_t tagHash = CssParser::blockSelectorHash(name, strlen(name));
+    bool found = false;
+    for (const auto& rule : *blockStyles) {
+      if (rule.style.indentEm < 0 || (rule.tagHash != 0 && rule.tagHash != tagHash)) continue;
+      if (rule.classHash != 0 && !hasClassHash(atts, rule.classHash)) continue;
+      quarters = toQuarters(rule.style.indentEm);
+      found = true;
+    }
+    return found;
+  }
+
+  static bool hasClassHash(const char** atts, const uint32_t hash) {
+    for (int i = 0; atts && atts[i]; i += 2) {
+      if (strcasecmp(atts[i], "class") != 0 || !atts[i + 1]) continue;
+      const char* val = atts[i + 1];
+      while (*val) {
+        while (*val == ' ') val++;
+        const char* start = val;
+        while (*val && *val != ' ') val++;
+        if (val > start && CssParser::blockSelectorHash(start, val - start) == hash) return true;
+      }
+    }
+    return false;
   }
 
   static bool hasClass(const char** atts, const char* cls) {
@@ -613,6 +688,12 @@ struct TextExtractor {
         self->flushParagraph();
       }
       self->blockDepth++;
+      uint8_t quarters = 0;
+      if (self->indentCount < MAX_INDENT_LEVELS && self->resolveIndent(name, atts, quarters)) {
+        // Text before it keeps the indent it was written under.
+        if (quarters != self->currentIndent()) self->flushCurrentText();
+        self->indentLevels[self->indentCount++] = {self->elementDepth, quarters};
+      }
     }
     if (strcasecmp(name, "ruby") == 0) {
       self->flushCurrentText();
@@ -804,6 +885,10 @@ struct TextExtractor {
       self->emphasisStack.close();
     }
     if (isBlockTag(name)) {
+      if (self->indentCount > 0 && self->indentLevels[self->indentCount - 1].depth - 1 == self->elementDepth) {
+        self->flushCurrentText();
+        self->indentCount--;
+      }
       self->blockDepth--;
       if (self->blockDepth <= 0) {
         self->blockDepth = 0;
@@ -2061,6 +2146,9 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
       if (b.blockStyles.capacity() < STYLED_BLOCK_TABLE_ENTRIES) {
         LOG_ERR("VSC", "Styled-block table refused at reserve (maxAlloc=%u); building unstyled", ESP.getMaxAllocHeap());
         lastBuildUnstyledForHeap_ = true;
+      } else if (const size_t own = epub->getCssParser()->appendChapterVerticalStyles(b.tmpHtmlPath, b.blockStyles)) {
+        // The chapter's own <style> blocks, after the book's stylesheets.
+        LOG_DBG("VSC", "%u styled-block selectors from the chapter's <style>", static_cast<unsigned>(own));
       }
       if (!b.blockStyles.empty()) {
         LOG_DBG("VSC", "%u styled-block selectors active", static_cast<unsigned>(b.blockStyles.size()));
