@@ -285,14 +285,16 @@ class CssParser {
     float hangEm = 0;          // v padding-top + negative text-indent: hanging indent for wrapped lines
     bool alignCenter = false;  // text-align: center -> column content vertically centered
     uint8_t borderEdges = 0;   // CssStyle::BORDER_* edge mask; vertical rendering stays solid
+    float indentEm = -1;       // text-indent: a paragraph's first column starts this far down; -1 = not set
     [[nodiscard]] bool any() const {
-      return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || borderEdges != 0;
+      return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || borderEdges != 0 ||
+             indentEm >= 0;
     }
   };
 
   // One styled-block rule, keyed by hashes rather than the selector text: the vertical engine only
   // matches "tag", ".class" and "tag.class", so a tag hash (0 = any tag) and a class hash (0 = no
-  // class) say everything a selector string did, in 28 bytes and without a heap string per rule.
+  // class) say everything a selector string did, in 32 bytes and without a heap string per rule.
   struct VerticalBlockRule {
     uint32_t tagHash = 0;
     uint32_t classHash = 0;

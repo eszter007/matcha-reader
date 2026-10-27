@@ -2019,6 +2019,8 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
     if (defPaddingTop && defTextIndent && emOf(lens[0].v, lens[0].u) < 0) {
       vs.hangEm = emOf(lens[5].v, lens[5].u);
     }
+    // A negative indent is the hanging form above, not a first-line indent.
+    if (defTextIndent) vs.indentEm = std::max(0.0f, emOf(lens[0].v, lens[0].u));
     if ((definedBits & (1u << 0)) && enums[0] == static_cast<uint8_t>(CssTextAlign::Center)) vs.alignCenter = true;
     if (definedBits & (1u << 18)) vs.borderEdges = CssStyle::edgeMaskOf(borderVal);
     if (!vs.any()) continue;
@@ -2046,6 +2048,7 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
         if (vs.hangEm > 0) existing.hangEm = vs.hangEm;
         existing.alignCenter = existing.alignCenter || vs.alignCenter;
         if (vs.borderEdges != 0) existing.borderEdges = vs.borderEdges;
+        if (vs.indentEm >= 0) existing.indentEm = vs.indentEm;
         merged = true;
         break;
       }

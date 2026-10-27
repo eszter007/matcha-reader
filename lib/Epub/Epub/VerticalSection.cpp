@@ -111,8 +111,10 @@ namespace {
 // with the outer element's params, so a sibling after an inner box is no longer framed with it.
 // v150: no format change. Upstream merge: static GIF images are decoded, so a GIF page stores
 // the image's own size (and rotation) instead of the full-page placeholder.
-// v152: no format change. An opening bracket after 。 or 、 keeps half an em between them, not a whole
-// em (JLREQ 3.1.4).
+// v152: no format change. An opening bracket after 。 or 、 keeps half an em between them, not a
+// whole em (JLREQ 3.1.4). Dash pairs, a number and its unit, and a sign before a number are no longer
+// split across columns, a character that may not start a column moves its predecessor across a page
+// break too (3.1.7, 3.1.10), and a paragraph's first column honours the book's CSS text-indent.
 constexpr uint8_t VSECTION_FILE_VERSION = 152;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
@@ -186,6 +188,16 @@ struct TextExtractor {
   // Styled-block detection: (selector -> vertical layout params) distilled from the CSS cache.
   // boxOpenedAtDepth is the elementDepth of the styled element while inside one, else -1.
   const std::vector<CssParser::VerticalBlockRule>* blockStyles = nullptr;
+  // The text-indent of the block elements open now, innermost last (CSS inherits it). Runs carry it
+  // so the layout can indent each paragraph's first column.
+  struct IndentLevel {
+    int depth;
+    uint8_t quarters;
+  };
+  static constexpr int MAX_INDENT_LEVELS = 16;
+  IndentLevel indentLevels[MAX_INDENT_LEVELS] = {};
+  int indentCount = 0;
+  uint8_t currentIndent() const { return indentCount > 0 ? indentLevels[indentCount - 1].quarters : 0; }
   int boxOpenedAtDepth = -1;
   // Whether the open styled block has had any text yet. Until it has, styled elements nested in it
   // (EBPAJ wraps a rule in indent divs: start-1em > k-solid-top > start-1em) merge into it.
@@ -365,6 +377,7 @@ struct TextExtractor {
       currentRuns.clear();
       midParagraph = true;
     }
+    run.indentQuarters = currentIndent();
     currentRuns.push_back(std::move(run));
   }
 
@@ -503,6 +516,35 @@ struct TextExtractor {
     return matched;
   }
 
+  // This element's own text-indent, in quarter ems (capped at the 7 bits a character carries). False
+  // when no rule sets it, so it inherits its parent's.
+  bool resolveIndent(const char* name, const char** atts, uint8_t& quarters) const {
+    if (!blockStyles || blockStyles->empty()) return false;
+    const uint32_t tagHash = CssParser::blockSelectorHash(name, strlen(name));
+    bool found = false;
+    for (const auto& rule : *blockStyles) {
+      if (rule.style.indentEm < 0 || (rule.tagHash != 0 && rule.tagHash != tagHash)) continue;
+      if (rule.classHash != 0 && !hasClassHash(atts, rule.classHash)) continue;
+      quarters = static_cast<uint8_t>(std::min(127.0f, rule.style.indentEm * 4 + 0.5f));
+      found = true;
+    }
+    return found;
+  }
+
+  static bool hasClassHash(const char** atts, const uint32_t hash) {
+    for (int i = 0; atts && atts[i]; i += 2) {
+      if (strcasecmp(atts[i], "class") != 0 || !atts[i + 1]) continue;
+      const char* val = atts[i + 1];
+      while (*val) {
+        while (*val == ' ') val++;
+        const char* start = val;
+        while (*val && *val != ' ') val++;
+        if (val > start && CssParser::blockSelectorHash(start, val - start) == hash) return true;
+      }
+    }
+    return false;
+  }
+
   static bool hasClass(const char** atts, const char* cls) {
     if (!atts) return false;
     for (int i = 0; atts[i]; i += 2) {
@@ -584,6 +626,12 @@ struct TextExtractor {
         self->flushParagraph();
       }
       self->blockDepth++;
+      uint8_t quarters = 0;
+      if (self->indentCount < MAX_INDENT_LEVELS && self->resolveIndent(name, atts, quarters)) {
+        // Text before it keeps the indent it was written under.
+        if (quarters != self->currentIndent()) self->flushCurrentText();
+        self->indentLevels[self->indentCount++] = {self->elementDepth, quarters};
+      }
     }
     if (strcasecmp(name, "ruby") == 0) {
       self->flushCurrentText();
@@ -771,6 +819,10 @@ struct TextExtractor {
       self->emphasisStack.close();
     }
     if (isBlockTag(name)) {
+      if (self->indentCount > 0 && self->indentLevels[self->indentCount - 1].depth - 1 == self->elementDepth) {
+        self->flushCurrentText();
+        self->indentCount--;
+      }
       self->blockDepth--;
       if (self->blockDepth <= 0) {
         self->blockDepth = 0;

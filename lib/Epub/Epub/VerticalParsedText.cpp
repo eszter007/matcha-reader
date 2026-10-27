@@ -341,11 +341,21 @@ int punctEmHalf(const uint32_t cp) {
   }
 }
 
+// Halves of a pair JLREQ 3.1.10 never splits across columns: …… ‥‥ —— ――.
+bool isInseparableMark(const uint32_t cp) { return cp == 0x2026 || cp == 0x2025 || cp == 0x2014 || cp == 0x2015; }
+
 // Digits that are set SIDEWAYS in vertical text -- as a tate-chu-yoko pair, or as a rotated run.
 // Halfwidth ASCII only. Fullwidth digits (U+FF10-U+FF19) are East Asian Wide: they are ideographic
 // -width characters and stand upright in tategaki, one per cell, exactly like kanji. Gathering them
 // into a rotated run laid １９３８年 on its side across four cells.
 bool isAsciiDigit(const uint32_t cp) { return cp >= '0' && cp <= '9'; }
+
+// Units and symbols written after a number (JLREQ cl-18 postfixed abbreviations, and the squared
+// unit signs ㎏ ㍉): never split from it (3.1.10).
+bool isPostfixUnit(const uint32_t cp) {
+  return cp == 0xFF05 || cp == 0x2030 || cp == 0x2103 || cp == 0x00B0 || cp == 0x2032 || cp == 0x2033 || cp == 0x00A2 ||
+         cp == 0xFFE0 || (cp >= 0x3300 && cp <= 0x33FF);
+}
 
 bool isAsciiAlnum(const uint32_t cp) {
   return (cp >= '0' && cp <= '9') || (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z');
@@ -594,7 +604,7 @@ void VerticalParsedText::addParagraph(const std::string& utf8Text) {
     // there is no chapter-wide position to attribute it to. Only the annotated path (the one
     // the real chapter build uses) carries offsets.
     stream_.push_back(
-        PendingChar{Kinsoku::verticalFormOf(cp), paragraphIndex, static_cast<uint32_t>(i), 0, false, {}, 0});
+        PendingChar{Kinsoku::verticalFormOf(cp), paragraphIndex, static_cast<uint32_t>(i), 0, false, 0, 0, 0});
     i += consumed;
   }
 }
@@ -732,13 +742,9 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
     if (run.rubyText.empty()) {
       for (size_t k = 0; k < baseCps.size(); k++) {
         if (!canPushStreamChar()) return;
-        stream_.push_back(PendingChar{Kinsoku::verticalFormOf(baseCps[k]),
-                                      paragraphIndex,
-                                      static_cast<uint32_t>(baseOffsets[k]),
-                                      run.style,
-                                      run.emphasis,
-                                      {},
-                                      run.visibleTextOffset + baseCpIndex[k]});
+        stream_.push_back(PendingChar{Kinsoku::verticalFormOf(baseCps[k]), paragraphIndex,
+                                      static_cast<uint32_t>(baseOffsets[k]), run.style, run.emphasis,
+                                      run.indentQuarters, 0, run.visibleTextOffset + baseCpIndex[k]});
       }
     } else {
       // Decode ruby codepoints to distribute evenly across base characters.
@@ -769,6 +775,7 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
                        static_cast<uint32_t>(baseOffsets[k]),
                        run.style,
                        run.emphasis,
+                       run.indentQuarters,
                        0,
                        run.visibleTextOffset + baseCpIndex[k]};
         setRuby(pc, slice.data(), slice.size());
@@ -1182,11 +1189,17 @@ struct VerticalParsedText::LayoutCursor {
 
   // Place a character in a cell the squeeze just freed: placeUprightAt works off the grid, so it
   // has to come up by the same amount the column's tail did.
+  // The new character's cell starts one row below the last one's, wherever squeezes left that: the
+  // last glyph has risen by this squeeze and by any before it in the column.
   void placeAfterSqueeze(const PendingChar& pc, const uint16_t col, const uint16_t rowIdx, const int applied) {
-    placeUprightAt(pc, col, rowIdx);
     if (page.glyphs.empty()) return;
+    const int cellTop = cellTopOf(page.glyphs.back()) + geom.rowPitchPx;
+    const size_t before = page.glyphs.size();
+    placeUprightAt(pc, col, rowIdx);
+    if (page.glyphs.size() == before) return;
     VerticalGlyph& placed = page.glyphs.back();
-    placed.y = static_cast<uint16_t>(std::max(0, static_cast<int>(placed.y) - applied));
+    const int lift = applied > 0 ? cellTopOf(placed) - cellTop : 0;
+    placed.y = static_cast<uint16_t>(std::max(0, static_cast<int>(placed.y) - lift));
   }
 
   // JLREQ 3.1.4: two adjacent half-em marks SHARE one em -- the first takes the first half, the
@@ -1806,6 +1819,11 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         cur.finalizePageIfNeeded();
       }
       row = cur.columnStartRow(true);
+      // The book's text-indent: the paragraph's first column starts that many cells down.
+      if (idx < stream_.size() && stream_[idx].indentQuarters > 0) {
+        const int indentRows = (stream_[idx].indentQuarters + 2) / 4;
+        row = static_cast<uint16_t>(std::min<int>(cur.rowsAvailable() - 1, row + indentRows));
+      }
       nextParagraphBreakIdx++;
     }
 
@@ -1903,13 +1921,33 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       }
     }
 
-    if (isAsciiDigit(pc.codepoint)) {
+    // A number written into a Latin word or with a Latin unit (10km, 50%, A4) is set sideways with it
+    // as one run, so the two never part (3.1.10).
+    size_t numberEnd = idx;
+    while (numberEnd < boundaryLimit && isAsciiDigit(stream_[numberEnd].codepoint)) numberEnd++;
+    const bool numberInWord = numberEnd > idx && numberEnd < boundaryLimit &&
+                              stream_[numberEnd].paragraphIndex == pc.paragraphIndex &&
+                              ((stream_[numberEnd].codepoint >= 'A' && stream_[numberEnd].codepoint <= 'Z') ||
+                               (stream_[numberEnd].codepoint >= 'a' && stream_[numberEnd].codepoint <= 'z') ||
+                               stream_[numberEnd].codepoint == '%');
+    if (isAsciiDigit(pc.codepoint) && !numberInWord) {
       size_t digitEnd = idx;
       while (digitEnd < boundaryLimit && isAsciiDigit(stream_[digitEnd].codepoint)) {
         digitEnd++;
       }
 
       const size_t digitCount = digitEnd - idx;
+
+      // 3.1.10: a number keeps its unit. One the rest of the column cannot take with the unit after
+      // it starts the next column (a longer run checks its own length below).
+      const int unitRows = digitEnd < boundaryLimit && isPostfixUnit(stream_[digitEnd].codepoint) ? 1 : 0;
+      if (digitCount <= 2 && unitRows && row > cur.columnStartRow(false) && row + 1 + unitRows > cur.rowsAvailable()) {
+        if (column < 64) oidashiColumns_ |= uint64_t{1} << column;  // spread to its foot
+        column++;
+        row = 0;
+        cur.finalizePageIfNeeded();
+        row = cur.columnStartRow(false);
+      }
 
       if (digitCount == 2) {
         cur.placeTcyPairAt(idx);
@@ -1939,7 +1977,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         int startY = cur.rotatedRunStartY(column, geom.rowTopPx(row));
         uint16_t rowsNeeded = rotatedRunRows(rowPitchPx, startY, digitInkWidth, row, nextInkOffset);
 
-        if (row != 0 && row + rowsNeeded > cur.rowsAvailable()) {
+        if (row != 0 && row + rowsNeeded + unitRows > cur.rowsAvailable()) {
           column++;
           row = 0;
           cur.finalizePageIfNeeded();
@@ -1987,13 +2025,14 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       continue;
     }
 
-    if (Kinsoku::isRotatedRunCharacter(pc.codepoint)) {
+    if (Kinsoku::isRotatedRunCharacter(pc.codepoint) || isAsciiDigit(pc.codepoint)) {
       // Gather the contiguous run of rotated-run characters (e.g. an
-      // embedded English phrase) so it's laid out, and later rendered,
+      // embedded English phrase, with any numbers in it) so it's laid out, and later rendered,
       // as a single sideways block instead of one cell per character.
       size_t runEnd = idx;
       std::string runUtf8;
-      while (runEnd < boundaryLimit && Kinsoku::isRotatedRunCharacter(stream_[runEnd].codepoint) &&
+      while (runEnd < boundaryLimit &&
+             (Kinsoku::isRotatedRunCharacter(stream_[runEnd].codepoint) || isAsciiDigit(stream_[runEnd].codepoint)) &&
              stream_[runEnd].paragraphIndex == pc.paragraphIndex) {
         utf8AppendCodepoint(stream_[runEnd].codepoint, runUtf8);
         runEnd++;
@@ -2192,8 +2231,13 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     // order, so the last glyph sitting in an earlier column (or an empty page) means this
     // character would be the column's first.
     const bool startingNewColumn = page.glyphs.empty() || page.glyphs.back().column < column;
+    // The second half of a dash or leader pair is held to the first like a character that may not
+    // start a column.
+    const bool pairsWithPrevious = isInseparableMark(pc.codepoint) && idx > 0 &&
+                                   stream_[idx - 1].codepoint == pc.codepoint &&
+                                   stream_[idx - 1].paragraphIndex == pc.paragraphIndex;
     if (startingNewColumn && !paraBreakJustFired && idx >= suppressKinsokuUntilIdx &&
-        Kinsoku::isLineStartProhibited(pc.codepoint)) {
+        (Kinsoku::isLineStartProhibited(pc.codepoint) || pairsWithPrevious)) {
       if (!page.glyphs.empty()) {
         const VerticalGlyph& prev = page.glyphs.back();
         // Oikomi (追い込み): put the character on the previous column after all. Free when that
@@ -2241,9 +2285,6 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         //
         // The character before may itself be the second half of an inseparable pair (…… ‥‥ ——,
         // JLREQ 3.1.11): then both halves move, or ？ after …… would split the dots across columns.
-        const auto isInseparable = [](const uint32_t cp) {
-          return cp == 0x2026 || cp == 0x2025 || cp == 0x2014 || cp == 0x2015;
-        };
         const auto isStreamEntry = [&](const VerticalGlyph& g, const size_t at) {
           return g.byteOffset == stream_[at].byteOffset && g.paragraphIndex == stream_[at].paragraphIndex;
         };
@@ -2256,7 +2297,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         while (moving < MAX_MOVING && idx > moving && page.glyphs.size() > moving) {
           const VerticalGlyph& head = page.glyphs[page.glyphs.size() - moving];
           const VerticalGlyph& before = page.glyphs[page.glyphs.size() - moving - 1];
-          const bool samePair = isInseparable(head.codepoint) && before.codepoint == head.codepoint;
+          const bool samePair = isInseparableMark(head.codepoint) && before.codepoint == head.codepoint;
           if (!samePair && !Kinsoku::isLineStartProhibited(head.codepoint)) break;
           if (before.column != prev.column || !isStreamEntry(before, idx - moving - 1)) break;
           moving++;
@@ -2331,6 +2372,26 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           cur.pushGlyph(prevPage, g, rubyOf(pc));
           idx++;
           continue;
+        }
+        // Oidashi across the page break: the character that ended the previous page moves to the
+        // head of this one, so the pair opens it together. Only one that may start a column, and
+        // only this batch's previous stream entry (an earlier batch's glyph is not ours to re-place).
+        const VerticalGlyph* last = prevPage.glyphs.empty() ? nullptr : &prevPage.glyphs.back();
+        if (!prevColumnHasRoom && last && idx > 0 && last->codepoint != 0 &&
+            last->renderKind != VerticalGlyph::RotatedRun && last->renderKind != VerticalGlyph::UprightRun &&
+            !isImageMarker(last->codepoint) && !Kinsoku::isLineStartProhibited(last->codepoint) &&
+            last->byteOffset == stream_[idx - 1].byteOffset &&
+            last->paragraphIndex == stream_[idx - 1].paragraphIndex && row + 1 < cur.rowsAvailable()) {
+          const uint16_t lastColumn = last->column;
+          prevPage.glyphs.pop_back();
+          // The column it leaves ends short of the foot: spread like any column oidashi shortened.
+          if (lastColumn < 64) oidashiColumns_ |= uint64_t{1} << lastColumn;
+          cur.spreadColumnToFoot(prevPage, lastColumn);
+          oidashiColumns_ = 0;
+          page.visibleTextOffset = stream_[idx - 1].visibleTextOffset;
+          cur.placeUprightAt(stream_[idx - 1], column, row);
+          row++;
+          // Fall through: this character is placed normally, now one row below its partner.
         }
       }
     }
