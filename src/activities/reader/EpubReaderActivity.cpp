@@ -70,15 +70,18 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/settings/ReaderSettingsActivity.h"
 #include "activities/settings/TextSettingsActivity.h"
+#include "activities/util/ConfirmationActivity.h"
 #include "clippings/ClippingText.h"
 #include "clippings/ClippingWordFont.h"
 #include "clippings/ClippingsManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookProgress.h"
 #include "util/BookmarkUtil.h"
 #include "util/ButtonNavigator.h"
 #include "util/DictionaryRegistry.h"
 #include "util/PluginEvents.h"
+#include "util/RemoteProgress.h"
 #include "util/ScreenshotUtil.h"
 #include "util/TextProfiles.h"
 
@@ -972,7 +975,29 @@ void EpubReaderActivity::openClippings() {
   });
 }
 
+void EpubReaderActivity::offerSyncedPosition() {
+  syncedPositionOffered = true;
+  const int synced = remoteProgress::percent(epub->getPath());
+  // Only a clear lead: rounding between the two page counts must not ask on every open.
+  if (synced < 0 || synced >= 100 || synced < loadOwnBookProgress(epub->getPath()) + 2) return;
+  char body[96];
+  snprintf(body, sizeof(body), tr(STR_JUMP_TO_SYNCED_PERCENT), synced);
+  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_KOREADER_SYNC), body);
+  if (!confirmation) {
+    LOG_ERR("ERS", "OOM: synced position dialog");
+    return;
+  }
+  startActivityForResult(std::move(confirmation), [this, synced](const ActivityResult& result) {
+    if (!result.isCancelled) jumpToPercent(synced);
+    requestUpdate();
+  });
+}
+
 void EpubReaderActivity::readerLoop() {
+  if (!syncedPositionOffered && epub && pageRendered.load(std::memory_order_acquire)) {
+    offerSyncedPosition();
+    return;
+  }
   if (panelPageReady.exchange(false, std::memory_order_acquire)) {
     const auto panel = panelAfterRender.exchange(PanelAfterRender::None, std::memory_order_relaxed);
     if (panel == PanelAfterRender::Footnotes) openFootnotesPanel();
