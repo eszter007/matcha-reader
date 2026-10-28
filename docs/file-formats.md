@@ -577,7 +577,8 @@ image no longer hides the styled blocks after it, and styled elements nested in 
 first text merge into it. In 149, what follows a merged element continues with the outer element's
 params alone, so it is not framed with the element before it. In 150, a GIF page stores the image's own size
 instead of the full-page placeholder, since static GIFs are now decoded. In 151, a bracket set flush to the
-line head no longer gives space to line adjustment, which drew the next character over it.
+line head no longer gives space to line adjustment, which drew the next character over it, and a
+column adjusted twice no longer sets its last character past the foot.
 
 ### Version 143
 

@@ -112,7 +112,9 @@ namespace {
 // v150: no format change. Upstream merge: static GIF images are decoded, so a GIF page stores
 // the image's own size (and rotation) instead of the full-page placeholder.
 // v151: no format change. A bracket set flush to the line head no longer gives a half em to the
-// squeeze; cached pages can hold a character drawn over it and a column run past the foot.
+// squeeze, and a column squeezed twice places its last character after the first squeeze's lift
+// and the character spacing; cached pages can hold a character drawn over the bracket or past
+// the column's foot.
 constexpr uint8_t VSECTION_FILE_VERSION = 151;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after

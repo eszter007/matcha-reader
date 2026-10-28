@@ -1069,9 +1069,9 @@ struct VerticalParsedText::LayoutCursor {
   // that may not start a line can join it instead of being pushed to the next column.
   //
   // The reducible space is the half em that 。、 and brackets carry inside their own em; 3.8
-  // reduces each by a QUARTER em, so four such marks buy one cell. The pull is progressive --
-  // only the glyphs AFTER a reduced space move up -- which is why this cannot go through
-  // columnYShift, that shifts a whole column uniformly.
+  // reduces each by a QUARTER em, so four such marks buy one cell. The pull on glyphs already
+  // placed is progressive -- only those AFTER a reduced space move up -- so it edits them directly;
+  // the tail's total lift then joins columnYShift, so whatever is placed after it follows.
   //
   // Two passes: measure first, and only touch the glyphs once a full cell is actually available.
   // A partial squeeze would tighten the column for nothing and still push the character out.
@@ -1093,7 +1093,11 @@ struct VerticalParsedText::LayoutCursor {
   // How much room a character actually needs at the end of a column. A half-em mark (a closing
   // bracket, 。、) is set in one half of its em and the other half is white, so half a cell is
   // enough for it -- demanding a whole one is what kept a lone 」 off the column it belongs to.
-  int spaceNeededFor(const uint32_t cp) const { return isHalfEmMark(cp) ? (geom.cellPx + 1) / 2 : geom.cellPx; }
+  // The character-spacing gap before it is needed too.
+  int spaceNeededFor(const uint32_t cp) const {
+    const int body = isHalfEmMark(cp) ? (geom.cellPx + 1) / 2 : geom.cellPx;
+    return std::max(1, body + geom.rowGapPx());
+  }
 
   // Where a glyph's cell starts now. 。、 are positioned by their ink, so their y sits above
   // their cell top; measuring a squeeze from it counts that offset as white space still to give,
@@ -1109,8 +1113,8 @@ struct VerticalParsedText::LayoutCursor {
     return static_cast<int>(g.y) + gridTop - placedY;
   }
 
-  // Returns the pixels actually recovered (0 when the column has nothing to give). The caller
-  // places its character `applied` px above the grid row, since the tail moved up by that much.
+  // Returns the pixels actually recovered (0 when the column has nothing to give). The tail moved
+  // up by that much, so it joins the column's slide: whatever is placed after it follows it.
   //
   // A column can be squeezed more than once (……？ pulls in two characters that may not start a
   // line), so what a mark may still give is read from where its neighbours sit now: a mark keeps
@@ -1182,16 +1186,14 @@ struct VerticalParsedText::LayoutCursor {
       }
       if (gives && !leading) applied += give;  // what follows rises into the mark's trailing half
     }
+    if (applied > 0) {
+      if (shiftColumn != col) {
+        columnYShift = 0;
+        shiftColumn = col;
+      }
+      columnYShift += applied;
+    }
     return applied;
-  }
-
-  // Place a character in a cell the squeeze just freed: placeUprightAt works off the grid, so it
-  // has to come up by the same amount the column's tail did.
-  void placeAfterSqueeze(const PendingChar& pc, const uint16_t col, const uint16_t rowIdx, const int applied) {
-    placeUprightAt(pc, col, rowIdx);
-    if (page.glyphs.empty()) return;
-    VerticalGlyph& placed = page.glyphs.back();
-    placed.y = static_cast<uint16_t>(std::max(0, static_cast<int>(placed.y) - applied));
   }
 
   // JLREQ 3.1.4: two adjacent half-em marks SHARE one em -- the first takes the first half, the
@@ -1299,9 +1301,9 @@ struct VerticalParsedText::LayoutCursor {
       placeUprightAt(next, prevColumn, row);
     } else if (placeHalfEmPair(next)) {
       // A closing bracket after a half-em mark shares its cell -- no room needed at all.
-    } else if (const int applied = squeezeColumnForOneMore(prevColumn, spaceNeededFor(next.codepoint))) {
+    } else if (squeezeColumnForOneMore(prevColumn, spaceNeededFor(next.codepoint)) > 0) {
       // 3.8 line adjustment freed room in the closing column.
-      placeAfterSqueeze(next, prevColumn, row, applied);
+      placeUprightAt(next, prevColumn, row);
     } else {
       return false;
     }
@@ -2211,8 +2213,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         }
         const uint16_t oikomiCol = prev.column;
         const uint16_t oikomiRow = static_cast<uint16_t>(prev.row + 1);
-        if (const int applied = cur.squeezeColumnForOneMore(oikomiCol, cur.spaceNeededFor(pc.codepoint))) {
-          cur.placeAfterSqueeze(pc, oikomiCol, oikomiRow, applied);
+        if (cur.squeezeColumnForOneMore(oikomiCol, cur.spaceNeededFor(pc.codepoint)) > 0) {
+          cur.placeUprightAt(pc, oikomiCol, oikomiRow);
           idx++;
           continue;
         }
