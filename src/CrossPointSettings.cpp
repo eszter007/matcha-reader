@@ -13,6 +13,7 @@
 
 #include "I18nKeys.h"
 #include "ReaderFontSizes.h"
+#include "ReaderLineSpacing.h"
 #include "SettingsList.h"
 #include "fontIds.h"
 #include "util/ParagraphIndentMigration.h"
@@ -34,6 +35,13 @@ void copyToField(char* dest, const char* src, const size_t maxLen) {
 // fields, so its entry is never written.
 constexpr const char* TEXT_PROFILE_KEYS[] = {"latin", "ja", "zh-Hant", "zh-Hans", "ko"};
 static_assert(std::size(TEXT_PROFILE_KEYS) == static_cast<size_t>(CrossPointSettings::TextProfileId::Count));
+
+// Pre-percentage saves: Tight/Normal/Wide/Extra Wide (0..3) become 1.1..1.45.
+uint8_t legacyLineSpacing(JsonVariantConst value) {
+  const int legacy = value.as<uint8_t>();
+  return legacy + 1 < CrossPointSettings::LINE_COMPRESSION_COUNT ? static_cast<uint8_t>(legacy + 1)
+                                                                 : CrossPointSettings::LINE_SPACING_120;
+}
 
 }  // namespace
 
@@ -152,7 +160,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   if (latinIsHeld) {
     doc["fontFamily"] = latinHeld.fontFamily;
     doc["fontSize"] = latinHeld.fontPointSize;
-    doc["lineSpacing"] = latinHeld.lineSpacing;
+    doc["lineHeight"] = latinHeld.lineSpacing;
     doc["characterSpacing"] = latinHeld.characterSpacing;
     doc["wordSpacing"] = latinHeld.wordSpacing;
     if (latinHeld.sdFontFamilyName[0] != '\0') {
@@ -166,7 +174,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
     const TextProfile& p = scriptTextProfiles[i - 1];
     JsonObject o = profiles[TEXT_PROFILE_KEYS[i]].to<JsonObject>();
     o["fontSize"] = p.fontPointSize;
-    o["lineSpacing"] = p.lineSpacing;
+    o["lineHeight"] = p.lineSpacing;
     o["characterSpacing"] = p.characterSpacing;
     o["wordSpacing"] = p.wordSpacing;
     o["fontFamily"] = p.fontFamily;
@@ -336,6 +344,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     }
   }
 
+  // "lineSpacing" saves predate the 1.0 option: Tight/Normal/Wide/Extra Wide (0..3) become 1.1..1.45.
+  if (doc["lineHeight"].isNull() && doc["lineSpacing"].is<uint8_t>()) {
+    lineSpacing = legacyLineSpacing(doc["lineSpacing"]);
+    needsResave = true;
+  }
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
   frontButtonBack = clamp(doc["frontButtonBack"] | (uint8_t)FRONT_HW_BACK, FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_BACK);
   frontButtonConfirm =
@@ -400,7 +413,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     TextProfile cjk = latin;
     if (!doc["cjkFontPointSize"].isNull()) {
       cjk.fontPointSize = doc["cjkFontPointSize"] | latin.fontPointSize;
-      cjk.lineSpacing = doc["cjkLineSpacing"] | latin.lineSpacing;
+      // Saved before the 1.0 option, so one slot up, as for "lineSpacing" above.
+      if (doc["cjkLineSpacing"].is<uint8_t>()) cjk.lineSpacing = legacyLineSpacing(doc["cjkLineSpacing"]);
       cjk.characterSpacing = doc["cjkCharacterSpacing"] | latin.characterSpacing;
       cjk.wordSpacing = doc["cjkWordSpacing"] | latin.wordSpacing;
     }
@@ -413,7 +427,12 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       if (!o.isNull()) {
         const uint8_t size = o["fontSize"] | p.fontPointSize;
         if (size >= 6 && size <= 72) p.fontPointSize = size;
-        p.lineSpacing = clamp(o["lineSpacing"] | p.lineSpacing, (uint8_t)LINE_COMPRESSION_COUNT, p.lineSpacing);
+        if (o["lineHeight"].is<uint8_t>()) {
+          p.lineSpacing = clamp(o["lineHeight"].as<uint8_t>(), (uint8_t)LINE_COMPRESSION_COUNT, p.lineSpacing);
+        } else if (o["lineSpacing"].is<uint8_t>()) {
+          p.lineSpacing = legacyLineSpacing(o["lineSpacing"]);
+          needsResave = true;
+        }
         p.characterSpacing = clamp(o["characterSpacing"] | p.characterSpacing,
                                    (uint8_t)(2 * CHARACTER_SPACING_OFFSET + 1), p.characterSpacing);
         const uint8_t words = o["wordSpacing"] | p.wordSpacing;
@@ -470,7 +489,8 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   ReaderRenderSpec spec;
   spec.fontId = getReaderFontId();
   spec.lineCompression = getReaderLineCompression();
-  spec.lineSpacingLevel = lineSpacing;
+  // Vertical keeps its three column gaps: 100-110% tight, 120% normal, 130% and up wide.
+  spec.lineSpacingLevel = static_cast<uint8_t>(std::clamp(lineSpacing - 1, 0, 2));
   spec.characterSpacing = getCharacterSpacing();
   spec.wordSpacingPercent = wordSpacing;
   spec.extraParagraphSpacing = extraParagraphSpacing != 0;
@@ -480,41 +500,15 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   spec.viewportHeight = viewportHeight;
   spec.hyphenationEnabled = hyphenationEnabled != 0;
   spec.embeddedStyle = embeddedStyle != 0;
-  spec.imageRendering = imageRendering;
+  // Same layout as Display, so switching between them keeps the section cache.
+  spec.imageRendering = imageRendering == IMAGES_DISPLAY_BW ? static_cast<uint8_t>(IMAGES_DISPLAY) : imageRendering;
   spec.focusReadingEnabled = focusReadingEnabled != 0;
   spec.honorBookInsets = bookCssMargins != 0;
   return spec;
 }
 
 float CrossPointSettings::getReaderLineCompression() const {
-  // One scale for all SD card fonts, whatever their format: .cpfont and vector
-  // fonts both take their line height from FreeType's size metrics. Same values
-  // as the former built-in Noto Serif; Normal keeps the font's own line height.
-  if (sdFontFamilyName[0] != '\0') {
-    switch (lineSpacing) {
-      case TIGHT:
-        return 0.95f;
-      case NORMAL:
-      default:
-        return 1.0f;
-      case WIDE:
-        return 1.1f;
-      case EXTRA_WIDE:
-        return 1.2f;
-    }
-  }
-
-  switch (lineSpacing) {
-    case TIGHT:
-      return 0.95f;
-    case NORMAL:
-    default:
-      return 1.0f;
-    case WIDE:
-      return 1.1f;
-    case EXTRA_WIDE:
-      return 1.2f;
-  }
+  return LINE_SPACING_MULTIPLIERS[lineSpacing < LINE_COMPRESSION_COUNT ? lineSpacing : LINE_SPACING_120];
 }
 
 unsigned long CrossPointSettings::getSleepTimeoutMs() const {

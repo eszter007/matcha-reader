@@ -154,7 +154,7 @@ TEST_F(FontDecompressorTest, UiPrewarmLeavesAllReaderStyleSlotsAvailable) {
 
 TEST(EpdFontFamilyTest, JoyoVariantDrawsAsTheFormTheFontCarries) {
   EpdFont joyo(&notosansjp_joyo_12_regular);
-  const EpdFontFamily family(&joyo);
+  const EpdFontFamily family(12, &joyo);
   // The subset has 叱 and 塡 but not 𠮟 or 填: each is drawn as its partner, glyph and data alike.
   for (const auto [missing, carried] : {std::pair<uint32_t, uint32_t>{0x20B9F, 0x53F1}, {0x586B, 0x5861}}) {
     ASSERT_FALSE(joyo.hasCodepoint(missing));

@@ -5,6 +5,7 @@
 
 #include <deque>
 #include <string>
+#include <vector>
 
 namespace BidiUtils {
 enum class BidiBaseDir : signed char { AUTO = -1, LTR = 0, RTL = 1 };
@@ -33,10 +34,24 @@ class GfxRenderer {
   // Signatures mirror the real renderer, trailing defaults included: TextBlock::render() calls
   // these with and without letterSpacing, and the scaled variants carry the fork's per-word
   // scaling (ruby and mixed-size runs).
-  void drawText(int, int, int, const char*, bool = true, EpdFontFamily::Style = EpdFontFamily::REGULAR,
-                BidiUtils::BidiBaseDir = BidiUtils::BidiBaseDir::AUTO, int8_t = 0) const {}
-  void drawTextScaled(int, int, int, const char*, uint16_t, bool = true, EpdFontFamily::Style = EpdFontFamily::REGULAR,
-                      BidiUtils::BidiBaseDir = BidiUtils::BidiBaseDir::AUTO, int8_t = 0) const {}
+  // Bold glyphs can be wider than regular ones; the focus-reading test sets this.
+  int boldGlyphAdvance = 8;
+  struct TextDraw {
+    int x;
+    std::string text;
+    EpdFontFamily::Style style;
+    BidiUtils::BidiBaseDir direction;
+  };
+  mutable std::vector<TextDraw> textDraws;
+  void drawText(int, int x, int, const char* text, bool = true, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
+                BidiUtils::BidiBaseDir direction = BidiUtils::BidiBaseDir::AUTO, int8_t = 0) const {
+    textDraws.push_back({x, text, style, direction});
+  }
+  void drawTextScaled(int font, int x, int y, const char* text, uint16_t, bool black = true,
+                      EpdFontFamily::Style style = EpdFontFamily::REGULAR,
+                      BidiUtils::BidiBaseDir direction = BidiUtils::BidiBaseDir::AUTO, int8_t spacing = 0) const {
+    drawText(font, x, y, text, black, style, direction, spacing);
+  }
   int getTextWidth(int font, const char* text, EpdFontFamily::Style style,
                    BidiUtils::BidiBaseDir = BidiUtils::BidiBaseDir::AUTO) const {
     return getTextAdvanceX(font, text, style);
@@ -62,12 +77,14 @@ class GfxRenderer {
   // the built-in faces whose advanceY is smaller than their own ink.
   int getFontInkHeight(int) const { return 18; }
   int getSpaceWidth(int, EpdFontFamily::Style, int8_t = 0) const { return 4; }
-  int getTextAdvanceX(int, const char* text, EpdFontFamily::Style, int8_t = 0) const {
+  int getTextAdvanceX(int, const char* text, EpdFontFamily::Style style, int8_t = 0) const {
     // Per CHARACTER, not per byte: the real renderer advances once per glyph, so counting bytes
     // would measure any non-ASCII text (an em dash, a guillemet) two or three times too wide.
     int width = 0;
     for (const char* p = text; *p != '\0'; ++p) {
-      if ((static_cast<unsigned char>(*p) & 0xC0) != 0x80) width += 8;  // skip continuation bytes
+      if ((static_cast<unsigned char>(*p) & 0xC0) != 0x80) {  // skip continuation bytes
+        width += (style & EpdFontFamily::BOLD) ? boldGlyphAdvance : 8;
+      }
     }
     return width;
   }

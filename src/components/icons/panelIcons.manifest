@@ -5,7 +5,7 @@
 #
 # Tabler icons (MIT), vendored in assets/icons/tabler/ from
 # https://github.com/tabler/tabler-icons. The control centre's round buttons: each one shows
-# what tapping it does, so the night, touch and light buttons swap icon with their state.
+# what tapping it does, so the night, touch, light and Bluetooth buttons swap icon with their state.
 PanelMoonIcon = moon
 PanelSunIcon = sun
 PanelRefreshIcon = refresh
@@ -15,6 +15,8 @@ PanelTouchOnIcon = hand-finger
 PanelTouchOffIcon = hand-finger-off
 PanelBulbIcon = bulb
 PanelBulbOffIcon = bulb-off
+PanelBluetoothIcon = bluetooth
+PanelBluetoothOffIcon = bluetooth-off
 # Leading icons on the two slider rows.
 PanelBrightnessIcon = sun
 PanelWarmthIcon = temperature
