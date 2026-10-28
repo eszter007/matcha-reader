@@ -37,6 +37,7 @@
 #include "SdCardFontSystem.h"
 #include "WordSelectionScan.h"
 #include "activities/settings/ReaderSettingsActivity.h"
+#include "components/SyncedPositionPrompt.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookProgress.h"
@@ -471,6 +472,16 @@ void MangaReaderActivity::clearEndOfBookOptionsIfNeeded() {
   endOfBookOptions.reset();
 }
 
+void MangaReaderActivity::jumpToPercent(const int percent) {
+  if (!book || book->getPageCount() == 0) return;
+  currentPage =
+      std::min<uint32_t>(static_cast<uint32_t>(percent) * book->getPageCount() / 100, book->getPageCount() - 1);
+  currentPanel = -1;
+  viewMode = ViewMode::FullPage;
+  loadCurrentPagePanels();
+  requestUpdate();
+}
+
 void MangaReaderActivity::onReturnFromEndOfBook() {
   currentPage = book && book->getPageCount() > 0 ? book->getPageCount() - 1 : 0;
   currentPanel = -1;
@@ -566,6 +577,14 @@ void MangaReaderActivity::loop() {
   // task's normal locking rules. Runs before everything else so a completed warm is visible to
   // this very tick's input handling, and so the single job slot frees up for the next post.
   applyPrefetchResult();
+
+  if (!syncedPositionOffered && book && !isAtEndOfBook()) {
+    syncedPositionOffered = true;
+    if (SyncedPositionPrompt::offer(*this, renderer, mappedInput, book->getFolder(), enterPercent,
+                                    [this](const int percent) { jumpToPercent(percent); })) {
+      return;
+    }
+  }
 
   if (translationPageReady.exchange(false, std::memory_order_acquire)) {
     translationAfterRender.store(false, std::memory_order_relaxed);

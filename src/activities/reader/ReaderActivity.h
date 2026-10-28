@@ -48,6 +48,8 @@ class ReaderActivity : public Activity {
   virtual void onReaderEnter() = 0;
   virtual void onReaderExit() = 0;
   virtual void readerLoop() = 0;
+  // Moves to a whole-book percentage; used for the synced-position prompt.
+  virtual void jumpToPercent(int percent) = 0;
   // Called when loadBook() failed. Return true to keep the activity alive
   // (e.g. showing a dialog); false finishes it (the default).
   virtual bool handleLoadFailure() { return false; }
@@ -107,4 +109,5 @@ class ReaderActivity : public Activity {
  private:
   unsigned long readingSessionStartMs = 0;
   int enterPercent = -1;  // the book's saved progress when it was opened
+  bool syncedPositionOffered = false;
 };

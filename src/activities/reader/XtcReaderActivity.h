@@ -69,6 +69,7 @@ class XtcReaderActivity final : public ReaderActivity {
   void onReaderEnter() override;
   void onReaderExit() override;
   void readerLoop() override;
+  void jumpToPercent(int percent) override;
   bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;
 

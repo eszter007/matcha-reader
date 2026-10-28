@@ -597,10 +597,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void clearDeferredReposition();
   void rememberCurrentContentOffset();
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
-  void jumpToPercent(int percent);
-  // Offers once per open to jump to the sync server's position when it is ahead of this reader's.
-  void offerSyncedPosition();
-  bool syncedPositionOffered = false;
+  void jumpToPercent(int percent) override;
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   // Live section position, or the values cached before a child screen
   // released the section.

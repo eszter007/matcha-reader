@@ -19,6 +19,7 @@
 #include "SdCardFontSystem.h"
 #include "XtcReaderActivity.h"
 #include "activities/util/BmpViewerActivity.h"
+#include "components/SyncedPositionPrompt.h"
 #include "util/BookProgress.h"
 #include "util/PluginEvents.h"
 #include "util/RemoteProgress.h"
@@ -186,6 +187,16 @@ void ReaderActivity::loop() {
   // Here rather than in each format's readerLoop(): every reader routes through this, and the
   // write it defers (APP_STATE + Recent Books) belongs on the loop task, not the render task.
   rememberBookOnceRendered();
+  // Once per open, after the first page is up; enterPercent is this reader's own saved progress.
+  if (!syncedPositionOffered && pageRendered.load(std::memory_order_acquire) && !isAtEndOfBook()) {
+    syncedPositionOffered = true;
+    if (SyncedPositionPrompt::offer(*this, renderer, mappedInput, bookPath, enterPercent, [this](const int percent) {
+          jumpToPercent(percent);
+          requestUpdate();
+        })) {
+      return;
+    }
+  }
   readerLoop();
 }
 
