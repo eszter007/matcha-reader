@@ -134,7 +134,9 @@ void HalGPIO::update() {
     injCount_--;
   }
   const uint8_t pageButtons = inputMgr.capacitivePageButtonMask();
-  capacitivePagePressed = (pageButtons & ~previousCapacitivePageButtons) != 0;
+  capacitivePagePressedMask = pageButtons & ~previousCapacitivePageButtons;
+  capacitivePageReleasedMask = previousCapacitivePageButtons & ~pageButtons;
+  capacitivePagePressed = capacitivePagePressedMask != 0;
   previousCapacitivePageButtons = pageButtons;
   const bool connected = isUsbConnected();
   usbStateChanged = (connected != lastUsbConnected);

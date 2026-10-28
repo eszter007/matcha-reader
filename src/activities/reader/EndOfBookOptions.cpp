@@ -466,6 +466,11 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
   // ReaderUtils::detectPageTurn). This matters on entry: with press-triggered turns, the press
   // that turned the final page already fired in the reader, and its release must not double-fire.
   const bool usePress = SETTINGS.longPressButtonBehavior == CrossPointSettings::OFF;
+  // Cover page keys turn pages like a page-turn gesture rather than moving the selection: the
+  // previous-page key goes back into the book; the next-page key does nothing, as there is no
+  // next page. The side keys, which arrive as the same Up/Down bits, still move the selection.
+  if (input.wasCoverPageKey(true, !usePress)) return Action::LastPage;
+  if (input.wasCoverPageKey(false, !usePress)) return Action::None;
   const auto triggered = [&](const MappedInputManager::Button button) {
     return usePress ? input.wasPressed(button) : input.wasReleased(button);
   };

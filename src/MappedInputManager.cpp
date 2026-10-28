@@ -434,6 +434,13 @@ bool MappedInputManager::wasBottomEdgeUpSwipe() const { return wasEdgeSwipe(fui:
 
 bool MappedInputManager::wasMenuGesture() const { return wasTopEdgeDownSwipe(); }
 
+bool MappedInputManager::wasCoverPageKey(const bool prevPage, const bool onRelease) const {
+  // Same Up/Down choice as Button::PageBack / PageForward.
+  const bool up = prevPage != isNavDirectionSwapped();
+  const uint8_t button = up ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN;
+  return onRelease ? gpio.wasCapacitivePageKeyReleased(button) : gpio.wasCapacitivePageKeyPressed(button);
+}
+
 bool MappedInputManager::wasReaderMenuSwipeUp() const { return gpio.hasHomeKey() && wasBottomEdgeUpSwipe(); }
 
 bool MappedInputManager::wasHomeGesture() const {
