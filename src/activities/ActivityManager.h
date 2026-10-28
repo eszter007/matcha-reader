@@ -79,6 +79,10 @@ class ActivityManager {
   // Counts screen changes, so the Bluetooth page turner can tell one visit of a book from the next.
   // Written by the main loop under RenderLock; the render task captures it under that lock.
   uint32_t screenVisit = 0;
+  // Net page turns waiting for the drawing to end (+ forward), for the book visit they came in.
+  int8_t queuedRemoteTurns = 0;
+  uint32_t queuedRemoteTurnVisit = 0;
+  unsigned long queuedRemoteTurnAtMs = 0;
   // The screen visit whose frame the render task painted last.
   std::atomic<uint32_t> paintedVisit{0};
 
@@ -136,6 +140,8 @@ class ActivityManager {
   bool isForegroundHomeShown() const;
   uint32_t visit() const { return screenVisit; }
   bool remoteTurn(bool forward, bool chapter);
+  // Replays page turns a remote sent while a page was still drawing. Call every loop; true when one turned.
+  bool applyQueuedRemoteTurn();
   // A remote button mapped to the reader menu (true) or to a new clipping (false).
   bool remoteShortcut(bool readerMenu);
   bool handleForcedRefresh();

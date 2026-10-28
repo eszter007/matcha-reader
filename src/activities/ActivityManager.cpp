@@ -120,6 +120,12 @@ void ActivityManager::loop() {
   }
 
   if (currentActivity) {
+    // Before anything below waits on the RenderLock: going home pops the reader, which blocks until
+    // the render task's background work ends. Buttons alone are seen by the reader itself; the Home
+    // key and touch never reach it.
+    if (isForegroundReader() && (mappedInput.wasAnyPressed() || mappedInput.wasTouchActivity())) {
+      static_cast<ReaderActivity*>(currentActivity.get())->interruptBackgroundWork();
+    }
     if (!currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
       if (currentActivity->handleHomeGesture()) {
         return;
@@ -529,17 +535,52 @@ bool ActivityManager::remoteShortcut(const bool readerMenu) {
   return reader->remoteShortcut(readerMenu);
 }
 
+namespace {
+constexpr int MAX_QUEUED_REMOTE_TURNS = 3;
+constexpr unsigned long QUEUED_REMOTE_TURN_MAX_AGE_MS = 4000;
+}  // namespace
+
 bool ActivityManager::remoteTurn(const bool forward, const bool chapter) {
   if (!isRemoteReaderContext() || mappedInput.hasRemoteClick()) return false;
   auto* reader = isForegroundReader() ? static_cast<ReaderActivity*>(currentActivity.get()) : nullptr;
   if (!reader || reader->inputOverPage()) {
     return !chapter && remoteClick(forward ? RemoteButton::Next : RemoteButton::Previous);
   }
-  if (!remoteTurnAccepted(reader->pageRendered.load(std::memory_order_acquire), RenderLock::peek(),
-                          reader->inputOverPage())) {
-    return false;
+  const bool shown = reader->pageRendered.load(std::memory_order_acquire);
+  if (!remoteTurnAccepted(shown, RenderLock::peek(), reader->inputOverPage())) {
+    // A press during a page draw or a background slice is kept, not lost: a remote has no held
+    // state to read back later, so a dropped press is simply gone.
+    if (!shown || chapter) return false;
+    if (queuedRemoteTurnVisit != screenVisit) queuedRemoteTurns = 0;
+    queuedRemoteTurns = static_cast<int8_t>(
+        std::clamp(queuedRemoteTurns + (forward ? 1 : -1), -MAX_QUEUED_REMOTE_TURNS, MAX_QUEUED_REMOTE_TURNS));
+    queuedRemoteTurnVisit = screenVisit;
+    queuedRemoteTurnAtMs = millis();
+    reader->interruptBackgroundWork();
+    return true;
   }
   const bool turned = chapter ? reader->skipPages(forward ? 1 : -1) : reader->pageTurn(forward);
+  if (turned) requestUpdate();
+  return turned;
+}
+
+bool ActivityManager::applyQueuedRemoteTurn() {
+  if (queuedRemoteTurns == 0) return false;
+  // Another screen, or a wait so long the reader would no longer expect the turn.
+  if (queuedRemoteTurnVisit != screenVisit || millis() - queuedRemoteTurnAtMs > QUEUED_REMOTE_TURN_MAX_AGE_MS) {
+    queuedRemoteTurns = 0;
+    return false;
+  }
+  if (!isRemoteReaderContext() || RenderLock::peek() || requestedUpdate.load()) return false;
+  auto* reader = isForegroundReader() ? static_cast<ReaderActivity*>(currentActivity.get()) : nullptr;
+  if (!reader || reader->inputOverPage()) {
+    queuedRemoteTurns = 0;
+    return false;
+  }
+  const bool forward = queuedRemoteTurns > 0;
+  queuedRemoteTurns = static_cast<int8_t>(queuedRemoteTurns + (forward ? -1 : 1));
+  queuedRemoteTurnAtMs = millis();
+  const bool turned = reader->pageTurn(forward);
   if (turned) requestUpdate();
   return turned;
 }

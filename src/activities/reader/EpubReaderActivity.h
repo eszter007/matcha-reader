@@ -675,6 +675,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   // True when the reader moved (or, mid-build, when the page was requested).
   bool pageTurn(bool isForwardTurn) override;
+  void interruptBackgroundWork() override { imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed); }
   void loadCachedBookmarks();
   void addBookmark();
   void updateBookmarkFlag();

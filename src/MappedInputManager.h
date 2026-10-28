@@ -131,6 +131,8 @@ class MappedInputManager {
   void setSideActionsActive(const bool active) const { sideActionsActive = active; }
   // See HalGPIO::anyButtonDownRaw() -- for cancelling long background work.
   bool anyButtonDownRaw() const { return gpio.anyButtonDownRaw(); }
+  // A touch edge this frame, including the capacitive Home key (not counted by wasAnyPressed()).
+  bool wasTouchActivity() const { return gpio.wasTouchActivity(); }
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;
   const GfxRenderer& getRenderer() const { return renderer; }

@@ -72,6 +72,9 @@ class ReaderActivity : public Activity {
 
   // Entry points for a Bluetooth remote. A reader without them ignores the remote's turns.
   virtual bool pageTurn(bool /*isForward*/) { return false; }
+  // A remote turn is waiting on the render task: cut its background work short, as a key press
+  // would. Called from the loop task while the render task may hold the RenderLock.
+  virtual void interruptBackgroundWork() {}
   virtual bool skipPages(int amount) { return pageTurn(amount > 0); }
   // A Bluetooth remote asks for the reader menu (true) or a new clipping (false).
   virtual bool remoteShortcut(bool /*readerMenu*/) { return false; }
