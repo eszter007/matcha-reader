@@ -95,6 +95,14 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 110 (fork numbering)
+
+Upstream merge (their versions 69 to 71). The layout format is unchanged. Line spacing now
+multiplies the font size instead of the font's newline distance (`advanceY`), SD-font layout
+rounds each glyph advance to pixels as drawing does, and focus-reading split offsets follow the
+visual run order in RTL words. Lines move, so older sections are rebuilt; book metadata and
+progress are kept.
+
 ### Version 109 (fork numbering)
 
 The layout format is unchanged. CSS text-emphasis marks (bouten) are now stored on each
@@ -344,7 +352,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 106
+#define EXPECTED_VERSION 110
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256

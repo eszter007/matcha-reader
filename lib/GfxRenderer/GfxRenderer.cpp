@@ -2855,13 +2855,11 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   }
 
   // Advance table fast-path for SD card fonts during layout.
-  // No kerning/ligature lookup — consistent with previous metadataOnly behavior
-  // where kern/lig data was not loaded.
+  // Snap each advance like drawText. Kerning/ligature data is not resident
+  // during layout, so kerned-pair steps can still differ.
   auto sdIt = sdCardFonts_.find(resolvedFontId);
   if (mode == TextMeasureMode::Layout && sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
-    int32_t widthFP = 0;
-    int trackingPx = 0;
-    uint32_t prevCp = 0;
+    int widthPx = 0;
     const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
     const uint8_t styleIdx = resolveSdCardStyle(*sdIt->second, style);
     const auto fontIt = fontMap.find(resolvedFontId);
@@ -2872,12 +2870,12 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
     const auto& font = fontIt->second;
     size_t glyphCount = 0;
     while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text))) {
-      // RTL vowel marks (niqqud/harakat) are zero-advance overlays in drawText — no width.
-      if (BidiUtils::isTransparentMark(cp)) {
+      // RTL vowel marks (niqqud/harakat) and combining marks are zero-advance overlays in drawText.
+      if (BidiUtils::isTransparentMark(cp) || utf8IsCombiningMark(cp)) {
         continue;
       }
       int32_t advFP = sdIt->second->getAdvance(cp, styleIdx);
-      if (advFP == 0 && !utf8IsCombiningMark(cp)) {
+      if (advFP == 0) {
         // Missing from the selected SD font: price it from the companion's advance table
         // (resident RAM), else any already-resident fallback glyph -- never the on-demand SD
         // loader, which costs a seek+read per glyph and cripples indexing.
@@ -2887,10 +2885,10 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
           advFP = glyph ? glyph->advanceX : 0;
         }
       }
-      widthFP += isSupSub ? (advFP + 1) / 2 : advFP;
+      widthPx += fp4::toPixel(isSupSub ? (advFP + 1) / 2 : advFP);
       glyphCount++;
     }
-    return textAdvance::withLetterSpacing(fp4::toPixel(widthFP), glyphCount, letterSpacing);
+    return textAdvance::withLetterSpacing(widthPx, glyphCount, letterSpacing);
   }
 
   const auto fontIt = fontMap.find(resolvedFontId);
@@ -3046,7 +3044,14 @@ int GfxRenderer::getLineHeightScaled(const int fontId, const uint16_t scale) con
 }
 
 int GfxRenderer::getLineHeight(const int fontId, const float compression) const {
-  return static_cast<int>(getLineHeight(fontId) * compression + 0.5f);
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", fontId);
+    return 0;
+  }
+  // A FaceScale id shares the base face's family, so its size is the base size scaled.
+  const float sizePx = fontIt->second.getSizeInPixels() * faceScaleFor(fontId).own / 256.0f;
+  return static_cast<int>(sizePx * compression + 0.5f);
 }
 
 int GfxRenderer::textBaselineOffset(const int fontId, const char* text, const EpdFontFamily::Style style) const {
@@ -3446,12 +3451,14 @@ void GfxRenderer::displayGrayscaleBase(HalDisplay::RefreshMode fallback) const {
   panelResidue_ = true;
   grayPlanesResident_ = true;
   absoluteGrayPlanes = false;
-  display.displayGrayscaleBase(fallback, fadingFix);
+  display.displayGrayscaleBase(applyPromotedRefresh(fallback), fadingFix);
 }
 
 bool GfxRenderer::displayGrayscaleBase(HalDisplay::GrayscaleMode mode, HalDisplay::RefreshMode fallback) const {
   absoluteGrayPlanes = false;
-  if (!display.displayGrayscaleBase(mode, fallback, fadingFix)) return false;
+  if (!display.displayGrayscaleBase(mode, promotedRefreshPending_ ? promotedRefresh_ : fallback, fadingFix))
+    return false;
+  promotedRefreshPending_ = false;
   absoluteGrayPlanes = mode != HalDisplay::GrayscaleMode::Overlay;
   // Same tracking as the other base/displayGrayBuffer paths: the plane passes that
   // follow leave gray charge no single HALF scrubs, and RED RAM now holds a gray

@@ -849,7 +849,7 @@ void ChapterHtmlSlimParser::flushKeepBuffer() {
 }
 
 int16_t ChapterHtmlSlimParser::nestedFrameGap() const {
-  return static_cast<int16_t>(std::max(4, static_cast<int>(renderer.getLineHeight(fontId) * lineCompression) / 4));
+  return static_cast<int16_t>(std::max(4, renderer.getLineHeight(fontId, lineCompression) / 4));
 }
 
 void ChapterHtmlSlimParser::openBox(const int elementDepth, const CssStyle& cssStyle, const int16_t emptyAdvance,
@@ -894,7 +894,7 @@ void ChapterHtmlSlimParser::openBox(const int elementDepth, const CssStyle& cssS
     // Room for the nested box's first line, or the parent would frame nothing at this page's foot.
     // A forced break -- the parent's, still pending, or this box's own -- is taken here for the same
     // reason, and not raised again for this box.
-    const int lineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
+    const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
     const bool ownBreak = cssStyle.pageBreakBefore() == CssPageBreak::Always;
     if (pendingForcedBreak || ownBreak ||
         currentPageNextY + above + gap + ownStyle.topInset() + lineHeight > viewportHeight) {
@@ -934,7 +934,7 @@ void ChapterHtmlSlimParser::fitStyleInsideBox(BlockStyle& accumulated) const {
 // Returns the y of the drawn bottom edge, or -1 when nothing was drawn.
 int16_t ChapterHtmlSlimParser::emitBoxRect(OpenBox& box, const bool openBottom) {
   if (!currentPage || box.awaitingFirstLine) return -1;  // no box content on this page yet
-  const int lineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
+  const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
   const auto pad = static_cast<int16_t>(std::max(2, lineHeight / 3));
   const auto yTop = box.continued ? static_cast<int16_t>(0) : static_cast<int16_t>(std::max(0, box.startY - pad));
   // Closing edge: currentPageNextY at close already includes the last block's bottom spacing
@@ -946,7 +946,7 @@ int16_t ChapterHtmlSlimParser::emitBoxRect(OpenBox& box, const bool openBottom) 
   // at the last line's bottom, and a third of a line above that lands inside its glyphs -- the
   // closing border drew THROUGH the final line of text, striking it out (reported on a German
   // EPUB whose bordered blocks carry no bottom margin).
-  const int lineHeight2 = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
+  const int lineHeight2 = renderer.getLineHeight(fontId, lineCompression);
   const int pulledUp = std::max<int>(box.lastLineBottomY, currentPageNextY - lineHeight2 / 3);
   const auto yBottom = openBottom
                            ? static_cast<int16_t>(viewportHeight - 1)
@@ -1033,7 +1033,7 @@ void ChapterHtmlSlimParser::closeBoxBlock() {
   // carry their own margin/padding; adding the old box clearance here doubled the space after
   // headings, quotes and worksheet lines.
   if (box.sides[0] != 0 && box.sides[1] != 0 && box.sides[2] != 0 && box.sides[3] != 0) {
-    const int lineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
+    const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
     currentPageNextY =
         static_cast<int16_t>(currentPageNextY + std::max(2, lineHeight / 12) + std::max(4, lineHeight / 2));
   }
@@ -1352,7 +1352,7 @@ void ChapterHtmlSlimParser::finishTableRow() {
   }
 
   const int16_t lineHeight =
-      std::max<int16_t>(1, static_cast<int16_t>(renderer.getLineHeight(fontId) * lineCompression));
+      std::max<int16_t>(1, static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression)));
   const size_t columnCount = tableRowCells.size();
   const uint16_t cellWidth = static_cast<uint16_t>(viewportWidth / columnCount);
 
@@ -3571,7 +3571,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
       int ink = 0;
       if (TextBlock::isWordScaleTag(wf)) {
         const auto scale = static_cast<uint16_t>(-wf);
-        h = static_cast<int>(renderer.getLineHeightScaled(lineFontId, scale) * lineCompression + 0.5f);
+        h = std::max(1, (renderer.getLineHeight(lineFontId, lineCompression) * scale + 128) / 256);
         ink = (renderer.getFontInkHeight(lineFontId) * scale + 128) / 256;
       } else {
         h = renderer.getLineHeight(wf, lineCompression);

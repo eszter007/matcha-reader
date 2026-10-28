@@ -19,10 +19,12 @@
 #include "HomeButtonSettings.h"
 #include "KOReaderCredentialStore.h"
 #include "ReaderFontSizes.h"
+#include "ReaderLineSpacing.h"
 #include "SdCardFontSystem.h"
 #include "activities/settings/SettingInfo.h"
 #include "components/UITheme.h"
 #include "util/DictionaryRegistry.h"
+#include "util/SlideSwitch.h"
 
 // Build the font family setting dynamically. When registry is non-null, SD card fonts
 // are appended after the built-in fonts. Otherwise only built-in fonts are listed.
@@ -406,9 +408,9 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
           // this entry is always replaced by buildFontSizeSetting() below. It only
           // fixes the setting's position in the Reader category.
           SettingInfo::Enum(StrId::STR_FONT_SIZE, nullptr, {}, "fontSize", StrId::STR_CAT_READER).withTextSettings(),
-          SettingInfo::Enum(StrId::STR_LINE_SPACING, &CrossPointSettings::lineSpacing,
-                            {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE},
-                            "lineSpacing", StrId::STR_CAT_READER)
+          // "lineHeight": fromJson() moves older "lineSpacing" saves up one slot for the added 1.0.
+          SettingInfo::StaticEnum(StrId::STR_LINE_SPACING, &CrossPointSettings::lineSpacing, LINE_SPACING_IDS,
+                                  "lineHeight", StrId::STR_CAT_READER)
               .withTextSettings(),
           SettingInfo::Value(StrId::STR_WORD_SPACING, &CrossPointSettings::wordSpacing,
                              {CrossPointSettings::WORD_SPACING_MIN, CrossPointSettings::WORD_SPACING_MAX,
@@ -464,7 +466,8 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                               StrId::STR_CAT_READER)
               .withTextSettings(),
           SettingInfo::Enum(StrId::STR_IMAGES, &CrossPointSettings::imageRendering,
-                            {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},
+                            {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS,
+                             StrId::STR_IMAGES_DISPLAY_BW},
                             "imageRendering", StrId::STR_CAT_READER),
           SettingInfo::Enum(StrId::STR_READER_MENU_STYLE, &CrossPointSettings::readerMenuStyle,
                             {StrId::STR_MENU_STYLE_LIST, StrId::STR_MENU_STYLE_TOOLBAR}, "readerMenuStyle",
@@ -493,6 +496,11 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                               StrId::STR_CAT_CONTROLS),
           SettingInfo::Toggle(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
                               "touchReaderControls", StrId::STR_CAT_CONTROLS),
+#if FREEINK_DEVICE_PICCO
+          SettingInfo::Enum(StrId::STR_SLIDE_SWITCH, &CrossPointSettings::slideSwitchAction,
+                            {StrId::STR_FRONTLIGHT, StrId::STR_NIGHT_MODE, StrId::STR_TOUCH_READER_CONTROLS},
+                            "slideSwitchAction", StrId::STR_CAT_CONTROLS),
+#endif
           // Inverted Swipe is Matcha-only, for right-to-left vertical reading. It is stored after
           // Disabled (append-only indices) but offered beside Inverted Tap, which is what the
           // enumOrder below does -- presentation only, stored values unchanged.
@@ -752,13 +760,16 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
           // LEGACY: retired quarter-hour UTC offset (biased by 48). Persisted so
           // timezones::activeIndex() can migrate it into clockTimezone.
           SettingInfo::Value(StrId::STR_CLOCK, &CrossPointSettings::clockUtcOffsetQ, {0, 104, 1}, "clockUtcOffsetQ",
-                             StrId::STR_CUSTOMISE_STATUS_BAR),
+                             StrId::STR_CUSTOMISE_STATUS_BAR)
+              .withWebHidden(),
           SettingInfo::Enum(StrId::STR_CLOCK_FORMAT, &CrossPointSettings::clockFormat,
                             {StrId::STR_CLOCK_FORMAT_24H, StrId::STR_CLOCK_FORMAT_12H}, "clockFormat",
                             StrId::STR_CUSTOMISE_STATUS_BAR),
           // Index into the append-only table in src/util/Timezones.cpp; 255 = unset.
+          // Web-hidden: a raw index is unusable there; the device has a picker.
           SettingInfo::Value(StrId::STR_TIMEZONE, &CrossPointSettings::clockTimezone, {0, 255, 1}, "clockTimezone",
-                             StrId::STR_CUSTOMISE_STATUS_BAR),
+                             StrId::STR_CUSTOMISE_STATUS_BAR)
+              .withWebHidden(),
           SettingInfo::Enum(StrId::STR_CLOCK_DST, &CrossPointSettings::clockDst,
                             {StrId::STR_CLOCK_DST_AUTO, StrId::STR_STATE_ON, StrId::STR_STATE_OFF}, "clockDst",
                             StrId::STR_CUSTOMISE_STATUS_BAR),
@@ -867,12 +878,41 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                            [](const SettingInfo& s) { return s.nameId == StrId::STR_RESTORE_LIGHT_ON_WAKE; }),
             v.end());
   }
+  // The slide switch's position owns its bound function (the light at boot
+  // too). UI-only, so the keys stay persisted for other devices.
+  v.erase(std::remove_if(v.begin(), v.end(),
+                         [](const SettingInfo& s) {
+                           return (s.nameId == StrId::STR_RESTORE_LIGHT_ON_WAKE && slideSwitchOwnsLight()) ||
+                                  (s.nameId == StrId::STR_NIGHT_MODE &&
+                                   slideSwitchOwns(CrossPointSettings::SLIDE_SWITCH_NIGHT_MODE)) ||
+                                  (s.nameId == StrId::STR_TOUCH_READER_CONTROLS &&
+                                   slideSwitchOwns(CrossPointSettings::SLIDE_SWITCH_TOUCH_CONTROLS));
+                         }),
+          v.end());
   // Tilt page turn needs an IMU with a gyroscope. UI-only, like the frontlight
   // entry: a failed probe on one boot must not drop the saved value.
   if (!halTiltSensor.isAvailable()) {
     v.erase(
         std::remove_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.nameId == StrId::STR_TILT_PAGE_TURN; }),
         v.end());
+  }
+  // Clock settings need the RTC, as on the device (ClockSettingsActivity).
+  if (!halClock.isAvailable()) {
+    v.erase(std::remove_if(v.begin(), v.end(),
+                           [](const SettingInfo& s) {
+                             switch (s.nameId) {
+                               case StrId::STR_CLOCK:
+                               case StrId::STR_CLOCK_FORMAT:
+                               case StrId::STR_TIMEZONE:
+                               case StrId::STR_CLOCK_DST:
+                               case StrId::STR_CLOCK_IN_HEADER:
+                               case StrId::STR_CLOCK_SYNCED:
+                                 return true;
+                               default:
+                                 return false;
+                             }
+                           }),
+            v.end());
   }
   // Hidden on touch boards: the Home button actions (X4 Pro) or the short
   // power click (other touch boards) cover these shortcuts.
