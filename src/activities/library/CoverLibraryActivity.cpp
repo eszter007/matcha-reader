@@ -35,6 +35,8 @@
 #include "util/BookProgress.h"
 
 namespace {
+bool recentFileExists(const std::string& path) { return Storage.exists(path.c_str()); }
+
 constexpr unsigned long LONG_PRESS_MS = 1000;
 constexpr int COVER_ASPECT_NUM = 2;
 constexpr int COVER_ASPECT_DEN = 3;
@@ -192,7 +194,7 @@ void CoverLibraryActivity::loadRecentBooks() {
   RecentBooksStore cache;
   if (cache.loadFromPath(LIBRARY_CACHE_JSON)) {
     recentBooks = cache.takeBooks();
-    mergeRecentBooks(recentBooks, RECENT_BOOKS.getBooks());
+    mergeRecentBooks(recentBooks, RECENT_BOOKS.getBooks(), recentFileExists);
   } else {
     recentBooks = RECENT_BOOKS.getBooks();
   }
@@ -618,7 +620,7 @@ bool CoverLibraryActivity::applyLibraryScan() {
 
   // Cached entries whose files vanished drop out; recents remain first without building a
   // second full catalog.
-  mergeRecentBooks(scan_.results, RECENT_BOOKS.getBooks());
+  mergeRecentBooks(scan_.results, RECENT_BOOKS.getBooks(), recentFileExists);
 
   bool changed = scan_.results.size() != recentBooks.size();
   if (!changed) {
