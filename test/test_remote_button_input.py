@@ -36,6 +36,7 @@ struct HalGPIO {
   bool wasHomeKeyTapped() const { return false; }
   bool wasHomeKeyLongPressed() const { return false; }
   bool wasHomeKeyPressed() const { return false; }
+  bool wasTouchActivity() const { return false; }
 };
 """
 harness = r"""
@@ -112,15 +113,24 @@ remote_turn = "bool ActivityManager::remoteTurn(" + manager_source.split(
     "bool ActivityManager::remoteTurn(", 1
 )[1].split("bool ActivityManager::handleForcedRefresh()", 1)[0]
 harness = harness.replace("int main() {", r"""
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include "activities/reader/RemoteTurnGate.h"
-struct RenderLock { static bool peek() { return false; } };
+struct RenderLock {
+  static inline bool busy = false;
+  static bool peek() { return busy; }
+};
+constexpr int MAX_QUEUED_REMOTE_TURNS = 3;
+constexpr unsigned long QUEUED_REMOTE_TURN_MAX_AGE_MS = 4000;
 struct ReaderActivity {
   std::atomic<bool> pageRendered{true};
   bool menu = false;
-  int pages = 0, chapters = 0;
+  int pages = 0, chapters = 0, interrupts = 0;
   bool inputOverPage() const { return menu; }
+  void interruptBackgroundWork() { interrupts++; }
+  int menus = 0;
+  bool remoteShortcut(bool readerMenu) { menus += readerMenu ? 1 : 0; return true; }
   bool pageTurn(bool forward) { pages += forward ? 1 : -1; return true; }
   bool skipPages(int step) { chapters += step; return true; }
 };
@@ -128,11 +138,21 @@ struct ActivityManager {
   MappedInputManager& mappedInput;
   std::unique_ptr<ReaderActivity> currentActivity = std::make_unique<ReaderActivity>();
   bool context = true, foregroundReader = true;
+  std::atomic<bool> requestedUpdate{false};
+  uint32_t screenVisit = 1;
+  enum class QueuedShortcut : uint8_t { None, ReaderMenu, SaveQuote };
+  int8_t queuedRemoteTurns = 0;
+  RemoteButton queuedRemoteClick = RemoteButton::None;
+  QueuedShortcut queuedRemoteShortcut = QueuedShortcut::None;
+  uint32_t queuedRemoteTurnVisit = 0;
+  unsigned long queuedRemoteTurnAtMs = 0;
+  void noteQueuedRemoteInput();
   bool isRemoteReaderContext() const { return context; }
   bool isForegroundReader() const { return foregroundReader; }
   bool remoteClick(RemoteButton button) { return mappedInput.injectRemoteClick(button); }
   void requestUpdate() {}
   bool remoteTurn(bool forward, bool chapter);
+  bool applyQueuedRemoteInput();
 };
 """ + remote_turn + r"""
 void checkRouting(MappedInputManager& input) {
@@ -158,9 +178,36 @@ void checkRouting(MappedInputManager& input) {
   manager.context = false;
   assert(!manager.remoteTurn(true, false));
 }
+void checkQueue(MappedInputManager& input) {
+  ActivityManager manager{input};
+  input.update();
+  // Presses during a draw are kept, capped at three, and interrupt the render task's background work.
+  RenderLock::busy = true;
+  for (int i = 0; i < 5; i++) assert(manager.remoteTurn(true, false));
+  assert(manager.currentActivity->pages == 0 && manager.currentActivity->interrupts == 5);
+  assert(!manager.applyQueuedRemoteInput());
+  assert(!manager.remoteTurn(true, true));  // chapter skips are not queued
+  RenderLock::busy = false;
+  for (int i = 0; i < 3; i++) assert(manager.applyQueuedRemoteInput());
+  assert(!manager.applyQueuedRemoteInput());
+  assert(manager.currentActivity->pages == 3);
+  // Opposite turns cancel; a changed screen drops what is left.
+  RenderLock::busy = true;
+  assert(manager.remoteTurn(true, false) && manager.remoteTurn(false, false) && manager.remoteTurn(false, false));
+  RenderLock::busy = false;
+  manager.screenVisit++;
+  assert(!manager.applyQueuedRemoteInput() && manager.currentActivity->pages == 3);
+  // A held shortcut replaces the held turns: it opens something over the page.
+  manager.queuedRemoteTurnVisit = manager.screenVisit;
+  manager.queuedRemoteTurnAtMs = millis();
+  manager.queuedRemoteTurns = 2;
+  manager.queuedRemoteShortcut = ActivityManager::QueuedShortcut::ReaderMenu;
+  assert(manager.applyQueuedRemoteInput() && manager.currentActivity->menus == 1);
+  assert(!manager.applyQueuedRemoteInput() && manager.currentActivity->pages == 3);
+}
 int main() {
 """)
-harness = harness.replace("  using Button =", "  checkRouting(input);\n  using Button =")
+harness = harness.replace("  using Button =", "  checkRouting(input);\n  checkQueue(input);\n  using Button =")
 with tempfile.TemporaryDirectory() as directory:
     directory = Path(directory)
     (directory / "HalGPIO.h").write_text(stub)

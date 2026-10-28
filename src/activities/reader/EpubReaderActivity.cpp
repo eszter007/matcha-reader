@@ -5306,8 +5306,10 @@ bool EpubReaderActivity::textAtPoint(const int x, const int y) {
   int top, right, bottom, left;
   renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
   const int fontId = effectiveReaderFontId();
-  // Non-blocking: a chapter build holds the lock for seconds, and the input loop must not wait on it.
-  RenderLock lock{RenderLock::Try{}};
+  // A bounded wait: a page still drawing (the touch already stopped background work) ends within it,
+  // so the tap is not misread as empty space; a chapter build can hold the lock for seconds and must
+  // not stall input that long.
+  RenderLock lock{RenderLock::TryFor{1500}};
   if (!lock.held()) return false;
   if (verticalSection) {
     struct Hit {
