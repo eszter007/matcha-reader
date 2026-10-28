@@ -129,6 +129,8 @@ struct ReaderActivity {
   int pages = 0, chapters = 0, interrupts = 0;
   bool inputOverPage() const { return menu; }
   void interruptBackgroundWork() { interrupts++; }
+  int menus = 0;
+  bool remoteShortcut(bool readerMenu) { menus += readerMenu ? 1 : 0; return true; }
   bool pageTurn(bool forward) { pages += forward ? 1 : -1; return true; }
   bool skipPages(int step) { chapters += step; return true; }
 };
@@ -138,15 +140,19 @@ struct ActivityManager {
   bool context = true, foregroundReader = true;
   std::atomic<bool> requestedUpdate{false};
   uint32_t screenVisit = 1;
+  enum class QueuedShortcut : uint8_t { None, ReaderMenu, SaveQuote };
   int8_t queuedRemoteTurns = 0;
+  RemoteButton queuedRemoteClick = RemoteButton::None;
+  QueuedShortcut queuedRemoteShortcut = QueuedShortcut::None;
   uint32_t queuedRemoteTurnVisit = 0;
   unsigned long queuedRemoteTurnAtMs = 0;
+  void noteQueuedRemoteInput();
   bool isRemoteReaderContext() const { return context; }
   bool isForegroundReader() const { return foregroundReader; }
   bool remoteClick(RemoteButton button) { return mappedInput.injectRemoteClick(button); }
   void requestUpdate() {}
   bool remoteTurn(bool forward, bool chapter);
-  bool applyQueuedRemoteTurn();
+  bool applyQueuedRemoteInput();
 };
 """ + remote_turn + r"""
 void checkRouting(MappedInputManager& input) {
@@ -179,18 +185,25 @@ void checkQueue(MappedInputManager& input) {
   RenderLock::busy = true;
   for (int i = 0; i < 5; i++) assert(manager.remoteTurn(true, false));
   assert(manager.currentActivity->pages == 0 && manager.currentActivity->interrupts == 5);
-  assert(!manager.applyQueuedRemoteTurn());
+  assert(!manager.applyQueuedRemoteInput());
   assert(!manager.remoteTurn(true, true));  // chapter skips are not queued
   RenderLock::busy = false;
-  for (int i = 0; i < 3; i++) assert(manager.applyQueuedRemoteTurn());
-  assert(!manager.applyQueuedRemoteTurn());
+  for (int i = 0; i < 3; i++) assert(manager.applyQueuedRemoteInput());
+  assert(!manager.applyQueuedRemoteInput());
   assert(manager.currentActivity->pages == 3);
   // Opposite turns cancel; a changed screen drops what is left.
   RenderLock::busy = true;
   assert(manager.remoteTurn(true, false) && manager.remoteTurn(false, false) && manager.remoteTurn(false, false));
   RenderLock::busy = false;
   manager.screenVisit++;
-  assert(!manager.applyQueuedRemoteTurn() && manager.currentActivity->pages == 3);
+  assert(!manager.applyQueuedRemoteInput() && manager.currentActivity->pages == 3);
+  // A held shortcut replaces the held turns: it opens something over the page.
+  manager.queuedRemoteTurnVisit = manager.screenVisit;
+  manager.queuedRemoteTurnAtMs = millis();
+  manager.queuedRemoteTurns = 2;
+  manager.queuedRemoteShortcut = ActivityManager::QueuedShortcut::ReaderMenu;
+  assert(manager.applyQueuedRemoteInput() && manager.currentActivity->menus == 1);
+  assert(!manager.applyQueuedRemoteInput() && manager.currentActivity->pages == 3);
 }
 int main() {
 """)

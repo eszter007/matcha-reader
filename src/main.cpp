@@ -1044,7 +1044,7 @@ void loop() {
   scene.pageShown = homeShown || remoteContext;
   scene.storageBusy = activityManager.requiresExclusiveStorageLoop();
   scene.wifiOn = WiFi.getMode() != WIFI_MODE_NULL;
-  const bool remoteActed = bleturner::tick(scene) | activityManager.applyQueuedRemoteTurn();
+  const bool remoteActed = bleturner::tick(scene) | activityManager.applyQueuedRemoteInput();
 
   if (activityManager.requiresExclusiveStorageLoop()) {
     // USB Drive handed the raw SD card to the host. Do not run screenshots,
