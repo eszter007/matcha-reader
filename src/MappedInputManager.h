@@ -104,6 +104,10 @@ class MappedInputManager {
     deferredHomeAction = HomeButtonAction::Ignore;
   }
   bool wasMenuGesture() const;
+  // Capacitive page keys (the Metalio cover keys) arrive as the side Up/Down bits, so Button-based
+  // code cannot tell them from the side keys. prevPage picks the key the reader turns back with;
+  // onRelease picks the edge.
+  bool wasCoverPageKey(bool prevPage, bool onRelease) const;
   // Bottom-edge up-swipe as the reader-menu gesture (SHOW_READER_MENU's Swipe
   // Up option). Only meaningful on home-key boards, where Home lives on the
   // key and the bottom edge is free; elsewhere the same swipe is the Home

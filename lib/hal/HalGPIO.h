@@ -47,6 +47,8 @@ class HalGPIO {
   bool usbStateChanged = false;
   uint8_t previousCapacitivePageButtons = 0;
   bool capacitivePagePressed = false;
+  uint8_t capacitivePagePressedMask = 0;   // cover page keys that went down this update
+  uint8_t capacitivePageReleasedMask = 0;  // cover page keys that went up this update
 
  public:
   enum class DeviceType : uint8_t { X4, X3 };
@@ -129,6 +131,13 @@ class HalGPIO {
   bool wasTouchTap(float& nx, float& ny) const;
   bool wasTouchDown(float& nx, float& ny) const;
   bool wasCapacitivePagePressed() const { return capacitivePagePressed; }
+  // Per-key edges of the capacitive page keys (e.g. the Metalio cover keys), as BTN_* bits.
+  bool wasCapacitivePageKeyPressed(uint8_t buttonIndex) const {
+    return buttonIndex < 8 && (capacitivePagePressedMask & (1u << buttonIndex)) != 0;
+  }
+  bool wasCapacitivePageKeyReleased(uint8_t buttonIndex) const {
+    return buttonIndex < 8 && (capacitivePageReleasedMask & (1u << buttonIndex)) != 0;
+  }
   bool isCapacitivePagePressed(uint8_t buttonIndex) const {
     return buttonIndex < 8 && (previousCapacitivePageButtons & (1u << buttonIndex)) != 0;
   }
