@@ -268,7 +268,8 @@ uint16_t measureFocusRtlSplitAdvance(const GfxRenderer& renderer, const int font
                                      const EpdFontFamily::Style style, const uint8_t boundary,
                                      const int8_t letterSpacing) {
   const auto suffix = word.substr(boundary);
-  const int kerning = renderer.getKerning(fontId, firstCodepoint(suffix), lastCodepoint(word.substr(0, boundary)), style);
+  const int kerning =
+      renderer.getKerning(fontId, firstCodepoint(suffix), lastCodepoint(word.substr(0, boundary)), style);
   return measureWordWidth(renderer, fontId, suffix, style, letterSpacing) + kerning;
 }
 
@@ -2213,13 +2214,13 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     outBoundaries.push_back(boundary);
     const auto style = static_cast<EpdFontFamily::Style>(lineWordStyles[i] & ~TextBlock::DISCRETIONARY_HYPHEN_FLAG);
     const bool rtl = BidiUtils::startsWithRtl(lineWords[i].c_str());
-    outSplitX.push_back(
-        boundary == 0 ? 0
-                      : scaleWordWidth(rtl ? measureFocusRtlSplitAdvance(renderer, wordFont, lineWords[i], style,
-                                                                         boundary, blockStyle.letterSpacing)
-                                           : measureFocusPrefixAdvance(renderer, wordFont, lineWords[i], style,
-                                                                       boundary, blockStyle.letterSpacing),
-                                       wordScale));
+    outSplitX.push_back(boundary == 0
+                            ? 0
+                            : scaleWordWidth(rtl ? measureFocusRtlSplitAdvance(renderer, wordFont, lineWords[i], style,
+                                                                               boundary, blockStyle.letterSpacing)
+                                                 : measureFocusPrefixAdvance(renderer, wordFont, lineWords[i], style,
+                                                                             boundary, blockStyle.letterSpacing),
+                                             wordScale));
   }
 
   auto block = makeUniqueNoThrow<TextBlock>(lineWords, lineXPos, lineWordStyles, outBoundaries, outSplitX, blockStyle,

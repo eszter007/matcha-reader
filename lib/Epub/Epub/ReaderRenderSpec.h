@@ -13,8 +13,8 @@
 struct ReaderRenderSpec {
   int fontId = 0;
   float lineCompression = 1.0f;  // Multiplier of font size in pixels, independent of advanceY.
-  // The vertical column-gap step (0 tight .. 2 wide), derived from the Line Spacing setting. Vertical text sets its column gap in
-  // quarter ems from this step; lineCompression above is the same setting as horizontal reads it.
+  // The vertical column-gap step (0 tight .. 2 wide), derived from the Line Spacing setting. Vertical text sets its
+  // column gap in quarter ems from this step; lineCompression above is the same setting as horizontal reads it.
   uint8_t lineSpacingLevel = 1;
   bool extraParagraphSpacing = false;
   uint8_t paragraphIndentSpaces = 2;
