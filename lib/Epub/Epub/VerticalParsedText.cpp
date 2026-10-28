@@ -1138,9 +1138,12 @@ struct VerticalParsedText::LayoutCursor {
       if (marks == MAX_MARKS) return 0;
       // The white half before an opening bracket sits between it and the previous glyph; every
       // other mark's white half is between it and the next one.
+      // A bracket set flush to the line head already gave up its leading half.
       int gap = geom.cellPx;
       if (!givesLeadingSpace(cp)) {
         gap = cellTopOf(page.glyphs[i + 1]) - cellTopOf(page.glyphs[i]);
+      } else if (page.glyphs[i].lineHeadFlush) {
+        gap = 0;
       } else if (i > first) {
         gap = cellTopOf(page.glyphs[i]) - cellTopOf(page.glyphs[i - 1]);
       }
