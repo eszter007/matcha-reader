@@ -111,7 +111,9 @@ namespace {
 // with the outer element's params, so a sibling after an inner box is no longer framed with it.
 // v150: no format change. Upstream merge: static GIF images are decoded, so a GIF page stores
 // the image's own size (and rotation) instead of the full-page placeholder.
-constexpr uint8_t VSECTION_FILE_VERSION = 150;
+// v151: no format change. A bracket set flush to the line head no longer gives a half em to the
+// squeeze; cached pages can hold a character drawn over it and a column run past the foot.
+constexpr uint8_t VSECTION_FILE_VERSION = 151;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
