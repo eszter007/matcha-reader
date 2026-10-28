@@ -106,7 +106,7 @@ Read panel by panel, each scaled to fill the screen, and look up any word right 
 
 ### Library and home
 
-Every book on the card as a cover grid, manga beside EPUBs, with a **Shelves** tab for folders. The **Cover Grid** theme adds a tab bar for Home, Library, File Transfer, Insights and Settings. Long-press a cover for insights, Mark as Read and Delete. With the CrossPoint sync server, the badges show your furthest position on any device. CrossPoint's own list view is still there. See [Guide §3.1](USER_GUIDE.md#31-home-screen) and [§3.4](USER_GUIDE.md#34-library-screen).
+Every book on the card as a cover grid, manga beside EPUBs, with a **Shelves** tab for folders. The **Cover Grid** theme adds a tab bar for Home, Library, File Transfer, Insights and Settings. Long-press a cover for insights, Mark as Read and Delete. With the CrossPoint sync server, the badges show your furthest position on any device, and opening a book that another device has read further offers to jump there. CrossPoint's own list view is still there. See [Guide §3.1](USER_GUIDE.md#31-home-screen) and [§3.4](USER_GUIDE.md#34-library-screen).
 
 <p align="center">
   <img src="docs/images/screenshots/tab-home.png" width="150" alt="Home tab: the cover grid">
