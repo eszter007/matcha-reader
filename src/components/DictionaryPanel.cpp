@@ -52,7 +52,7 @@ constexpr int TITLE_GAP = 8;
 constexpr int FOOTER_GAP = 16;
 
 // Smallest panel worth moving into a gap; a smaller gap keeps the centred panel over the word.
-constexpr int MIN_AVOID_HEIGHT = 160;
+constexpr int MIN_AVOID_HEIGHT = 300;
 
 Rect avoidBand;
 
