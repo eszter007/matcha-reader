@@ -80,6 +80,8 @@ TEST(VerticalPageBreak, ShortenedColumnSpreadsAtMostAnEighthEmPerGap) {
   constexpr int EM = 20;
   for (size_t i = 1; i < ys.size(); i++)
     EXPECT_LE(ys[i] - ys[i - 1], fullPitch + EM / 8 + 1) << "gap " << i;  // +1: rounding
+}
+
 TEST(VerticalPageBreak, OpeningBracketNeverEndsAColumn) {
   // Each case puts 「 on the last row of the first column.
   for (const char* paragraph : {"あいうえおかきくけ「こ」", "あいうえおかきく。「こ」", "あいうえおかきく、「こ」",
