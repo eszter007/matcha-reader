@@ -56,6 +56,10 @@ struct ClippingResult {
   uint16_t wordCount = 0;
   uint32_t startOffset = UINT32_MAX;
   uint32_t endOffset = UINT32_MAX;
+  // A screen point inside the first selected word, -1 when it is not on the page shown: Look Up
+  // opens the definition of the word there instead of a cursor of its own.
+  int16_t firstWordX = -1;
+  int16_t firstWordY = -1;
 };
 
 // A drag started on a lookup panel's word handles: clip selection opens on that word and keeps
