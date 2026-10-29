@@ -645,10 +645,8 @@ int TextSettingsActivity::visibleLayoutRows(LayoutRow* out) const {
 uint8_t* TextSettingsActivity::verticalTextSetting() const {
   if (!editStoredProfile_) return nullptr;
   if (profile_ == CrossPointSettings::TextProfileId::Japanese) return &SETTINGS.tategaki;
-  if (profile_ == CrossPointSettings::TextProfileId::TraditionalChinese ||
-      profile_ == CrossPointSettings::TextProfileId::SimplifiedChinese) {
-    return &SETTINGS.zhipai;
-  }
+  if (profile_ == CrossPointSettings::TextProfileId::TraditionalChinese) return &SETTINGS.zhipai;
+  if (profile_ == CrossPointSettings::TextProfileId::SimplifiedChinese) return &SETTINGS.zhipaiSimplified;
   return nullptr;
 }
 

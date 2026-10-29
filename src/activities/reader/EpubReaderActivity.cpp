@@ -7489,10 +7489,13 @@ bool EpubReaderActivity::useVerticalText() const {
   if (!isCjkBook()) return false;
   if (verticalOverride == 0) return false;
   if (verticalOverride == 1) return true;
-  // No per-book choice: the Tategaki (Japanese) or Zhipai (Chinese) setting decides. Automatic follows
-  // the publisher: a spine declared right-to-left (Japanese novels; Taiwanese novels from Readmoo,
-  // Kobo, Books.com.tw) opens in columns, anything else horizontal.
-  switch (isJapaneseBook() ? SETTINGS.tategaki : SETTINGS.zhipai) {
+  // No per-book choice: Tategaki (Japanese) or the Zhipai setting of the book's Chinese script
+  // decides. Automatic opens a spine declared right-to-left (Japanese novels; Taiwanese novels from
+  // Readmoo, Kobo, Books.com.tw) in columns, anything else horizontal.
+  const uint8_t mode = isJapaneseBook()                               ? SETTINGS.tategaki
+                       : bookScript() == CjkScript::SimplifiedChinese ? SETTINGS.zhipaiSimplified
+                                                                      : SETTINGS.zhipai;
+  switch (mode) {
     case CrossPointSettings::VERTICAL_ON:
       return true;
     case CrossPointSettings::VERTICAL_OFF:
