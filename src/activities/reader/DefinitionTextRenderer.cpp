@@ -585,6 +585,18 @@ void formatEntryBody(std::string& text, const std::string& omitLeading) {
       continue;
     }
 
+    // Converted Jitendex marks explanatory glosses with an "Explanation" label glued to the text.
+    static constexpr char kExplanationLabel[] = "Explanation";
+    constexpr size_t kExplanationLabelLen = sizeof(kExplanationLabel) - 1;
+    if (line.size() > kExplanationLabelLen && line.compare(0, kExplanationLabelLen, kExplanationLabel) == 0 &&
+        line[kExplanationLabelLen] != ' ') {
+      flushGlosses();
+      std::string note = line.substr(kExplanationLabelLen);
+      trim(note);
+      appendLine(std::string(kItalicLinePrefix) + "   " + note);
+      continue;
+    }
+
     if (isNameDictionary) {
       flushGlosses();
       if (isNumberedSense(line, 0, line.size())) {

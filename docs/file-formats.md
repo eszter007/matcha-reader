@@ -588,7 +588,8 @@ instead of the full-page placeholder, since static GIFs are now decoded. In 151,
 in one column with its reading set over the whole group. In 152, an opening bracket after 。 or 、
 keeps half an em, more pairs stay together across columns and pages, and a paragraph's first column
 honours the book's text-indent. In 153, a paragraph that starts a page starts in its first column,
-not after a blank one. In 155, a chapter cached without block styling on low heap is rebuilt styled
+not after a blank one. In 154, an opening bracket moves with the ruby group after it when the group
+moves to the next column. In 155, a chapter cached without block styling on low heap is rebuilt styled
 once an open has more room, and chapters cached unstyled before are rebuilt once.
 
 ### Version 143

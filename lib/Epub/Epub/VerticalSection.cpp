@@ -121,6 +121,8 @@ namespace {
 // break too (3.1.7, 3.1.10), and a paragraph's first column honours the book's CSS text-indent.
 // v153: no format change. A paragraph that starts a page starts in its first column; when the
 // previous paragraph ended at the foot of the last column, the page used to open with a blank one.
+// v154: no format change. An opening bracket before a ruby group that moves to the next column moves
+// with it, instead of being left at the foot of the column.
 // v155: no format change. A chapter cached without block styling on low heap is rebuilt styled once
 // an open has more room; chapters cached unstyled before this are rebuilt once.
 constexpr uint8_t VSECTION_FILE_VERSION = 155;

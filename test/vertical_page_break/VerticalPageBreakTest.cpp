@@ -62,3 +62,60 @@ TEST(VerticalPageBreak, ParagraphMidPageStillStartsFreshColumn) {
   EXPECT_EQ(head->column, 1);
   EXPECT_EQ(head->row, 0);
 }
+
+TEST(VerticalPageBreak, OpeningBracketNeverEndsAColumn) {
+  // Each case puts 「 on the last row of the first column.
+  for (const char* paragraph : {"あいうえおかきくけ「こ」", "あいうえおかきく。「こ」", "あいうえおかきく、「こ」",
+                                "あいうえおかき。「こ」さしすせそ", "あいうえおかきくけこさしすせそたちつ。「て」"}) {
+    const auto pages = layout({paragraph});
+    ASSERT_FALSE(pages.empty());
+    for (const auto& g : pages[0].glyphs) {
+      if (g.codepoint != U'「') continue;
+      const bool lastRow = g.row + 1 >= pages[0].rowsPerColumn;
+      EXPECT_FALSE(lastRow) << paragraph << ": 「 at column " << g.column << " row " << g.row;
+    }
+  }
+}
+
+TEST(VerticalPageBreak, OpeningBracketMovesWithRubyGroupThatBreaksColumn) {
+  // 「 lands on row 7; the ruby group after it needs three rows, so it moves to the next column and
+  // must take the bracket with it (device photo: 「 left at the foot before 養父母).
+  GfxRenderer renderer;
+  VerticalParsedText text(renderer, 0, VIEWPORT_W, VIEWPORT_H);
+  text.setRubyShown(true);
+  VerticalParsedText::RubyRun before;
+  before.baseText = "あいうえおかさ「";
+  VerticalParsedText::RubyRun ruby;
+  ruby.baseText = "養父母";
+  ruby.rubyText = "ふたり";
+  VerticalParsedText::RubyRun after;
+  after.baseText = "のことは";
+  text.addAnnotatedParagraph({before, ruby, after});
+  const auto pages = text.layoutPages();
+  ASSERT_FALSE(pages.empty());
+  const VerticalGlyph* bracket = firstGlyphOf(pages[0], U'「');
+  const VerticalGlyph* base = firstGlyphOf(pages[0], U'養');
+  ASSERT_NE(bracket, nullptr);
+  ASSERT_NE(base, nullptr);
+  EXPECT_EQ(bracket->column, base->column);
+  EXPECT_EQ(bracket->row + 1, base->row);
+}
+
+TEST(VerticalPageBreak, OpeningBracketFollowsRubyGroupOntoTheNextPage) {
+  GfxRenderer renderer;
+  VerticalParsedText text(renderer, 0, VIEWPORT_W, VIEWPORT_H);
+  text.setRubyShown(true);
+  VerticalParsedText::RubyRun before;
+  before.baseText = std::string(TEN) + TEN + TEN + TEN + "あいうえおかさ「";
+  VerticalParsedText::RubyRun ruby;
+  ruby.baseText = "養父母";
+  ruby.rubyText = "ふたり";
+  text.addAnnotatedParagraph({before, ruby});
+  const auto pages = text.layoutPages();
+  ASSERT_EQ(pages.size(), 2u);
+  EXPECT_EQ(firstGlyphOf(pages[0], U'「'), nullptr);
+  const VerticalGlyph* bracket = firstGlyphOf(pages[1], U'「');
+  ASSERT_NE(bracket, nullptr);
+  EXPECT_EQ(bracket->column, 0);
+  EXPECT_EQ(bracket->row, 0);
+}
