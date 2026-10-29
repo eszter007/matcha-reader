@@ -450,10 +450,12 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
               "orientation", StrId::STR_CAT_READER),
           SettingInfo::Enum(StrId::STR_TATEGAKI, &CrossPointSettings::tategaki,
                             {StrId::STR_VERTICAL_AUTOMATIC, StrId::STR_STATE_ON, StrId::STR_STATE_OFF}, "tategaki",
-                            StrId::STR_CAT_READER),
+                            StrId::STR_CAT_READER)
+              .withTextSettings(),
           SettingInfo::Enum(StrId::STR_ZHIPAI, &CrossPointSettings::zhipai,
                             {StrId::STR_VERTICAL_AUTOMATIC, StrId::STR_STATE_ON, StrId::STR_STATE_OFF}, "zhipai",
-                            StrId::STR_CAT_READER),
+                            StrId::STR_CAT_READER)
+              .withTextSettings(),
           SettingInfo::Toggle(StrId::STR_ROTATE_MANGA_PANELS, &CrossPointSettings::rotateMangaPanels,
                               "rotateMangaPanels", StrId::STR_CAT_READER),
           SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing,

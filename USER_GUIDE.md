@@ -441,6 +441,13 @@ to that book only.
     family offers the sizes installed for it. When **Noto Sans** on your card consists only of Chinese or Japanese
     versions, a book offers the sizes of the version it uses, e.g. `NotoSansSC` for a simplified-Chinese book.
   - **LAYOUT**:
+    - **Tategaki (vertical Japanese)**, in the **Japanese** profile, and **Zhípái (vertical Chinese)**, in the
+      **Traditional Chinese** profile: whether Japanese or Chinese books open in vertical columns. Zhípái applies to
+      every Chinese book, simplified ones too. Only listed when Text Settings is opened from **Settings**.
+      - **Automatic** (default): follows the book. A book set to read right to left opens vertically, any other
+        book horizontally.
+      - **On**: always vertical.
+      - **Off**: always horizontal.
     - **Line Spacing**: Space between lines, as a percentage of the font size: **0%**, **+10%**, **+20%** (default), **+30%**, **+45%**, **+60%** or **+75%**. Vertical text uses three column gaps: 0% and +10% are tight, +20% is normal, and +30% and up are wide.
     - **Word spacing**: 50% to 200% of a normal space (default 100%).
     - **Character spacing**: −2 px to +2 px (default 0 px). In vertical text this is the gap between characters down
@@ -490,13 +497,6 @@ to that book only.
   - **Landscape CW**: turned a quarter clockwise.
   - **Portrait 180°**: upside down.
   - **Landscape CCW**: turned a quarter counter-clockwise.
-
-- **Tategaki (vertical Japanese)** and **Zhípái (vertical Chinese)**: Whether Japanese and Chinese books open in
-  vertical columns.
-  - **Automatic** (default): follows the book. A book set to read right to left opens vertically, any other book
-    horizontally.
-  - **On**: always vertical.
-  - **Off**: always horizontal.
 
   The **Vertical Text** switch in a book's Reader Settings overrides this for that book.
 
@@ -1300,8 +1300,8 @@ browser.
 ### 6.3 Japanese Books
 
 Copy a Japanese EPUB to the SD card and open it from the Library. A Japanese novel set to read right to left opens
-in vertical text, other Japanese books horizontally. To open every Japanese book one way, set **Settings → Reader →
-Tategaki (vertical Japanese)** to **On** or **Off**. A book with no language set, or the wrong one, is recognised
+in vertical text, other Japanese books horizontally. To open every Japanese book one way, set **Tategaki (vertical
+Japanese)** in **Settings → Reader → Text Settings → Japanese** to **On** or **Off**. A book with no language set, or the wrong one, is recognised
 from its kana the first time you open it.
 
 **Furigana.** The reader shows the furigana that a book already has. It cannot add furigana itself. For a book
@@ -1434,8 +1434,8 @@ per thousand characters, so a whole novel is a long run.
 #### Vertical Text
 
 The layout follows the publisher. A book set to read right to left (common for novels from Taiwan) opens in
-vertical columns. Every other Chinese book opens horizontally. To open every Chinese book one way, set **Settings →
-Reader → Zhípái (vertical Chinese)** to **On** or **Off**. The **Vertical Text** switch in a book's **Reader
+vertical columns. Every other Chinese book opens horizontally. To open every Chinese book one way, set **Zhípái (vertical
+Chinese)** in **Settings → Reader → Text Settings → Traditional Chinese** to **On** or **Off**. The **Vertical Text** switch in a book's **Reader
 Settings** overrides both and is saved per book.
 
 #### Fonts and the Interface

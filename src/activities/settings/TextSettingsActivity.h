@@ -51,6 +51,7 @@ class TextSettingsActivity final : public UiListActivity {
     Alignment,
     ScreenMargin,
     BookSideMargins,
+    VerticalText,  // Japanese and Traditional Chinese, from Settings only
     Count
   };
   enum class StyleRow { FocusReading, Hyphenation, EmbeddedStyle, AntiAliasing, Count };
@@ -87,6 +88,8 @@ class TextSettingsActivity final : public UiListActivity {
   // Fills `out` (when non-null, room for LayoutRow::Count) with the Layout rows shown for this
   // book, in order, and returns how many.
   int visibleLayoutRows(LayoutRow* out) const;
+  // The vertical-text setting this screen edits (tategaki or zhipai), or null.
+  uint8_t* verticalTextSetting() const;
   // CJK books hide FocusReading/Hyphenation.
   StyleRow styleRowAt(int visibleIndex) const;
   int styleRowCount() const { return cjkBook_ ? 2 : static_cast<int>(StyleRow::Count); }
