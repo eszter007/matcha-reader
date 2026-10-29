@@ -577,7 +577,7 @@ if (parsedSize != fileSize) {
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
 
-### Versions 144 to 155
+### Versions 144 to 156
 
 No format change; each rebuilds the cached pages once for a layout fix. In 148, a chapter applies
 the stylesheets its linked ones `@import` (EBPAJ boxes, rules and indents), a block holding only an
@@ -590,7 +590,9 @@ keeps half an em, more pairs stay together across columns and pages, and a parag
 honours the book's text-indent. In 153, a paragraph that starts a page starts in its first column,
 not after a blank one. In 154, an opening bracket moves with the ruby group after it when the group
 moves to the next column. In 155, a chapter cached without block styling on low heap is rebuilt styled
-once an open has more room, and chapters cached unstyled before are rebuilt once.
+once an open has more room, and chapters cached unstyled before are rebuilt once. In 156, a column
+shortened by oidashi spreads by at most an eighth of an em between characters and otherwise ends short
+of the foot.
 
 ### Version 143
 

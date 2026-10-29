@@ -1054,6 +1054,7 @@ struct VerticalParsedText::LayoutCursor {
   //     stretching it would space a two-character line down the whole page. A column oidashi
   //     pushed characters out of ends short mid-paragraph, so it is spread whatever the shortfall.
   //   - the last glyph HANGS past the foot (burasage), i.e. leftover is negative.
+  static constexpr int MAX_SPREAD_PER_GAP_DIVISOR = 8;  // em / 8
   void spreadColumnToFoot(VerticalPage& pg, const uint16_t col) {
     int lastRow = -1;
     int lastY = 0;
@@ -1067,9 +1068,12 @@ struct VerticalParsedText::LayoutCursor {
     const int leftover = static_cast<int>(o.viewportHeight_) - (lastY + geom.cellPx);
     const bool pushedOut = col < 64 && (o.oidashiColumns_ >> col) & 1u;
     if (leftover <= 0 || (leftover >= geom.rowPitchPx && !pushedOut)) return;
+    // At most an eighth of an em between two characters: a column oidashi shortened by several
+    // cells otherwise spreads into visibly loose type, so it ends short of the foot instead.
+    const int spread = std::min(leftover, lastRow * geom.cellPx / MAX_SPREAD_PER_GAP_DIVISOR);
     for (auto& g : pg.glyphs) {
       if (g.column != col) continue;
-      g.y = static_cast<uint16_t>(static_cast<int>(g.y) + leftover * static_cast<int>(g.row) / lastRow);
+      g.y = static_cast<uint16_t>(static_cast<int>(g.y) + spread * static_cast<int>(g.row) / lastRow);
     }
   }
 

@@ -63,6 +63,25 @@ TEST(VerticalPageBreak, ParagraphMidPageStillStartsFreshColumn) {
   EXPECT_EQ(head->row, 0);
 }
 
+TEST(VerticalPageBreak, ShortenedColumnSpreadsAtMostAnEighthEmPerGap) {
+  // た。…… may not be split, so all three move on and leave column 0 three rows short.
+  const auto pages = layout({"あいうえおかきた。……と", std::string(TEN)});
+  ASSERT_FALSE(pages.empty());
+  std::vector<int> ys;
+  for (const auto& g : pages[0].glyphs) {
+    if (g.column == 0) ys.push_back(g.y);
+  }
+  ASSERT_EQ(ys.size(), 7u);
+  int fullPitch = 0;  // pitch of the full column 2
+  for (const auto& g : pages[0].glyphs) {
+    if (g.column == 2 && g.row == 1) fullPitch = g.y;
+  }
+  ASSERT_GT(fullPitch, 0);
+  constexpr int EM = 20;
+  for (size_t i = 1; i < ys.size(); i++)
+    EXPECT_LE(ys[i] - ys[i - 1], fullPitch + EM / 8 + 1) << "gap " << i;  // +1: rounding
+}
+
 TEST(VerticalPageBreak, OpeningBracketNeverEndsAColumn) {
   // Each case puts 「 on the last row of the first column.
   for (const char* paragraph : {"あいうえおかきくけ「こ」", "あいうえおかきく。「こ」", "あいうえおかきく、「こ」",

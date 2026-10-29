@@ -125,7 +125,9 @@ namespace {
 // with it, instead of being left at the foot of the column.
 // v155: no format change. A chapter cached without block styling on low heap is rebuilt styled once
 // an open has more room; chapters cached unstyled before this are rebuilt once.
-constexpr uint8_t VSECTION_FILE_VERSION = 155;
+// v156: no format change. A column oidashi shortened spreads by at most an eighth of an em per gap
+// and otherwise ends short of the foot.
+constexpr uint8_t VSECTION_FILE_VERSION = 156;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
