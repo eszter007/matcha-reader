@@ -5,6 +5,7 @@
 #include <Epub/Section.h>
 #include <Epub/VerticalSection.h>
 #include <Epub/blocks/ImageBlock.h>
+#include <HalMemory.h>
 
 #include <atomic>
 #include <memory>
@@ -710,6 +711,22 @@ class EpubReaderActivity final : public ReaderActivity {
   uint32_t liveSelectionStart = UINT32_MAX;
   uint32_t liveSelectionEnd = 0;
   bool repaintPageForPanel();
+  // A copy of the last text-page body, either direction (PSRAM boards only), so closing a lookup or clip
+  // panel puts the page back without laying it out again. Used only while armed: a panel opened
+  // from that page, with nothing on it changed since.
+  HalMemory::PsramBuffer pageSnapshot_;
+  int pageSnapshotSpine_ = -1;
+  int pageSnapshotPage_ = -1;
+  uint32_t pageSnapshotSignature_ = 0;
+  bool pageSnapshotArmed_ = false;
+  uint32_t pageSnapshotSignature() const;
+  int pageSnapshotIndex() const;
+  void savePageSnapshot();
+  bool restorePageSnapshot();
+  void invalidatePageSnapshot() {
+    pageSnapshotSpine_ = -1;
+    pageSnapshotArmed_ = false;
+  }
   // The page a lookup opened during a vertical build took with it when the build was dropped;
   // the panel repaints from it until it closes. Empty otherwise.
   VerticalPage lookupPage_;
