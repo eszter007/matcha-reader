@@ -260,6 +260,9 @@ void TtfEpdFont::clearCache() {
 
 void TtfEpdFont::releaseResidentCaches() {
   if (evictionLocked_) return;  // mid-fault: this font's faces are live
+  // With PSRAM every cache and FreeType face below lives there (fiFontMalloc), so releasing them
+  // returns no internal heap, and the next draw re-reads the faces from SD.
+  if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0) return;
   for (int i = 0; i < 4; ++i) {
     Face& f = faces_[i];
     // Actually RELEASE the caches (swap-with-empty frees capacity; clear() alone
