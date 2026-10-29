@@ -509,6 +509,10 @@ void ClipSelectionActivity::confirmSelection(const ClippingResult::Action action
   result.startWordIndex = words[first].pageWordIndex;
   result.endWordIndex = words[last].pageWordIndex;
   result.wordCount = static_cast<uint16_t>(last - first + 1);
+  if (words[first].pageOffset == 0) {
+    result.firstWordX = static_cast<int16_t>(words[first].x + words[first].width / 2);
+    result.firstWordY = static_cast<int16_t>(words[first].y + textOffset() + words[first].height / 2);
+  }
   result.startOffset = UINT32_MAX;
   result.endOffset = 0;
   for (int i = first; i <= last; ++i) {

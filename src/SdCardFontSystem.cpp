@@ -4,6 +4,7 @@
 #include <EpdFontFamily.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#include <HalMemory.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -554,7 +555,10 @@ void SdCardFontSystem::unloadLookupVariant(GfxRenderer& renderer) {
 void SdCardFontSystem::releaseWordLookupFallback(GfxRenderer& renderer) {
   unloadLookupVariant(renderer);
 #if CROSSPOINT_VECTOR_FONTS
-  releaseTtfLookup(renderer);
+  // With PSRAM the panel's TTF faces stay for the next lookup (their caches live there): loading
+  // one parses the font from SD, about half a second per open. mapTtfForLookup() reuses them, and
+  // unloadTtf() frees them with the reader face. Without PSRAM they would hold internal heap.
+  if (HalMemory::getPsramHeap().totalBytes == 0) releaseTtfLookup(renderer);
 #endif
   lookupVariantTried_ = false;
   if (lookupUiLent_) {
