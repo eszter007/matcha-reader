@@ -121,7 +121,9 @@ namespace {
 // break too (3.1.7, 3.1.10), and a paragraph's first column honours the book's CSS text-indent.
 // v153: no format change. A paragraph that starts a page starts in its first column; when the
 // previous paragraph ended at the foot of the last column, the page used to open with a blank one.
-constexpr uint8_t VSECTION_FILE_VERSION = 153;
+// v155: no format change. A chapter cached without block styling on low heap is rebuilt styled once
+// an open has more room; chapters cached unstyled before this are rebuilt once.
+constexpr uint8_t VSECTION_FILE_VERSION = 155;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -2385,12 +2387,15 @@ bool VerticalSection::finishBuild(const bool parseOk) {
   }
   serialization::writePod(file, pageCount);
   serialization::writePod(file, indexOffset);
-  // Styling was skipped but every character is present, so the file is correct as text and is
-  // kept valid. Restamping it stale would rebuild the chapter on every open for a cosmetic
-  // difference -- and while a large SD CJK font is resident the condition never clears, so the
-  // rebuild would never win. Reported apart from a content drop because the two are not alike.
+  // Styling was skipped but every character is present, so the file stays valid for this and later
+  // opens. It is still best-effort: record the headroom like a degraded build, so an open with
+  // clearly more room rebuilds it styled. Restamping it stale instead would rebuild on every open,
+  // which never wins while a large SD CJK font is resident.
   if (lastBuildUnstyledForHeap_ && !lastBuildDroppedForHeap_) {
-    LOG_INF("VSC", "Chapter cached without block styling (text complete)");
+    LOG_INF("VSC", "Chapter cached without block styling (text complete); styled rebuild when heap allows");
+    HalFile deg;
+    const uint32_t headroom = lastLoadMaxAlloc_ ? lastLoadMaxAlloc_ : lastBuildStartMaxAlloc_;
+    if (Storage.openFileForWrite("VSC", degradedPath(), deg)) serialization::writePod(deg, headroom);
   }
 
   // A build that dropped content on low heap produced sparse pages. Keep the file usable for
@@ -2420,7 +2425,9 @@ bool VerticalSection::finishBuild(const bool parseOk) {
   }
   file.close();
   build_.reset();
-  if (!lastBuildDroppedForHeap_ && Storage.exists(degradedPath().c_str())) Storage.remove(degradedPath().c_str());
+  if (!lastBuildDroppedForHeap_ && !lastBuildUnstyledForHeap_ && Storage.exists(degradedPath().c_str())) {
+    Storage.remove(degradedPath().c_str());
+  }
 
   // Last page's source position. The horizontal build logs the same number ("SCT: chapter
   // spans"), and the two counters are supposed to agree character for character -- if these
