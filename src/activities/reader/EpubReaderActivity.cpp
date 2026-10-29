@@ -855,6 +855,7 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
       RenderLock lock;
       const int clippingIndex = clippingAtPoint(*page, initialX, initialY);
       if (clippingIndex >= 0) {
+        invalidatePageSnapshot();
         const bool removed = CLIPPINGS.removeClippingAt(static_cast<size_t>(clippingIndex));
         if (!removed) LOG_ERR("CLIP", "Failed to delete highlighted clipping %d", clippingIndex);
         clippingMessage = removed ? StrId::STR_CLIPPING_REMOVED : StrId::STR_CLIPPING_DELETE_FAILED;
@@ -890,6 +891,7 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
   std::string bookTitle = epub->getTitle();
   std::string author = epub->getAuthor();
 
+  pageSnapshotArmed_ = true;  // closing the selection redraws this page
   auto activity = makeUniqueNoThrow<ClipSelectionActivity>(renderer, mappedInput, std::move(pages), marginLeft,
                                                            marginTop, effectiveReaderFontId(), initialX, initialY);
   if (!activity) {
@@ -938,6 +940,7 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
     }
     const uint16_t paragraphIndex =
         section ? section->getParagraphIndexForPage(startPage).value_or(UINT16_MAX) : UINT16_MAX;
+    invalidatePageSnapshot();
     const auto addResult = CLIPPINGS.addClipping(
         spineIndex, startPage, endPage, pageCount, clipping.startWordIndex, clipping.endWordIndex, clipping.wordCount,
         chapterTitle.c_str(), paragraphIndex, clipping.text, layoutSignature, clipping.startOffset, clipping.endOffset);
@@ -3239,9 +3242,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           ImageBlock::releaseRenderCache();
           if (spec.refineOnly) return;
           imagePageDisplayed = true;
-        } else {
+        } else if (!restorePageSnapshot()) {
           renderVerticalPageBody(*vpage, vGlyphsWarm);
+          savePageSnapshot();
         }
+        pageSnapshotArmed_ = false;  // a panel opened from this page arms it again
         // Re-assert the claim for the page the body just prewarmed (it cleared it above).
         if (!vGlyphsWarm) prewarmedVPage_ = verticalSection->currentPage;
       }
@@ -4486,9 +4491,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     return;
   }
 
-  drawClippingHighlights(*page, fontId, orientedMarginTop, orientedMarginLeft);
   forcedRefreshPending = false;
-  page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
+  if (!restorePageSnapshot()) {
+    drawClippingHighlights(*page, fontId, orientedMarginTop, orientedMarginLeft);
+    page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
+    savePageSnapshot();
+  }
+  pageSnapshotArmed_ = false;  // a panel opened from this page arms it again
   renderStatusBar();
   const auto tBwRender = millis();
   if (needsAnyGrayscale && !combinedGrayscaleBase && overlapRefresh && pagesUntilFullRefresh > 1) {
@@ -5550,6 +5559,7 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
     if (initialX >= 0 && dragX < 0 && CLIPPINGS.hasClippings()) {
       const int clippingIndex = verticalClippingAtPoint(*vpage, initialX, initialY);
       if (clippingIndex >= 0) {
+        invalidatePageSnapshot();
         const bool removed = CLIPPINGS.removeClippingAt(static_cast<size_t>(clippingIndex));
         if (!removed) LOG_ERR("CLIP", "Failed to delete highlighted clipping %d", clippingIndex);
         clippingMessage = removed ? StrId::STR_CLIPPING_REMOVED : StrId::STR_CLIPPING_DELETE_FAILED;
@@ -5580,6 +5590,7 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
     }
     pageNumber = static_cast<uint16_t>(verticalSection->currentPage);
     pageCount = verticalSection->pageCount;
+    pageSnapshotArmed_ = true;  // the selection repaints this page, and so does its close
     int marginTop, marginRight, marginBottom, marginLeft;
     renderer.getOrientedViewableTRBL(&marginTop, &marginRight, &marginBottom, &marginLeft);
     marginTop += SETTINGS.screenMargin;
@@ -5647,6 +5658,7 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
       openPanelAfterRender(PanelAfterRender::Translation);
       return;
     }
+    invalidatePageSnapshot();
     const auto addResult =
         CLIPPINGS.addClipping(spineIndex, pageNumber, pageNumber, pageCount, clipping.startWordIndex,
                               clipping.endWordIndex, clipping.wordCount, chapterTitle.c_str(), UINT16_MAX,
@@ -5775,6 +5787,38 @@ void EpubReaderActivity::setLiveSelectionThunk(void* ctx, const uint32_t start, 
   reader->liveSelectionEnd = end;
 }
 
+int EpubReaderActivity::pageSnapshotIndex() const {
+  if (verticalSection) return verticalSection->currentPage;
+  return section ? section->currentPage : -1;
+}
+
+uint32_t EpubReaderActivity::pageSnapshotSignature() const {
+  return readerRenderSpecSignature(readerSpec(buildViewportWidth, buildViewportHeight)) ^ (useFurigana() ? 1u : 0u);
+}
+
+void EpubReaderActivity::savePageSnapshot() {
+  if (pageSnapshotIndex() < 0 || liveSelectionStart != UINT32_MAX || !renderer.getFrameBuffer()) return;
+  const size_t bytes = renderer.getBufferSize();
+  if (!pageSnapshot_) {
+    pageSnapshot_ = HalMemory::allocatePsram(bytes);  // null without PSRAM: no snapshot
+    if (!pageSnapshot_) return;
+  }
+  memcpy(pageSnapshot_.get(), renderer.getFrameBuffer(), bytes);
+  pageSnapshotSpine_ = currentSpineIndex;
+  pageSnapshotPage_ = pageSnapshotIndex();
+  pageSnapshotSignature_ = pageSnapshotSignature();
+}
+
+bool EpubReaderActivity::restorePageSnapshot() {
+  if (!pageSnapshotArmed_ || !pageSnapshot_ || pageSnapshotIndex() < 0 || liveSelectionStart != UINT32_MAX ||
+      !renderer.getFrameBuffer() || pageSnapshotSpine_ != currentSpineIndex ||
+      pageSnapshotPage_ != pageSnapshotIndex() || pageSnapshotSignature_ != pageSnapshotSignature()) {
+    return false;
+  }
+  memcpy(renderer.getFrameBuffer(), pageSnapshot_.get(), renderer.getBufferSize());
+  return true;
+}
+
 bool EpubReaderActivity::repaintPageForPanelThunk(void* ctx) {
   return static_cast<EpubReaderActivity*>(ctx)->repaintPageForPanel();
 }
@@ -5785,12 +5829,16 @@ bool EpubReaderActivity::repaintPageForPanel() {
     renderVerticalPageBody(lookupPage_);
     drew = true;
   } else if (verticalSection) {
-    if (const VerticalPage* page = verticalSection->getPage()) {
+    if (restorePageSnapshot()) {
+      drew = true;
+    } else if (const VerticalPage* page = verticalSection->getPage()) {
       renderVerticalPageBody(*page);
       drew = true;
     }
   } else if (section) {
-    if (const auto page = section->loadPage(section->currentPage)) {
+    if (restorePageSnapshot()) {
+      drew = true;
+    } else if (const auto page = section->loadPage(section->currentPage)) {
       page->render(renderer, effectiveReaderFontId(), currentPageLinkMarginLeft, currentPageLinkMarginTop,
                    !useFurigana());
       drew = true;
@@ -5859,6 +5907,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
       RenderLock lock(*this);
       selectCtx.cellPx = verticalCellPx(renderer, effectiveReaderFontId());
       selectCtx.pageOnScreen = pageOnScreen && !renderer.frameBufferContentsStale();
+      pageSnapshotArmed_ = true;  // the panel repaints this page, and so does its close
       releaseReloadableMemory();
       LOG_DBG("ERS", "Word lookup (vertical): maxAlloc after reclaim = %u", ESP.getMaxAllocHeap());
       // Start of the NEXT page, so a word split across the boundary can still be looked up
@@ -5967,6 +6016,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
       const int fontId = effectiveReaderFontId();
       selectCtx.cellPx = renderer.getLineHeight(fontId);
       selectCtx.pageOnScreen = pageOnScreen && !renderer.frameBufferContentsStale();
+      pageSnapshotArmed_ = true;  // the panel repaints this page, and so does its close
       page = section->loadPage(pageIndex);
       // Before the font release below, like the vertical cell: the page was just drawn, so every
       // advance is still in RAM.
