@@ -121,6 +121,8 @@ namespace {
 // break too (3.1.7, 3.1.10), and a paragraph's first column honours the book's CSS text-indent.
 // v153: no format change. A paragraph that starts a page starts in its first column; when the
 // previous paragraph ended at the foot of the last column, the page used to open with a blank one.
+// v154: no format change. An opening bracket before a ruby group that moves to the next column moves
+// with it, instead of being left at the foot of the column.
 // v156: no format change. A column oidashi shortened spreads by at most an eighth of an em per gap
 // and otherwise ends short of the foot.
 constexpr uint8_t VSECTION_FILE_VERSION = 156;

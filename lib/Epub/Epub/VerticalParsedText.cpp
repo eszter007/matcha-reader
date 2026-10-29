@@ -2288,14 +2288,37 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       int freshSpan = basePx;
       if (!atHead && row > startRow && row + rows > cur.rowsAvailable() &&
           startRow + fit(true, false, freshSpan) <= cur.rowsAvailable()) {
+        // An opening bracket just before the group may not end the column it leaves: it moves too.
+        // Only this batch's own stream entries, as for the oidashi below.
+        static constexpr size_t MAX_CARRIED = 2;
+        size_t carried = 0;
+        while (carried < MAX_CARRIED && idx > carried && page.glyphs.size() > carried) {
+          const VerticalGlyph& g = page.glyphs[page.glyphs.size() - 1 - carried];
+          const PendingChar& entry = stream_[idx - 1 - carried];
+          if (g.column != column || !Kinsoku::isLineEndProhibited(g.codepoint) || g.byteOffset != entry.byteOffset ||
+              g.paragraphIndex != entry.paragraphIndex) {
+            break;
+          }
+          carried++;
+        }
+        if (carried > 0 && page.glyphs.size() > carried &&
+            page.glyphs[page.glyphs.size() - 1 - carried].column != column) {
+          carried = 0;  // the brackets open the column: moving them would leave it empty
+        }
+        page.glyphs.resize(page.glyphs.size() - carried);
         if (column < 64) oidashiColumns_ |= uint64_t{1} << column;
         column++;
         row = 0;
         cur.finalizePageIfNeeded();
         row = cur.columnStartRow(false);
-        atHead = true;
-        rows = fit(true, false, spanPx);
-        if (row + rows >= cur.rowsAvailable()) rows = fit(true, true, spanPx);
+        if (carried > 0 && page.glyphs.empty()) page.visibleTextOffset = stream_[idx - carried].visibleTextOffset;
+        for (size_t k = carried; k > 0; k--) {
+          cur.placeUprightAt(stream_[idx - k], column, row);
+          row++;
+        }
+        atHead = carried == 0;
+        rows = fit(atHead, false, spanPx);
+        if (row + rows >= cur.rowsAvailable()) rows = fit(atHead, true, spanPx);
       }
       if (spanPx > basePx && row + rows <= cur.rowsAvailable()) {
         // Spaced 1:2:1: half as much at each end as between two characters. The base stays centred

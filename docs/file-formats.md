@@ -588,7 +588,8 @@ instead of the full-page placeholder, since static GIFs are now decoded. In 151,
 in one column with its reading set over the whole group. In 152, an opening bracket after 。 or 、
 keeps half an em, more pairs stay together across columns and pages, and a paragraph's first column
 honours the book's text-indent. In 153, a paragraph that starts a page starts in its first column,
-not after a blank one. In 156, a column shortened by oidashi spreads by at most an eighth of an em
+not after a blank one. In 154, an opening bracket moves with the ruby group after it when the group
+moves to the next column. In 156, a column shortened by oidashi spreads by at most an eighth of an em
 between characters and otherwise ends short of the foot.
 
 ### Version 143
