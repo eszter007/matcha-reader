@@ -929,7 +929,8 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
       return;
     }
     if (clipping.action == ClippingResult::Action::Lookup) {
-      openDictionaryWordSelect(/*pageOnScreen=*/true, clipping.firstWordX, clipping.firstWordY, clipping.text);
+      // The framebuffer still holds the selection bar and handles; the panel repaints the page under them.
+      openDictionaryWordSelect(/*pageOnScreen=*/false, clipping.firstWordX, clipping.firstWordY, clipping.text);
       return;
     }
     if (clipping.action == ClippingResult::Action::Translate) {
@@ -5653,7 +5654,8 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
       return;
     }
     if (clipping.action == ClippingResult::Action::Lookup) {
-      openDictionaryWordSelect(/*pageOnScreen=*/true, clipping.firstWordX, clipping.firstWordY, clipping.text);
+      // The framebuffer still holds the selection bar and handles; the panel repaints the page under them.
+      openDictionaryWordSelect(/*pageOnScreen=*/false, clipping.firstWordX, clipping.firstWordY, clipping.text);
       return;
     }
     if (clipping.action == ClippingResult::Action::Translate) {
