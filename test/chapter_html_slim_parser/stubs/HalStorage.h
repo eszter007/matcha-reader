@@ -26,6 +26,7 @@ class HalFile {
     const size_t pos = position();
     return (file_ && pos < total) ? static_cast<int>(total - pos) : 0;
   }
+  int read() { return file_ ? std::fgetc(file_) : -1; }
   size_t read(void* buffer, size_t count) { return file_ ? std::fread(buffer, 1, count, file_) : 0; }
   size_t write(const void* buffer, size_t count) {
     if (HalFileTest::failNextWrite) {

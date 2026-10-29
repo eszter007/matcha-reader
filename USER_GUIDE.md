@@ -376,9 +376,9 @@ any profile of **Settings → Reader → Text Settings**.
   - **Transparent**: one of your pictures drawn on top of the current screen. See [Sleep Screen](#37-sleep-screen).
   - **Insights**: your reading insights, such as hours read, your daily streak and minutes read this week.
 
-- **Sleep Screen Cover Mode**: How a cover fits the screen on the cover sleep screens.
-  - **Fit** (default): the whole cover, centred, with white borders where needed.
-  - **Crop**: fills the screen and cuts off the edges. Experimental.
+- **Sleep Screen Cover Mode**: How a cover or custom sleep image fits the screen.
+  - **Fit** (default): the whole picture, centred, with white borders where needed.
+  - **Crop**: fills the screen and cuts off the edges.
 
 - **Sleep Screen Cover Filter**: How a cover is drawn on the cover sleep screens.
   - **None** (default): in shades of grey.
@@ -879,6 +879,8 @@ Set **Sleep Screen** to **Custom** or **Cover + Custom**, then put BMP images on
 - **Several images (recommended):** Make a folder called `.sleep` in the top level of the SD card and put your `.bmp` files in it. The device picks one at random each time it sleeps. A folder called `sleep` works too.
 - **One image:** Put a file called `sleep.bmp` in the top level of the card. It wins over the folders.
 
+Like book covers, custom images are scaled to the screen using **Sleep Screen Cover Mode**. The first sleep with a new image takes longer while it is converted.
+
 #### Transparent overlay images
 
 Set **Sleep Screen** to **Transparent** or **Cover + Transparent**, then put BMP or PNG images on the SD card:
@@ -898,7 +900,7 @@ Keep these pictures apart from your normal sleep images, because they work diffe
 > - X3: make images 528x792 pixels.
 
 > [!TIP]
-> You can set a picture as your sleep screen straight from the image viewer in **[Browse Files](#33-browse-files-screen)**.
+> You can set a picture as your sleep screen straight from the image viewer in **[Browse Files](#33-browse-files-screen)**. On touch devices, long-press the image.
 
 #### Custom logo
 
