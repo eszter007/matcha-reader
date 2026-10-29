@@ -116,6 +116,7 @@ add_subdirectory(ble_remote_turn_gate)
 add_subdirectory(logo_art)
 
 add_subdirectory(${REPO_ROOT}/lib/BlePageTurner/test BlePageTurnerTests)
+add_subdirectory(vertical_page_break)
 
 add_test(NAME list_viewport COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_list_viewport.py)
 # Upstream also registers test_selection_buttons.py, test_clipping_highlight_planes.py and

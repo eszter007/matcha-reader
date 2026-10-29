@@ -119,7 +119,9 @@ namespace {
 // whole em (JLREQ 3.1.4). Dash pairs, a number and its unit, and a sign before a number are no longer
 // split across columns, a character that may not start a column moves its predecessor across a page
 // break too (3.1.7, 3.1.10), and a paragraph's first column honours the book's CSS text-indent.
-constexpr uint8_t VSECTION_FILE_VERSION = 152;
+// v154: no format change. A paragraph that starts a page starts in its first column; when the
+// previous paragraph ended at the foot of the last column, the page used to open with a blank one.
+constexpr uint8_t VSECTION_FILE_VERSION = 154;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
