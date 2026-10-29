@@ -1817,7 +1817,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     while (nextParagraphBreakIdx < paragraphBreaksBeforeIndex_.size() &&
            idx == paragraphBreaksBeforeIndex_[nextParagraphBreakIdx]) {
       paraBreakJustFired = true;
-      if (row != 0 || column == 0) {
+      if (row != 0) {
         column++;
         row = 0;
         cur.finalizePageIfNeeded();
