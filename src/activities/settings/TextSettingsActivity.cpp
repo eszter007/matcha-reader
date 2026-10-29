@@ -26,10 +26,10 @@ namespace fui = freeink::ui;
 
 namespace {
 // Indexed by LayoutRow / StyleRow; rebuildRowItems() asserts the lengths match.
-constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING,          StrId::STR_WORD_SPACING,
-                                         StrId::STR_CHARACTER_SPACING,     StrId::STR_EXTRA_SPACING,
-                                         StrId::STR_PARAGRAPH_INDENTATION, StrId::STR_ALIGNMENT,
-                                         StrId::STR_SCREEN_MARGIN,         StrId::STR_BOOK_CSS_MARGINS};
+constexpr StrId LAYOUT_ROW_NAME_IDS[] = {
+    StrId::STR_LINE_SPACING,  StrId::STR_WORD_SPACING,          StrId::STR_CHARACTER_SPACING,
+    StrId::STR_EXTRA_SPACING, StrId::STR_PARAGRAPH_INDENTATION, StrId::STR_ALIGNMENT,
+    StrId::STR_SCREEN_MARGIN, StrId::STR_BOOK_CSS_MARGINS,      StrId::STR_TATEGAKI};
 // Only Focus Reading shows in the preview; the other Style rows say so in their label.
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION_NO_PREVIEW,
                                         StrId::STR_EMBEDDED_STYLE_NO_PREVIEW, StrId::STR_TEXT_AA_NO_PREVIEW};
@@ -61,6 +61,7 @@ constexpr StrId WORD_SPACING_IDS[] = {StrId::STR_SPACING_50_PERCENT,  StrId::STR
 constexpr StrId CHARACTER_SPACING_IDS[] = {StrId::STR_SPACING_MINUS_2, StrId::STR_SPACING_MINUS_1,
                                            StrId::STR_SPACING_ZERO, StrId::STR_SPACING_PLUS_1,
                                            StrId::STR_SPACING_PLUS_2};
+constexpr StrId VERTICAL_TEXT_IDS[] = {StrId::STR_VERTICAL_AUTOMATIC, StrId::STR_STATE_ON, StrId::STR_STATE_OFF};
 constexpr StrId ALIGNMENT_IDS[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
                                    StrId::STR_BOOK_S_STYLE};
 constexpr int MARGIN_MIN = CrossPointSettings::SCREEN_MARGIN_MIN;
@@ -218,7 +219,10 @@ void TextSettingsActivity::rebuildRowItems() {
     } else if (i < LAYOUT_FIRST_ROW + layoutCount) {
       // Visible position -> LayoutRow: not every row is shown for every book.
       const int layoutIndex = i - LAYOUT_FIRST_ROW;
-      item.label = I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(layoutRowAt(layoutIndex))]);
+      const LayoutRow row = layoutRowAt(layoutIndex);
+      item.label = row == LayoutRow::VerticalText && profile_ != CrossPointSettings::TextProfileId::Japanese
+                       ? tr(STR_ZHIPAI)
+                       : I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(row)]);
       if (layoutIndex == 0) item.sectionHeading = layoutHeading_.c_str();
     } else {
       const int styleIndex = i - LAYOUT_FIRST_ROW - layoutCount;
@@ -501,6 +505,16 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
                         });
       requestUpdate();
       break;
+    case LayoutRow::VerticalText: {
+      uint8_t* setting = verticalTextSetting();
+      if (!setting) break;
+      const StrId title =
+          profile_ == CrossPointSettings::TextProfileId::Japanese ? StrId::STR_TATEGAKI : StrId::STR_ZHIPAI;
+      optionPopup_.show(title, VERTICAL_TEXT_IDS, static_cast<int>(std::size(VERTICAL_TEXT_IDS)), *setting,
+                        [setting](int idx) { *setting = static_cast<uint8_t>(idx); });
+      requestUpdate();
+      break;
+    }
     case LayoutRow::ScreenMargin: {
       std::vector<std::string> options;
       options.reserve((MARGIN_MAX - MARGIN_MIN) / MARGIN_STEP + 1);
@@ -572,6 +586,11 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
     }
     case LayoutRow::ScreenMargin:
       return std::to_string(SETTINGS.screenMargin);
+    case LayoutRow::VerticalText: {
+      const uint8_t* setting = verticalTextSetting();
+      const uint8_t v = setting ? *setting : 0;
+      return I18N.get(VERTICAL_TEXT_IDS[v < std::size(VERTICAL_TEXT_IDS) ? v : 0]);
+    }
 
     // ParaSpacing and BookSideMargins draw switches -- see layoutRowIsSwitch().
     default:
@@ -608,11 +627,27 @@ int TextSettingsActivity::listCount() const { return LAYOUT_FIRST_ROW + visibleL
 int TextSettingsActivity::visibleLayoutRows(LayoutRow* out) const {
   static constexpr LayoutRow VERTICAL[] = {LayoutRow::LineSpacing, LayoutRow::CharacterSpacing,
                                            LayoutRow::ScreenMargin};
-  const int count = verticalText_ ? static_cast<int>(std::size(VERTICAL)) : static_cast<int>(LayoutRow::Count);
-  if (out) {
-    for (int i = 0; i < count; i++) out[i] = verticalText_ ? VERTICAL[i] : static_cast<LayoutRow>(i);
+  int count = 0;
+  const auto add = [&](const LayoutRow row) {
+    if (out) out[count] = row;
+    count++;
+  };
+  if (verticalTextSetting()) add(LayoutRow::VerticalText);
+  if (verticalText_) {
+    for (const LayoutRow row : VERTICAL) add(row);
+  } else {
+    for (int i = 0; i < static_cast<int>(LayoutRow::VerticalText); i++) add(static_cast<LayoutRow>(i));
   }
   return count;
+}
+
+// Only from Settings: in a book, a change of direction would need the open chapter laid out again.
+uint8_t* TextSettingsActivity::verticalTextSetting() const {
+  if (!editStoredProfile_) return nullptr;
+  if (profile_ == CrossPointSettings::TextProfileId::Japanese) return &SETTINGS.tategaki;
+  if (profile_ == CrossPointSettings::TextProfileId::TraditionalChinese) return &SETTINGS.zhipai;
+  if (profile_ == CrossPointSettings::TextProfileId::SimplifiedChinese) return &SETTINGS.zhipaiSimplified;
+  return nullptr;
 }
 
 TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int visibleIndex) const {

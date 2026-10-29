@@ -394,11 +394,13 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // ReaderPrefs entry: it lives in the Controls screen, which a book cannot reach, so a per-book
   // copy could never be changed once that book had prefs saved.
   uint8_t reversePageTurn = 0;
-  // Whether Japanese (tategaki) and Chinese (zhipai) books open in vertical columns. The per-book
+  // Whether Japanese (tategaki), Traditional Chinese (zhipai) and Simplified Chinese (zhipaiSimplified)
+  // books open in vertical columns. The per-book
   // vertical toggle overrides both. AUTOMATIC follows the book's declared page order.
   enum VERTICAL_MODE : uint8_t { VERTICAL_AUTOMATIC = 0, VERTICAL_ON = 1, VERTICAL_OFF = 2, VERTICAL_MODE_COUNT };
   uint8_t tategaki = VERTICAL_AUTOMATIC;
   uint8_t zhipai = VERTICAL_AUTOMATIC;
+  uint8_t zhipaiSimplified = VERTICAL_AUTOMATIC;
   // Back on Home reopens the most recent book, and its hint says Resume. Off by default: Back is a
   // "go back" button everywhere else, which made the shortcut too easy to hit by accident.
   uint8_t homeBackResumes = 0;
