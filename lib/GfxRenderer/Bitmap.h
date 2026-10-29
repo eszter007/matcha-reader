@@ -79,6 +79,8 @@ class Bitmap {
   // A false return (image above the size cap, or no heap) is not an error -- readNextRow()
   // just keeps reading row-wise from the file.
   bool preload() const;
+  // Unprocessed luminance of display-order row y (0 = top); leaves readNextRow()'s dither state alone.
+  BmpReaderError readRowGray(int y, uint8_t* gray, uint8_t* rowBuffer) const;
   int getWidth() const { return width; }
   int getHeight() const { return height; }
   bool isTopDown() const { return topDown; }
