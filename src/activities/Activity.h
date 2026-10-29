@@ -6,6 +6,8 @@
 #include <string>
 #include <utility>
 
+class ReaderActivity;
+
 #include "ActivityManager.h"  // for using the ActivityManager singleton
 #include "ActivityResult.h"
 #include "GfxRenderer.h"
@@ -49,6 +51,9 @@ class Activity {
   // transitions so no filesystem code races a raw SD-card owner.
   virtual bool requiresExclusiveStorageLoop() const { return false; }
   virtual bool isReaderActivity() const { return false; }
+  // The ReaderActivity behind this screen, or null. isReaderActivity() is also true for screens
+  // that only act like a reader (clip selection, manga), so never cast on that alone.
+  virtual ReaderActivity* asReaderActivity() { return nullptr; }
   virtual bool acceptsRemoteInput() const { return false; }
   // Returns true when the activity schedules its own forced refresh.
   virtual bool handleForcedRefresh() { return false; }

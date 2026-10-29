@@ -106,6 +106,7 @@ class ReaderActivity : public Activity {
   void prepareForSleep() override;
 
   bool isReaderActivity() const final { return true; }
+  ReaderActivity* asReaderActivity() final { return this; }
   bool acceptsRemoteInput() const final { return pageRendered.load(std::memory_order_acquire); }
   bool handleForcedRefresh() final;
 
