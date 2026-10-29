@@ -137,7 +137,7 @@ struct ReaderActivity {
 struct ActivityManager {
   MappedInputManager& mappedInput;
   std::unique_ptr<ReaderActivity> currentActivity = std::make_unique<ReaderActivity>();
-  bool context = true, foregroundReader = true;
+  bool context = true, foregroundReaderShown = true;
   std::atomic<bool> requestedUpdate{false};
   uint32_t screenVisit = 1;
   enum class QueuedShortcut : uint8_t { None, ReaderMenu, SaveQuote };
@@ -148,7 +148,8 @@ struct ActivityManager {
   unsigned long queuedRemoteTurnAtMs = 0;
   void noteQueuedRemoteInput();
   bool isRemoteReaderContext() const { return context; }
-  bool isForegroundReader() const { return foregroundReader; }
+  bool isForegroundReader() const { return foregroundReaderShown; }
+  ReaderActivity* foregroundReader() const { return foregroundReaderShown ? currentActivity.get() : nullptr; }
   bool remoteClick(RemoteButton button) { return mappedInput.injectRemoteClick(button); }
   void requestUpdate() {}
   bool remoteTurn(bool forward, bool chapter);
@@ -161,7 +162,7 @@ void checkRouting(MappedInputManager& input) {
   assert(manager.remoteTurn(true, false));
   assert(manager.currentActivity->pages == 1 && !input.hasRemoteClick());
   for (bool reader : {true, false}) {
-    manager.foregroundReader = reader;
+    manager.foregroundReaderShown = reader;
     manager.currentActivity->menu = true;
     for (bool forward : {true, false}) {
       input.update();
