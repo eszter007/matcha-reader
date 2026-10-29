@@ -1074,6 +1074,8 @@ void EpubReaderActivity::readerLoop() {
       return;
     }
   }
+  stepLookupPrescan();
+
   // Idle glyph prewarm for the likely next page (currentPage + 1). The scan
   // pass draws nothing (FCM scan mode suppresses pixels), so the displayed
   // framebuffer is untouched; endScanAndPrewarm loads only glyphs not already
@@ -5327,7 +5329,9 @@ bool EpubReaderActivity::textAtPoint(const int x, const int y) {
       bool found;
     } hit{x, y, false};
     const VerticalPage* vpage = verticalSection->getPage();
-    if (!vpage) return false;
+    // A chapter still being laid out cannot serve its page here; the lookup panel can (it drops
+    // the build and keeps the page), and finds no word if the tap was not on one.
+    if (!vpage) return verticalBuildInProgress_.load(std::memory_order_relaxed);
     forEachVerticalClipCell(renderer, *vpage, fontId, left + SETTINGS.screenMargin, top + SETTINGS.screenMargin, &hit,
                             [](void* ctx, const VerticalClipCell& cell) {
                               auto& h = *static_cast<Hit*>(ctx);
@@ -5854,7 +5858,83 @@ bool EpubReaderActivity::repaintPageForPanel() {
   return true;
 }
 
+void EpubReaderActivity::stepLookupPrescan() {
+  constexpr unsigned long PRESCAN_REST_MS = 1500;  // after the page is up: past a run of turns
+  constexpr uint32_t PRESCAN_SLICE_MS = 25;
+  constexpr uint32_t PRESCAN_MIN_ALLOC = 40 * 1024;
+  const int page = verticalSection ? verticalSection->currentPage : -1;
+  if (prescan_ && (prescanSpine_ != currentSpineIndex || prescanPage_ != page)) {
+    prescan_.reset();  // the reader moved on
+    DictIndex::releaseCaches();
+  }
+  // Only where it is cheap to hold: the scan and the dictionary caches need internal heap the
+  // X3/X4 cannot spare in the background, and a lookup there still scans on open.
+  if (page < 0 || !epub || HalMemory::getPsramHeap().totalBytes == 0 || !DictIndex::isAvailable() ||
+      !(isJapaneseBook() || isChineseBook()) || verticalBuildInProgress_.load(std::memory_order_relaxed) ||
+      overlay != Overlay::None || lastRenderCompleteMs == 0 || millis() - lastRenderCompleteMs < PRESCAN_REST_MS ||
+      mappedInput.anyButtonDownRaw()) {
+    return;
+  }
+  const std::string cachePath = epub->getCachePath() + "/wlscan.bin";
+  if (!prescan_) {
+    if (prescanSpine_ == currentSpineIndex && prescanPage_ == page) return;  // done (or tried) here
+    if (ESP.getMaxAllocHeap() < PRESCAN_MIN_ALLOC) return;
+    RenderLock lock{RenderLock::Try{}};
+    if (!lock.held()) return;
+    const VerticalPage* vpage = verticalSection->getPage();
+    if (!vpage || vpage->isImagePage()) return;
+    auto scan = makeUniqueNoThrow<WordSelectionScan>();
+    if (!scan) return;
+    // Built exactly as the panel builds its scan, or the cache would not match it.
+    std::string tail;
+    const uint32_t tailParagraph = verticalLookupTail(tail, nullptr);
+    vpage = verticalSection->getPage();  // the tail's getPage() may have re-faulted the slot
+    if (!vpage) return;
+    scan->initFromVerticalPage(*vpage);
+    if (!tail.empty()) scan->appendLookupContext(tail, tailParagraph);
+    prescanSpine_ = currentSpineIndex;
+    prescanPage_ = page;
+    if (scan->tryLoadCache(cachePath, static_cast<uint16_t>(currentSpineIndex), static_cast<uint16_t>(page))) return;
+    prescan_ = std::move(scan);
+    prescanStartMs_ = millis();
+    return;
+  }
+  if (!prescan_->step(PRESCAN_SLICE_MS)) return;
+  // A truncated scan is refused by saveCache() itself; the panel then scans on open as before.
+  prescan_->saveCache(cachePath, static_cast<uint16_t>(currentSpineIndex), static_cast<uint16_t>(page),
+                      WordSelectionScan::kNoRestoredCursor);
+  LOG_DBG("ERS", "Lookup prescan of spine=%d page=%d done in %lu ms", currentSpineIndex, page,
+          millis() - prescanStartMs_);
+  prescan_.reset();
+  DictIndex::releaseCaches();
+}
+
+uint32_t EpubReaderActivity::verticalLookupTail(std::string& lookupTail, std::string* miningTail) {
+  // Worst case 4 UTF-8 bytes per context character: one reserve instead of repeated growth.
+  lookupTail.reserve(WordSelectionScan::kLookupContextChars * 4);
+  if (miningTail) miningTail->reserve(kMiningTailChars * 3);
+  uint32_t paragraph = 0;
+  const VerticalPage* nextPage = verticalSection->getPage(verticalSection->currentPage + 1);
+  if (!nextPage) return paragraph;
+  int taken = 0;
+  for (const auto& g : nextPage->glyphs) {
+    if (g.renderKind == VerticalGlyph::RotatedRun) continue;
+    // Both run kinds keep their text in the page's pool and leave codepoint == 0; encoding that
+    // would put a NUL byte into the tail and be read back as a real character.
+    if (g.codepoint == 0) continue;
+    if (taken == 0) paragraph = g.paragraphIndex;
+    // One paragraph only: a word cannot span a paragraph break, and the scan would discard the rest.
+    if (g.paragraphIndex != paragraph) break;
+    if (taken < WordSelectionScan::kLookupContextChars) WordSelectionScan::encodeUtf8(g.codepoint, lookupTail);
+    if (!miningTail && taken + 1 >= WordSelectionScan::kLookupContextChars) break;
+    if (miningTail) WordSelectionScan::encodeUtf8(g.codepoint, *miningTail);
+    if (++taken >= kMiningTailChars) break;
+  }
+  return paragraph;
+}
+
 void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int lookupAtX, const int lookupAtY) {
+  prescan_.reset();  // the panel scans (or loads the cache) itself; give it the heap
   requestVerticalBuildNotice();
   if (!epub) return;
   if (!DictIndex::isAvailable()) {
@@ -5915,30 +5995,10 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
       // pointer into the section's page cache, so asking for another page can invalidate the one
       // already held.
       std::string lookupTail;
-      // Worst case 4 UTF-8 bytes per context character: one reserve instead of repeated growth
-      // on a heap that was just reclaimed.
-      lookupTail.reserve(WordSelectionScan::kLookupContextChars * 4);
       // The same walk, carried further, finishes a sentence the page turn cut off when the word
       // is saved for sentence mining. Kept apart from lookupTail, which becomes scan glyphs.
       std::string miningTail;
-      miningTail.reserve(kMiningTailChars * 3);
-      uint32_t lookupTailParagraph = 0;
-      if (const VerticalPage* nextPage = verticalSection->getPage(verticalSection->currentPage + 1)) {
-        int taken = 0;
-        for (const auto& g : nextPage->glyphs) {
-          if (g.renderKind == VerticalGlyph::RotatedRun) continue;
-          // Both run kinds keep their text in the page's pool and leave codepoint == 0; encoding
-          // that would put a NUL byte into the tail and be read back as a real character.
-          if (g.codepoint == 0) continue;
-          if (taken == 0) lookupTailParagraph = g.paragraphIndex;
-          // One paragraph only: a word cannot span a paragraph break, and the scan would discard
-          // the rest anyway.
-          if (g.paragraphIndex != lookupTailParagraph) break;
-          if (taken < WordSelectionScan::kLookupContextChars) WordSelectionScan::encodeUtf8(g.codepoint, lookupTail);
-          WordSelectionScan::encodeUtf8(g.codepoint, miningTail);
-          if (++taken >= kMiningTailChars) break;
-        }
-      }
+      const uint32_t lookupTailParagraph = verticalLookupTail(lookupTail, &miningTail);
       const int pageIndex = verticalSection->currentPage;
       const VerticalPage* page = nullptr;
       // A chapter still building holds most of the heap, and it stays held while the panel is in

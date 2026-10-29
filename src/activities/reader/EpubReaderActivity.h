@@ -19,6 +19,7 @@
 #include "ProgressMapper.h"
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
+#include "WordSelectionScan.h"
 #include "components/OptionPopup.h"
 #include "util/CjkScript.h"
 
@@ -686,6 +687,16 @@ class EpubReaderActivity final : public ReaderActivity {
   void navigateToHref(const std::string& href, bool savePosition = false);
   void openFootnotesPanel();
   void openWordLookupPanel(bool pageOnScreen, int lookupAtX = -1, int lookupAtY = -1);
+  // The next page's opening characters as lookup context (and, when asked, the longer mining
+  // tail); returns their paragraph. Callers hold the render lock (getPage() re-faults the slot).
+  uint32_t verticalLookupTail(std::string& lookupTail, std::string* miningTail);
+  // Word Lookup's page scan, run while the reader rests on a vertical page and saved to the scan
+  // cache, so the first lookup there opens without the multi-second dictionary walk.
+  std::unique_ptr<WordSelectionScan> prescan_;
+  int prescanSpine_ = -1;
+  int prescanPage_ = -1;
+  unsigned long prescanStartMs_ = 0;
+  void stepLookupPrescan();
   // Footnotes and translation float over the page. Picked from the reader menu, the framebuffer
   // still holds the menu, so they wait for render() to put the page back first: render() sets
   // panelPageReady once the page is drawn, and the next readerLoop() opens the panel.
@@ -907,7 +918,8 @@ class EpubReaderActivity final : public ReaderActivity {
   bool skipLoopDelay() override {
     // A vertical chapter build left running by render() advances one slice per loop pass: no delay
     // between passes, or the chapter takes several times as long to finish.
-    return overlay != Overlay::None || verticalBuildInProgress_.load(std::memory_order_relaxed) ||
+    // A lookup prescan runs in slices too; idle pacing would stretch a 2 s scan to minutes.
+    return overlay != Overlay::None || verticalBuildInProgress_.load(std::memory_order_relaxed) || prescan_ ||
            (section && section->isBuilding() && !buildHeapPaused &&
             (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD));
   }
