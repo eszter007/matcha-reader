@@ -121,7 +121,9 @@ namespace {
 // break too (3.1.7, 3.1.10), and a paragraph's first column honours the book's CSS text-indent.
 // v153: no format change. A paragraph that starts a page starts in its first column; when the
 // previous paragraph ended at the foot of the last column, the page used to open with a blank one.
-constexpr uint8_t VSECTION_FILE_VERSION = 153;
+// v156: no format change. A column oidashi shortened spreads by at most an eighth of an em per gap
+// and otherwise ends short of the foot.
+constexpr uint8_t VSECTION_FILE_VERSION = 156;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
