@@ -45,7 +45,9 @@ TEST(VerticalPageBreak, ParagraphAfterHangingFullStopStartsInFirstColumn) {
   // The 。 hangs past the foot of the page's last column (burasage).
   const auto pages = layout({fullPage("人物なのだかきくけこ。"), "今やらなければ"});
   ASSERT_EQ(pages.size(), 2u);
-  EXPECT_EQ(firstGlyphOf(pages[0], U'。')->column, 4);
+  const VerticalGlyph* stop = firstGlyphOf(pages[0], U'。');
+  ASSERT_NE(stop, nullptr);
+  EXPECT_EQ(stop->column, 4);
   const VerticalGlyph* head = firstGlyphOf(pages[1], U'今');
   ASSERT_NE(head, nullptr);
   EXPECT_EQ(head->column, 0);
@@ -55,6 +57,8 @@ TEST(VerticalPageBreak, ParagraphAfterHangingFullStopStartsInFirstColumn) {
 TEST(VerticalPageBreak, ParagraphMidPageStillStartsFreshColumn) {
   const auto pages = layout({"あいう。", "今やら"});
   ASSERT_EQ(pages.size(), 1u);
-  EXPECT_EQ(firstGlyphOf(pages[0], U'今')->column, 1);
-  EXPECT_EQ(firstGlyphOf(pages[0], U'今')->row, 0);
+  const VerticalGlyph* head = firstGlyphOf(pages[0], U'今');
+  ASSERT_NE(head, nullptr);
+  EXPECT_EQ(head->column, 1);
+  EXPECT_EQ(head->row, 0);
 }
