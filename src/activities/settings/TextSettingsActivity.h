@@ -51,7 +51,7 @@ class TextSettingsActivity final : public UiListActivity {
     Alignment,
     ScreenMargin,
     BookSideMargins,
-    VerticalText,  // Japanese and Traditional Chinese, from Settings only
+    VerticalText,  // Japanese and Chinese, from Settings only
     Count
   };
   enum class StyleRow { FocusReading, Hyphenation, EmbeddedStyle, AntiAliasing, Count };

@@ -220,7 +220,7 @@ void TextSettingsActivity::rebuildRowItems() {
       // Visible position -> LayoutRow: not every row is shown for every book.
       const int layoutIndex = i - LAYOUT_FIRST_ROW;
       const LayoutRow row = layoutRowAt(layoutIndex);
-      item.label = row == LayoutRow::VerticalText && profile_ == CrossPointSettings::TextProfileId::TraditionalChinese
+      item.label = row == LayoutRow::VerticalText && profile_ != CrossPointSettings::TextProfileId::Japanese
                        ? tr(STR_ZHIPAI)
                        : I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(row)]);
       if (layoutIndex == 0) item.sectionHeading = layoutHeading_.c_str();
@@ -508,8 +508,10 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
     case LayoutRow::VerticalText: {
       uint8_t* setting = verticalTextSetting();
       if (!setting) break;
-      optionPopup_.show(LAYOUT_ROW_NAME_IDS[row], VERTICAL_TEXT_IDS, static_cast<int>(std::size(VERTICAL_TEXT_IDS)),
-                        *setting, [setting](int idx) { *setting = static_cast<uint8_t>(idx); });
+      const StrId title =
+          profile_ == CrossPointSettings::TextProfileId::Japanese ? StrId::STR_TATEGAKI : StrId::STR_ZHIPAI;
+      optionPopup_.show(title, VERTICAL_TEXT_IDS, static_cast<int>(std::size(VERTICAL_TEXT_IDS)), *setting,
+                        [setting](int idx) { *setting = static_cast<uint8_t>(idx); });
       requestUpdate();
       break;
     }
@@ -643,7 +645,10 @@ int TextSettingsActivity::visibleLayoutRows(LayoutRow* out) const {
 uint8_t* TextSettingsActivity::verticalTextSetting() const {
   if (!editStoredProfile_) return nullptr;
   if (profile_ == CrossPointSettings::TextProfileId::Japanese) return &SETTINGS.tategaki;
-  if (profile_ == CrossPointSettings::TextProfileId::TraditionalChinese) return &SETTINGS.zhipai;
+  if (profile_ == CrossPointSettings::TextProfileId::TraditionalChinese ||
+      profile_ == CrossPointSettings::TextProfileId::SimplifiedChinese) {
+    return &SETTINGS.zhipai;
+  }
   return nullptr;
 }
 

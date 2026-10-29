@@ -442,8 +442,8 @@ to that book only.
     versions, a book offers the sizes of the version it uses, e.g. `NotoSansSC` for a simplified-Chinese book.
   - **LAYOUT**:
     - **Tategaki (vertical Japanese)**, in the **Japanese** profile, and **Zhípái (vertical Chinese)**, in the
-      **Traditional Chinese** profile: whether Japanese or Chinese books open in vertical columns. Zhípái applies to
-      every Chinese book, simplified ones too. Only listed when Text Settings is opened from **Settings**.
+      **Traditional Chinese** and **Simplified Chinese** profiles (one setting, shown in both): whether Japanese or
+      Chinese books open in vertical columns. Only listed when Text Settings is opened from **Settings**.
       - **Automatic** (default): follows the book. A book set to read right to left opens vertically, any other
         book horizontally.
       - **On**: always vertical.
@@ -1435,7 +1435,8 @@ per thousand characters, so a whole novel is a long run.
 
 The layout follows the publisher. A book set to read right to left (common for novels from Taiwan) opens in
 vertical columns. Every other Chinese book opens horizontally. To open every Chinese book one way, set **Zhípái (vertical
-Chinese)** in **Settings → Reader → Text Settings → Traditional Chinese** to **On** or **Off**. The **Vertical Text** switch in a book's **Reader
+Chinese)** in **Settings → Reader → Text Settings → Traditional Chinese** (or **Simplified Chinese**) to **On** or
+**Off**. The **Vertical Text** switch in a book's **Reader
 Settings** overrides both and is saved per book.
 
 #### Fonts and the Interface
