@@ -104,13 +104,17 @@ class MappedInputManager {
     deferredHomeAction = HomeButtonAction::Ignore;
   }
   bool wasMenuGesture() const;
+  // Capacitive page keys (the Metalio cover keys) arrive as the side Up/Down bits, so Button-based
+  // code cannot tell them from the side keys. prevPage picks the key the reader turns back with;
+  // onRelease picks the edge.
+  bool wasCoverPageKey(bool prevPage, bool onRelease) const;
   // Bottom-edge up-swipe as the reader-menu gesture (SHOW_READER_MENU's Swipe
   // Up option). Only meaningful on home-key boards, where Home lives on the
   // key and the bottom edge is free; elsewhere the same swipe is the Home
   // gesture and this returns false.
   bool wasReaderMenuSwipeUp() const;
-  // Top-edge down-swipe opens the light panel when the active board actually
-  // has a frontlight. ActivityManager consumes it before activity input.
+  // Top-edge down-swipe opens the control center on touch boards.
+  // ActivityManager consumes it before activity input.
   bool wasLightPanelGesture() const;
   bool wasAnyPressed() const;
   // True when a side-button edge right now is plausibly deliberate: no front
@@ -127,6 +131,8 @@ class MappedInputManager {
   void setSideActionsActive(const bool active) const { sideActionsActive = active; }
   // See HalGPIO::anyButtonDownRaw() -- for cancelling long background work.
   bool anyButtonDownRaw() const { return gpio.anyButtonDownRaw(); }
+  // A touch edge this frame, including the capacitive Home key (not counted by wasAnyPressed()).
+  bool wasTouchActivity() const { return gpio.wasTouchActivity(); }
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;
   const GfxRenderer& getRenderer() const { return renderer; }

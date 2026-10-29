@@ -206,6 +206,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void settleOverlayRefresh();
   int autoTurnOption = 0;  // current auto page-turn rate index (More panel)
   std::vector<EpubReaderMenuActivity::MenuItem> moreItems;
+  EpubReaderMenuActivity::MenuAction selectedMenuAction = EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER;
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
@@ -597,7 +598,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void clearDeferredReposition();
   void rememberCurrentContentOffset();
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
-  void jumpToPercent(int percent);
+  void jumpToPercent(int percent) override;
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   // Live section position, or the values cached before a child screen
   // released the section.
@@ -675,6 +676,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   // True when the reader moved (or, mid-build, when the page was requested).
   bool pageTurn(bool isForwardTurn) override;
+  void interruptBackgroundWork() override { imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed); }
   void loadCachedBookmarks();
   void addBookmark();
   void updateBookmarkFlag();

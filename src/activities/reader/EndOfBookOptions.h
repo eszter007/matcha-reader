@@ -33,9 +33,9 @@ class EndOfBookOptions {
   bool menuActive() const;
 
   // Left/Right and side Up/Down move between Home and Continue, Confirm or a tap activates one,
-  // and a short Back press returns to the last page of the book. Fills openPath when the result
-  // is OpenBook. Returns Action::None when nothing relevant was pressed; callers continue their
-  // normal input path (keeping long-press Back to the file browser working).
+  // and a short Back press or a previous-page cover key returns to the last page of the book. Fills openPath when the
+  // result is OpenBook. Returns Action::None when nothing relevant was pressed; callers continue their normal input
+  // path (keeping long-press Back to the file browser working).
   Action handleMenuInput(const MappedInputManager& input, std::string* openPath);
 
   // Draws the full end screen onto a cleared buffer.

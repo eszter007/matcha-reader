@@ -16,12 +16,16 @@ struct RecentBook {
 
 // Recents contains at most ten entries. Move them to the front of the scanned catalog in place
 // instead of allocating another full catalog just to preserve recent-first ordering.
-inline void mergeRecentBooks(std::vector<RecentBook>& catalog, std::vector<RecentBook> recents) {
+// A recent the catalog does not hold is added only while its file still exists: the recents list
+// outlives a book deleted elsewhere (file browser, web, USB), and adding it back unchecked kept a
+// dead entry in the Library.
+inline void mergeRecentBooks(std::vector<RecentBook>& catalog, std::vector<RecentBook> recents,
+                             bool (*fileExists)(const std::string& path)) {
   for (auto recent = recents.rbegin(); recent != recents.rend(); ++recent) {
     const auto scanned =
         std::find_if(catalog.begin(), catalog.end(), [&](const RecentBook& book) { return book.path == recent->path; });
     if (scanned == catalog.end()) {
-      catalog.insert(catalog.begin(), std::move(*recent));
+      if (fileExists(recent->path)) catalog.insert(catalog.begin(), std::move(*recent));
       continue;
     }
     if (!recent->title.empty()) scanned->title = std::move(recent->title);

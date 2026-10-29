@@ -35,6 +35,8 @@
 #include "util/BookProgress.h"
 
 namespace {
+bool recentFileExists(const std::string& path) { return Storage.exists(path.c_str()); }
+
 constexpr unsigned long LONG_PRESS_MS = 1000;
 constexpr int COVER_ASPECT_NUM = 2;
 constexpr int COVER_ASPECT_DEN = 3;
@@ -192,7 +194,7 @@ void CoverLibraryActivity::loadRecentBooks() {
   RecentBooksStore cache;
   if (cache.loadFromPath(LIBRARY_CACHE_JSON)) {
     recentBooks = cache.takeBooks();
-    mergeRecentBooks(recentBooks, RECENT_BOOKS.getBooks());
+    mergeRecentBooks(recentBooks, RECENT_BOOKS.getBooks(), recentFileExists);
   } else {
     recentBooks = RECENT_BOOKS.getBooks();
   }
@@ -618,7 +620,7 @@ bool CoverLibraryActivity::applyLibraryScan() {
 
   // Cached entries whose files vanished drop out; recents remain first without building a
   // second full catalog.
-  mergeRecentBooks(scan_.results, RECENT_BOOKS.getBooks());
+  mergeRecentBooks(scan_.results, RECENT_BOOKS.getBooks(), recentFileExists);
 
   bool changed = scan_.results.size() != recentBooks.size();
   if (!changed) {
@@ -1291,12 +1293,18 @@ void CoverLibraryActivity::showBookActions(const std::string& path, const std::s
                                           ? shelves[openShelfIndex].folderPath
                                           : std::string();
   BookActionsMenu::show(optionPopup, *this, renderer, mappedInput, path, title, percent,
-                        [this, openShelfFolder](const bool deleted) {
+                        [this, openShelfFolder, path](const bool deleted) {
                           // Either way the frame underneath is stale; a delete also drops a book
                           // out of the lists the grid is drawn from.
                           lastRendered.valid = false;
                           if (deleted) {
                             loadRecentBooks();
+                            // The scan cache still lists the book, and a running scan may already
+                            // have collected it; drop it from both so it does not come back.
+                            const auto samePath = [&path](const RecentBook& book) { return book.path == path; };
+                            std::erase_if(recentBooks, samePath);
+                            std::erase_if(scan_.results, samePath);
+                            RecentBooksStore::saveBooksToPath(recentBooks, LIBRARY_CACHE_JSON);
                             shelvesLoaded = false;
                             contentIndex = 0;
                           }

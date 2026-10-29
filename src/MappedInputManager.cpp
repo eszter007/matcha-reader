@@ -3,7 +3,6 @@
 #include <BoardConfig.h>
 #include <FreeInkUICore.h>
 #include <GfxRenderer.h>
-#include <HalFrontlight.h>
 #include <HalHaptics.h>
 
 #include <algorithm>
@@ -434,16 +433,20 @@ bool MappedInputManager::wasBottomEdgeUpSwipe() const { return wasEdgeSwipe(fui:
 
 bool MappedInputManager::wasMenuGesture() const { return wasTopEdgeDownSwipe(); }
 
+bool MappedInputManager::wasCoverPageKey(const bool prevPage, const bool onRelease) const {
+  // Same Up/Down choice as Button::PageBack / PageForward.
+  const bool up = prevPage != isNavDirectionSwapped();
+  const uint8_t button = up ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN;
+  return onRelease ? gpio.wasCapacitivePageKeyReleased(button) : gpio.wasCapacitivePageKeyPressed(button);
+}
+
 bool MappedInputManager::wasReaderMenuSwipeUp() const { return gpio.hasHomeKey() && wasBottomEdgeUpSwipe(); }
 
 bool MappedInputManager::wasHomeGesture() const {
   return gpio.hasHomeKey() ? homeAction == HomeButtonAction::Home : wasBottomEdgeUpSwipe();
 }
 
-bool MappedInputManager::wasLightPanelGesture() const {
-  // On lightless boards the same edge remains available to the reader menu.
-  return Frontlight.present() && wasTopEdgeDownSwipe();
-}
+bool MappedInputManager::wasLightPanelGesture() const { return wasTopEdgeDownSwipe(); }
 
 #if FREEINK_CAP_TOUCH
 bool MappedInputManager::wasPowerConfirmClick() const {

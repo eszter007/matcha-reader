@@ -62,6 +62,14 @@ void XtcReaderActivity::onReaderExit() {
   xtc.reset();
 }
 
+void XtcReaderActivity::jumpToPercent(const int percent) {
+  if (!xtc) return;
+  const uint32_t total = xtc->getPageCount();
+  uint32_t target = static_cast<uint32_t>(static_cast<float>(percent) / 100.0f * total);
+  if (target >= total && total > 0) target = total - 1;
+  currentPage = target;
+}
+
 void XtcReaderActivity::readerLoop() {
   // Auto-dismiss the bookmark toast.
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
@@ -216,13 +224,7 @@ void XtcReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction a
       startActivityForResult(
           std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
           [this](const ActivityResult& result) {
-            if (!result.isCancelled && xtc) {
-              const int percent = std::get<PercentResult>(result.data).percent;
-              const uint32_t total = xtc->getPageCount();
-              uint32_t target = static_cast<uint32_t>(static_cast<float>(percent) / 100.0f * total);
-              if (target >= total && total > 0) target = total - 1;
-              currentPage = target;
-            }
+            if (!result.isCancelled) jumpToPercent(std::get<PercentResult>(result.data).percent);
             requestUpdate();
           });
       break;

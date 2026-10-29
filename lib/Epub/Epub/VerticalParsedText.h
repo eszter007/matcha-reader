@@ -243,6 +243,8 @@ class VerticalParsedText {
     // layouts -- that shared meaning is the whole point: it is what lets a reading position
     // survive a vertical/horizontal switch. See VerticalPage::visibleTextOffset.
     uint32_t visibleTextOffset = 0;
+    // The book's text-indent (CSS) for a paragraph that starts in this run, in quarter ems.
+    uint8_t indentQuarters = 0;
   };
 
   // continuesPreviousParagraph: pass true when this call carries the NEXT CHUNK of a paragraph
@@ -404,6 +406,8 @@ class VerticalParsedText {
   // Extra right-side padding (in pixels) reserved for vertical ruby so it
   // doesn't clip against the right edge.
   void setRightPaddingPx(int padPx) { rightPaddingPx_ = (padPx < 0) ? 0 : padPx; }
+  // Furigana is drawn: a reading longer than its base spaces the base out (JLREQ 3.3.8).
+  void setRubyShown(const bool shown) { rubyShown_ = shown; }
 
  private:
   const GfxRenderer& renderer_;
@@ -413,13 +417,16 @@ class VerticalParsedText {
   int columnGapPx_ = 0;
   int characterSpacingPx_ = 0;
   int rightPaddingPx_ = 0;
+  bool rubyShown_ = false;
 
   struct PendingChar {
     uint32_t codepoint;
     uint32_t paragraphIndex;
     uint32_t byteOffset;
     uint8_t style;
-    bool emphasis;
+    uint8_t emphasis : 1;
+    // The book's text-indent for a paragraph starting at this character, in quarter ems.
+    uint8_t indentQuarters : 7;
     // This character's share of its ruby, as a span of rubyPool_ (0 = none). A span rather than a
     // std::string keeps the entry at 24 bytes instead of 44: stream_ reserves 512 of them for the
     // whole build.

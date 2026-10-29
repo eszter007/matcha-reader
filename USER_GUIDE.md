@@ -112,13 +112,13 @@ Some devices, such as the X4, have no clock chip. Their clock drifts during slee
 
 **Settings → System → Clock → Show in Header** shows the time at the top of menu screens, on the opposite side from the battery. Some themes have no room for it. The time updates whenever the screen redraws. On the X4 it shows the device's own time even when that time has drifted, so a wrong time there means you should sync.
 
-### Frontlight (X4 Pro and Paper Mono)
+### Control Center and Frontlight
 
 The X4 Pro and the M5Stack Paper Mono have a built-in light. On the X4 Pro you can set brightness and warmth. On the Paper Mono you can set brightness only. You control the light from a pull-down panel, not from the Settings menu.
 
 * **Open the panel:** Swipe down from the top edge of the screen. This works on almost every screen, including Home, Browse Files and a book. Tapping the status bar at the top also opens it.
 * **Adjust the light:** Drag the **Brightness** and **Warmth** sliders. The light changes as you drag.
-* **Turn the light on or off:** Tap the **Light** button in the row of quick buttons, or press **Confirm**. The same row also has buttons for **Night Mode**, a screen refresh, screen rotation and touch controls.
+* **Turn the light on or off:** Tap the **Light** button in the row of quick buttons, or press **Confirm**. The same row also has buttons for **Night Mode**, a screen refresh, screen rotation and touch controls, and on devices with Bluetooth a button that turns the Bluetooth page turner on or off.
 * **Use the buttons:** While the panel is open, **Side Up**/**Side Down**, **Left**/**Right** and the page-turn buttons change the brightness. Hold a button to keep changing it. On devices with side buttons on the edge, the upper button always makes the light brighter.
 * **Close the panel:** Swipe up, tap below the panel, or press **Back**.
 * **Quick on/off (X4 Pro only):** Double-click **Power**. This shortcut is **Double-Click Power for Light** in **Settings → Controls → Shortcuts** and is on by default.
@@ -441,7 +441,7 @@ to that book only.
     family offers the sizes installed for it. When **Noto Sans** on your card consists only of Chinese or Japanese
     versions, a book offers the sizes of the version it uses, e.g. `NotoSansSC` for a simplified-Chinese book.
   - **LAYOUT**:
-    - **Line Spacing**: **Tight**, **Normal** (default), **Wide** or **Extra Wide**.
+    - **Line Spacing**: Space between lines, as a percentage of the font size: **0%**, **+10%**, **+20%** (default), **+30%**, **+45%**, **+60%** or **+75%**. Vertical text uses three column gaps: 0% and +10% are tight, +20% is normal, and +30% and up are wide.
     - **Word spacing**: 50% to 200% of a normal space (default 100%).
     - **Character spacing**: −2 px to +2 px (default 0 px). In vertical text this is the gap between characters down
       a column, so a tighter setting fits more characters in each column.
@@ -506,6 +506,7 @@ to that book only.
   - **Display** (default): shows them.
   - **Placeholder**: shows only the picture's description text.
   - **Suppress**: leaves them out.
+  - **Black & White**: draws them as a black-and-white dot pattern, so pages with pictures turn as fast as text pages.
 
 - **Reader Menu Style**: How the reader menu looks: **List** (default), a full-screen list, or **Toolbar**, bars at
   the top and bottom of the page.
@@ -529,6 +530,7 @@ Which rows you see depends on your device. Touch devices hide the rows that only
   - **Tilt Page Turn** (devices with a motion sensor, e.g. the X3)
   - **Quick return from links** (only while **Short Power Button Click** is **Links and footnotes**)
   - **Upper Side Button in Reader** and **Lower Side Button in Reader**
+  - **Slide Switch** (BOOX Picco): what the slide switch controls: **Frontlight**, **Night Mode** or **Touch Reader Controls**
   - **Short Back to File Browser** (button devices)
 
 - **Remap Front Buttons** (button devices): Choose what each button below the screen does.

@@ -48,6 +48,8 @@ class ReaderActivity : public Activity {
   virtual void onReaderEnter() = 0;
   virtual void onReaderExit() = 0;
   virtual void readerLoop() = 0;
+  // Moves to a whole-book percentage; used for the synced-position prompt.
+  virtual void jumpToPercent(int percent) = 0;
   // Called when loadBook() failed. Return true to keep the activity alive
   // (e.g. showing a dialog); false finishes it (the default).
   virtual bool handleLoadFailure() { return false; }
@@ -70,6 +72,9 @@ class ReaderActivity : public Activity {
 
   // Entry points for a Bluetooth remote. A reader without them ignores the remote's turns.
   virtual bool pageTurn(bool /*isForward*/) { return false; }
+  // A remote turn is waiting on the render task: cut its background work short, as a key press
+  // would. Called from the loop task while the render task may hold the RenderLock.
+  virtual void interruptBackgroundWork() {}
   virtual bool skipPages(int amount) { return pageTurn(amount > 0); }
   // A Bluetooth remote asks for the reader menu (true) or a new clipping (false).
   virtual bool remoteShortcut(bool /*readerMenu*/) { return false; }
@@ -107,4 +112,5 @@ class ReaderActivity : public Activity {
  private:
   unsigned long readingSessionStartMs = 0;
   int enterPercent = -1;  // the book's saved progress when it was opened
+  bool syncedPositionOffered = false;
 };

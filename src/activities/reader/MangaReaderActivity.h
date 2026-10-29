@@ -56,6 +56,8 @@ class MangaReaderActivity final : public Activity {
   bool ignoreNextConfirmRelease = false;
   unsigned long readingSessionStartMs = 0;
   int enterPercent = -1;  // the book's saved progress when it was opened
+  bool syncedPositionOffered = false;
+  void jumpToPercent(int percent);
 
   bool automaticPageTurnActive = false;
   unsigned long lastPageTurnTime = 0;

@@ -95,6 +95,14 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 110 (fork numbering)
+
+Upstream merge (their versions 69 to 71). The layout format is unchanged. Line spacing now
+multiplies the font size instead of the font's newline distance (`advanceY`), SD-font layout
+rounds each glyph advance to pixels as drawing does, and focus-reading split offsets follow the
+visual run order in RTL words. Lines move, so older sections are rebuilt; book metadata and
+progress are kept.
+
 ### Version 109 (fork numbering)
 
 The layout format is unchanged. CSS text-emphasis marks (bouten) are now stored on each
@@ -344,7 +352,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 106
+#define EXPECTED_VERSION 110
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
@@ -569,14 +577,14 @@ if (parsedSize != fileSize) {
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
 
-### Versions 144 to 151
+### Versions 144 to 153
 
 No format change; each rebuilds the cached pages once for a layout fix. In 148, a chapter applies
 the stylesheets its linked ones `@import` (EBPAJ boxes, rules and indents), a block holding only an
 image no longer hides the styled blocks after it, and styled elements nested in a block before its
 first text merge into it. In 149, what follows a merged element continues with the outer element's
 params alone, so it is not framed with the element before it. In 150, a GIF page stores the image's own size
-instead of the full-page placeholder, since static GIFs are now decoded. In 151, a bracket set flush to the
+instead of the full-page placeholder, since static GIFs are now decoded. In 153, a bracket set flush to the
 line head no longer gives space to line adjustment, which drew the next character over it, and a
 column adjusted twice no longer sets its last character past the foot.
 

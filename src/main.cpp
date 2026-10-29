@@ -57,6 +57,7 @@
 #include "util/ButtonNavigator.h"
 #include "util/PluginEvents.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SlideSwitch.h"
 #include "util/Timezones.h"
 
 #if CROSSPOINT_VECTOR_FONTS
@@ -92,14 +93,14 @@ EpdFont notoserif14RegularFont(&notoserif_14_regular);
 EpdFont notoserif14BoldFont(&notoserif_14_bold);
 EpdFont notoserif14ItalicFont(&notoserif_14_italic);
 EpdFont notoserif14BoldItalicFont(&notoserif_14_bolditalic);
-EpdFontFamily notoserif14FontFamily(&notoserif14RegularFont, &notoserif14BoldFont, &notoserif14ItalicFont,
+EpdFontFamily notoserif14FontFamily(14, &notoserif14RegularFont, &notoserif14BoldFont, &notoserif14ItalicFont,
                                     &notoserif14BoldItalicFont);
 #ifndef OMIT_FONTS
 EpdFont notoserif12RegularFont(&notoserif_12_regular);
 EpdFont notoserif12BoldFont(&notoserif_12_bold);
 EpdFont notoserif12ItalicFont(&notoserif_12_italic);
 EpdFont notoserif12BoldItalicFont(&notoserif_12_bolditalic);
-EpdFontFamily notoserif12FontFamily(&notoserif12RegularFont, &notoserif12BoldFont, &notoserif12ItalicFont,
+EpdFontFamily notoserif12FontFamily(12, &notoserif12RegularFont, &notoserif12BoldFont, &notoserif12ItalicFont,
                                     &notoserif12BoldItalicFont);
 // No 16 or 18pt faces are compiled in: those sizes draw the 14pt face enlarged (FaceScale, set
 // up in setupDisplayAndFonts()), freeing ~470 KB of flash. An SD family carries real cuts.
@@ -115,19 +116,19 @@ EpdFontFamily notoserif12FontFamily(&notoserif12RegularFont, &notoserif12BoldFon
 // the reader. No .cpfont ships a UI size, so these are what every device renders UI Japanese
 // with -- not just the ones without an SD font.
 EpdFont cjk8RegularFont(&notosansjp_joyo_8_regular);
-EpdFontFamily cjk8FontFamily(&cjk8RegularFont);
+EpdFontFamily cjk8FontFamily(8, &cjk8RegularFont);
 EpdFont cjk12RegularFont(&notosansjp_joyo_12_regular);
-EpdFontFamily cjk12FontFamily(&cjk12RegularFont);
+EpdFontFamily cjk12FontFamily(12, &cjk12RegularFont);
 
 EpdFont ui10RegularFont(&ubuntu_10_regular);
 EpdFont ui10BoldFont(&ubuntu_10_bold);
-EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
+EpdFontFamily ui10FontFamily(10, &ui10RegularFont, &ui10BoldFont);
 EpdFont smallRegularFont(&ubuntu_8_regular);
-EpdFontFamily smallFontFamily(&smallRegularFont);
+EpdFontFamily smallFontFamily(8, &smallRegularFont);
 
 EpdFont ui12RegularFont(&ubuntu_12_regular);
 EpdFont ui12BoldFont(&ubuntu_12_bold);
-EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
+EpdFontFamily ui12FontFamily(12, &ui12RegularFont, &ui12BoldFont);
 
 // Definitions for SilentRestart.h. RTC_NOINIT survives ESP.restart() but not power loss.
 RTC_NOINIT_ATTR uint32_t silentRebootMagic;
@@ -308,7 +309,9 @@ void handleSlideSwitch() {
       SETTINGS.touchReaderControls = on ? CrossPointSettings::TOUCH_READER_ON : CrossPointSettings::TOUCH_READER_OFF;
       break;
     default:
-      if (!Frontlight.present() || Frontlight.isOn() == on) return;
+      // Also compare the saved state: setup() lit the light from the switch
+      // without updating it.
+      if (!Frontlight.present() || (Frontlight.isOn() == on && (SETTINGS.frontlightOn != 0) == on)) return;
       Frontlight.setOn(on);
       SETTINGS.frontlightOn = on ? 1 : 0;
       break;
@@ -803,9 +806,12 @@ void setup() {
   // Brightness and warmth are always restored. A normal wake starts with the
   // light off unless Restore Light on Wake is enabled; silent maintenance
   // reboots replay the live state captured at restart, so they neither go dark
-  // nor light up against the user's wake preference.
-  const bool restoreLightOn =
-      isSilentReboot ? silentRebootLightOn : (SETTINGS.frontlightOn != 0 && SETTINGS.frontlightRestoreOnWake != 0);
+  // nor light up against the user's wake preference. A slide switch bound to
+  // the light decides it from its position instead.
+  const bool restoreLightOn = isSilentReboot ? silentRebootLightOn
+                              : slideSwitchOwnsLight()
+                                  ? gpio.isToggleSwitchOn()
+                                  : (SETTINGS.frontlightOn != 0 && SETTINGS.frontlightRestoreOnWake != 0);
   Frontlight.begin(SETTINGS.frontlightBrightness, SETTINGS.frontlightWarmth, restoreLightOn);
 
   switch (wakeupReason) {
@@ -847,6 +853,10 @@ void setup() {
   }
 
   LOG_DBG("MAIN", "Starting CrossPoint version " CROSSPOINT_VERSION);
+
+  // Apply a switch moved during sleep before the first paint, so the wake
+  // screen does not draw in the old night mode and then repaint.
+  handleSlideSwitch();
 
   // Resolve the single boot-presentation decision. Skipping the splash also
   // skips the panel-clearing pass and the X3 initial-full-sync arming (see
@@ -1044,7 +1054,7 @@ void loop() {
   scene.pageShown = homeShown || remoteContext;
   scene.storageBusy = activityManager.requiresExclusiveStorageLoop();
   scene.wifiOn = WiFi.getMode() != WIFI_MODE_NULL;
-  const bool remoteActed = bleturner::tick(scene);
+  const bool remoteActed = bleturner::tick(scene) | activityManager.applyQueuedRemoteInput();
 
   if (activityManager.requiresExclusiveStorageLoop()) {
     // USB Drive handed the raw SD card to the host. Do not run screenshots,

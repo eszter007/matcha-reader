@@ -297,7 +297,11 @@ namespace {
 // v108: upstream merge (their v65 to v67): justification counts a literal space after a hyphen
 //       or ellipsis, and after visual reordering only a space that continues into a word; a
 //       no-break space carried across a soft wrap no longer indents the next line.
-constexpr uint8_t SECTION_FILE_VERSION = 109;
+// v109: emphasis dots (bouten) sit on each character of the marked run.
+// v110: upstream merge (their v69 to v71): line spacing multiplies the font size instead of its
+//       advanceY, SD-font layout rounds each glyph advance to pixels as drawing does, and focus
+//       split offsets follow the visual run order in RTL words. Lines move. The framing is unchanged.
+constexpr uint8_t SECTION_FILE_VERSION = 110;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -746,6 +750,11 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
           if (!reusedHtml) Storage.remove(tmpHtmlPath.c_str());
           return false;
         }
+      }
+      // The chapter's own <style> blocks, after the book's stylesheets.
+      if (ctx->cssParser->loadStyleBlocks(ctx->parsePath)) {
+        LOG_DBG("SCT", "Chapter <style> blocks loaded (%u rules in all)",
+                static_cast<unsigned>(ctx->cssParser->ruleCount()));
       }
     }
   }

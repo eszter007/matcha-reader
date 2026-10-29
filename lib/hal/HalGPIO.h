@@ -47,6 +47,8 @@ class HalGPIO {
   bool usbStateChanged = false;
   uint8_t previousCapacitivePageButtons = 0;
   bool capacitivePagePressed = false;
+  uint8_t capacitivePagePressedMask = 0;   // cover page keys that went down this update
+  uint8_t capacitivePageReleasedMask = 0;  // cover page keys that went up this update
 
  public:
   enum class DeviceType : uint8_t { X4, X3 };
@@ -113,8 +115,9 @@ class HalGPIO {
   unsigned long getHeldTime() const;
   unsigned long getPowerButtonHeldTime() const;
   // True when any button contact is closed right now, read straight from the
-  // hardware (ADC ladder off its idle rail, or the power GPIO asserted), without
-  // going through the debounced state. Cheap enough to call every few ms.
+  // hardware (ADC ladder off its idle rail, the power GPIO asserted, or the T5S3
+  // expander key, one I2C read), without going through the debounced state.
+  // Cheap enough to call every few ms.
   bool rawInputActive();
   bool hasTouch() const;
   // Capacitive Home key reported by the touch controller (X4 Pro). The tap
@@ -129,6 +132,13 @@ class HalGPIO {
   bool wasTouchTap(float& nx, float& ny) const;
   bool wasTouchDown(float& nx, float& ny) const;
   bool wasCapacitivePagePressed() const { return capacitivePagePressed; }
+  // Per-key edges of the capacitive page keys (e.g. the Metalio cover keys), as BTN_* bits.
+  bool wasCapacitivePageKeyPressed(uint8_t buttonIndex) const {
+    return buttonIndex < 8 && (capacitivePagePressedMask & (1u << buttonIndex)) != 0;
+  }
+  bool wasCapacitivePageKeyReleased(uint8_t buttonIndex) const {
+    return buttonIndex < 8 && (capacitivePageReleasedMask & (1u << buttonIndex)) != 0;
+  }
   bool isCapacitivePagePressed(uint8_t buttonIndex) const {
     return buttonIndex < 8 && (previousCapacitivePageButtons & (1u << buttonIndex)) != 0;
   }

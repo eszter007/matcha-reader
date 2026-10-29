@@ -124,7 +124,21 @@ bool isLineStartProhibited(uint32_t codepoint) {
   return isClosingBracket(codepoint) || isSmallKanaOrMark(codepoint) || isLineStartPunctuation(codepoint);
 }
 
-bool isLineEndProhibited(uint32_t codepoint) { return isOpeningBracket(codepoint); }
+// Opening brackets, and the signs written before a number (JLREQ cl-19: ￥ ＄ ￡ ＃ € №), which may not
+// be parted from it.
+bool isLineEndProhibited(uint32_t codepoint) {
+  switch (codepoint) {
+    case 0xFFE5:  // ￥
+    case 0xFF04:  // ＄
+    case 0xFFE1:  // ￡
+    case 0xFF03:  // ＃
+    case 0x20AC:  // €
+    case 0x2116:  // №
+      return true;
+    default:
+      return isOpeningBracket(codepoint);
+  }
+}
 
 bool isAlwaysUpright(uint32_t codepoint) {
   // CJK ideographs, hiragana, katakana, and ideographic punctuation are
