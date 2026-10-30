@@ -2,7 +2,9 @@
 
 #include <Epub/VerticalParsedText.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <vector>
 
 class GfxRenderer;
 
@@ -21,6 +23,12 @@ struct VerticalClipCell {
   uint32_t endOffset = 0;
   bool paragraphStart = false;
 };
+
+// Where a glyph's cell is, margins not applied. Small kana and half-em punctuation are drawn
+// shifted inside their cell, so their own x/y is not the cell's: a column's x is its leftmost
+// upright glyph's, and a shifted glyph's top comes from a full-size neighbour in its column.
+void verticalColumnXs(const VerticalPage& page, std::vector<int>& columnX);
+int verticalCellTop(const VerticalPage& page, size_t glyphIndex, int cellPx);
 
 // Visits every text cell of `page` in reading order. The visitor returns false to stop early.
 // Offsets are derived from the page's first offset by counting the codepoints the cells carry,

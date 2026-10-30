@@ -63,7 +63,8 @@ class WordSelectionScan {
                           LineGeometry& out);
 
   // Populate allGlyphs from a page and reset the state machine. Vertical (tategaki) mode.
-  void initFromVerticalPage(const VerticalPage& page);
+  // Each glyph gets its cell's origin (see verticalCellTop), cellPx being the reader's cell size.
+  void initFromVerticalPage(const VerticalPage& page, int cellPx);
   // Horizontal (yokogaki) mode: flattens the page's lines into one continuous character stream.
   // With a geometry each glyph also gets its place on the page -- x/y as drawn, column = its
   // line, row = its x, so "the next column" and "the closest row" mean the next line and the

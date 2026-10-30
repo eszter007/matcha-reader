@@ -5892,7 +5892,7 @@ void EpubReaderActivity::stepLookupPrescan() {
     const uint32_t tailParagraph = verticalLookupTail(tail, nullptr);
     vpage = verticalSection->getPage();  // the tail's getPage() may have re-faulted the slot
     if (!vpage) return;
-    scan->initFromVerticalPage(*vpage);
+    scan->initFromVerticalPage(*vpage, verticalCellPx(renderer, effectiveReaderFontId()));
     if (!tail.empty()) scan->appendLookupContext(tail, tailParagraph);
     prescanSpine_ = currentSpineIndex;
     prescanPage_ = page;
