@@ -48,6 +48,15 @@ void DictionaryWordSelectActivity::onEnter() {
   Activity::onEnter();
   lineHeight = renderer.getLineHeight(fontId);
   if (!lookupText.empty()) {
+    // The screen still holds the selection bar and handles; the definition opens over the page.
+    {
+      RenderLock lock(*this);
+      renderer.clearScreen();
+      auto scope = renderer.getFontCacheManager()->createPrewarmScope();
+      page->render(renderer, fontId, marginLeft, marginTop);
+      scope.endScanAndPrewarm();
+      page->render(renderer, fontId, marginLeft, marginTop);
+    }
     performLookup();
     return;
   }
