@@ -1127,7 +1127,7 @@ A clipping saves a passage you have selected and highlights it on the page.
 
 **With buttons:** choose **Create Clipping** in the Reader Menu. Move to the first word and press **Confirm**, then move to the last word and press **Confirm** again to save. **Back** clears the selection. Press **Back** again to leave.
 
-**With touch:** press and hold a word. Its definition opens, with a handle on each side of the word. Drag a handle to turn the lookup into a selection. If your page turns use swipes only, holding a word starts the selection right away. Drag the handles to set the start and end, then tap one of the buttons above the selection (below it when the selection is at the top of the page): **Look Up**, **Translate** (with Gemini, see [6.2](#62-page-translation)), **Clip** or **Bookmark**.
+**With touch:** press and hold a word. Its definition opens, with a handle on each side of the word. Drag a handle to turn the lookup into a selection. If your page turns use swipes only, holding a word starts the selection right away. Drag the handles to set the start and end, then tap one of the buttons above the selection (below it when the selection is at the top of the page): **Define** (look it up), **Translate** (with Gemini, see [6.2](#62-page-translation)), **Clip** or **Save** (bookmark the page).
 
 To carry a selection onto the next page, hold the end handle on the last word for a second. A selection can cover up to three pages of the same chapter. To remove a clipping, press and hold its highlighted text.
 

@@ -44,11 +44,38 @@ inline Rect actions(const Rect safe, const int textTop, const int textBottom, co
   return Rect{std::clamp(anchorX, safe.x, safe.x + safe.width - width), y, width, height};
 }
 
-inline Rect button(const Rect actions, const int index, const int padding) {
+// The action bar's slots are centred an equal pitch apart: the widest slot plus `gap`, so the
+// icons are evenly spaced. The card ends `edge` past the first and last slots' own widths.
+inline int actionsWidth(const BaseTheme::SelectionActionWidths& widths, const int gap, const int edge) {
   constexpr int count = BaseTheme::SELECTION_ACTION_COUNT;
-  const int width = (actions.width - padding * (count + 1)) / count;
-  return Rect{actions.x + padding + index * (width + padding), actions.y + padding, width,
-              actions.height - padding * 2};
+  const int widest = *std::max_element(widths.begin(), widths.end());
+  return 2 * edge + (widths[0] + widths[count - 1]) / 2 + (count - 1) * (widest + gap);
+}
+
+// Distance between slot centres in a bar `width` wide: the widest slot plus `gap`, less when the
+// bar is too narrow for that.
+inline int actionsPitch(const int width, const BaseTheme::SelectionActionWidths& widths, const int gap) {
+  constexpr int count = BaseTheme::SELECTION_ACTION_COUNT;
+  const int widest = *std::max_element(widths.begin(), widths.end());
+  const int room = (width - (widths[0] + widths[count - 1]) / 2) / (count - 1);
+  return std::max(0, std::min(widest + gap, room));
+}
+
+// Slot `index`'s content box, centred in the bar so both ends get the same air.
+inline Rect slot(const Rect actions, const BaseTheme::SelectionActionWidths& widths, const int gap, const int index) {
+  constexpr int count = BaseTheme::SELECTION_ACTION_COUNT;
+  const int pitch = actionsPitch(actions.width, widths, gap);
+  const int span = (widths[0] + widths[count - 1]) / 2 + (count - 1) * pitch;
+  const int centre = actions.x + (actions.width - span) / 2 + widths[0] / 2 + index * pitch;
+  return Rect{centre - widths[index] / 2, actions.y, widths[index], actions.height};
+}
+
+// Slot `index`'s hit area: one pitch wide around its centre, so a tap between two labels goes to
+// the nearer one.
+inline Rect button(const Rect actions, const BaseTheme::SelectionActionWidths& widths, const int gap, const int index) {
+  const Rect content = slot(actions, widths, gap, index);
+  const int pitch = actionsPitch(actions.width, widths, gap);
+  return Rect{content.x + content.width / 2 - pitch / 2, actions.y, pitch, actions.height};
 }
 
 // A selection handle beside a word box: under its leading (start) or trailing (end) edge on a
@@ -77,9 +104,10 @@ inline bool contains(const Rect rect, const int x, const int y) {
   return x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
 }
 
-inline int actionAt(const Rect actions, const int padding, const int x, const int y) {
+inline int actionAt(const Rect actions, const BaseTheme::SelectionActionWidths& widths, const int gap, const int x,
+                    const int y) {
   for (int i = 0; i < BaseTheme::SELECTION_ACTION_COUNT; ++i) {
-    if (contains(button(actions, i, padding), x, y)) return i;
+    if (contains(button(actions, widths, gap, i), x, y)) return i;
   }
   return -1;
 }

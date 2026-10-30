@@ -1,10 +1,13 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
+
+#include "fontIds.h"
 
 class Bitmap;
 class GfxRenderer;
@@ -331,16 +334,21 @@ class BaseTheme {
   static int selectionHandleSize();
   // Selection action bar: a 32px outline icon over its label in each slot (see drawSelectionActions).
   static constexpr int SELECTION_ACTION_COUNT = 4;
+  // Labels in the status bar's 8pt font: the icons lead, the words confirm them.
+  static constexpr int SELECTION_ACTION_FONT_ID = SMALL_FONT_ID;
   static constexpr int SELECTION_ACTION_ICON_PX = 32;
   static constexpr int SELECTION_ACTION_GAP_PX = 4;
   // Air above the icons and below the labels.
   static constexpr int SELECTION_ACTION_VPAD_PX = 12;
   // The pointer on the bar's edge: this tall, twice this wide, aimed at anchorX.
   static constexpr int SELECTION_ACTION_TAIL_PX = 12;
-  // Air around each slot and between slots, and the card's corner radius: tighter and rounder than
-  // the generic menu metrics, so the actions read as one compact bubble.
-  static constexpr int SELECTION_ACTION_PAD_PX = 4;
+  // Between the widest slot and its neighbours, and from the end labels to the card's sides.
+  static constexpr int SELECTION_ACTION_SLOT_GAP_PX = 2;
+  static constexpr int SELECTION_ACTION_EDGE_PX = 16;
   static constexpr int SELECTION_ACTION_RADIUS_PX = 12;
+  // Each slot's width: its label or its icon, whichever is wider.
+  using SelectionActionWidths = std::array<int, SELECTION_ACTION_COUNT>;
+  static SelectionActionWidths selectionActionWidths(const GfxRenderer& renderer);
   // Outline of the card and its pointer.
   static constexpr int SELECTION_ACTION_LINE_PX = 2;
   // anchorX < 0 draws no pointer.

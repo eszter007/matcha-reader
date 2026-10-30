@@ -1278,13 +1278,28 @@ void BaseTheme::drawSelectionHandle(const GfxRenderer& renderer, const Rect rect
                     radius - border, radius - border, false);
 }
 
+namespace {
+const char* selectionActionLabel(const int index) {
+  constexpr StrId ids[BaseTheme::SELECTION_ACTION_COUNT] = {StrId::STR_SELECTION_DEFINE, StrId::STR_TRANSLATE,
+                                                            StrId::STR_CLIP, StrId::STR_SELECTION_SAVE};
+  return I18n::getInstance().get(ids[index]);
+}
+}  // namespace
+
+BaseTheme::SelectionActionWidths BaseTheme::selectionActionWidths(const GfxRenderer& renderer) {
+  SelectionActionWidths widths{};
+  for (int i = 0; i < SELECTION_ACTION_COUNT; ++i) {
+    widths[i] =
+        std::max(renderer.getTextWidth(SELECTION_ACTION_FONT_ID, selectionActionLabel(i)), SELECTION_ACTION_ICON_PX);
+  }
+  return widths;
+}
+
 // One card, four actions, each an outline icon over its label (the stock reader's selection
-// bar). The hit areas stay selectionGeometry::button(); only the drawing changed.
+// bar). Hit areas are selectionGeometry::button() over the same widths.
 void BaseTheme::drawSelectionActions(const GfxRenderer& renderer, const Rect rect, const int anchorX,
                                      const bool pointUp) {
-  const int font = uiScaleSpec().smallFontId;
-  const char* labels[SELECTION_ACTION_COUNT] = {tr(STR_LOOKUP), tr(STR_TRANSLATE), tr(STR_CLIP),
-                                                tr(STR_BOOKMARK_OPTION)};
+  const int font = SELECTION_ACTION_FONT_ID;
   const freeink::Icon* icons[SELECTION_ACTION_COUNT] = {&icon_clip_lookup_32, &icon_clip_translate_32,
                                                         &icon_clip_clip_32, &icon_clip_bookmark_32};
   renderer.fillRoundedRect(rect.x, rect.y, rect.width, rect.height, SELECTION_ACTION_RADIUS_PX, Color::White);
@@ -1293,17 +1308,19 @@ void BaseTheme::drawSelectionActions(const GfxRenderer& renderer, const Rect rec
   // Generated icons are not pre-rotated (drawIcon expects the old blit layout); the FreeInkUI
   // target draws them orientation-correct.
   freeink::ui::GfxRendererTarget target = makeUiTarget(renderer);
+  const SelectionActionWidths widths = selectionActionWidths(renderer);
   for (int i = 0; i < SELECTION_ACTION_COUNT; ++i) {
-    const Rect slot = selectionGeometry::button(rect, i, SELECTION_ACTION_PAD_PX);
+    const Rect slot = selectionGeometry::slot(rect, widths, SELECTION_ACTION_SLOT_GAP_PX, i);
     const int iconX = slot.x + (slot.width - SELECTION_ACTION_ICON_PX) / 2;
     const int iconY = rect.y + SELECTION_ACTION_VPAD_PX;
     target.bitmap(freeink::ui::Rect{static_cast<int16_t>(iconX), static_cast<int16_t>(iconY),
                                     static_cast<int16_t>(SELECTION_ACTION_ICON_PX),
                                     static_cast<int16_t>(SELECTION_ACTION_ICON_PX)},
                   freeink::ui::bitmapFromIcon(*icons[i]), freeink::ui::BitmapMode::Center);
-    const int labelWidth = renderer.getTextWidth(font, labels[i]);
+    const char* label = selectionActionLabel(i);
+    const int labelWidth = renderer.getTextWidth(font, label);
     renderer.drawText(font, slot.x + (slot.width - labelWidth) / 2,
-                      iconY + SELECTION_ACTION_ICON_PX + SELECTION_ACTION_GAP_PX, labels[i]);
+                      iconY + SELECTION_ACTION_ICON_PX + SELECTION_ACTION_GAP_PX, label);
   }
   if (anchorX < 0) return;
   // Pointer: a white triangle on the bottom edge (top edge when the bar sits below the text),

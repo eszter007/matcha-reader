@@ -579,7 +579,8 @@ void ClipSelectionActivity::loop() {
   }
   if (!touchDragSelecting && mappedInput.wasScreenTapped(touchX, touchY)) {
     if (rangeStart >= 0) {
-      const int action = selectionGeometry::actionAt(actionRect(), BaseTheme::SELECTION_ACTION_PAD_PX, touchX, touchY);
+      const int action = selectionGeometry::actionAt(actionRect(), BaseTheme::selectionActionWidths(renderer),
+                                                     BaseTheme::SELECTION_ACTION_SLOT_GAP_PX, touchX, touchY);
       if (action >= 0) {
         confirmSelection(SELECTION_ACTIONS[action]);
         return;
@@ -640,7 +641,9 @@ void ClipSelectionActivity::loop() {
   } else if (mappedInput.wasScreenTouchPressed(touchX, touchY)) {
     if (rangeStart >= 0) {
       const Rect actions = actionRect();
-      if (selectionGeometry::actionAt(actions, BaseTheme::SELECTION_ACTION_PAD_PX, touchX, touchY) >= 0) return;
+      if (selectionGeometry::actionAt(actions, BaseTheme::selectionActionWidths(renderer),
+                                      BaseTheme::SELECTION_ACTION_SLOT_GAP_PX, touchX, touchY) >= 0)
+        return;
       const int first = std::min(rangeStart, selected);
       const int last = std::max(rangeStart, selected);
       for (int endpoint = 0; endpoint < 2; ++endpoint) {
@@ -793,17 +796,11 @@ void ClipSelectionActivity::actionArea(Rect& safe, int& width, int& height) cons
   safe.y = std::max(safe.y, top) + std::max(metrics.topPadding, metrics.verticalSpacing);
   safe.width = rightEdge - safe.x;
   safe.height = bottomEdge - safe.y;
-  const int font = uiScaleSpec().smallFontId;
-  const int labelWidth =
-      std::max({renderer.getTextWidth(font, tr(STR_LOOKUP)), renderer.getTextWidth(font, tr(STR_TRANSLATE)),
-                renderer.getTextWidth(font, tr(STR_CLIP)), renderer.getTextWidth(font, tr(STR_BOOKMARK_OPTION))});
-  const int padding = BaseTheme::SELECTION_ACTION_PAD_PX;
-  // Each slot holds an icon over its label; the widest label sets the slot width.
-  const int slotWidth = std::max(labelWidth, BaseTheme::SELECTION_ACTION_ICON_PX) + padding * 2;
-  constexpr int count = BaseTheme::SELECTION_ACTION_COUNT;
-  width = std::min(safe.width, count * slotWidth + padding * (count + 1));
-  height = BaseTheme::SELECTION_ACTION_ICON_PX + BaseTheme::SELECTION_ACTION_GAP_PX + renderer.getLineHeight(font) +
-           2 * BaseTheme::SELECTION_ACTION_VPAD_PX;
+  width = std::min(safe.width, selectionGeometry::actionsWidth(BaseTheme::selectionActionWidths(renderer),
+                                                               BaseTheme::SELECTION_ACTION_SLOT_GAP_PX,
+                                                               BaseTheme::SELECTION_ACTION_EDGE_PX));
+  height = BaseTheme::SELECTION_ACTION_ICON_PX + BaseTheme::SELECTION_ACTION_GAP_PX +
+           renderer.getLineHeight(BaseTheme::SELECTION_ACTION_FONT_ID) + 2 * BaseTheme::SELECTION_ACTION_VPAD_PX;
 }
 
 bool ClipSelectionActivity::actionsAbove() const {
@@ -819,13 +816,12 @@ Rect ClipSelectionActivity::actionRect() const {
   int width = 0;
   int height = 0;
   actionArea(safe, width, height);
-  const int padding = BaseTheme::SELECTION_ACTION_PAD_PX;
   const int anchor = actionAnchor();
   // The card hangs left-aligned with the word it points at, but never so far right that the
   // pointer, which must clear the rounded corner, could not sit exactly on the word's centre.
   const int wordX = words[anchor].x + textXOffset();
   const int apexInset = BaseTheme::SELECTION_ACTION_RADIUS_PX + BaseTheme::SELECTION_ACTION_TAIL_PX;
-  const int barX = std::min(wordX - padding, wordX + words[anchor].width / 2 - apexInset);
+  const int barX = std::min(wordX - BaseTheme::SELECTION_ACTION_EDGE_PX, wordX + words[anchor].width / 2 - apexInset);
   return selectionGeometry::actions(safe, selectionTop(), selectionBottom(), height, ACTION_GAP, width, barX);
 }
 

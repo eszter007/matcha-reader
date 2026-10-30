@@ -191,18 +191,42 @@ TEST(SelectionGeometry, ToolbarSitsAboveOrBelowAndStaysInsideEveryOrientedSafeAr
         EXPECT_LE(actions.y + actions.height, top - 10);
       else
         EXPECT_EQ(actions.y, bottom + 10);  // no room above: below the selection
-      for (int i = 0; i < 3; ++i) {
-        const Rect button = selectionGeometry::button(actions, i, 8);
-        EXPECT_EQ(selectionGeometry::actionAt(actions, 8, button.x, button.y), i);
-        EXPECT_EQ(selectionGeometry::actionAt(actions, 8, button.x + button.width - 1, button.y + button.height - 1),
-                  i);
-        EXPECT_EQ(selectionGeometry::actionAt(actions, 8, button.x + button.width, button.y), -1);
+      constexpr BaseTheme::SelectionActionWidths widths{40, 60, 32, 70};
+      for (int i = 0; i < BaseTheme::SELECTION_ACTION_COUNT; ++i) {
+        const Rect button = selectionGeometry::button(actions, widths, 8, i);
+        EXPECT_EQ(selectionGeometry::actionAt(actions, widths, 8, button.x, button.y), i);
+        EXPECT_EQ(
+            selectionGeometry::actionAt(actions, widths, 8, button.x + button.width - 1, button.y + button.height - 1),
+            i);
       }
-      EXPECT_EQ(selectionGeometry::actionAt(actions, 8, actions.x, actions.y), -1);
-      EXPECT_EQ(selectionGeometry::actionAt(actions, 8, actions.x + actions.width, actions.y), -1);
-      EXPECT_EQ(selectionGeometry::actionAt(actions, 8, actions.x, actions.y + actions.height), -1);
+      EXPECT_EQ(selectionGeometry::actionAt(actions, widths, 8, actions.x, actions.y), -1);
+      EXPECT_EQ(selectionGeometry::actionAt(actions, widths, 8, actions.x + actions.width, actions.y), -1);
+      EXPECT_EQ(
+          selectionGeometry::actionAt(actions, widths, 8, actions.x + actions.width / 2, actions.y + actions.height),
+          -1);
     }
   }
+}
+
+TEST(SelectionGeometry, SlotsAreEvenlyPitchedAndTheCardHugsTheEndLabels) {
+  constexpr BaseTheme::SelectionActionWidths widths{40, 60, 32, 70};
+  constexpr int gap = 8;
+  constexpr int edge = 8;
+  const int width = selectionGeometry::actionsWidth(widths, gap, edge);
+  EXPECT_EQ(width, 2 * edge + (40 + 70) / 2 + 3 * (70 + gap));
+  const Rect actions{10, 50, width, 60};
+  const auto centre = [&](const int i) {
+    const Rect s = selectionGeometry::slot(actions, widths, gap, i);
+    return s.x + s.width / 2;
+  };
+  for (int i = 1; i < BaseTheme::SELECTION_ACTION_COUNT; ++i) EXPECT_EQ(centre(i) - centre(i - 1), 70 + gap);
+  EXPECT_EQ(selectionGeometry::slot(actions, widths, gap, 0).x, actions.x + edge);
+  const Rect last = selectionGeometry::slot(actions, widths, gap, 3);
+  EXPECT_EQ(actions.x + actions.width - (last.x + last.width), edge);
+  // A tap midway between two icons goes to one of them, never to nothing.
+  const int mid = (centre(0) + centre(1)) / 2;
+  EXPECT_EQ(selectionGeometry::actionAt(actions, widths, gap, mid - 1, 60), 0);
+  EXPECT_EQ(selectionGeometry::actionAt(actions, widths, gap, mid + 1, 60), 1);
 }
 
 TEST(SelectionGeometry, ToolbarWithNoRoomEitherSideStaysOnScreen) {
@@ -214,7 +238,11 @@ TEST(SelectionGeometry, ToolbarWithNoRoomEitherSideStaysOnScreen) {
 TEST(SelectionGeometry, FirstButtonFollowsStartHandleUntilScreenEdge) {
   const Rect safe{12, 20, 456, 744};
   const Rect row = selectionGeometry::actions(safe, 200, 220, 48, 10, 260, 92);
-  EXPECT_EQ(selectionGeometry::button(row, 0, 8).x, 100);
+  constexpr BaseTheme::SelectionActionWidths widths{40, 60, 32, 70};
+  const Rect first = selectionGeometry::slot(row, widths, 8, 0);
+  const Rect last = selectionGeometry::slot(row, widths, 8, 3);
+  EXPECT_GE(first.x, row.x);  // too narrow for the full pitch: the slots close up but stay inside
+  EXPECT_LE(last.x + last.width, row.x + row.width);
   const Rect atRight = selectionGeometry::actions(safe, 200, 220, 48, 10, 260, 420);
   EXPECT_EQ(atRight.x + atRight.width, safe.x + safe.width);
   const Rect atLeft = selectionGeometry::actions(safe, 200, 220, 48, 10, 260, 0);
