@@ -228,6 +228,8 @@ STR_LANDSCAPE_CCW: "افقی پادساعت‌گرد"
 
 STR_KOSYNC: "KOSync"
 STR_BOOKMARK_OPTION: "نشانک"
+STR_SELECTION_DEFINE: "تعریف"
+STR_SELECTION_SAVE: "ذخیره"
 STR_DICTIONARY: "واژه‌نامه"
 STR_FALLBACK_DICTIONARY: "پشتیبان برای زبان‌های دیگر"
 STR_DICT_STATUS_JA: "فرهنگ ژاپنی"

@@ -1,10 +1,13 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
+
+#include "fontIds.h"
 
 class Bitmap;
 class GfxRenderer;
@@ -329,20 +332,27 @@ class BaseTheme {
   enum class HandleCorner : uint8_t { TopLeft, TopRight, BottomLeft, BottomRight };
   static void drawSelectionHandle(const GfxRenderer& renderer, Rect rect, HandleCorner corner);
   static int selectionHandleSize();
-  // Selection action bar: a 24px outline icon over its label in each slot (see drawSelectionActions).
+  // Selection action bar: a 32px outline icon over its label in each slot (see drawSelectionActions).
   static constexpr int SELECTION_ACTION_COUNT = 4;
-  static constexpr int SELECTION_ACTION_ICON_PX = 40;
+  // Labels in the status bar's 8pt font: the icons lead, the words confirm them.
+  static constexpr int SELECTION_ACTION_FONT_ID = SMALL_FONT_ID;
+  static constexpr int SELECTION_ACTION_ICON_PX = 32;
   static constexpr int SELECTION_ACTION_GAP_PX = 4;
   // Air above the icons and below the labels.
   static constexpr int SELECTION_ACTION_VPAD_PX = 12;
-  // The pointer under the bar: this tall, twice this wide, aimed at anchorX.
-  static constexpr int SELECTION_ACTION_TAIL_PX = 8;
-  // Air around each slot and between slots, and the card's corner radius: tighter and rounder than
-  // the generic menu metrics, so the three actions read as one compact bubble.
-  static constexpr int SELECTION_ACTION_PAD_PX = 4;
+  // The pointer on the bar's edge: this tall, twice this wide, aimed at anchorX.
+  static constexpr int SELECTION_ACTION_TAIL_PX = 12;
+  // Between the widest slot and its neighbours, and from the end labels to the card's sides.
+  static constexpr int SELECTION_ACTION_SLOT_GAP_PX = 2;
+  static constexpr int SELECTION_ACTION_EDGE_PX = 16;
   static constexpr int SELECTION_ACTION_RADIUS_PX = 12;
+  // Each slot's width: its label or its icon, whichever is wider.
+  using SelectionActionWidths = std::array<int, SELECTION_ACTION_COUNT>;
+  static SelectionActionWidths selectionActionWidths(const GfxRenderer& renderer);
+  // Outline of the card and its pointer.
+  static constexpr int SELECTION_ACTION_LINE_PX = 2;
   // anchorX < 0 draws no pointer.
-  static void drawSelectionActions(const GfxRenderer& renderer, Rect rect, int anchorX = -1);
+  static void drawSelectionActions(const GfxRenderer& renderer, Rect rect, int anchorX = -1, bool pointUp = false);
   virtual Rect drawPopup(const GfxRenderer& renderer, const char* message) const;
   virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const;
   static void drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage, const int pageCount,
