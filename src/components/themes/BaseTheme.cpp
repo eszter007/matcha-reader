@@ -1285,10 +1285,11 @@ void BaseTheme::drawSelectionActions(const GfxRenderer& renderer, const Rect rec
   const int font = uiScaleSpec().smallFontId;
   const char* labels[SELECTION_ACTION_COUNT] = {tr(STR_LOOKUP), tr(STR_TRANSLATE), tr(STR_CLIP),
                                                 tr(STR_BOOKMARK_OPTION)};
-  const freeink::Icon* icons[SELECTION_ACTION_COUNT] = {&icon_clip_lookup_40, &icon_clip_translate_40,
-                                                        &icon_clip_clip_40, &icon_clip_bookmark_40};
+  const freeink::Icon* icons[SELECTION_ACTION_COUNT] = {&icon_clip_lookup_32, &icon_clip_translate_32,
+                                                        &icon_clip_clip_32, &icon_clip_bookmark_32};
   renderer.fillRoundedRect(rect.x, rect.y, rect.width, rect.height, SELECTION_ACTION_RADIUS_PX, Color::White);
-  renderer.drawRoundedRect(rect.x, rect.y, rect.width, rect.height, 1, SELECTION_ACTION_RADIUS_PX, true);
+  renderer.drawRoundedRect(rect.x, rect.y, rect.width, rect.height, SELECTION_ACTION_LINE_PX,
+                           SELECTION_ACTION_RADIUS_PX, true);
   // Generated icons are not pre-rotated (drawIcon expects the old blit layout); the FreeInkUI
   // target draws them orientation-correct.
   freeink::ui::GfxRendererTarget target = makeUiTarget(renderer);
@@ -1310,12 +1311,12 @@ void BaseTheme::drawSelectionActions(const GfxRenderer& renderer, const Rect rec
   constexpr int tail = SELECTION_ACTION_TAIL_PX;
   const int cx = std::clamp(anchorX, rect.x + SELECTION_ACTION_RADIUS_PX + tail,
                             rect.x + rect.width - SELECTION_ACTION_RADIUS_PX - tail - 1);
-  const int baseY = pointUp ? rect.y : rect.y + rect.height - 1;
+  const int baseY = pointUp ? rect.y + SELECTION_ACTION_LINE_PX - 1 : rect.y + rect.height - SELECTION_ACTION_LINE_PX;
   const int dir = pointUp ? -1 : 1;
   for (int dy = 0; dy <= tail; ++dy) {
     const int half = tail - dy;
     renderer.drawLine(cx - half, baseY + dir * dy, cx + half, baseY + dir * dy, false);
   }
-  renderer.drawLine(cx - tail, baseY, cx, baseY + dir * tail, true);
-  renderer.drawLine(cx + tail, baseY, cx, baseY + dir * tail, true);
+  renderer.drawLine(cx - tail, baseY, cx, baseY + dir * tail, SELECTION_ACTION_LINE_PX, true);
+  renderer.drawLine(cx + tail, baseY, cx, baseY + dir * tail, SELECTION_ACTION_LINE_PX, true);
 }

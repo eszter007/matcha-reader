@@ -785,9 +785,11 @@ void ClipSelectionActivity::actionArea(Rect& safe, int& width, int& height) cons
   const auto& metrics = UITheme::getInstance().getMetrics();
   int top, right, bottom, left;
   renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
-  const int rightEdge = std::min(safe.x + safe.width, renderer.getScreenWidth() - right);
+  // On a line page the bar spans no wider than the text column, so its sides line up with the text.
+  const int textInset = vertical() ? 0 : std::max(0, marginLeft - left);
+  const int rightEdge = std::min(safe.x + safe.width, renderer.getScreenWidth() - right - textInset);
   const int bottomEdge = std::min(safe.y + safe.height, renderer.getScreenHeight() - bottom);
-  safe.x = std::max(safe.x, left);
+  safe.x = std::max(safe.x, left + textInset);
   safe.y = std::max(safe.y, top) + std::max(metrics.topPadding, metrics.verticalSpacing);
   safe.width = rightEdge - safe.x;
   safe.height = bottomEdge - safe.y;
@@ -797,7 +799,7 @@ void ClipSelectionActivity::actionArea(Rect& safe, int& width, int& height) cons
                 renderer.getTextWidth(font, tr(STR_CLIP)), renderer.getTextWidth(font, tr(STR_BOOKMARK_OPTION))});
   const int padding = BaseTheme::SELECTION_ACTION_PAD_PX;
   // Each slot holds an icon over its label; the widest label sets the slot width.
-  const int slotWidth = std::max(labelWidth, BaseTheme::SELECTION_ACTION_ICON_PX) + padding * 4;
+  const int slotWidth = std::max(labelWidth, BaseTheme::SELECTION_ACTION_ICON_PX) + padding * 2;
   constexpr int count = BaseTheme::SELECTION_ACTION_COUNT;
   width = std::min(safe.width, count * slotWidth + padding * (count + 1));
   height = BaseTheme::SELECTION_ACTION_ICON_PX + BaseTheme::SELECTION_ACTION_GAP_PX + renderer.getLineHeight(font) +
