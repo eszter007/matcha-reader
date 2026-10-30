@@ -47,7 +47,7 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
   if (slash != std::string::npos) bookCachePath = this->scanCachePath.substr(0, slash);
   beginSelectMode();
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
-  scan.initFromVerticalPage(page);
+  scan.initFromVerticalPage(page, selectCtx.cellPx);
   if (!lookupContext.empty()) scan.appendLookupContext(lookupContext, lookupContextParagraph);
   initScanFromCacheOrBurst("vertical");
 }

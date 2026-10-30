@@ -13,6 +13,7 @@
 
 #include "Epub/Kinsoku.h"
 #include "Epub/Page.h"
+#include "VerticalClipCells.h"
 #include "util/CjkScript.h"
 
 namespace {
@@ -236,13 +237,18 @@ void WordSelectionScan::restartStepScan() {
   restoredCursorIndex = kNoRestoredCursor;
 }
 
-void WordSelectionScan::initFromVerticalPage(const VerticalPage& page) {
+void WordSelectionScan::initFromVerticalPage(const VerticalPage& page, const int cellPx) {
   reset();
   reserveGlyphsSafe(allGlyphs, page.glyphs.size());
-  for (const auto& g : page.glyphs) {
+  std::vector<int> columnX;
+  verticalColumnXs(page, columnX);
+  for (size_t i = 0; i < page.glyphs.size(); i++) {
+    const auto& g = page.glyphs[i];
     if (g.renderKind == VerticalGlyph::RotatedRun) continue;
     if (VerticalParsedText::isImageMarker(g.codepoint)) continue;  // an inline image, not text
-    GlyphRef ref{g.x, g.y, g.column, g.row, g.codepoint, g.paragraphIndex, 0};
+    const int x = g.column < columnX.size() && columnX[g.column] >= 0 ? columnX[g.column] : g.x;
+    const int y = std::max(0, verticalCellTop(page, i, cellPx));
+    GlyphRef ref{static_cast<uint16_t>(x), static_cast<uint16_t>(y), g.column, g.row, g.codepoint, g.paragraphIndex, 0};
     if (!pushGlyphSafe(allGlyphs, ref)) {
       scanTruncated = true;
       break;
