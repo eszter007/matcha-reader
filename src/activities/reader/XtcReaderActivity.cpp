@@ -179,7 +179,7 @@ void XtcReaderActivity::launchMenu() {
   // pushed activity, and holding it left too little heap for the menu to load the (Japanese)
   // title glyphs -- the header rendered blank. render() re-allocates it on return. Take the
   // render lock so the render task can't be mid-use of the buffer when it's freed.
-  {
+  if (!psramPageBuffer) {  // a PSRAM buffer costs the menu nothing
     RenderLock lock;
     freePageBuffer();
   }
@@ -393,9 +393,24 @@ void XtcReaderActivity::renderStatusBarOverlay(const StatusBarOverlayPosition po
 }
 
 void XtcReaderActivity::freePageBuffer() {
-  free(pageBuffer);
+  if (psramPageBuffer) {
+    psramPageBuffer.reset();
+  } else {
+    free(pageBuffer);
+  }
   pageBuffer = nullptr;
   pageBufferSize = 0;
+}
+
+bool XtcReaderActivity::ensurePsramPageBuffer(const size_t needed) {
+  if (psramPageBuffer && pageBufferSize >= needed) return true;
+  auto buffer = HalMemory::allocatePsram(needed);  // null without PSRAM
+  if (!buffer) return false;
+  freePageBuffer();
+  psramPageBuffer = std::move(buffer);
+  pageBuffer = psramPageBuffer.get();
+  pageBufferSize = needed;
+  return true;
 }
 
 // Allocate the page buffer once (or grow it if a later page is somehow larger). After the library
@@ -426,13 +441,15 @@ void XtcReaderActivity::renderPage() {
   // XTG (1-bit): Row-major, ((width+7)/8) * height bytes, held whole.
   // XTH (2-bit): Two column-major bit planes of width * ((height + 7) / 8) bytes each. Only the
   // first plane is held; the second is streamed from SD for each drawing pass, because the whole
-  // page is larger than the biggest free block on a warm heap.
+  // page is larger than the biggest free block on a warm heap. With PSRAM the whole page is held.
   const size_t planeSize = static_cast<size_t>(pageWidth) * ((static_cast<size_t>(pageHeight) + 7) / 8);
-  const size_t neededSize = bitDepth == 2 ? planeSize : ((pageWidth + 7) / 8) * pageHeight;
+  const size_t pageSize = bitDepth == 2 ? 2 * planeSize : ((pageWidth + 7) / 8) * pageHeight;
 
   // Reuse a single page buffer for the whole session (allocated on first render, see
   // ensurePageBuffer()) instead of a large malloc/free on every page turn.
-  if (!ensurePageBuffer(neededSize)) {
+  const bool wholePage = ensurePsramPageBuffer(pageSize);
+  const size_t neededSize = wholePage || bitDepth != 2 ? pageSize : planeSize;
+  if (!wholePage && !ensurePageBuffer(neededSize)) {
     LOG_ERR("XTR", "Failed to allocate page buffer (%lu bytes, maxAlloc=%u)", neededSize, ESP.getMaxAllocHeap());
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_MEMORY_ERROR), true, EpdFontFamily::BOLD);
@@ -469,7 +486,7 @@ void XtcReaderActivity::renderPage() {
   if (bitDepth == 2) {
     // XTH 2-bit mode: pixel value = (bit1 << 1) | bit2, 0=White, 1=Dark Grey, 2=Light Grey,
     // 3=Black. Columns run right to left, 8 vertical pixels per byte, MSB = topmost.
-    // Each pass streams plane 2 and combines it bytewise with the held plane 1:
+    // Each pass takes plane 2 (held with PSRAM, else streamed) and combines it bytewise with plane 1:
     //   any ink (value >= 1)    = bit1 | bit2
     //   dark gray (value 1)     = ~bit1 & bit2
     //   any gray (value 1 or 2) = bit1 ^ bit2
@@ -485,26 +502,31 @@ void XtcReaderActivity::renderPage() {
       bool state;
     };
     PassCtx ctx{&renderer, pageBuffer, planeSize, (pageHeight + 7u) / 8u, pageWidth, pageHeight, Pass::Ink, true};
+    const auto combine = [](PassCtx* c, const uint8_t* data, const size_t size, const size_t offset) {
+      for (size_t i = 0; i < size; i++) {
+        const size_t index = offset + i - c->planeSize;
+        const uint8_t bit1 = c->plane1[index], bit2 = data[i];
+        const uint8_t mask = c->pass == Pass::Ink        ? (bit1 | bit2)
+                             : c->pass == Pass::DarkGray ? static_cast<uint8_t>(~bit1 & bit2)
+                                                         : static_cast<uint8_t>(bit1 ^ bit2);
+        if (!mask) continue;
+        const uint16_t x = c->pageWidth - 1 - index / c->colBytes;
+        const uint16_t y0 = (index % c->colBytes) * 8;
+        for (uint8_t bit = 0; bit < 8; bit++) {
+          if ((mask & (0x80 >> bit)) && y0 + bit < c->pageHeight) c->renderer->drawPixel(x, y0 + bit, c->state);
+        }
+      }
+    };
     const auto drawPass = [&](const Pass pass, const bool state) -> bool {
       ctx.pass = pass;
       ctx.state = state;
+      if (wholePage) {
+        combine(&ctx, pageBuffer + planeSize, planeSize, planeSize);
+        return true;
+      }
       const xtc::XtcError err = xtc->loadPageStreaming(
           currentPage,
-          [c = &ctx](const uint8_t* data, size_t size, size_t offset) {
-            for (size_t i = 0; i < size; i++) {
-              const size_t index = offset + i - c->planeSize;
-              const uint8_t bit1 = c->plane1[index], bit2 = data[i];
-              const uint8_t mask = c->pass == Pass::Ink        ? (bit1 | bit2)
-                                   : c->pass == Pass::DarkGray ? static_cast<uint8_t>(~bit1 & bit2)
-                                                               : static_cast<uint8_t>(bit1 ^ bit2);
-              if (!mask) continue;
-              const uint16_t x = c->pageWidth - 1 - index / c->colBytes;
-              const uint16_t y0 = (index % c->colBytes) * 8;
-              for (uint8_t bit = 0; bit < 8; bit++) {
-                if ((mask & (0x80 >> bit)) && y0 + bit < c->pageHeight) c->renderer->drawPixel(x, y0 + bit, c->state);
-              }
-            }
-          },
+          [c = &ctx, &combine](const uint8_t* data, size_t size, size_t offset) { combine(c, data, size, offset); },
           2048, nullptr, nullptr, planeSize, planeSize);
       if (err != xtc::XtcError::OK) LOG_ERR("XTR", "Plane 2 stream failed: %s", xtc::errorToString(err));
       return err == xtc::XtcError::OK;

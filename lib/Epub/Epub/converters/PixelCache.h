@@ -1,5 +1,6 @@
 #pragma once
 
+#include <HalMemory.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <stdint.h>
@@ -53,6 +54,9 @@ class Reader {
 
  private:
   HalFile file;
+  // With PSRAM the whole body is read once at open(), and every pass draws from it instead of
+  // re-reading the card. Null without PSRAM (or when it is full): passes stream as before.
+  HalMemory::PsramBuffer body_;
   int width_ = 0;
   int height_ = 0;
 };
