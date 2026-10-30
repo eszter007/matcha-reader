@@ -7296,9 +7296,15 @@ void EpubReaderActivity::addBookmark() {
     currentPageBookmarked = false;
   } else {
     std::string pageText;
+    std::optional<uint32_t> verticalOffset;
     if (verticalSection) {
+      // The render task's warm tail re-faults the section's single page slot; read it under the lock.
+      RenderLock lock(*this);
       const VerticalPage* vp = verticalSection->getPage();
       if (vp) pageText = PageTextExtractor::fromVerticalPage(*vp);
+      if (currentPage >= 0 && currentPage < verticalSection->pageCount) {
+        verticalOffset = verticalSection->getVisibleTextOffsetForPage(currentPage);
+      }
     } else if (section && currentPage >= 0 && currentPage < pageCount) {
       pageText = section->getTextFromSectionFile();
     }
@@ -7313,8 +7319,8 @@ void EpubReaderActivity::addBookmark() {
     // The two layouts own different section objects; never touch `section` while a vertical page
     // is active (it is null in that mode).
     std::optional<uint32_t> offset;
-    if (verticalSection && currentPage >= 0 && currentPage < verticalSection->pageCount) {
-      offset = verticalSection->getVisibleTextOffsetForPage(currentPage);
+    if (verticalSection) {
+      offset = verticalOffset;
     } else if (section && currentPage >= 0 && currentPage < section->pageCount) {
       // currentPageVisibleOffset was captured for this very page at its last render.
       offset = currentPageVisibleOffset.has_value()

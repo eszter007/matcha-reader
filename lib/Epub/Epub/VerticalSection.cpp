@@ -2519,8 +2519,17 @@ bool VerticalSection::loadSectionFile(const ReaderRenderSpec& spec, const bool r
   pageOffsets_.clear();
   loadedPageIndex_ = -1;
 
+  // finishBuild() always patches in a real index offset, even for a chapter with no pages. Zero is
+  // the header's placeholder: the build never finished (power cut, reset), or is still running.
+  // Not cleared here -- a build in progress owns the file; the caller's rebuild overwrites it.
+  if (indexOffset == 0) {
+    file.close();
+    LOG_ERR("VSC", "Unfinished cache (no page index), rebuilding");
+    return false;
+  }
+
   if (cachedPageCount > 0) {
-    if (indexOffset == 0 || !file.seek(indexOffset)) {
+    if (!file.seek(indexOffset)) {
       file.close();
       LOG_ERR("VSC", "Bad page index offset in cache");
       clearCache();
