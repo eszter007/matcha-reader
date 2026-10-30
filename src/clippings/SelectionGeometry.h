@@ -30,11 +30,18 @@ inline bool nearerWord(const Rect candidate, const Rect current, const int x, co
   return distance(candidate) < distance(current);
 }
 
-inline Rect actions(const Rect safe, const int textTop, const int height, const int gap, const int preferredWidth = 0,
-                    const int anchorX = 0) {
+inline bool actionsFitAbove(const Rect safe, const int textTop, const int height, const int gap) {
+  return textTop - height - gap >= safe.y;
+}
+
+// The bar sits above the selection, or below it (textBottom) when there is no room above.
+inline Rect actions(const Rect safe, const int textTop, const int textBottom, const int height, const int gap,
+                    const int preferredWidth = 0, const int anchorX = 0) {
   const int width = preferredWidth > 0 ? std::min(safe.width, preferredWidth) : safe.width;
-  return Rect{std::clamp(anchorX, safe.x, safe.x + safe.width - width), std::max(safe.y, textTop - height - gap), width,
-              height};
+  const int y = actionsFitAbove(safe, textTop, height, gap)
+                    ? textTop - height - gap
+                    : std::max(safe.y, std::min(textBottom + gap, safe.y + safe.height - height));
+  return Rect{std::clamp(anchorX, safe.x, safe.x + safe.width - width), y, width, height};
 }
 
 inline Rect button(const Rect actions, const int index, const int padding) {

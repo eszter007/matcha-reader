@@ -335,14 +335,14 @@ class BaseTheme {
   static constexpr int SELECTION_ACTION_GAP_PX = 4;
   // Air above the icons and below the labels.
   static constexpr int SELECTION_ACTION_VPAD_PX = 12;
-  // The pointer under the bar: this tall, twice this wide, aimed at anchorX.
+  // The pointer on the bar's edge: this tall, twice this wide, aimed at anchorX.
   static constexpr int SELECTION_ACTION_TAIL_PX = 8;
   // Air around each slot and between slots, and the card's corner radius: tighter and rounder than
-  // the generic menu metrics, so the three actions read as one compact bubble.
+  // the generic menu metrics, so the actions read as one compact bubble.
   static constexpr int SELECTION_ACTION_PAD_PX = 4;
   static constexpr int SELECTION_ACTION_RADIUS_PX = 12;
   // anchorX < 0 draws no pointer.
-  static void drawSelectionActions(const GfxRenderer& renderer, Rect rect, int anchorX = -1);
+  static void drawSelectionActions(const GfxRenderer& renderer, Rect rect, int anchorX = -1, bool pointUp = false);
   virtual Rect drawPopup(const GfxRenderer& renderer, const char* message) const;
   virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const;
   static void drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage, const int pageCount,

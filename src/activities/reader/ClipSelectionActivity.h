@@ -84,6 +84,8 @@ class ClipSelectionActivity final : public Activity {
   };
 
   static constexpr size_t MAX_SELECTABLE_WORDS = 240;
+  // Between the action bar and the text: the pointer plus a little air.
+  static constexpr int ACTION_GAP = BaseTheme::SELECTION_ACTION_TAIL_PX + 2;
   // A vertical page is one page of character cells (a dense one holds ~450); 512 WordBoxes stay
   // under 24KB on the C3, and the nothrow allocation cancels the selection when even that is short.
   static constexpr size_t MAX_SELECTABLE_CELLS = 512;
@@ -108,8 +110,12 @@ class ClipSelectionActivity final : public Activity {
   void loopButtons();
   bool handleButtons(uint8_t buttons);
   Rect handleRect(int index, bool start) const;
+  void actionArea(Rect& safe, int& width, int& height) const;
   Rect actionRect() const;
   int selectionTop() const;
+  int selectionBottom() const;
+  bool actionsAbove() const;
+  int actionAnchor() const;
   int textOffset() const;
   int textXOffset() const;
   void cancel();

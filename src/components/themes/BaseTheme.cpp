@@ -1280,7 +1280,8 @@ void BaseTheme::drawSelectionHandle(const GfxRenderer& renderer, const Rect rect
 
 // One card, four actions, each an outline icon over its label (the stock reader's selection
 // bar). The hit areas stay selectionGeometry::button(); only the drawing changed.
-void BaseTheme::drawSelectionActions(const GfxRenderer& renderer, const Rect rect, const int anchorX) {
+void BaseTheme::drawSelectionActions(const GfxRenderer& renderer, const Rect rect, const int anchorX,
+                                     const bool pointUp) {
   const int font = uiScaleSpec().smallFontId;
   const char* labels[SELECTION_ACTION_COUNT] = {tr(STR_LOOKUP), tr(STR_TRANSLATE), tr(STR_CLIP),
                                                 tr(STR_BOOKMARK_OPTION)};
@@ -1304,16 +1305,17 @@ void BaseTheme::drawSelectionActions(const GfxRenderer& renderer, const Rect rec
                       iconY + SELECTION_ACTION_ICON_PX + SELECTION_ACTION_GAP_PX, labels[i]);
   }
   if (anchorX < 0) return;
-  // Pointer: a white triangle hanging from the bottom edge, outlined like the card, its base
-  // opening the border so bubble and tail read as one shape.
+  // Pointer: a white triangle on the bottom edge (top edge when the bar sits below the text),
+  // outlined like the card, its base opening the border so bubble and tail read as one shape.
   constexpr int tail = SELECTION_ACTION_TAIL_PX;
   const int cx = std::clamp(anchorX, rect.x + SELECTION_ACTION_RADIUS_PX + tail,
                             rect.x + rect.width - SELECTION_ACTION_RADIUS_PX - tail - 1);
-  const int baseY = rect.y + rect.height - 1;
+  const int baseY = pointUp ? rect.y : rect.y + rect.height - 1;
+  const int dir = pointUp ? -1 : 1;
   for (int dy = 0; dy <= tail; ++dy) {
     const int half = tail - dy;
-    renderer.drawLine(cx - half, baseY + dy, cx + half, baseY + dy, false);
+    renderer.drawLine(cx - half, baseY + dir * dy, cx + half, baseY + dir * dy, false);
   }
-  renderer.drawLine(cx - tail, baseY, cx, baseY + tail, true);
-  renderer.drawLine(cx + tail, baseY, cx, baseY + tail, true);
+  renderer.drawLine(cx - tail, baseY, cx, baseY + dir * tail, true);
+  renderer.drawLine(cx + tail, baseY, cx, baseY + dir * tail, true);
 }

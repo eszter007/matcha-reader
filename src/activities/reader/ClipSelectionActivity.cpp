@@ -100,7 +100,9 @@ void ClipSelectionActivity::onEnter() {
       closestInRow(firstPageRows / 2, vertical() ? renderer.getScreenHeight() / 2 : renderer.getScreenWidth() / 2);
   if (middle >= 0) selected = middle;
   if (initialX >= 0) {
-    const int hit = wordAt(initialX, initialY);
+    // The reader takes a press up to half a line from the text; start on the nearest word.
+    int hit = wordAt(initialX, initialY);
+    if (hit < 0) hit = dragWordAt(initialX, initialY);
     if (hit < 0) {
       cancel();
       return;
@@ -754,8 +756,32 @@ int ClipSelectionActivity::selectionTop() const {
   return top;
 }
 
-Rect ClipSelectionActivity::actionRect() const {
-  Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+int ClipSelectionActivity::selectionBottom() const {
+  const int first = std::min(rangeStart, selected);
+  const int last = std::max(rangeStart, selected);
+  int bottom = 0;
+  for (int i = first; i <= last; ++i) {
+    if (words[i].pageOffset == currentPageOffset) bottom = std::max(bottom, words[i].y + words[i].height);
+  }
+  // Handles hang below the last word (below the last cell on a vertical page).
+  return bottom + BaseTheme::selectionHandleSize();
+}
+
+// The selected word the bar points at: the first on this page, or the last when the bar is below.
+int ClipSelectionActivity::actionAnchor() const {
+  int first = std::min(rangeStart, selected);
+  int last = std::max(rangeStart, selected);
+  if (actionsAbove()) {
+    while (first < last && words[first].pageOffset != currentPageOffset) ++first;
+    return first;
+  }
+  while (last > first && words[last].pageOffset != currentPageOffset) --last;
+  return last;
+}
+
+// The area the action bar may use, and the bar's size.
+void ClipSelectionActivity::actionArea(Rect& safe, int& width, int& height) const {
+  safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   const auto& metrics = UITheme::getInstance().getMetrics();
   int top, right, bottom, left;
   renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
@@ -773,20 +799,32 @@ Rect ClipSelectionActivity::actionRect() const {
   // Each slot holds an icon over its label; the widest label sets the slot width.
   const int slotWidth = std::max(labelWidth, BaseTheme::SELECTION_ACTION_ICON_PX) + padding * 4;
   constexpr int count = BaseTheme::SELECTION_ACTION_COUNT;
-  const int width = std::min(safe.width, count * slotWidth + padding * (count + 1));
-  const int height = BaseTheme::SELECTION_ACTION_ICON_PX + BaseTheme::SELECTION_ACTION_GAP_PX +
-                     renderer.getLineHeight(font) + 2 * BaseTheme::SELECTION_ACTION_VPAD_PX;
-  int first = std::min(rangeStart, selected);
-  const int last = std::max(rangeStart, selected);
-  while (first < last && words[first].pageOffset < currentPageOffset) ++first;
-  // The gap below the card holds the pointer plus a little air before the selected word.
-  const int gap = BaseTheme::SELECTION_ACTION_TAIL_PX + 2;
-  // The card hangs left-aligned with the first selected word, but never so far right that the
+  width = std::min(safe.width, count * slotWidth + padding * (count + 1));
+  height = BaseTheme::SELECTION_ACTION_ICON_PX + BaseTheme::SELECTION_ACTION_GAP_PX + renderer.getLineHeight(font) +
+           2 * BaseTheme::SELECTION_ACTION_VPAD_PX;
+}
+
+bool ClipSelectionActivity::actionsAbove() const {
+  Rect safe;
+  int width = 0;
+  int height = 0;
+  actionArea(safe, width, height);
+  return selectionGeometry::actionsFitAbove(safe, selectionTop(), height, ACTION_GAP);
+}
+
+Rect ClipSelectionActivity::actionRect() const {
+  Rect safe;
+  int width = 0;
+  int height = 0;
+  actionArea(safe, width, height);
+  const int padding = BaseTheme::SELECTION_ACTION_PAD_PX;
+  const int anchor = actionAnchor();
+  // The card hangs left-aligned with the word it points at, but never so far right that the
   // pointer, which must clear the rounded corner, could not sit exactly on the word's centre.
-  const int wordX = words[first].x + textXOffset();
+  const int wordX = words[anchor].x + textXOffset();
   const int apexInset = BaseTheme::SELECTION_ACTION_RADIUS_PX + BaseTheme::SELECTION_ACTION_TAIL_PX;
-  const int barX = std::min(wordX - padding, wordX + words[first].width / 2 - apexInset);
-  return selectionGeometry::actions(safe, selectionTop(), height, gap, width, barX);
+  const int barX = std::min(wordX - padding, wordX + words[anchor].width / 2 - apexInset);
+  return selectionGeometry::actions(safe, selectionTop(), selectionBottom(), height, ACTION_GAP, width, barX);
 }
 
 int ClipSelectionActivity::textOffset() const {
@@ -985,10 +1023,9 @@ void ClipSelectionActivity::drawSelection() const {
       GUI.drawSelectionHandle(renderer, handleRect(last, false),
                               selectionGeometry::handleCorner(false, vertical(), words[last].isRtl));
     if (!touchDragSelecting) {
-      // The pointer aims at the first selected word on this page (its cell, on a vertical page).
-      int anchor = std::min(rangeStart, selected);
-      while (anchor < last && words[anchor].pageOffset != currentPageOffset) ++anchor;
-      GUI.drawSelectionActions(renderer, actionRect(), words[anchor].x + offsetX + words[anchor].width / 2);
+      const int anchor = actionAnchor();
+      GUI.drawSelectionActions(renderer, actionRect(), words[anchor].x + offsetX + words[anchor].width / 2,
+                               !actionsAbove());
     }
   }
 }

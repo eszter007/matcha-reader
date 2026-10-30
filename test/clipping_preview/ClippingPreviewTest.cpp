@@ -178,18 +178,19 @@ TEST(SelectionGeometry, SinglePressSelectsTwoWordsInEitherReadingDirection) {
   EXPECT_EQ(selectionGeometry::horizontalIndex(0, 0, false, true), -1);
 }
 
-TEST(SelectionGeometry, ToolbarOverlaysAtTopAndStaysInsideEveryOrientedSafeArea) {
+TEST(SelectionGeometry, ToolbarSitsAboveOrBelowAndStaysInsideEveryOrientedSafeArea) {
   for (const Rect safe :
        {Rect{12, 20, 456, 744}, Rect{20, 12, 744, 456}, Rect{8, 32, 456, 744}, Rect{32, 8, 744, 456}}) {
     for (const int top : {safe.y, safe.y + 40, safe.y + safe.height / 2, safe.y + safe.height - 80}) {
-      const Rect actions = selectionGeometry::actions(safe, top, 64, 10);
+      const int bottom = top + 40;
+      const Rect actions = selectionGeometry::actions(safe, top, bottom, 64, 10);
       EXPECT_GE(actions.y, safe.y);
       EXPECT_LE(actions.x + actions.width, safe.x + safe.width);
       EXPECT_LE(actions.y + actions.height, safe.y + safe.height);
       if (top >= safe.y + 74)
         EXPECT_LE(actions.y + actions.height, top - 10);
       else
-        EXPECT_EQ(actions.y, safe.y);
+        EXPECT_EQ(actions.y, bottom + 10);  // no room above: below the selection
       for (int i = 0; i < 3; ++i) {
         const Rect button = selectionGeometry::button(actions, i, 8);
         EXPECT_EQ(selectionGeometry::actionAt(actions, 8, button.x, button.y), i);
@@ -204,13 +205,19 @@ TEST(SelectionGeometry, ToolbarOverlaysAtTopAndStaysInsideEveryOrientedSafeArea)
   }
 }
 
+TEST(SelectionGeometry, ToolbarWithNoRoomEitherSideStaysOnScreen) {
+  const Rect safe{12, 20, 456, 744};
+  const Rect actions = selectionGeometry::actions(safe, safe.y + 10, safe.y + safe.height - 20, 64, 10);
+  EXPECT_EQ(actions.y + actions.height, safe.y + safe.height);
+}
+
 TEST(SelectionGeometry, FirstButtonFollowsStartHandleUntilScreenEdge) {
   const Rect safe{12, 20, 456, 744};
-  const Rect row = selectionGeometry::actions(safe, 200, 48, 10, 260, 92);
+  const Rect row = selectionGeometry::actions(safe, 200, 220, 48, 10, 260, 92);
   EXPECT_EQ(selectionGeometry::button(row, 0, 8).x, 100);
-  const Rect atRight = selectionGeometry::actions(safe, 200, 48, 10, 260, 420);
+  const Rect atRight = selectionGeometry::actions(safe, 200, 220, 48, 10, 260, 420);
   EXPECT_EQ(atRight.x + atRight.width, safe.x + safe.width);
-  const Rect atLeft = selectionGeometry::actions(safe, 200, 48, 10, 260, 0);
+  const Rect atLeft = selectionGeometry::actions(safe, 200, 220, 48, 10, 260, 0);
   EXPECT_EQ(atLeft.x, safe.x);
 }
 
