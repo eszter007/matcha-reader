@@ -408,7 +408,8 @@ void DictionaryWordSelectActivity::performLookup() {
       LOG_ERR("DICT", "OOM: definition view");
       return;
     }
-    if (mappedInput.hasTouch()) {
+    // A lookup of selected text (lookupText) never extracts the page's words, so it has no box.
+    if (mappedInput.hasTouch() && selected >= 0 && static_cast<size_t>(selected) < words.size()) {
       const WordBox& box = words[selected];
       const Rect wordRect{box.x, box.y, box.width, wordHeight(box)};
       LookupClipHandles handles;
