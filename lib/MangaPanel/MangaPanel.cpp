@@ -77,10 +77,9 @@ bool MangaBook::isMangaFolder(const std::string& folderPath) {
 std::string MangaBook::getTitle() const {
   if (!metaTitle.empty()) return metaTitle;
   auto pos = folderPath.find_last_of('/');
-  if (pos != std::string::npos && pos + 1 < folderPath.size()) {
-    return folderPath.substr(pos + 1);
-  }
-  return folderPath;
+  std::string name = pos != std::string::npos && pos + 1 < folderPath.size() ? folderPath.substr(pos + 1) : folderPath;
+  if (FsHelpers::hasMatchaExtension(name)) name.resize(name.size() - 7);  // ".matcha"
+  return name;
 }
 
 std::string MangaBook::findCoverImage(const std::string& folderPath, BmpConvertCancelFn shouldCancel, void* cancelCtx) {
@@ -91,12 +90,12 @@ std::string MangaBook::findCoverImage(const std::string& folderPath, BmpConvertC
     if (Storage.exists(path.c_str())) return path;
   }
 
-  auto dir = Storage.open(folderPath.c_str());
-  if (!dir || !dir.isDirectory()) return "";
-  dir.rewindDirectory();
+  // A .matcha container cannot be listed; its converter always writes the canonical names.
+  auto dir = FsHelpers::hasMatchaExtension(folderPath) ? HalFile() : Storage.open(folderPath.c_str());
   std::string firstPageImage;
   std::string firstAnyImage;
-  for (auto mf = dir.openNextFile(); mf; mf = dir.openNextFile()) {
+  if (dir && dir.isDirectory()) dir.rewindDirectory();
+  for (auto mf = dir && dir.isDirectory() ? dir.openNextFile() : HalFile(); mf; mf = dir.openNextFile()) {
     if (shouldCancel && shouldCancel(cancelCtx)) return "";
     char imgName[200];
     mf.getName(imgName, sizeof(imgName));
@@ -115,7 +114,7 @@ std::string MangaBook::findCoverImage(const std::string& folderPath, BmpConvertC
       if (firstAnyImage.empty() || imgFn < firstAnyImage) firstAnyImage = imgName;
     }
   }
-  dir.close();
+  if (dir) dir.close();
   const std::string& chosen = !firstPageImage.empty() ? firstPageImage : firstAnyImage;
   if (!chosen.empty()) return folderPath + "/" + chosen;
 
@@ -289,6 +288,9 @@ bool MangaBook::buildCanonicalPageList() {
 
 bool MangaBook::scanImages() {
   imageFiles.clear();
+
+  // A .matcha container cannot be listed; its pages are always the canonical names.
+  if (FsHelpers::hasMatchaExtension(folderPath)) return buildCanonicalPageList();
 
   const unsigned long canonStart = millis();
   if (buildCanonicalPageList()) {

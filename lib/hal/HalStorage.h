@@ -129,6 +129,11 @@ class HalFile : public Print {
   HalFile openNextFile();
   bool isOpen() const;
   operator bool() const;
+
+ private:
+  // Narrows a read-only file to [offset, offset + length): an entry inside a .matcha container
+  // (see MatchaContainer.h). Positions, sizes and reads are then relative to the entry.
+  void setWindow(uint32_t offset, uint32_t length);
 };
 
 // Downstream code must use Storage instead of SdMan

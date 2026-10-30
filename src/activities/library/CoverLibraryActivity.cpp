@@ -601,7 +601,8 @@ void CoverLibraryActivity::scanDirectoryEntry() {
 
   const std::string_view filename{name};
   if ((!FsHelpers::hasEpubExtension(filename) && !FsHelpers::hasXtcExtension(filename) &&
-       !FsHelpers::hasTxtExtension(filename) && !FsHelpers::hasMarkdownExtension(filename)) ||
+       !FsHelpers::hasTxtExtension(filename) && !FsHelpers::hasMarkdownExtension(filename) &&
+       !FsHelpers::hasMatchaExtension(filename)) ||
       isCrashReportFile(name)) {
     return;
   }

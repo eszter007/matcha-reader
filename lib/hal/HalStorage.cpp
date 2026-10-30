@@ -2,12 +2,14 @@
 
 #include <FS.h>  // need to be included before SdFat.h for compatibility with FS.h's File class
 #include <Logging.h>
+#include <MatchaContainer.h>
 #include <SDCardManager.h>
 #include <esp_heap_caps.h>
 #if FREEINK_CAP_USB_MSC
 #include <UsbMassStorage.h>
 #endif
 
+#include <algorithm>
 #include <cassert>
 
 #define SDCard SDCardManager::getInstance()
@@ -176,6 +178,10 @@ class HalFile::Impl {
     file.close();
   }
   FsFile file;
+  // Set for an entry of a .matcha container: the file is the container, read through a window.
+  bool windowed = false;
+  uint32_t windowStart = 0;
+  uint32_t windowLength = 0;
 };
 
 HalFile::HalFile() = default;
@@ -191,7 +197,22 @@ HalFile HalStorage::open(const char* path, const oflag_t oflag) {
 
 bool HalStorage::mkdir(const char* path, const bool pFlag) { HAL_STORAGE_WRAPPED_CALL(mkdir, path, pFlag); }
 
-bool HalStorage::exists(const char* path) { HAL_STORAGE_WRAPPED_CALL(exists, path); }
+namespace {
+bool readContainerAt(void* ctx, const uint32_t offset, void* buf, const size_t n) {
+  auto& file = *static_cast<HalFile*>(ctx);
+  return file.seekSet(offset) && file.read(buf, n) == static_cast<int>(n);
+}
+}  // namespace
+
+bool HalStorage::exists(const char* path) {
+  std::string container, entry;
+  if (matcha::splitPath(path, container, entry)) {
+    HalFile file;
+    matcha::Entry found;
+    return openFileForRead("HAL", container, file) && matcha::findEntry(readContainerAt, &file, entry, found);
+  }
+  HAL_STORAGE_WRAPPED_CALL(exists, path);
+}
 
 bool HalStorage::remove(const char* path) { HAL_STORAGE_WRAPPED_CALL(remove, path); }
 bool HalStorage::rename(const char* oldPath, const char* newPath) {
@@ -205,6 +226,17 @@ bool HalStorage::replaceFile(const char* tmpPath, const char* path) {
 bool HalStorage::rmdir(const char* path) { HAL_STORAGE_WRAPPED_CALL(rmdir, path); }
 
 bool HalStorage::openFileForRead(const char* moduleName, const char* path, HalFile& file) {
+  std::string container, entry;
+  if (matcha::splitPath(path, container, entry)) {
+    matcha::Entry found;
+    if (!openFileForRead(moduleName, container, file) || !matcha::findEntry(readContainerAt, &file, entry, found) ||
+        found.isDirectory()) {
+      file = HalFile();
+      return false;
+    }
+    file.setWindow(found.offset, found.size);
+    return true;
+  }
   StorageLock lock;  // ensure thread safety for the duration of this function
   FsFile fsFile;
   bool ok = SDCard.openFileForRead(moduleName, path, fsFile);
@@ -262,8 +294,22 @@ bool HalStorage::removeDir(const char* path) { HAL_STORAGE_WRAPPED_CALL(removeDi
 
 void HalFile::flush() { HAL_FILE_WRAPPED_CALL(flush, ); }
 size_t HalFile::getName(char* name, size_t len) { HAL_FILE_WRAPPED_CALL(getName, name, len); }
-size_t HalFile::size() { HAL_FILE_FORWARD_CALL(size, ); }          // already thread-safe, no need to wrap
-size_t HalFile::fileSize() { HAL_FILE_FORWARD_CALL(fileSize, ); }  // already thread-safe, no need to wrap
+void HalFile::setWindow(const uint32_t offset, const uint32_t length) {
+  HalStorage::StorageLock lock;
+  impl->windowed = true;
+  impl->windowStart = offset;
+  impl->windowLength = length;
+  impl->file.seekSet(offset);
+}
+
+size_t HalFile::size() {
+  if (impl && impl->windowed) return impl->windowLength;
+  HAL_FILE_FORWARD_CALL(size, );  // already thread-safe, no need to wrap
+}
+size_t HalFile::fileSize() {
+  if (impl && impl->windowed) return impl->windowLength;
+  HAL_FILE_FORWARD_CALL(fileSize, );  // already thread-safe, no need to wrap
+}
 
 uint32_t HalFile::modifiedStamp() {
   if (!impl) return 0;
@@ -272,7 +318,10 @@ uint32_t HalFile::modifiedStamp() {
   if (!impl->file.getModifyDateTime(&date, &time)) return 0;
   return (static_cast<uint32_t>(date) << 16) | time;
 }
-uint64_t HalFile::fileSize64() { HAL_FILE_FORWARD_CALL(fileSize, ); }  // already thread-safe, no need to wrap
+uint64_t HalFile::fileSize64() {
+  if (impl && impl->windowed) return impl->windowLength;
+  HAL_FILE_FORWARD_CALL(fileSize, );  // already thread-safe, no need to wrap
+}
 uint32_t HalFile::modificationTime() {
   HalStorage::StorageLock lock;
   uint16_t date = 0;
@@ -280,15 +329,51 @@ uint32_t HalFile::modificationTime() {
   if (!impl || !impl->file.getModifyDateTime(&date, &time) || date == 0) return 0;
   return (static_cast<uint32_t>(date) << 16) | time;
 }
-bool HalFile::seek(size_t pos) { HAL_FILE_WRAPPED_CALL(seekSet, pos); }
-bool HalFile::seek64(uint64_t pos) { HAL_FILE_WRAPPED_CALL(seekSet, pos); }
-bool HalFile::seekCur(int64_t offset) { HAL_FILE_WRAPPED_CALL(seekCur, offset); }
-bool HalFile::seekSet(size_t offset) { HAL_FILE_WRAPPED_CALL(seekSet, offset); }
+bool HalFile::seek(size_t pos) { return seekSet(pos); }
+bool HalFile::seek64(uint64_t pos) {
+  if (impl && impl->windowed) return pos <= impl->windowLength && seekSet(static_cast<size_t>(pos));
+  HAL_FILE_WRAPPED_CALL(seekSet, pos);
+}
+bool HalFile::seekCur(int64_t offset) {
+  if (impl && impl->windowed) {
+    const int64_t target = static_cast<int64_t>(position()) + offset;
+    return target >= 0 && seekSet(static_cast<size_t>(target));
+  }
+  HAL_FILE_WRAPPED_CALL(seekCur, offset);
+}
+bool HalFile::seekSet(size_t offset) {
+  if (impl && impl->windowed) {
+    if (offset > impl->windowLength) return false;
+    HalStorage::StorageLock lock;
+    return impl->file.seekSet(impl->windowStart + offset);
+  }
+  HAL_FILE_WRAPPED_CALL(seekSet, offset);
+}
 bool HalFile::truncate(const uint64_t length) { HAL_FILE_WRAPPED_CALL(truncate, length); }
-int HalFile::available() const { HAL_FILE_WRAPPED_CALL(available, ); }
-size_t HalFile::position() const { HAL_FILE_WRAPPED_CALL(position, ); }
-int HalFile::read(void* buf, size_t count) { HAL_FILE_WRAPPED_CALL(read, buf, count); }
-int HalFile::read() { HAL_FILE_WRAPPED_CALL(read, ); }
+int HalFile::available() const {
+  if (impl && impl->windowed) return static_cast<int>(impl->windowLength - position());
+  HAL_FILE_WRAPPED_CALL(available, );
+}
+size_t HalFile::position() const {
+  if (impl && impl->windowed) {
+    HalStorage::StorageLock lock;
+    const uint64_t at = impl->file.position();
+    return at > impl->windowStart ? static_cast<size_t>(at - impl->windowStart) : 0;
+  }
+  HAL_FILE_WRAPPED_CALL(position, );
+}
+int HalFile::read(void* buf, size_t count) {
+  if (impl && impl->windowed) {
+    const size_t left = impl->windowLength - std::min<size_t>(position(), impl->windowLength);
+    if (count > left) count = left;
+    if (count == 0) return 0;
+  }
+  HAL_FILE_WRAPPED_CALL(read, buf, count);
+}
+int HalFile::read() {
+  if (impl && impl->windowed && position() >= impl->windowLength) return -1;
+  HAL_FILE_WRAPPED_CALL(read, );
+}
 size_t HalFile::write(const uint8_t* buf, size_t count) { HAL_FILE_WRAPPED_CALL(write, buf, count); }
 size_t HalFile::write(const void* buf, size_t count) { HAL_FILE_WRAPPED_CALL(write, buf, count); }
 size_t HalFile::write(uint8_t b) { HAL_FILE_WRAPPED_CALL(write, b); }
