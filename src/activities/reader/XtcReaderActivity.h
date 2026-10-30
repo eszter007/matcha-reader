@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <HalMemory.h>
 #include <Xtc.h>
 
 #include <atomic>
@@ -44,9 +45,13 @@ class XtcReaderActivity final : public ReaderActivity {
   // Page pixel buffer (a 1-bit page, or plane 1 of a 2-bit page), allocated once and reused for
   // every page turn. Page dimensions are fixed per file, so one buffer serves all pages -- avoids a
   // large malloc/free on every turn (slow) and grabs the block once while the heap is freshest.
+  // With PSRAM the buffer lives there and holds a 2-bit page whole, so the gray passes read plane 2
+  // from memory instead of streaming it off the card for each one.
   uint8_t* pageBuffer = nullptr;
   size_t pageBufferSize = 0;
+  HalMemory::PsramBuffer psramPageBuffer;  // owns pageBuffer when set
   bool ensurePageBuffer(size_t needed);
+  bool ensurePsramPageBuffer(size_t needed);
   void freePageBuffer();
   enum class StatusBarOverlayPosition { Bottom, Top };
   struct StatusBarInfo {

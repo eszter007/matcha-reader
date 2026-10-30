@@ -8,6 +8,7 @@
 #include <Epub/converters/PixelCache.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalMemory.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
@@ -224,6 +225,7 @@ void MangaReaderActivity::onExit() {
     READING_STATS_STORE.record(update);
   }
 
+  dropLookupPrescan();
   saveProgress();
   if (book) remoteProgress::readHere(book->getFolder(), enterPercent, mangaProgressPercent(book->getFolder()));
   flushReaderSession();
@@ -764,6 +766,7 @@ void MangaReaderActivity::loop() {
         prefetchPanelCache(currentPanel + 1);
       }
     }
+    stepLookupPrescan();
     return;
   }
 
@@ -1661,12 +1664,57 @@ void MangaReaderActivity::launchWordLookupCurrentView() {
   // With line geometry the page itself becomes the selector; the text-only panel remains for
   // volumes converted before line boxes existed.
   if (enterWordSelect()) return;
-  std::string combined;
+  launchWordLookupAt(viewText(), -1);
+}
+
+std::string MangaReaderActivity::viewText() const {
+  std::string text;
   for (const auto* tb : viewTextBlocks()) {
-    if (!combined.empty()) combined += '\n';
-    combined += tb->text;
+    if (!text.empty()) text += '\n';
+    text += tb->text;
   }
-  launchWordLookupAt(std::move(combined), -1);
+  return text;
+}
+
+void MangaReaderActivity::dropLookupPrescan() {
+  if (!prescan_) return;
+  prescan_.reset();
+  DictIndex::releaseCaches();
+}
+
+void MangaReaderActivity::stepLookupPrescan() {
+  // Same pacing as EpubReaderActivity::stepLookupPrescan().
+  constexpr unsigned long PRESCAN_REST_MS = 1500;
+  constexpr uint32_t PRESCAN_SLICE_MS = 25;
+  constexpr uint32_t PRESCAN_MIN_ALLOC = 40 * 1024;
+  const int panel = currentPanel + 1;
+  if (prescan_ && (prescanPage_ != currentPage || prescanPanel_ != panel)) dropLookupPrescan();  // moved on
+  const unsigned long shownMs = viewMode == ViewMode::PanelZoom ? panelRenderedMs.load() : fullPageRenderedMs.load();
+  if (!book || HalMemory::getPsramHeap().totalBytes == 0 || !DictIndex::isAvailable() || shownMs == 0 ||
+      millis() - shownMs < PRESCAN_REST_MS || mappedInput.anyButtonDownRaw()) {
+    return;
+  }
+  const std::string cachePath = book->getCachePath() + "/wlscan.bin";
+  if (!prescan_) {
+    if (prescanPage_ == currentPage && prescanPanel_ == panel) return;  // done (or tried) here
+    if (ESP.getMaxAllocHeap() < PRESCAN_MIN_ALLOC) return;
+    prescanPage_ = currentPage;
+    prescanPanel_ = panel;
+    const std::string text = viewText();
+    if (text.empty()) return;
+    auto scan = makeUniqueNoThrow<WordSelectionScan>();
+    if (!scan) return;
+    scan->initFromUtf8Text(text);  // as MangaWordLookupActivity builds it, or the cache would not match
+    if (scan->tryLoadCache(cachePath, static_cast<uint16_t>(currentPage), static_cast<uint16_t>(panel))) return;
+    prescan_ = std::move(scan);
+    return;
+  }
+  if (!prescan_->step(PRESCAN_SLICE_MS)) return;
+  // A truncated scan is refused by saveCache() itself; the lookup then scans on open as before.
+  prescan_->saveCache(cachePath, static_cast<uint16_t>(currentPage), static_cast<uint16_t>(panel),
+                      WordSelectionScan::kNoRestoredCursor);
+  LOG_DBG("MRA", "Lookup prescan of page=%u panel=%d done", static_cast<unsigned>(currentPage), panel);
+  dropLookupPrescan();
 }
 
 std::vector<const manga::TextBlock*> MangaReaderActivity::viewTextBlocks() const {
@@ -1797,17 +1845,14 @@ bool MangaReaderActivity::holdTarget(const int x, const int y, std::string& text
       std::clamp(static_cast<int>(static_cast<int64_t>(along) * static_cast<int64_t>(cells.size()) / length), 0,
                  static_cast<int>(cells.size()) - 1);
 
-  text.clear();
-  for (const auto* tb : blocks) {
-    if (!text.empty()) text += '\n';
-    text += tb->text;
-  }
+  text = viewText();
   glyph = base + static_cast<int>(cells[cell]);
   return true;
 }
 
 void MangaReaderActivity::launchWordLookupAt(std::string combined, const int glyph) {
   if (!book || !DictIndex::isAvailable()) return;
+  dropLookupPrescan();  // the lookup scans (or loads the cache) itself
   const ViewMode returnMode = viewMode;
   if (combined.empty()) return;
   // Dictionary text needs the comic's CJK SD fallback. Restore it only for the child activity,

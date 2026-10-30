@@ -16,6 +16,8 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
+class WordSelectionScan;
+
 namespace PixelCacheIO {
 class Reader;
 }
@@ -188,6 +190,16 @@ class MangaReaderActivity final : public Activity {
   // Set by entering, moving or leaving the selection: the next render only swaps the outline.
   bool outlineOnlyUpdate_ = false;
   std::vector<const manga::TextBlock*> viewTextBlocks() const;
+  // viewTextBlocks() joined by line breaks: the text a lookup from this view scans.
+  std::string viewText() const;
+
+  // Word Lookup prescan (PSRAM boards): the view's text is segmented while the reader rests on it,
+  // so a hold opens on a cached scan. Keyed like the lookup's own cache: page, panel + 1.
+  std::unique_ptr<WordSelectionScan> prescan_;
+  uint32_t prescanPage_ = UINT32_MAX;
+  int prescanPanel_ = -1;
+  void stepLookupPrescan();
+  void dropLookupPrescan();
 
   FullPageGeom applyFullPageGeometry(int imgWidth, int imgHeight);
   // Pure fit/rotate math shared by applyFullPageGeometry (render path) and the prefetch worker.

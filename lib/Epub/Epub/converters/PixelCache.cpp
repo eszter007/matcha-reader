@@ -58,10 +58,14 @@ bool PixelCacheIO::Reader::open(const std::string& cachePath) {
   }
   width_ = w16;
   height_ = h16;
+  const size_t bodyBytes = static_cast<size_t>((width_ + 3) / 4) * height_;
+  body_ = HalMemory::allocatePsram(bodyBytes);
+  if (body_ && file.read(body_.get(), bodyBytes) != static_cast<int>(bodyBytes)) body_.reset();
   return true;
 }
 
 void PixelCacheIO::Reader::close() {
+  body_.reset();
   if (file.isOpen()) file.close();
   width_ = 0;
   height_ = 0;
@@ -89,7 +93,7 @@ bool PixelCacheIO::Reader::render(GfxRenderer& renderer, int x, int y, int expec
 
   // Rewind past the header: a second or third pass over the same handle starts where the previous
   // one stopped.
-  if (!file.seekSet(HEADER_BYTES)) {
+  if (!body_ && !file.seekSet(HEADER_BYTES)) {
     LOG_ERR("IMG", "Cache seek to body failed");
     return false;
   }
@@ -105,7 +109,8 @@ bool PixelCacheIO::Reader::render(GfxRenderer& renderer, int x, int y, int expec
   int rowsPerRead = 4096 / bytesPerRow;
   if (rowsPerRead < 1) rowsPerRead = 1;
   if (rowsPerRead > cachedHeight) rowsPerRead = cachedHeight;
-  uint8_t* readBuffer = (uint8_t*)malloc((size_t)rowsPerRead * bytesPerRow);
+  // The PSRAM body is one buffer already holding every row.
+  uint8_t* readBuffer = body_ ? body_.get() : (uint8_t*)malloc((size_t)rowsPerRead * bytesPerRow);
   if (!readBuffer) {
     // Fall back to a single-row buffer under memory pressure.
     rowsPerRead = 1;
@@ -132,7 +137,7 @@ bool PixelCacheIO::Reader::render(GfxRenderer& renderer, int x, int y, int expec
   unsigned long readMs = 0;
   uint32_t skippedBytes = 0, drawnBytes = 0;
 
-  int rowsInBuffer = 0;
+  int rowsInBuffer = body_ ? cachedHeight : 0;
   int bufferRow = 0;
   for (int row = 0; row < cachedHeight; row++) {
     if (bufferRow >= rowsInBuffer) {
@@ -183,7 +188,7 @@ bool PixelCacheIO::Reader::render(GfxRenderer& renderer, int x, int y, int expec
     }
   }
 
-  free(readBuffer);
+  if (!body_) free(readBuffer);  // the PSRAM body belongs to the Reader
   // Splits the pass into its two costs, so "manga page turns are slow" can be attributed without
   // another guess: SD throughput versus the per-pixel write loop. skipped/drawn is how much of
   // the image the byte-skip above removed from that loop.

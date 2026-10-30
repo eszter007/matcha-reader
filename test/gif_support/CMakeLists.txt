@@ -17,10 +17,13 @@ add_library(animatedgif_host STATIC ${ANIMATEDGIF_SOURCE_DIR}/src/AnimatedGIF.cp
 target_include_directories(animatedgif_host PUBLIC ${ANIMATEDGIF_SOURCE_DIR}/src)
 target_compile_definitions(animatedgif_host PUBLIC __LINUX__ MAX_WIDTH=3072)
 
-add_executable(GifSupportTest GifSupportTest.cpp PixelCacheTest.cpp GifDecoderTest.cpp)
+add_executable(GifSupportTest GifSupportTest.cpp PixelCacheTest.cpp GifDecoderTest.cpp
+  ${REPO_ROOT}/lib/hal/HalMemory.cpp)
 target_include_directories(GifSupportTest PRIVATE
   ${REPO_ROOT}/lib/GifSupport
-  ${REPO_ROOT}/test/chapter_html_slim_parser/stubs)
+  ${REPO_ROOT}/test/chapter_html_slim_parser/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${REPO_ROOT}/lib/hal)
 target_link_libraries(GifSupportTest PRIVATE crosspoint_test_common GTest::gtest_main animatedgif_host)
 gtest_discover_tests(GifSupportTest)
 add_test(NAME PatchAnimatedGif COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/test/test_patch_animatedgif.py)

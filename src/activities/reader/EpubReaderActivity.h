@@ -690,6 +690,8 @@ class EpubReaderActivity final : public ReaderActivity {
   // The next page's opening characters as lookup context (and, when asked, the longer mining
   // tail); returns their paragraph. Callers hold the render lock (getPage() re-faults the slot).
   uint32_t verticalLookupTail(std::string& lookupTail, std::string* miningTail);
+  // The next page's opening characters, flattened as initFromPage() flattens a page.
+  void horizontalLookupTail(int pageIndex, std::string& lookupTail, std::string& miningTail);
   // Word Lookup's page scan, run while the reader rests on a vertical page and saved to the scan
   // cache, so the first lookup there opens without the multi-second dictionary walk.
   std::unique_ptr<WordSelectionScan> prescan_;

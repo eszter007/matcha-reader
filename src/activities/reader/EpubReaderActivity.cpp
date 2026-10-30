@@ -5864,7 +5864,7 @@ void EpubReaderActivity::stepLookupPrescan() {
   constexpr unsigned long PRESCAN_REST_MS = 1500;  // after the page is up: past a run of turns
   constexpr uint32_t PRESCAN_SLICE_MS = 25;
   constexpr uint32_t PRESCAN_MIN_ALLOC = 40 * 1024;
-  const int page = verticalSection ? verticalSection->currentPage : -1;
+  const int page = verticalSection ? verticalSection->currentPage : section ? section->currentPage : -1;
   if (prescan_ && (prescanSpine_ != currentSpineIndex || prescanPage_ != page)) {
     prescan_.reset();  // the reader moved on
     DictIndex::releaseCaches();
@@ -5873,8 +5873,8 @@ void EpubReaderActivity::stepLookupPrescan() {
   // X3/X4 cannot spare in the background, and a lookup there still scans on open.
   if (page < 0 || !epub || HalMemory::getPsramHeap().totalBytes == 0 || !DictIndex::isAvailable() ||
       !(isJapaneseBook() || isChineseBook()) || verticalBuildInProgress_.load(std::memory_order_relaxed) ||
-      overlay != Overlay::None || lastRenderCompleteMs == 0 || millis() - lastRenderCompleteMs < PRESCAN_REST_MS ||
-      mappedInput.anyButtonDownRaw()) {
+      (section && section->isBuilding()) || overlay != Overlay::None || lastRenderCompleteMs == 0 ||
+      millis() - lastRenderCompleteMs < PRESCAN_REST_MS || mappedInput.anyButtonDownRaw()) {
     return;
   }
   const std::string cachePath = epub->getCachePath() + "/wlscan.bin";
@@ -5883,16 +5883,26 @@ void EpubReaderActivity::stepLookupPrescan() {
     if (ESP.getMaxAllocHeap() < PRESCAN_MIN_ALLOC) return;
     RenderLock lock{RenderLock::Try{}};
     if (!lock.held()) return;
-    const VerticalPage* vpage = verticalSection->getPage();
-    if (!vpage || vpage->isImagePage()) return;
     auto scan = makeUniqueNoThrow<WordSelectionScan>();
     if (!scan) return;
     // Built exactly as the panel builds its scan, or the cache would not match it.
     std::string tail;
-    const uint32_t tailParagraph = verticalLookupTail(tail, nullptr);
-    vpage = verticalSection->getPage();  // the tail's getPage() may have re-faulted the slot
-    if (!vpage) return;
-    scan->initFromVerticalPage(*vpage);
+    uint32_t tailParagraph = 0;
+    if (verticalSection) {
+      const VerticalPage* vpage = verticalSection->getPage();
+      if (!vpage || vpage->isImagePage()) return;
+      tailParagraph = verticalLookupTail(tail, nullptr);
+      vpage = verticalSection->getPage();  // the tail's getPage() may have re-faulted the slot
+      if (!vpage) return;
+      scan->initFromVerticalPage(*vpage);
+    } else {
+      const auto hpage = section->loadPage(page);
+      if (!hpage) return;
+      std::string miningTail;
+      horizontalLookupTail(page, tail, miningTail);
+      // The panel adds line geometry; the cache keys on the text alone, so it matches without it.
+      scan->initFromPage(*hpage, nullptr);
+    }
     if (!tail.empty()) scan->appendLookupContext(tail, tailParagraph);
     prescanSpine_ = currentSpineIndex;
     prescanPage_ = page;
@@ -5909,6 +5919,55 @@ void EpubReaderActivity::stepLookupPrescan() {
           millis() - prescanStartMs_);
   prescan_.reset();
   DictIndex::releaseCaches();
+}
+
+void EpubReaderActivity::horizontalLookupTail(const int pageIndex, std::string& lookupTail, std::string& miningTail) {
+  // Start of the next page, so a word split across the boundary can still be looked up (#201).
+  lookupTail.reserve(WordSelectionScan::kLookupContextChars * 4);  // see verticalLookupTail()
+  miningTail.reserve(kMiningTailChars * 3);
+  if (auto nextPage = section ? section->loadPageAt(pageIndex + 1) : nullptr) {
+    // Flattened the way initFromPage() flattens the current page -- a separating space only
+    // between two ASCII words, CJK runs concatenated -- so a split Japanese word still meets
+    // its continuation. PageTextExtractor spaces EVERY word, which would break that; walking
+    // the first few words directly also avoids building the whole next page's text.
+    auto isAsciiWord = [](unsigned char c) {
+      return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+    };
+    int taken = 0;
+    for (const auto& el : nextPage->elements) {
+      if (taken >= kMiningTailChars) break;
+      if (el->getTag() != TAG_PageLine) continue;
+      const auto& line = static_cast<const PageLine&>(*el);
+      if (!line.getBlock()) continue;
+      const TextBlock& block = *line.getBlock();
+      for (uint16_t wi = 0; wi < block.wordCount() && taken < kMiningTailChars; wi++) {
+        // Braces, not parens: Arduino.h defines a function-like `word(...)` macro.
+        const std::string_view w{block.wordText(wi), block.wordTextLen(wi)};
+        if (w.empty()) continue;
+        if (!miningTail.empty() && isAsciiWord(static_cast<unsigned char>(miningTail.back())) &&
+            isAsciiWord(static_cast<unsigned char>(w[0]))) {
+          if (taken < WordSelectionScan::kLookupContextChars) lookupTail += ' ';
+          miningTail += ' ';
+          taken++;
+        }
+        for (size_t b = 0; b < w.size() && taken < kMiningTailChars;) {
+          const auto lead = static_cast<unsigned char>(w[b]);
+          size_t len = 1;
+          if ((lead & 0xE0) == 0xC0)
+            len = 2;
+          else if ((lead & 0xF0) == 0xE0)
+            len = 3;
+          else if ((lead & 0xF8) == 0xF0)
+            len = 4;
+          if (b + len > w.size()) break;
+          if (taken < WordSelectionScan::kLookupContextChars) lookupTail.append(w.data() + b, len);
+          miningTail.append(w.data() + b, len);
+          b += len;
+          taken++;
+        }
+      }
+    }
+  }
 }
 
 uint32_t EpubReaderActivity::verticalLookupTail(std::string& lookupTail, std::string* miningTail) {
@@ -6102,56 +6161,9 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
       // here needs the build to still be live.
       LOG_DBG("ERS", "Word lookup: maxAlloc after reclaim = %u", ESP.getMaxAllocHeap());
 
-      // Start of the next page, so a word split across the boundary can still be looked up (#201).
-      // loadPageAt() returns an owned page, so unlike the vertical path there is no cache pointer
-      // to invalidate and the order does not matter.
       std::string lookupTail;
-      lookupTail.reserve(WordSelectionScan::kLookupContextChars * 4);  // see the vertical path
-      std::string miningTail;                                          // see the vertical path
-      miningTail.reserve(kMiningTailChars * 3);
-      if (auto nextPage = section ? section->loadPageAt(pageIndex + 1) : nullptr) {
-        // Flattened the way initFromPage() flattens the current page -- a separating space only
-        // between two ASCII words, CJK runs concatenated -- so a split Japanese word still meets
-        // its continuation. PageTextExtractor spaces EVERY word, which would break that; walking
-        // the first few words directly also avoids building the whole next page's text.
-        auto isAsciiWord = [](unsigned char c) {
-          return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
-        };
-        int taken = 0;
-        for (const auto& el : nextPage->elements) {
-          if (taken >= kMiningTailChars) break;
-          if (el->getTag() != TAG_PageLine) continue;
-          const auto& line = static_cast<const PageLine&>(*el);
-          if (!line.getBlock()) continue;
-          const TextBlock& block = *line.getBlock();
-          for (uint16_t wi = 0; wi < block.wordCount() && taken < kMiningTailChars; wi++) {
-            // Braces, not parens: Arduino.h defines a function-like `word(...)` macro.
-            const std::string_view w{block.wordText(wi), block.wordTextLen(wi)};
-            if (w.empty()) continue;
-            if (!miningTail.empty() && isAsciiWord(static_cast<unsigned char>(miningTail.back())) &&
-                isAsciiWord(static_cast<unsigned char>(w[0]))) {
-              if (taken < WordSelectionScan::kLookupContextChars) lookupTail += ' ';
-              miningTail += ' ';
-              taken++;
-            }
-            for (size_t b = 0; b < w.size() && taken < kMiningTailChars;) {
-              const auto lead = static_cast<unsigned char>(w[b]);
-              size_t len = 1;
-              if ((lead & 0xE0) == 0xC0)
-                len = 2;
-              else if ((lead & 0xF0) == 0xE0)
-                len = 3;
-              else if ((lead & 0xF8) == 0xF0)
-                len = 4;
-              if (b + len > w.size()) break;
-              if (taken < WordSelectionScan::kLookupContextChars) lookupTail.append(w.data() + b, len);
-              miningTail.append(w.data() + b, len);
-              b += len;
-              taken++;
-            }
-          }
-        }
-      }
+      std::string miningTail;
+      horizontalLookupTail(pageIndex, lookupTail, miningTail);
 
       auto lookup = makeUniqueNoThrow<EpubReaderWordLookupActivity>(
           renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
