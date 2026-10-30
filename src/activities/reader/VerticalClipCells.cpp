@@ -16,14 +16,11 @@ uint32_t countCodepoints(const std::string& text) {
 
 }  // namespace
 
-void forEachVerticalClipCell(const GfxRenderer& renderer, const VerticalPage& page, const int fontId,
-                             const int marginLeft, const int marginTop, void* ctx, const VerticalClipCellVisitor visit,
-                             const int knownCellPx) {
-  const int cellPx = knownCellPx > 0 ? knownCellPx : verticalCellPx(renderer, fontId);
+void verticalColumnXs(const VerticalPage& page, std::vector<int>& columnX) {
   // Punctuation and small kana are drawn shifted inside their cell, so their glyph x is not the
   // column's. Anchor every cell to the leftmost upright glyph of its column (or the leftmost glyph
   // when a column has none), so a selection reads as one straight column.
-  std::vector<int> columnX(page.columnCount, -1);
+  columnX.assign(page.columnCount, -1);
   std::vector<bool> columnUpright(page.columnCount, false);
   for (const VerticalGlyph& g : page.glyphs) {
     if (g.column >= columnX.size() || VerticalParsedText::isImageMarker(g.codepoint)) continue;
@@ -35,27 +32,40 @@ void forEachVerticalClipCell(const GfxRenderer& renderer, const VerticalPage& pa
       columnX[g.column] = g.x;
     }
   }
+}
+
+int verticalCellTop(const VerticalPage& page, const size_t glyphIndex, const int cellPx) {
   // A glyph's y is where its ink is drawn. For a full-size upright glyph that is the cell top; a
-  // small kana is centred in its frame (JLREQ A.11), so its y lies half a row down, and a cell
-  // taken from it starts there and drags the cell above into stretching to meet it. Columns do
-  // not share one row grid (a half-width bracket shifts everything after it), so the cell top
-  // comes from the nearest full-size neighbour in the same column: one cell above the next, or
-  // one cell below the previous.
-  const auto isFullUpright = [](const VerticalGlyph& g) {
-    return g.renderKind == VerticalGlyph::Upright && !VerticalParsedText::isImageMarker(g.codepoint) &&
-           !Kinsoku::isSmallKana(g.codepoint);
+  // small kana is centred in its frame (JLREQ A.11) and 。、 sit at the cell's head, so their y is
+  // off the row, and a cell taken from it overlaps its neighbour. Columns do not share one row
+  // grid (a half-width bracket shifts everything after it), so the cell top comes from the
+  // nearest full-size neighbour in the same column: one cell above the next, or one cell below
+  // the previous.
+  const auto shifted = [](const VerticalGlyph& g) {
+    if (g.renderKind != VerticalGlyph::Upright) return false;
+    const int shiftType = Kinsoku::verticalShiftType(g.codepoint);
+    return Kinsoku::isSmallKana(g.codepoint) || shiftType == 1 || shiftType == 5;
   };
-  const auto cellTop = [&](const size_t i) -> int {
-    const VerticalGlyph& g = page.glyphs[i];
-    if (!Kinsoku::isSmallKana(g.codepoint) || g.renderKind != VerticalGlyph::Upright) return g.y;
-    for (size_t j = i + 1; j < page.glyphs.size() && page.glyphs[j].column == g.column; j++) {
-      if (isFullUpright(page.glyphs[j])) return static_cast<int>(page.glyphs[j].y) - cellPx;
-    }
-    for (size_t j = i; j-- > 0 && page.glyphs[j].column == g.column;) {
-      if (isFullUpright(page.glyphs[j])) return static_cast<int>(page.glyphs[j].y) + cellPx;
-    }
-    return g.y;
+  const auto isFullUpright = [&](const VerticalGlyph& g) {
+    return g.renderKind == VerticalGlyph::Upright && !VerticalParsedText::isImageMarker(g.codepoint) && !shifted(g);
   };
+  const VerticalGlyph& g = page.glyphs[glyphIndex];
+  if (!shifted(g)) return g.y;
+  for (size_t j = glyphIndex + 1; j < page.glyphs.size() && page.glyphs[j].column == g.column; j++) {
+    if (isFullUpright(page.glyphs[j])) return static_cast<int>(page.glyphs[j].y) - cellPx;
+  }
+  for (size_t j = glyphIndex; j-- > 0 && page.glyphs[j].column == g.column;) {
+    if (isFullUpright(page.glyphs[j])) return static_cast<int>(page.glyphs[j].y) + cellPx;
+  }
+  return g.y;
+}
+
+void forEachVerticalClipCell(const GfxRenderer& renderer, const VerticalPage& page, const int fontId,
+                             const int marginLeft, const int marginTop, void* ctx, const VerticalClipCellVisitor visit,
+                             const int knownCellPx) {
+  const int cellPx = knownCellPx > 0 ? knownCellPx : verticalCellPx(renderer, fontId);
+  std::vector<int> columnX;
+  verticalColumnXs(page, columnX);
   uint32_t offset = page.visibleTextOffset;
   uint32_t previousParagraph = UINT32_MAX;
   // Cells are handed over one behind, so a cell can be stretched down to the next one in its
@@ -91,7 +101,7 @@ void forEachVerticalClipCell(const GfxRenderer& renderer, const VerticalPage& pa
     VerticalClipCell cell;
     const int x = g.column < columnX.size() && columnX[g.column] >= 0 ? columnX[g.column] : g.x;
     cell.x = static_cast<int16_t>(x + marginLeft);
-    cell.y = static_cast<int16_t>(cellTop(i) + marginTop);
+    cell.y = static_cast<int16_t>(verticalCellTop(page, i, cellPx) + marginTop);
     cell.width = static_cast<int16_t>(cellPx);
     cell.height = static_cast<int16_t>(height);
     cell.column = g.column;
