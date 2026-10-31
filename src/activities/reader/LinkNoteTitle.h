@@ -2,9 +2,9 @@
 
 #include <BlePageTurner.h>
 
-// The Bluetooth page turner's link note (bleturner::linkNote) in the reader's status bar: it
-// stands in for the title while a remote connects, and after a failed link until the next page
-// turn. draw() runs where the status bar draws its title (render task, under the render lock),
+// The Bluetooth page turner's note (bleturner::linkNote) in the reader's status bar: it stands
+// in for the title while a remote connects, and after a link result or an unmapped button until
+// the next page turn. draw() runs where the status bar draws its title (render task, under the render lock),
 // repaint() on the main loop under a tried render lock.
 struct LinkNoteTitle {
   // The note to show in the title slot, None for the book's own title.

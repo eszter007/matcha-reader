@@ -5725,6 +5725,8 @@ void EpubReaderActivity::renderStatusBar() const {
     title = connected;
   } else if (note == bleturner::LinkNote::LowMemory) {
     title = tr(STR_BT_LOW_MEMORY);
+  } else if (note == bleturner::LinkNote::Unmapped) {
+    title = tr(STR_BT_MAP_REMOTE);
   } else if (note != bleturner::LinkNote::None) {
     title = note == bleturner::LinkNote::Connecting ? tr(STR_BT_CONNECTING) : tr(STR_BT_FAILED);
   } else if (automaticPageTurnActive) {

@@ -511,6 +511,27 @@ TEST_F(TickTest, ThreeButtonRemoteTapSkipsAChapterAndItsHoldFrameGoesBack) {
   EXPECT_EQ(host().delivered, (std::vector<Action>{Action::NextChapter, Action::PrevChapter}));
 }
 
+TEST_F(TickTest, AKeyNoPageActionTakesAsksOncePerVisitToMapTheButtons) {
+  running();
+  link("BOOX Tappy");
+  pass(fake::reading());
+  radio().keys = {{bleturner::kUsageRight, 0, true}, {bleturner::kUsageRight, 0x02, true}, {0x01, 0, false}};
+  pass(fake::reading());
+  EXPECT_EQ(bleturner::linkNote(), bleturner::LinkNote::None) << "a page key, a modified key or a release";
+  radio().keys = {{0x01, 0, true}};
+  pass(fake::reading());
+  EXPECT_EQ(bleturner::linkNote(), bleturner::LinkNote::Unmapped);
+  bleturner::acknowledgeLinkNote();
+  EXPECT_EQ(bleturner::linkNote(), bleturner::LinkNote::None);
+  radio().keys = {{0x02, 0, true}};
+  pass(fake::reading());
+  EXPECT_EQ(bleturner::linkNote(), bleturner::LinkNote::None) << "once per visit";
+  pass(fake::reading(2));
+  radio().keys = {{0x02, 0, true}};
+  pass(fake::reading(2));
+  EXPECT_EQ(bleturner::linkNote(), bleturner::LinkNote::Unmapped) << "again in the next visit";
+}
+
 TEST_F(TickTest, KeyPathWithoutATableTurnsOnPressesOnly) {
   running();
   link("Some Remote");
