@@ -4,6 +4,7 @@
 
 #include "util/HomeButtonInput.h"
 #include "util/RemoteButtonInput.h"
+#include "util/SideButtonActions.h"
 
 class GfxRenderer;
 namespace freeink {
@@ -129,6 +130,10 @@ class MappedInputManager {
   // shared logical names (Up/Down and everything that resolves to them). Set from the main loop,
   // so leaving the reader restores ordinary list navigation on both side buttons.
   void setSideActionsActive(const bool active) const { sideActionsActive = active; }
+  // Power + Up carrying a reader action: sideActionFired(action) answers true until the main loop
+  // clears it after the next activity tick, which runs only once the combination is released.
+  void setComboAction(const uint8_t action) const { comboAction = action; }
+  void clearComboAction() const { comboAction = static_cast<uint8_t>(SideButtonAction::None); }
   // See HalGPIO::anyButtonDownRaw() -- for cancelling long background work.
   bool anyButtonDownRaw() const { return gpio.anyButtonDownRaw(); }
   // A touch edge this frame, including the capacitive Home key (not counted by wasAnyPressed()).
@@ -198,6 +203,7 @@ class MappedInputManager {
   static constexpr unsigned long SIDE_GHOST_WINDOW_MS = 150;
   mutable unsigned long lastFrontActivityMs = static_cast<unsigned long>(-1000);
   mutable bool sideActionsActive = false;
+  mutable uint8_t comboAction = static_cast<uint8_t>(SideButtonAction::None);
   bool sideRoleSuppressed(uint8_t physical) const;
   mutable RemoteButtonInput remoteInput;
   mutable HomeButtonInput homeButtonInput;

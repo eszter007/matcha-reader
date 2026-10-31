@@ -407,7 +407,9 @@
     // and only once BOTH side buttons are remapped away from Default.
     const upperVal = getControlValue('upperSideButtonAction');
     const lowerVal = getControlValue('lowerSideButtonAction');
-    const sideFullyCustomized = upperVal > 0 && lowerVal > 0;
+    // Menu slots again: Default is first (sideButtonOrder()).
+    const SIDE_DEFAULT_SLOT = 0;
+    const sideFullyCustomized = upperVal !== SIDE_DEFAULT_SLOT && lowerVal !== SIDE_DEFAULT_SLOT;
     const lookupSideRow = document.getElementById('row-setting-wordLookupSideButtons');
     if (lookupSideRow) {
       lookupSideRow.style.display = sideFullyCustomized ? 'none' : '';

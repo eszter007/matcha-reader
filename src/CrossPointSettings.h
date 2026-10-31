@@ -114,6 +114,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     SIDE_BTN_WORD_LOOKUP = 6,
     SIDE_BTN_NONE = 7,
     SIDE_BTN_CREATE_CLIPPING = 8,
+    SIDE_BTN_SYNC_STATS_CLOCK = 9,
+    SIDE_BTN_SYNC_CLOCK = 10,
     SIDE_BUTTON_ACTION_COUNT
   };
   static_assert(static_cast<uint8_t>(SideButtonAction::Default) == SIDE_BTN_DEFAULT);
@@ -125,6 +127,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   static_assert(static_cast<uint8_t>(SideButtonAction::WordLookup) == SIDE_BTN_WORD_LOOKUP);
   static_assert(static_cast<uint8_t>(SideButtonAction::None) == SIDE_BTN_NONE);
   static_assert(static_cast<uint8_t>(SideButtonAction::CreateClipping) == SIDE_BTN_CREATE_CLIPPING);
+  static_assert(static_cast<uint8_t>(SideButtonAction::SyncStatsClock) == SIDE_BTN_SYNC_STATS_CLOCK);
+  static_assert(static_cast<uint8_t>(SideButtonAction::SyncClock) == SIDE_BTN_SYNC_CLOCK);
   static_assert(static_cast<uint8_t>(SideButtonAction::Count) == SIDE_BUTTON_ACTION_COUNT);
 
   // Pre-1.5 single "Side Button Layout" setting, kept only so fromJson() can migrate a stored
@@ -207,6 +211,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     PWR_BOOKMARK = 9,
     PWR_SYNC = 10,
     PWR_READER_MENU = 11,
+    PWR_SYNC_STATS_CLOCK = 12,
+    PWR_SYNC_CLOCK = 13,
     SHORT_PWRBTN_COUNT
   };
 
@@ -365,8 +371,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // X4 Pro: double-click power toggles the frontlight. Disabling frees the
   // power button for shortPwrBtn actions without the double-click wait.
   uint8_t doubleClickPwrLight = 1;
-  // Power + Side Up opens Sync Clock from any screen.
-  uint8_t powerUpClockSync = 0;
+  // Power + Side Up, a SIDE_BUTTON_ACTION. Sleep, Refresh and the syncs work on any screen; the
+  // rest only in a book. Default is never offered: the combination has no built-in role.
+  uint8_t powerUpAction = SIDE_BTN_NONE;
   uint8_t homeButtonTapAction = static_cast<uint8_t>(HomeButtonAction::Home);
   uint8_t homeButtonDoubleTapAction = static_cast<uint8_t>(HomeButtonAction::ToggleFrontlight);
   uint8_t homeButtonLongPressAction = static_cast<uint8_t>(HomeButtonAction::ReaderMenu);

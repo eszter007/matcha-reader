@@ -226,32 +226,37 @@ inline SettingInfo buildWordLookupFontSizeSetting() {
                            "wordLookupFontSize", StrId::STR_CAT_READER);
 }
 
+// Long-press menu choices as stored LONG_PRESS_MENU_FUNCTION values, in menu order: Off first.
+// Reader Menu only on boards with a Home key, which have no other way to it from the long press.
+inline std::vector<uint8_t> longPressMenuOrder() {
+  std::vector<uint8_t> order = {CrossPointSettings::LP_MENU_DISABLED, CrossPointSettings::LP_MENU_KOSYNC,
+                                CrossPointSettings::LP_MENU_BOOKMARK, CrossPointSettings::LP_MENU_DICTIONARY};
+  order.reserve(CrossPointSettings::LONG_PRESS_MENU_FUNCTION_COUNT);
+  if (BoardConfig::hasHomeKey()) order.push_back(CrossPointSettings::LP_MENU_READER_MENU);
+  order.push_back(CrossPointSettings::LP_MENU_CREATE_CLIPPING);
+  order.push_back(CrossPointSettings::LP_MENU_FOOTNOTES);
+  return order;
+}
+
 inline std::vector<StrId> buildLongPressMenuValues() {
-  std::vector<StrId> values = {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION,
-                               StrId::STR_DICTIONARY};
-  values.reserve(CrossPointSettings::LONG_PRESS_MENU_FUNCTION_COUNT);
-  if (BoardConfig::hasHomeKey()) values.push_back(StrId::STR_READER_MENU);
-  values.push_back(StrId::STR_SAVE_CLIPPING);
-  values.push_back(StrId::STR_FOOTNOTES);
+  static constexpr StrId LABELS[] = {StrId::STR_KOSYNC,     StrId::STR_STATE_OFF,   StrId::STR_BOOKMARK_OPTION,
+                                     StrId::STR_DICTIONARY, StrId::STR_READER_MENU, StrId::STR_SAVE_CLIPPING,
+                                     StrId::STR_FOOTNOTES};
+  static_assert(std::size(LABELS) == CrossPointSettings::LONG_PRESS_MENU_FUNCTION_COUNT);
+  std::vector<StrId> values;
+  for (const uint8_t stored : longPressMenuOrder()) values.push_back(LABELS[stored]);
   return values;
 }
 
 inline uint8_t longPressMenuDisplayValue() {
-  const uint8_t raw = SETTINGS.longPressMenuFunction;
-  if (raw <= CrossPointSettings::LP_MENU_DICTIONARY) return raw;
-  if (raw == CrossPointSettings::LP_MENU_READER_MENU) {
-    return BoardConfig::hasHomeKey() ? CrossPointSettings::LP_MENU_READER_MENU : CrossPointSettings::LP_MENU_DISABLED;
-  }
-  if (raw < CrossPointSettings::LONG_PRESS_MENU_FUNCTION_COUNT) return BoardConfig::hasHomeKey() ? raw : raw - 1;
-  return CrossPointSettings::LP_MENU_DISABLED;
+  const auto order = longPressMenuOrder();
+  const auto it = std::find(order.begin(), order.end(), SETTINGS.longPressMenuFunction);
+  return it != order.end() ? static_cast<uint8_t>(it - order.begin()) : 0;
 }
 
 inline void setLongPressMenuFromDisplayValue(const uint8_t displayValue) {
-  if (displayValue <= CrossPointSettings::LP_MENU_DICTIONARY) {
-    SETTINGS.longPressMenuFunction = displayValue;
-  } else {
-    SETTINGS.longPressMenuFunction = BoardConfig::hasHomeKey() ? displayValue : displayValue + 1;
-  }
+  const auto order = longPressMenuOrder();
+  SETTINGS.longPressMenuFunction = displayValue < order.size() ? order[displayValue] : order[0];
 }
 
 inline SettingInfo buildLongPressMenuSetting() {
@@ -259,14 +264,37 @@ inline SettingInfo buildLongPressMenuSetting() {
                                   setLongPressMenuFromDisplayValue, "longPressMenuFunction", StrId::STR_CAT_SHORTCUTS);
 }
 
+// Side-button and Power + Up actions, indexed by stored SIDE_BUTTON_ACTION value.
+inline std::vector<StrId> sideButtonActionLabels() {
+  return {StrId::STR_DEFAULT_VALUE,    StrId::STR_SLEEP,         StrId::STR_PREVIOUS_PAGE,
+          StrId::STR_NEXT_PAGE_OPT,    StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES,
+          StrId::STR_WORD_LOOKUP,      StrId::STR_STATE_OFF,     StrId::STR_SAVE_CLIPPING,
+          StrId::STR_SYNC_STATS_CLOCK, StrId::STR_CLOCK_SYNC};
+}
+
+// Default first where offered, then Off. Default (the side buttons' page turn) is not a role
+// Power + Up can have.
+inline std::vector<uint8_t> sideButtonOrder(const bool powerUp) {
+  std::vector<uint8_t> order;
+  if (!powerUp) order.push_back(CrossPointSettings::SIDE_BTN_DEFAULT);
+  order.push_back(CrossPointSettings::SIDE_BTN_NONE);
+  order.insert(order.end(), {CrossPointSettings::SIDE_BTN_PREV_PAGE, CrossPointSettings::SIDE_BTN_NEXT_PAGE,
+                             CrossPointSettings::SIDE_BTN_SLEEP, CrossPointSettings::SIDE_BTN_REFRESH,
+                             CrossPointSettings::SIDE_BTN_FOOTNOTES, CrossPointSettings::SIDE_BTN_WORD_LOOKUP,
+                             CrossPointSettings::SIDE_BTN_CREATE_CLIPPING,
+                             CrossPointSettings::SIDE_BTN_SYNC_STATS_CLOCK, CrossPointSettings::SIDE_BTN_SYNC_CLOCK});
+  return order;
+}
+
 // Confirm is offered only on touch boards, where the power button stands in for it (button
 // boards have their own). Bookmark, Sync and Reader Menu are offered only on touch boards
 // without a Home key, which have no other button for them.
 inline std::vector<uint8_t> shortPowerButtonOrder() {
-  std::vector<uint8_t> order = {CrossPointSettings::IGNORE,        CrossPointSettings::PWR_PREV_PAGE,
-                                CrossPointSettings::PAGE_TURN,     CrossPointSettings::SLEEP,
-                                CrossPointSettings::FORCE_REFRESH, CrossPointSettings::FOOTNOTES,
-                                CrossPointSettings::WORD_LOOKUP,   CrossPointSettings::CREATE_CLIPPING};
+  std::vector<uint8_t> order = {
+      CrossPointSettings::IGNORE,        CrossPointSettings::PWR_PREV_PAGE,   CrossPointSettings::PAGE_TURN,
+      CrossPointSettings::SLEEP,         CrossPointSettings::FORCE_REFRESH,   CrossPointSettings::FOOTNOTES,
+      CrossPointSettings::WORD_LOOKUP,   CrossPointSettings::CREATE_CLIPPING, CrossPointSettings::PWR_SYNC_STATS_CLOCK,
+      CrossPointSettings::PWR_SYNC_CLOCK};
   if (BoardConfig::hasTouch()) order.push_back(CrossPointSettings::PWR_CONFIRM);
   if (BoardConfig::hasTouch() && !BoardConfig::hasHomeKey()) {
     order.insert(order.end(),
@@ -541,8 +569,9 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                              StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
                             "longPressButtonBehavior", StrId::STR_CAT_SHORTCUTS),
           buildLongPressMenuSetting(),
-          SettingInfo::Toggle(StrId::STR_POWER_UP_CLOCK_SYNC, &CrossPointSettings::powerUpClockSync, "powerUpClockSync",
-                              StrId::STR_CAT_SHORTCUTS),
+          SettingInfo::Enum(StrId::STR_POWER_UP_ACTION, &CrossPointSettings::powerUpAction, sideButtonActionLabels(),
+                            "powerUpAction", StrId::STR_CAT_SHORTCUTS)
+              .withEnumOrder(sideButtonOrder(/*powerUp=*/true)),
           // Erased below unless the board is an X4 Pro.
           SettingInfo::Toggle(StrId::STR_DBL_CLICK_PWR_LIGHT, &CrossPointSettings::doubleClickPwrLight,
                               "doubleClickPwrLight", StrId::STR_CAT_SHORTCUTS),
@@ -553,12 +582,12 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
           // Labels stay indexed BY STORED VALUE; withEnumOrder() only decides what the menu offers
           // first. Previous Page sits at 7 because appending was the only safe place for it, and
           // reading it seven rows below Next Page was confusing -- so the two are offered together.
-          SettingInfo::Enum(
-              StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
-              {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_NEXT_PAGE_OPT, StrId::STR_FORCE_REFRESH,
-               StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_CONFIRM, StrId::STR_PREVIOUS_PAGE,
-               StrId::STR_SAVE_CLIPPING, StrId::STR_BOOKMARK_OPTION, StrId::STR_KOSYNC, StrId::STR_READER_MENU},
-              "shortPwrBtn", StrId::STR_CAT_SHORTCUTS)
+          SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
+                            {StrId::STR_STATE_OFF, StrId::STR_SLEEP, StrId::STR_NEXT_PAGE_OPT, StrId::STR_FORCE_REFRESH,
+                             StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_CONFIRM, StrId::STR_PREVIOUS_PAGE,
+                             StrId::STR_SAVE_CLIPPING, StrId::STR_BOOKMARK_OPTION, StrId::STR_KOSYNC,
+                             StrId::STR_READER_MENU, StrId::STR_SYNC_STATS_CLOCK, StrId::STR_CLOCK_SYNC},
+                            "shortPwrBtn", StrId::STR_CAT_SHORTCUTS)
               .withEnumOrder(shortPowerButtonOrder()),
           // Erased below unless the QMI8658 IMU is present (X3).
           SettingInfo::Enum(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn,
@@ -568,29 +597,14 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                               "pwrBtnFootnoteBack", StrId::STR_CAT_SHORTCUTS),
           // Last in the Shortcuts sub-screen: fixed physical mapping (Upper = BTN_UP,
           // Lower = BTN_DOWN). Every board profile defines that pair and sideActionFired() reads
-          // those two keys directly, so the rows are offered everywhere -- they were X3/X4 only for
-          // no reason the input path shares. Labels are indexed by stored value (Create Clipping was
-          // appended after Off); withEnumOrder() offers Off last.
+          // those two keys directly, so the rows are offered everywhere. Labels are indexed by
+          // stored value; withEnumOrder() decides the menu order.
           SettingInfo::Enum(upperSideButtonLabel(), &CrossPointSettings::upperSideButtonAction,
-                            {StrId::STR_DEFAULT_VALUE, StrId::STR_SLEEP, StrId::STR_PREVIOUS_PAGE,
-                             StrId::STR_NEXT_PAGE_OPT, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES,
-                             StrId::STR_WORD_LOOKUP, StrId::STR_STATE_OFF, StrId::STR_SAVE_CLIPPING},
-                            "upperSideButtonAction", StrId::STR_CAT_SHORTCUTS)
-              .withEnumOrder({CrossPointSettings::SIDE_BTN_DEFAULT, CrossPointSettings::SIDE_BTN_PREV_PAGE,
-                              CrossPointSettings::SIDE_BTN_NEXT_PAGE, CrossPointSettings::SIDE_BTN_SLEEP,
-                              CrossPointSettings::SIDE_BTN_REFRESH, CrossPointSettings::SIDE_BTN_FOOTNOTES,
-                              CrossPointSettings::SIDE_BTN_WORD_LOOKUP, CrossPointSettings::SIDE_BTN_CREATE_CLIPPING,
-                              CrossPointSettings::SIDE_BTN_NONE}),
+                            sideButtonActionLabels(), "upperSideButtonAction", StrId::STR_CAT_SHORTCUTS)
+              .withEnumOrder(sideButtonOrder(/*powerUp=*/false)),
           SettingInfo::Enum(lowerSideButtonLabel(), &CrossPointSettings::lowerSideButtonAction,
-                            {StrId::STR_DEFAULT_VALUE, StrId::STR_SLEEP, StrId::STR_PREVIOUS_PAGE,
-                             StrId::STR_NEXT_PAGE_OPT, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES,
-                             StrId::STR_WORD_LOOKUP, StrId::STR_STATE_OFF, StrId::STR_SAVE_CLIPPING},
-                            "lowerSideButtonAction", StrId::STR_CAT_SHORTCUTS)
-              .withEnumOrder({CrossPointSettings::SIDE_BTN_DEFAULT, CrossPointSettings::SIDE_BTN_PREV_PAGE,
-                              CrossPointSettings::SIDE_BTN_NEXT_PAGE, CrossPointSettings::SIDE_BTN_SLEEP,
-                              CrossPointSettings::SIDE_BTN_REFRESH, CrossPointSettings::SIDE_BTN_FOOTNOTES,
-                              CrossPointSettings::SIDE_BTN_WORD_LOOKUP, CrossPointSettings::SIDE_BTN_CREATE_CLIPPING,
-                              CrossPointSettings::SIDE_BTN_NONE}),
+                            sideButtonActionLabels(), "lowerSideButtonAction", StrId::STR_CAT_SHORTCUTS)
+              .withEnumOrder(sideButtonOrder(/*powerUp=*/false)),
           // Last row in Shortcuts.
           SettingInfo::Toggle(StrId::STR_BACK_SHORT_TO_FILE_BROWSER, &CrossPointSettings::backShortToFileBrowser,
                               "backShortToFileBrowser", StrId::STR_CAT_SHORTCUTS),
@@ -862,8 +876,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
   if (BoardConfig::hasHomeKey()) {
     v.reserve(v.size() + 3);
     for (unsigned i = 0; i < 3; ++i) {
-      v.push_back(SettingInfo::StaticEnum(home_button::GESTURE_LABELS[i], home_button::FIELDS[i],
-                                          home_button::ACTION_LABELS, home_button::KEYS[i], StrId::STR_CAT_CONTROLS));
+      v.push_back(home_button::setting(i));
     }
   }
   if (BoardConfig::hasTouch()) {
@@ -984,8 +997,7 @@ inline void forEachPersistableSetting(Fn&& fn) {
   for (const auto& info : settingsBaseList()) fn(info);
   if (BoardConfig::hasHomeKey()) {
     for (unsigned i = 0; i < 3; ++i) {
-      fn(SettingInfo::StaticEnum(home_button::GESTURE_LABELS[i], home_button::FIELDS[i], home_button::ACTION_LABELS,
-                                 home_button::KEYS[i], StrId::STR_CAT_CONTROLS));
+      fn(home_button::setting(i));
     }
   }
   fn(buildWordLookupFontSizeSetting());

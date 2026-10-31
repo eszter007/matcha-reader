@@ -1,16 +1,20 @@
 #include "StatsSyncActivity.h"
 
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <KOReaderCredentialStore.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <WiFi.h>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "activities/settings/ClockSyncActivity.h"
 #include "activities/settings/SettingsSection.h"
 #include "components/HomeTabBar.h"
 #include "components/UITheme.h"
@@ -19,13 +23,17 @@
 
 void StatsSyncActivity::onEnter() {
   Activity::onEnter();
-  if (KOREADER_STORE.getServerType() != KOReaderServerType::CROSSPOINT || !KOREADER_STORE.hasCredentials()) {
+  const bool hasAccount =
+      KOREADER_STORE.getServerType() == KOReaderServerType::CROSSPOINT && KOREADER_STORE.hasCredentials();
+  if (!hasAccount && !syncClock) {
     state = NO_ACCOUNT;
     requestUpdate();
     return;
   }
   state = SYNCING;
   if (WiFi.status() == WL_CONNECTED) {
+    // A shortcut can start this over any screen; the restart clears what Wi-Fi and TLS fragmented.
+    if (fromShortcut()) restartOnExit = true;
     requestUpdate();
     return;
   }
@@ -36,13 +44,23 @@ void StatsSyncActivity::onEnter() {
   {
     RenderLock lock(*this);
     sdFontSystem.releaseAllResidentFonts(renderer);
+    // A book underneath stays loaded; its glyph caches are the largest thing Wi-Fi can have back.
+    if (origin == Origin::ShortcutInReader) {
+      if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+    }
   }
-  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
-                         [this](const ActivityResult& result) {
-                           // Left from loop(): replacing this activity inside its own callback is unsafe.
-                           if (result.isCancelled) state = CANCELLED;
-                           requestUpdate();
-                         });
+  auto wifi = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput);
+  if (!wifi) {
+    LOG_ERR("STATS", "OOM: WifiSelectionActivity");
+    state = FAILED;
+    requestUpdate();
+    return;
+  }
+  startActivityForResult(std::move(wifi), [this](const ActivityResult& result) {
+    // Left from loop(): replacing this activity inside its own callback is unsafe.
+    if (result.isCancelled) state = CANCELLED;
+    requestUpdate();
+  });
 }
 
 void StatsSyncActivity::onExit() {
@@ -53,16 +71,25 @@ void StatsSyncActivity::onExit() {
       WiFi.disconnect(false);
       delay(30);
     }
-    if (fromSettings) {
-      silentRestartToSettings(static_cast<int>(SettingsSection::Insights));
-    } else {
-      silentRestartToHomeTab(static_cast<int>(HomeTab::Stats));
+    switch (origin) {
+      case Origin::Settings:
+        silentRestartToSettings(static_cast<int>(SettingsSection::Insights));
+        break;
+      case Origin::Insights:
+        silentRestartToHomeTab(static_cast<int>(HomeTab::Stats));
+        break;
+      case Origin::ShortcutInReader:
+        silentRestartToReader();
+        break;
+      case Origin::Shortcut:
+        silentRestart();
+        break;
     }
   }
 }
 
 void StatsSyncActivity::leave() {
-  if (fromSettings) {
+  if (origin != Origin::Insights) {
     finish();
   } else {
     activityManager.goToReadingStats();
@@ -75,12 +102,21 @@ void StatsSyncActivity::runSync() {
     requestUpdate();
     return;
   }
+  const bool clockOk = !syncClock || ClockSyncActivity::syncAndRecord();
+  const bool hasAccount =
+      KOREADER_STORE.getServerType() == KOReaderServerType::CROSSPOINT && KOREADER_STORE.hasCredentials();
+  if (!hasAccount) {
+    // The clock is set; say why Insights were skipped.
+    state = clockOk ? NO_ACCOUNT : FAILED;
+    requestUpdate();
+    return;
+  }
   // Download first: the upload's TLS sessions would otherwise leave less room for the list.
   const bool downloaded = statsSync::download();
   const bool uploaded = statsSync::run("", "");
   // A saved download is merged at boot, so it needs the restart even when WiFi was already up.
   if (downloaded) restartOnExit = true;
-  if (downloaded && uploaded) {
+  if (downloaded && uploaded && clockOk) {
     // The restart then returns to where the sync started; "Done" is the only sign it went through.
     state = DONE;
     requestUpdateAndWait();
@@ -88,7 +124,7 @@ void StatsSyncActivity::runSync() {
     leave();
     return;
   }
-  LOG_ERR("STATS", "Refresh incomplete: download %d, upload %d", downloaded, uploaded);
+  LOG_ERR("STATS", "Refresh incomplete: download %d, upload %d, clock %d", downloaded, uploaded, clockOk);
   state = FAILED;
   requestUpdate();
 }
@@ -114,7 +150,9 @@ void StatsSyncActivity::render(RenderLock&&) {
   const int midY = renderer.getScreenHeight() / 2;
   renderer.clearScreen();
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
-                 fromSettings ? tr(STR_SYNC_STATS) : tr(STR_REFRESH_STATS));
+                 syncClock                    ? tr(STR_SYNC_STATS_CLOCK)
+                 : origin == Origin::Insights ? tr(STR_REFRESH_STATS)
+                                              : tr(STR_SYNC_STATS));
   switch (state) {
     case SYNCING:
       renderer.drawCenteredText(UI_12_FONT_ID, midY, tr(STR_SYNCING_STATS));

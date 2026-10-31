@@ -406,8 +406,9 @@ void SettingsActivity::toggleSelectedSetting() {
         startActivityForResult(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::SyncStats:
-        startActivityForResult(std::make_unique<StatsSyncActivity>(renderer, mappedInput, /*fromSettings=*/true),
-                               resultHandler);
+        startActivityForResult(
+            std::make_unique<StatsSyncActivity>(renderer, mappedInput, StatsSyncActivity::Origin::Settings),
+            resultHandler);
         break;
       case SettingAction::OPDSBrowser:
         startActivityForResult(std::make_unique<OpdsServerListActivity>(renderer, mappedInput), resultHandler);

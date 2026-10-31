@@ -102,7 +102,7 @@ While reading, you can also press **Confirm** to open the reader menu and choose
 
 ### Syncing the Clock
 
-Turn on **Power + Up Syncs Clock** in **Settings → Controls → Shortcuts**. It is off by default. After that, pressing **Power** and **Side Up** together sets the clock from the internet, on any screen.
+Set **Power + Up** in **Settings → Controls → Shortcuts** to **Sync Clock**. It is off by default. After that, pressing **Power** and **Side Up** together sets the clock from the internet, on any screen. **Sync Clock** is also offered for the power button, the side buttons and the Home key gestures.
 
 * If Wi-Fi is not connected, the network list opens first.
 * When the new time appears, press **Back**. If you started in a book, you go back to the book.
@@ -525,7 +525,7 @@ Which rows you see depends on your device. Touch devices hide the rows that only
   - **Home Button Gestures** (devices with a Home key)
   - **Long-Press Button Behavior**
   - **Long-Press Menu** (button devices)
-  - **Power + Up Syncs Clock**
+  - **Power + Up**
   - **Double-Click Power for Light** (X4 Pro)
   - **Short Power Button Click**
   - **Tilt Page Turn** (devices with a motion sensor, e.g. the X3)
@@ -568,14 +568,19 @@ Which rows you see depends on your device. Touch devices hide the rows that only
 
 - **Upper / Lower Side Button in Reader** (in Shortcuts): What each side button does while reading. On the X4 Pro and
   X4 Classic the rows are called **Left** and **Right Side Button in Reader**.
-  - Options: **Default** (previous page on the upper button, next page on the lower), **Previous Page**,
-    **Next Page**, **Sleep**, **Refresh Screen**, **Links and footnotes**, **Word Lookup**, **Create Clipping** or
-    **Off**.
+  - Options: **Default** (previous page on the upper button, next page on the lower), **Off**, **Previous Page**,
+    **Next Page**, **Sleep**, **Refresh Screen**, **Links and footnotes**, **Word Lookup**, **Create Clipping**,
+    **Sync Insights & Clock** or **Sync Clock**.
   - A button with its own action does only that. Outside the reader both buttons work as usual.
   - In Word Lookup, a button set to **Previous Page** or **Next Page** moves between words.
   - A button set to **Word Lookup** starts word selection on the first press, looks up the word on the second, and
     closes the definition on the third.
   - **Reversed page turn** does not change a button you set yourself. **Next Page** always goes forward.
+
+- **Home Button Gestures** (devices with a Home key): What a tap, a double tap and a long press on the Home key
+  do. Each can be **Off**, **Home**, **Page Turn**, **Refresh Screen**, **Links and footnotes**,
+  **Confirm**, **KOSync**, **Bookmark**, **Dictionary**, **Reader Menu**, **Toggle Frontlight**, **Create
+  Clipping**, **Sync Insights & Clock** or **Sync Clock**. A tap is **Home** by default.
 
 - **Long-Press Button Behavior**: What holding a page-turn button does.
   - **Off** (default): nothing extra.
@@ -584,20 +589,22 @@ Which rows you see depends on your device. Touch devices hide the rows that only
 
 - **Long-Press Menu** (button devices): What holding **Confirm** does while reading. A short press always opens the
   reader menu.
+  - **Off** (default): holding does nothing.
   - **KOSync**: hold about 1 second to start CrossPoint Sync. Works once sync is set up.
-  - **Disabled** (default): holding does nothing.
   - **Bookmark**: hold about 0.4 seconds to bookmark the page.
   - **Dictionary**: hold about 0.4 seconds to pick a word to look up (see [docs/dictionary.md](docs/dictionary.md)).
   - **Create Clipping**: hold about 0.4 seconds to start selecting a clipping.
   - **Links and footnotes**: hold about 0.4 seconds to open the page's links and footnotes.
 
-- **Power + Up Syncs Clock** (off by default): Press Power and the upper side button together to set the clock from
-  the internet, on any screen. See [Syncing the Clock](#syncing-the-clock).
+- **Power + Up** (off by default): What pressing Power and the upper side button together does. The options are those
+  of the side buttons, without **Default**. **Sleep**, **Refresh Screen** and the syncs work on any screen; the
+  other options only while reading. See
+  [Syncing the Clock](#syncing-the-clock).
 
 - **Double-Click Power for Light** (on by default, X4 Pro): Double-click Power to switch the frontlight on or off.
 
 - **Short Power Button Click**: What a quick press of the power button does.
-  - **Ignore** (default): nothing. Hold the button to switch off.
+  - **Off** (default): nothing. Hold the button to switch off.
   - **Previous Page**: while reading, goes back one page.
   - **Next Page**: while reading, turns to the next page. Hold the button to switch off.
   - **Sleep**: puts the device to sleep.
@@ -607,6 +614,10 @@ Which rows you see depends on your device. Touch devices hide the rows that only
   - **Word Lookup**: while reading, the first press starts word selection, the second looks up the word, and the
     next closes the definition.
   - **Create Clipping**: while reading, starts selecting a clipping.
+  - **Sync Insights & Clock**: sets the clock from the internet, then uploads this device's reading stats and
+    downloads the other devices'. The stats need a CrossPoint Sync account; without one only the clock is set. The
+    device restarts at the end; started in a book, it reopens the book.
+  - **Sync Clock**: sets the clock from the internet.
   - **Confirm** (touch devices only): works like a Confirm button.
   - **Bookmark**, **KOSync** and **Reader Menu** (touch devices without a Home key): add or remove a bookmark, start
     a sync, or open the reader menu.
@@ -1054,7 +1065,7 @@ See [docs/dictionary.md](docs/dictionary.md) for supported formats and where to 
 
 **Short Back to File Browser** in **Settings → Controls → Shortcuts** swaps the two **Back** actions.
 
-**Hold Confirm (button-only devices).** Holding **Confirm** does whatever **Long-Press Menu** is set to. The choices are **Bookmark** (adds or removes a bookmark), **KOSync** (opens KOReader Sync), **Dictionary** (starts a word lookup), **Create Clipping** (starts a text selection), **Links and footnotes** (opens the footnote panel) and **Disabled**, which is the default. A short press always opens the Reader Menu. Touch devices don't have this setting. There, the Power button or Home button shortcuts do these jobs.
+**Hold Confirm (button-only devices).** Holding **Confirm** does whatever **Long-Press Menu** is set to. The choices are **Bookmark** (adds or removes a bookmark), **KOSync** (opens KOReader Sync), **Dictionary** (starts a word lookup), **Create Clipping** (starts a text selection), **Links and footnotes** (opens the footnote panel) and **Off**, which is the default. A short press always opens the Reader Menu. Touch devices don't have this setting. There, the Power button or Home button shortcuts do these jobs.
 
 ### Supported Languages
 

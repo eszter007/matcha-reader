@@ -42,8 +42,8 @@ void MappedInputManager::update(const bool deferHomeButtonAction) const {
       HalHaptics::feedback(SETTINGS.vibration != CrossPointSettings::VIBRATION_OFF, true, SETTINGS.hapticIntensity);
     }
   }
-  // Touch boards without a home key: a short power click can carry a reader
-  // shortcut (see SHORT_PWRBTN).
+  // A short power click can carry a home-button action (see SHORT_PWRBTN): the reader shortcuts
+  // for touch boards without a Home key, and the syncs on every board.
   if (homeAction == HomeButtonAction::Ignore && mapButton(Button::Power, &HalGPIO::wasReleased)) {
     switch (SETTINGS.shortPwrBtn) {
       case CrossPointSettings::PWR_BOOKMARK:
@@ -54,6 +54,12 @@ void MappedInputManager::update(const bool deferHomeButtonAction) const {
         break;
       case CrossPointSettings::PWR_READER_MENU:
         homeAction = HomeButtonAction::ReaderMenu;
+        break;
+      case CrossPointSettings::PWR_SYNC_STATS_CLOCK:
+        homeAction = HomeButtonAction::SyncStatsClock;
+        break;
+      case CrossPointSettings::PWR_SYNC_CLOCK:
+        homeAction = HomeButtonAction::SyncClock;
         break;
       default:
         break;
@@ -197,6 +203,7 @@ bool MappedInputManager::sideRoleSuppressed(const uint8_t physical) const {
 // trip the Lower action. Deliberately reads raw GPIO -- the logical names are suppressed above.
 bool MappedInputManager::sideActionFired(const uint8_t action) const {
   if (action == CrossPointSettings::SIDE_BTN_DEFAULT || action == CrossPointSettings::SIDE_BTN_NONE) return false;
+  if (comboAction == action) return true;
   if (gpio.isPressed(HalGPIO::BTN_POWER) || gpio.wasReleased(HalGPIO::BTN_POWER)) return false;
   if (!sideReleaseAlone()) return false;
   return (SETTINGS.sideButtonActionForUp() == action && gpio.wasReleased(HalGPIO::BTN_UP)) ||

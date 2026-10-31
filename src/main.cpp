@@ -46,6 +46,7 @@
 #include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/home/StatsSyncActivity.h"
 #include "activities/reader/EpubReaderTranslationActivity.h"
 #include "activities/settings/ClockSyncActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
@@ -991,8 +992,7 @@ void setup() {
 }
 
 // A two-button shortcut: Power held together with a side button. The action runs once per
-// press, and the power release that ends it is swallowed so it does not also run the short
-// power-button action.
+// press, and both releases that end it are swallowed so neither also runs its own action.
 struct PowerCombo {
   bool armed = true;
   bool active = false;
@@ -1009,11 +1009,13 @@ static bool pollPowerCombo(PowerCombo& combo, const uint8_t otherButton, void (*
     return true;
   }
   if (!combo.active) return false;
-  if (gpio.isPressed(HalGPIO::BTN_POWER)) return true;
-  const bool powerReleased = gpio.wasReleased(HalGPIO::BTN_POWER);
+  // Held until both are up, so neither release reaches the screen underneath as a press of its own.
+  // The Power + Up reader action (setComboAction) relies on this: the book's next tick is its only one.
+  if (gpio.isPressed(HalGPIO::BTN_POWER) || gpio.isPressed(otherButton)) return true;
+  const bool released = gpio.wasReleased(HalGPIO::BTN_POWER) || gpio.wasReleased(otherButton);
   combo.armed = true;
   combo.active = false;
-  return powerReleased;
+  return released;
 }
 
 static void startClockSyncFromCombo() {
@@ -1025,6 +1027,59 @@ static void startClockSyncFromCombo() {
     return;
   }
   activityManager.pushActivity(std::move(sync));
+}
+
+// Sync Insights & Clock from a button shortcut on any screen.
+static void startStatsSyncFromShortcut() {
+  if (StatsSyncActivity::isRunning() || ClockSyncActivity::isRunning()) return;
+  const auto origin = activityManager.isReaderActivity() ? StatsSyncActivity::Origin::ShortcutInReader
+                                                         : StatsSyncActivity::Origin::Shortcut;
+  auto sync = makeUniqueNoThrow<StatsSyncActivity>(renderer, mappedInputManager, origin, /*syncClock=*/true);
+  if (!sync) {
+    LOG_ERR("MAIN", "OOM: StatsSyncActivity");
+    return;
+  }
+  activityManager.pushActivity(std::move(sync));
+}
+
+static void forceScreenRefresh() {
+  LOG_DBG("MAIN", "Manual screen refresh triggered");
+  if (!activityManager.handleForcedRefresh()) {
+    RenderLock lock;
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  }
+}
+
+// Runs a sync for a shortcut that carries one; false for every other action.
+static bool runSyncShortcut(const uint8_t action) {
+  switch (action) {
+    case CrossPointSettings::SIDE_BTN_SYNC_STATS_CLOCK:
+      startStatsSyncFromShortcut();
+      return true;
+    case CrossPointSettings::SIDE_BTN_SYNC_CLOCK:
+      if (!StatsSyncActivity::isRunning()) startClockSyncFromCombo();
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Power + Up. Sleep, Refresh and the syncs run here on any screen; the reader actions are handed
+// to the open book, which reads them as a side-button press once the combination is released.
+static void runPowerUpAction() {
+  const uint8_t action = SETTINGS.powerUpAction;
+  if (runSyncShortcut(action)) return;
+  switch (action) {
+    case CrossPointSettings::SIDE_BTN_SLEEP:
+      enterDeepSleep();
+      return;
+    case CrossPointSettings::SIDE_BTN_REFRESH:
+      forceScreenRefresh();
+      return;
+    default:
+      if (activityManager.isReaderActivity()) mappedInputManager.setComboAction(action);
+      return;
+  }
 }
 
 void loop() {
@@ -1201,17 +1256,17 @@ void loop() {
     return;
   }
 
-  // Power + Down: screenshot. Power + Up, when switched on in Shortcuts: sync the clock (devices
-  // without a clock chip drift while asleep, which skews the reading stats).
+  // Power + Down: screenshot. Power + Up: the action chosen in Shortcuts.
   static PowerCombo screenshotCombo;
-  static PowerCombo clockSyncCombo;
+  static PowerCombo powerUpCombo;
   if (pollPowerCombo(screenshotCombo, HalGPIO::BTN_DOWN, [] {
         RenderLock lock;
         ScreenshotUtil::takeScreenshot(renderer);
       })) {
     return;
   }
-  if (SETTINGS.powerUpClockSync && pollPowerCombo(clockSyncCombo, HalGPIO::BTN_UP, startClockSyncFromCombo)) return;
+  const bool powerUpOn = SETTINGS.powerUpAction != CrossPointSettings::SIDE_BTN_NONE;
+  if (powerUpOn && pollPowerCombo(powerUpCombo, HalGPIO::BTN_UP, runPowerUpAction)) return;
 
   // Consume the second X4 Pro power-button release so it does not also run a
   // configured short-power action after toggling the frontlight.
@@ -1276,7 +1331,7 @@ void loop() {
   if (!x4ProAwaitingClickWindow && powerReleasedSinceWake && millis() >= allowSleepAt &&
       gpio.isPressed(HalGPIO::BTN_POWER) && gpio.getPowerButtonHeldTime() > SETTINGS.getPowerButtonDuration()) {
     // If a power-button combination is potentially being pressed, don't sleep
-    if (gpio.isPressed(HalGPIO::BTN_DOWN) || (SETTINGS.powerUpClockSync && gpio.isPressed(HalGPIO::BTN_UP))) {
+    if (gpio.isPressed(HalGPIO::BTN_DOWN) || (powerUpOn && gpio.isPressed(HalGPIO::BTN_UP))) {
       return;
     }
     LOG_DBG("MAIN", "Power button held %lums, sleeping", gpio.getPowerButtonHeldTime());
@@ -1315,11 +1370,18 @@ void loop() {
       (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
        mappedInputManager.wasReleased(MappedInputManager::Button::Power)) ||
       sideRefresh) {
-    LOG_DBG("MAIN", "Manual screen refresh triggered");
-    if (!activityManager.handleForcedRefresh()) {
-      RenderLock lock;
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-    }
+    forceScreenRefresh();
+  }
+
+  // Sync shortcuts: a short power click or the Home key (both arrive as a home action), or a side
+  // button in a book -- outside one the side buttons navigate lists.
+  const bool inBook = activityManager.isReaderActivity();
+  if (mappedInputManager.homeButtonAction() == HomeButtonAction::SyncStatsClock ||
+      (inBook && mappedInputManager.sideActionFired(CrossPointSettings::SIDE_BTN_SYNC_STATS_CLOCK))) {
+    runSyncShortcut(CrossPointSettings::SIDE_BTN_SYNC_STATS_CLOCK);
+  } else if (mappedInputManager.homeButtonAction() == HomeButtonAction::SyncClock ||
+             (inBook && mappedInputManager.sideActionFired(CrossPointSettings::SIDE_BTN_SYNC_CLOCK))) {
+    runSyncShortcut(CrossPointSettings::SIDE_BTN_SYNC_CLOCK);
   }
 
   // Refresh the battery icon when USB is plugged or unplugged.
@@ -1335,6 +1397,8 @@ void loop() {
   const unsigned long activityStartTime = millis();
   activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;
+  // A Power + Up reader action lives for exactly one activity tick.
+  mappedInputManager.clearComboAction();
 
   const unsigned long loopDuration = millis() - loopStartTime;
   if (loopDuration > maxLoopDuration) {

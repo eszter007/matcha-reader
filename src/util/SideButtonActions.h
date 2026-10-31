@@ -16,6 +16,8 @@ enum class SideButtonAction : uint8_t {
   // "Side Button Layout = Disabled" option used to do.
   None,
   CreateClipping,
+  SyncStatsClock,
+  SyncClock,
   Count
 };
 
