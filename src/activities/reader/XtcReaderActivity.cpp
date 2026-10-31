@@ -663,6 +663,8 @@ ScreenshotInfo XtcReaderActivity::getScreenshotInfo() const {
     // Clamp to last valid page to avoid sentinel value (currentPage == pageCount)
     uint32_t clampedPage = (pageCount > 0 && currentPage >= pageCount) ? pageCount - 1 : currentPage;
     info.progressPercent = pageCount > 0 ? xtc->calculateProgress(clampedPage) : 0;
+    // XTC progress already counts the visible page as read.
+    info.endProgressPercent = info.progressPercent;
     info.currentPage = static_cast<int>(clampedPage) + 1;
   } else {
     info.currentPage = currentPage + 1;

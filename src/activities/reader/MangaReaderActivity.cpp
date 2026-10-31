@@ -2300,6 +2300,8 @@ ScreenshotInfo MangaReaderActivity::getScreenshotInfo() const {
     info.currentPage = static_cast<int>(currentPage) + 1;
     info.progressPercent =
         book->getPageCount() > 0 ? static_cast<int>((currentPage + 1) * 100 / book->getPageCount()) : 0;
+    // The percent already counts the visible page as read.
+    info.endProgressPercent = info.progressPercent;
   }
   return info;
 }

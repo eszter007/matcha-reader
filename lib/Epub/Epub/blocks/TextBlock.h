@@ -101,8 +101,7 @@ class TextBlock final : public Block {
 
  private:
   struct RubyDrawInfo;
-  void layoutRuby(const GfxRenderer& renderer, int fontId, int x, std::vector<int>& wordShift,
-                  std::vector<RubyDrawInfo>& rubies) const;
+  void layoutRuby(const GfxRenderer& renderer, int fontId, int x, std::vector<RubyDrawInfo>& rubies) const;
   BlockStyle blockStyle;
   uint16_t numWords = 0;
   uint16_t paragraphStartWord = UINT16_MAX;  // Visual index of the paragraph's first logical word.
