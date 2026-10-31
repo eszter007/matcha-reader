@@ -2,6 +2,7 @@
 
 #include <Epub/Page.h>
 #include <Epub/VerticalParsedText.h>
+#include <HalMemory.h>
 
 #include <array>
 #include <cstddef>
@@ -151,6 +152,16 @@ class ClipSelectionActivity final : public Activity {
   bool rangeRepaintedByReader() const {
     return vertical() && rangeStart >= 0 && liveSelection && repaintPage && !dragging();
   }
+  // The page as drawPage() leaves it before any selection is drawn, kept in PSRAM (no copy on
+  // boards without it): a full render whose page is clean restores it instead of laying the page
+  // out again. A vertical range the reader shades into the page is not clean.
+  bool restoreCleanPage(int offsetX, int offset);
+  void storeCleanPage(int offsetX, int offset);
+  HalMemory::PsramBuffer cleanPage;
+  bool cleanPageUnavailable = false;
+  int cleanPageOffset = -1;
+  int cleanTextOffset = 0;
+  int cleanTextXOffset = 0;
   void markDirty(const WordBox& word) const;
   void flushDirtyCells();
   mutable int dirtyLeft = 0;

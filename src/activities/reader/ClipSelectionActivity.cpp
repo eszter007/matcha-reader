@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstdlib>
+#include <cstring>
 #include <numeric>
 
 #include "ClippingStore.h"
@@ -1119,6 +1120,30 @@ void ClipSelectionActivity::drawPage(const int offsetX, const int offsetY) {
   pages[currentPageOffset]->render(renderer, fontId, marginLeft + offsetX, marginTop + offsetY);
 }
 
+bool ClipSelectionActivity::restoreCleanPage(const int offsetX, const int offset) {
+  if (!cleanPage || rangeRepaintedByReader() || cleanPageOffset != currentPageOffset || cleanTextOffset != offset ||
+      cleanTextXOffset != offsetX) {
+    return false;
+  }
+  memcpy(renderer.getFrameBuffer(), cleanPage.get(), renderer.getBufferSize());
+  return true;
+}
+
+void ClipSelectionActivity::storeCleanPage(const int offsetX, const int offset) {
+  if (cleanPageUnavailable || rangeRepaintedByReader()) return;
+  if (!cleanPage) {
+    cleanPage = HalMemory::allocatePsram(renderer.getBufferSize());
+    if (!cleanPage) {
+      cleanPageUnavailable = true;  // no PSRAM, or none to spare: redraw as before
+      return;
+    }
+  }
+  memcpy(cleanPage.get(), renderer.getFrameBuffer(), renderer.getBufferSize());
+  cleanPageOffset = currentPageOffset;
+  cleanTextOffset = offset;
+  cleanTextXOffset = offsetX;
+}
+
 void ClipSelectionActivity::render(RenderLock&&) {
   settleRefresh();
   if (actionPopup.processRender(renderer, mappedInput)) {
@@ -1139,7 +1164,13 @@ void ClipSelectionActivity::render(RenderLock&&) {
   // as the reader draws it; the horizontal page is clipped to the safe area as before.
   if (!vertical()) renderer.setClipRect(safe.x, safe.y, safe.width, safe.height);
   publishLiveSelection();
-  drawPage(offsetX, offset);
+  const unsigned long started = millis();
+  const bool restored = restoreCleanPage(offsetX, offset);
+  if (!restored) {
+    drawPage(offsetX, offset);
+    storeCleanPage(offsetX, offset);
+  }
+  LOG_DBG("CLIP", "Page %s in %lums", restored ? "restored" : "drawn", millis() - started);
   if (wordCount != 0) drawSelection();
   renderer.setClipRect(clip[0], clip[1], clip[2], clip[3]);
 
