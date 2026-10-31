@@ -25,14 +25,16 @@ struct Entry {
 };
 
 // Splits "/a/vol.matcha/page_0001.jpg" into the container "/a/vol.matcha" and the entry
-// "page_0001.jpg". False for any path without a ".matcha/" component -- folder volumes included.
+// "page_0001.jpg". The extension matches in any case. False for any path without a ".matcha/"
+// component -- folder volumes included.
 bool splitPath(const char* path, std::string& container, std::string& entry);
 
 // Reads n bytes at an absolute offset of the open container; false on a short read. The storage
 // layer supplies it, so this code stays free of any file API.
 using ReadAt = bool (*)(void* ctx, uint32_t offset, void* buf, size_t n);
 
-// Looks `entry` up in a container. A trailing '/' is ignored, so "panels" finds "panels/".
+// Looks `entry` up in a container. A name without an extension also finds a directory, so
+// "panels" finds "panels/".
 bool findEntry(ReadAt readAt, void* ctx, const std::string& entry, Entry& out);
 
 }  // namespace matcha

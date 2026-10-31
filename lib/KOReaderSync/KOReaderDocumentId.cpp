@@ -1,17 +1,18 @@
 #include "KOReaderDocumentId.h"
 
+#include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <MD5Builder.h>
 
 namespace {
 // Extract filename from path (everything after last '/')
+// A .matcha volume is keyed like the folder it was packed from, so both forms share progress.
 std::string getFilename(const std::string& path) {
   const size_t pos = path.rfind('/');
-  if (pos == std::string::npos) {
-    return path;
-  }
-  return path.substr(pos + 1);
+  std::string name = pos == std::string::npos ? path : path.substr(pos + 1);
+  if (FsHelpers::hasMatchaExtension(name)) name.resize(name.size() - (sizeof(".matcha") - 1));
+  return name;
 }
 }  // namespace
 

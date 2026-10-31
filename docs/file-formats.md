@@ -657,6 +657,27 @@ Only kanji-bearing base texts are stored. The file is capped at 16KB; overflow p
 are silently dropped (the glossary is best-effort). Distinct readings for the same
 base text may appear as separate records; lookup joins them with '・'.
 
+## MATCHA — single-file manga volume (`<title>.matcha`)
+
+A manga folder packed into one file by `scripts/pack_matcha.py`, `convert_manga.py` or the browser tool.
+Read from firmware 2.0.0-rc-4. It is a plain ZIP (no ZIP64) in which every entry is **stored**, never
+compressed, so the storage layer reads an entry through a window onto the file. Renamed to `.zip`, any
+unzip tool gives back the folder's files.
+
+The **first** local entry is `matcha.idx`, with no extra field, so its data starts at byte
+`30 + 10`. All values are little-endian:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| magic | `char[4]` | `"MTCH"` |
+| version | `uint32_t` | currently 1 |
+| count | `uint32_t` | number of records |
+| records | 12 bytes × count | sorted by hash: `uint32_t` FNV-1a of the entry name (UTF-8, path relative to the volume), `uint32_t` offset of the entry's data, `uint32_t` size |
+
+A directory such as `panels/` has its own record with size `0xFFFFFFFF` (offset 0). Writers refuse
+two names with the same hash. A path like `/manga/Vol.matcha/page_0001.jpg` (extension in any case)
+resolves through this index; `HalStorage::exists` and `openFileForRead` handle it, other calls do not.
+
 ## LIBX — cover grid index (`.crosspoint/covers.idx`)
 
 Written and read by `src/activities/library/CoverLibraryActivity.cpp`, for the Matcha Covers
@@ -670,7 +691,7 @@ index, so both rebuild on every switch between the views.
 
 `"LIBX"` magic, `uint8_t` version (currently 3), `uint32_t` entry count (rejected above 2048),
 then that many 15-byte records: `pathHash` (`uint32_t`), `fileSize` (`uint32_t`, the size of
-`panels.idx` for a manga folder), `modifiedStamp` (`uint32_t`, packed FAT date/time, 0 when the
+`panels.idx` for a manga folder, of the file itself for a `.matcha`), `modifiedStamp` (`uint32_t`, packed FAT date/time, 0 when the
 driver has none), `thumbHeight` (`uint16_t`, the cover height the thumbnail was verified for),
 and `flags` (`uint8_t`: bit 0 a verified thumbnail is present, bit 1 the book declares no cover).
 A mismatched magic, version or count is treated as no index at all and the scan runs in full.

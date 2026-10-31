@@ -44,20 +44,19 @@ def collect(folder: str) -> list[tuple[str, str | None]]:
     return entries
 
 
-def main() -> None:
-    if len(sys.argv) not in (2, 3):
-        sys.exit(__doc__)
-    folder = sys.argv[1].rstrip("/")
-    out_path = sys.argv[2] if len(sys.argv) == 3 else folder + ".matcha"
+def pack(folder: str, out_path: str) -> None:
+    """Writes folder as out_path. Raises ValueError when the folder cannot be packed."""
     if not os.path.isfile(os.path.join(folder, "panels.idx")):
-        sys.exit(f"{folder} has no panels.idx: not a converted manga folder")
+        raise ValueError(f"{folder} has no panels.idx: not a converted manga folder")
 
     entries = collect(folder)
+    if len(entries) >= 0xFFFF:
+        raise ValueError(f"{len(entries)} files: a ZIP without ZIP64 holds at most 65534 besides the index")
     names = [n.encode("utf-8") for n, _ in entries]
     sizes = [0 if src is None else os.path.getsize(src) for _, src in entries]
     hashes = [fnv1a(n) for n in names]
     if len(set(hashes)) != len(hashes):
-        sys.exit("two entry names share a hash; rename one")
+        raise ValueError("two entry names share a hash; rename one")
 
     # Every offset is known up front: stored entries with no extra field, the index first.
     index_size = 12 + 12 * len(entries)
@@ -66,11 +65,11 @@ def main() -> None:
     for name, size in zip(names, sizes):
         data_offsets.append(offset + 30 + len(name))
         offset += 30 + len(name) + size
+    if offset > 0xFFFFFFFF:
+        raise ValueError("volume is over 4 GB")
     index = b"MTCH" + struct.pack("<II", INDEX_VERSION, len(entries))
     for h, off, size, (_, src) in sorted(zip(hashes, data_offsets, sizes, entries)):
         index += struct.pack("<III", h, 0 if src is None else off, DIRECTORY_SIZE if src is None else size)
-    if offset + index_size > 0xFFFFFFFF:
-        sys.exit("volume is over 4 GB")
 
     central = []
 
@@ -99,6 +98,16 @@ def main() -> None:
                               cd_start, 0))
     os.replace(tmp, out_path)
     print(f"{out_path}: {len(entries)} entries, {os.path.getsize(out_path)} bytes")
+
+
+def main() -> None:
+    if len(sys.argv) not in (2, 3):
+        sys.exit(__doc__)
+    folder = sys.argv[1].rstrip("/")
+    try:
+        pack(folder, sys.argv[2] if len(sys.argv) == 3 else folder + ".matcha")
+    except ValueError as e:
+        sys.exit(str(e))
 
 
 if __name__ == "__main__":

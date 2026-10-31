@@ -34,7 +34,8 @@ Usage:
     # Skip the Gemini OCR pass entirely (panels only, no text/lookup data):
     python3 convert_manga.py --input ./manga_pages/ --output-dir ./out/ --no-ocr
 
-Output (in --output-dir):
+Output: <output-dir>.matcha, one file holding everything below (see scripts/pack_matcha.py;
+renamed to .zip it unzips back into the folder). With --legacy, the folder itself:
     page_0000.jpg, page_0001.jpg, ...   canonical, trivially-sortable page
                                          images (device scans these directly)
     panels/p<page>_<panel>.jpg          cropped panel images for panel-zoom, in their own
@@ -1774,13 +1775,27 @@ def fit_to_device(img, target):
     return img.resize((new_w, new_h), Image.LANCZOS)
 
 
+def pack_into_matcha(output_dir):
+    """Replaces the converted folder with <output_dir>.matcha."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    from pack_matcha import pack
+
+    folder = os.path.normpath(output_dir)
+    try:
+        pack(folder, folder + ".matcha")
+    except ValueError as e:
+        sys.exit(f"Could not pack {folder}: {e}. The folder is kept; it also works on the device.")
+    shutil.rmtree(folder)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Convert manga (image folder / CBZ / EPUB) into CrossPoint Reader format.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--input", required=True, help="Image folder, .cbz/.zip, or .epub")
-    parser.add_argument("--output-dir", required=True, help="Directory to write pages, panels, and panels.idx/dat")
+    parser.add_argument("--output-dir", required=True, help="Book folder to write pages, panels and panels.idx/dat into; packed into <output-dir>.matcha "
+                        "afterwards unless --legacy")
     parser.add_argument("--page-order-file", help="Text file listing source filenames in reading order, one per line")
     parser.add_argument("--gemini-key-file", help="Path to a file containing the Gemini API key")
     parser.add_argument("--no-ocr", action="store_true", help="Skip Gemini OCR -- panel boxes only, no text")
@@ -1830,6 +1845,12 @@ def main():
         help="Book language tag written to meta.bin, e.g. 'ja' or 'en' (overrides the value auto-detected from "
              "an EPUB's <dc:language> or a CBZ's ComicInfo <LanguageISO>). Used to break reading stats down by "
              "language; PDF sources carry no language field, so set it here for those.",
+    )
+    parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="Write the legacy folder instead of one <output-dir>.matcha file. The .matcha file needs firmware "
+             "2.0.0-rc-4 or later; use this for older firmware.",
     )
     parser.add_argument(
         "--mono",
@@ -2142,6 +2163,8 @@ def main():
         print(f"  Text blocks: {total_text_blocks}")
         if toc_entries:
             write_toc(args.output_dir, toc_entries)
+        if not args.legacy:
+            pack_into_matcha(args.output_dir)
         print("Done.")
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

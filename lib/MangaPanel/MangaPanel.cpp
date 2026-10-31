@@ -5,6 +5,7 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <MatchaContainer.h>
 #include <Memory.h>
 #include <PngToBmpConverter.h>
 
@@ -78,7 +79,7 @@ std::string MangaBook::getTitle() const {
   if (!metaTitle.empty()) return metaTitle;
   auto pos = folderPath.find_last_of('/');
   std::string name = pos != std::string::npos && pos + 1 < folderPath.size() ? folderPath.substr(pos + 1) : folderPath;
-  if (FsHelpers::hasMatchaExtension(name)) name.resize(name.size() - 7);  // ".matcha"
+  if (FsHelpers::hasMatchaExtension(name)) name.resize(name.size() - (sizeof(matcha::kExtension) - 1));
   return name;
 }
 

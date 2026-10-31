@@ -1,5 +1,7 @@
 #include "MatchaContainer.h"
 
+#include <strings.h>
+
 #include <cstring>
 
 namespace matcha {
@@ -29,9 +31,14 @@ uint32_t fnv1a(const char* s, size_t n) {
 }  // namespace
 
 bool splitPath(const char* path, std::string& container, std::string& entry) {
-  const char* hit = strstr(path, ".matcha/");
+  // Case-insensitive, like FsHelpers::hasMatchaExtension: FAT copies often upper-case the name.
+  constexpr size_t extLen = sizeof(kExtension) - 1;
+  const char* hit = nullptr;
+  for (const char* p = strchr(path, '.'); p && !hit; p = strchr(p + 1, '.')) {
+    if (strncasecmp(p, kExtension, extLen) == 0 && p[extLen] == '/') hit = p;
+  }
   if (!hit) return false;
-  const size_t split = static_cast<size_t>(hit - path) + sizeof(kExtension) - 1;
+  const size_t split = static_cast<size_t>(hit - path) + extLen;
   container.assign(path, split);
   entry.assign(path + split + 1);
   return !entry.empty();
@@ -59,10 +66,14 @@ bool findEntry(const ReadAt readAt, void* ctx, const std::string& entry, Entry& 
 
   size_t len = entry.size();
   while (len > 0 && entry[len - 1] == '/') len--;
-  const uint32_t want = fnv1a(entry.data(), len);
-  const uint32_t wantDir = fnv1a((entry.substr(0, len) + '/').c_str(), len + 1);
-  // Two searches at most: the name as given, then as a directory.
-  for (const uint32_t key : {want, wantDir}) {
+  // A name with an extension is a file, so only an extensionless name is also tried as a
+  // directory ("panels" -> "panels/"); this keeps a miss on a page or crop to one search.
+  const size_t base = entry.find_last_of('/', len ? len - 1 : 0);
+  const bool maybeDir = entry.find('.', base == std::string::npos ? 0 : base + 1) >= len;
+  uint32_t keys[2] = {fnv1a(entry.data(), len), 0};
+  if (maybeDir) keys[1] = fnv1a((entry.substr(0, len) + '/').c_str(), len + 1);
+  for (int k = 0; k < (maybeDir ? 2 : 1); k++) {
+    const uint32_t key = keys[k];
     uint32_t lo = 0, hi = count;
     while (lo < hi) {
       const uint32_t mid = lo + (hi - lo) / 2;

@@ -191,6 +191,9 @@ HalFile::HalFile(HalFile&&) = default;
 HalFile& HalFile::operator=(HalFile&&) = default;
 
 HalFile HalStorage::open(const char* path, const oflag_t oflag) {
+  if (std::string container, entry; matcha::splitPath(path, container, entry)) {
+    LOG_ERR("HAL", "open() cannot reach .matcha entries, use openFileForRead: %s", path);
+  }
   StorageLock lock;  // ensure thread safety for the duration of this function
   return HalFile(std::make_unique<HalFile::Impl>(SDCard.open(path, oflag)));
 }
@@ -230,11 +233,11 @@ bool HalStorage::openFileForRead(const char* moduleName, const char* path, HalFi
   if (matcha::splitPath(path, container, entry)) {
     matcha::Entry found;
     if (!openFileForRead(moduleName, container, file) || !matcha::findEntry(readContainerAt, &file, entry, found) ||
-        found.isDirectory()) {
+        found.isDirectory() || static_cast<uint64_t>(found.offset) + found.size > file.fileSize64() ||
+        !file.setWindow(found.offset, found.size)) {
       file = HalFile();
       return false;
     }
-    file.setWindow(found.offset, found.size);
     return true;
   }
   StorageLock lock;  // ensure thread safety for the duration of this function
@@ -294,12 +297,12 @@ bool HalStorage::removeDir(const char* path) { HAL_STORAGE_WRAPPED_CALL(removeDi
 
 void HalFile::flush() { HAL_FILE_WRAPPED_CALL(flush, ); }
 size_t HalFile::getName(char* name, size_t len) { HAL_FILE_WRAPPED_CALL(getName, name, len); }
-void HalFile::setWindow(const uint32_t offset, const uint32_t length) {
+bool HalFile::setWindow(const uint32_t offset, const uint32_t length) {
   HalStorage::StorageLock lock;
   impl->windowed = true;
   impl->windowStart = offset;
   impl->windowLength = length;
-  impl->file.seekSet(offset);
+  return impl->file.seekSet(offset);
 }
 
 size_t HalFile::size() {

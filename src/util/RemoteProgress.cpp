@@ -1,5 +1,6 @@
 #include "RemoteProgress.h"
 
+#include <FsHelpers.h>
 #include <HalMemory.h>
 #include <HalStorage.h>
 #include <KOReaderCredentialStore.h>
@@ -7,9 +8,11 @@
 #include <Logging.h>
 #include <MD5Builder.h>
 #include <SdSystemDir.h>
+#include <strings.h>
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 namespace remoteProgress {
 namespace {
@@ -93,27 +96,75 @@ bool writeIndex(const uint32_t account, const uint64_t cursor, const std::vector
 
 uint32_t keyOfMd5(const std::string& hash) { return keyOf(hash.data(), hash.size()); }
 
-// Same hash as KOReaderDocumentId::calculateFromFilename(), without its log line per book.
-uint32_t filenameKey(const std::string& path) {
-  const size_t slash = path.find_last_of('/');
-  const char* name = path.c_str() + (slash == std::string::npos ? 0 : slash + 1);
-  if (!*name) return 0;
+uint32_t nameKey(const std::string_view name, const std::string_view suffix = {}) {
+  if (name.empty()) return 0;
   MD5Builder md5;
   md5.begin();
-  md5.add(name);
+  md5.add(reinterpret_cast<const uint8_t*>(name.data()), name.size());
+  if (!suffix.empty()) md5.add(reinterpret_cast<const uint8_t*>(suffix.data()), suffix.size());
   md5.calculate();
   return keyOfMd5(md5.toString().c_str());
 }
 
-// `lookup(key)` for the keys the book is known by, until one answers (>= 0): its filename hash, then, only when
-// that misses and sync matches by content, its content hash, which reads the book.
+std::string_view fileName(const std::string& path) {
+  const size_t slash = path.find_last_of('/');
+  return std::string_view(path).substr(slash == std::string::npos ? 0 : slash + 1);
+}
+
+// Same hash as KOReaderDocumentId::calculateFromFilename(), without its log line per book.
+uint32_t filenameKey(const std::string& path) {
+  std::string_view name = fileName(path);
+  if (FsHelpers::hasMatchaExtension(name)) name.remove_suffix(sizeof(".matcha") - 1);
+  return nameKey(name);
+}
+
+// The files a manga is converted from or exported to. They share its title, so "Title.cbz" read on
+// another device counts for the manga "Title" here, and the reverse.
+constexpr std::string_view MANGA_TWIN_EXTENSIONS[] = {".epub", ".cbz", ".pdf", ".xtc", ".xtch"};
+
+bool endsWithNoCase(const std::string_view s, const std::string_view suffix) {
+  return s.size() > suffix.size() &&
+         strncasecmp(s.data() + s.size() - suffix.size(), suffix.data(), suffix.size()) == 0;
+}
+
+// Fills `keys` with the twin names' hashes; returns how many (0 for a book that is neither).
+size_t mangaTwinKeys(const std::string& path, uint32_t (&keys)[std::size(MANGA_TWIN_EXTENSIONS)]) {
+  std::string_view name = fileName(path);
+  for (const auto ext : MANGA_TWIN_EXTENSIONS) {
+    if (endsWithNoCase(name, ext)) {
+      keys[0] = nameKey(name.substr(0, name.size() - ext.size()));
+      return keys[0] ? 1 : 0;
+    }
+  }
+  if (FsHelpers::hasMatchaExtension(name)) {
+    name.remove_suffix(sizeof(".matcha") - 1);
+  } else if (FsHelpers::hasReflowableBookExtension(name) || FsHelpers::hasImageExtension(name)) {
+    return 0;  // a book file, not a manga folder (whose name may contain dots: "Vol. 1")
+  }
+  if (name.empty()) return 0;
+  size_t n = 0;
+  for (const auto ext : MANGA_TWIN_EXTENSIONS) keys[n++] = nameKey(name, ext);
+  return n;
+}
+
+constexpr size_t MAX_NAME_KEYS = 1 + std::size(MANGA_TWIN_EXTENSIONS);
+
+// `lookup(keys, n)` answers for the first of `keys` it knows (>= 0). Asked first with the keys the
+// book is known by by name, most specific first: its filename hash, then a manga twin's (EPUB, CBZ,
+// PDF, XTC, XTCH). Only when those miss and sync matches by content, with its content hash, which
+// reads the book.
 template <typename Lookup>
 int lookUp(const std::string& path, Lookup&& lookup) {
-  const uint32_t name = filenameKey(path);
-  const int byName = name ? lookup(name) : -1;
+  uint32_t keys[MAX_NAME_KEYS];
+  size_t n = 0;
+  if (const uint32_t name = filenameKey(path)) keys[n++] = name;
+  uint32_t twins[std::size(MANGA_TWIN_EXTENSIONS)];
+  const size_t twinCount = mangaTwinKeys(path, twins);
+  for (size_t i = 0; i < twinCount; i++) keys[n++] = twins[i];
+  const int byName = n ? lookup(keys, n) : -1;
   if (byName >= 0 || KOREADER_STORE.getMatchMethod() != DocumentMatchMethod::BINARY) return byName;
   const uint32_t content = keyOfMd5(KOReaderDocumentId::calculate(path));
-  return content ? lookup(content) : -1;
+  return content ? lookup(&content, 1) : -1;
 }
 
 // Position of `key` in the sorted keys, or -1.
@@ -122,27 +173,36 @@ int indexOf(const std::vector<uint32_t>& keys, const uint32_t key) {
   return at != keys.end() && *at == key ? static_cast<int>(at - keys.begin()) : -1;
 }
 
-// One key's position, streamed from the file with no heap; `percent` set when found.
-int fileIndexOf(const uint32_t key, uint8_t& percent) {
+// Position of the first of `wanted` (in their order) in the index file, streamed in one pass with
+// no heap; `percent` and `hitKey` set when found.
+int fileIndexOf(const uint32_t* wanted, const size_t n, uint8_t& percent, uint32_t& hitKey) {
   HalFile f;
   uint32_t account;
   uint64_t cursor;
   uint16_t count = 0;
   if (!openIndex(f, account, cursor, count)) return -1;
+  size_t bestRank = n;
+  int bestAt = -1;
   uint32_t buf[32];
-  for (uint16_t done = 0; done < count;) {
+  for (uint16_t done = 0; done < count && bestRank > 0;) {
     const uint16_t take = std::min<uint16_t>(32, count - done);
     if (f.read(reinterpret_cast<uint8_t*>(buf), take * sizeof(uint32_t)) != static_cast<int>(take * sizeof(uint32_t)))
       return -1;
-    const auto hit = std::find(buf, buf + take, key);
-    if (hit != buf + take) {
-      const int at = done + static_cast<int>(hit - buf);
-      if (!f.seek(HEADER_BYTES + count * sizeof(uint32_t) + at) || f.read(&percent, 1) != 1) return -1;
-      return at;
+    for (uint16_t i = 0; i < take; i++) {
+      for (size_t r = 0; r < bestRank; r++) {
+        if (buf[i] == wanted[r]) {
+          bestRank = r;
+          bestAt = done + i;
+          break;
+        }
+      }
     }
     done += take;
   }
-  return -1;
+  if (bestAt < 0) return -1;
+  if (!f.seek(HEADER_BYTES + count * sizeof(uint32_t) + bestAt) || f.read(&percent, 1) != 1) return -1;
+  hitKey = wanted[bestRank];
+  return bestAt;
 }
 }  // namespace
 
@@ -154,17 +214,21 @@ void Snapshot::load() {
 
 int Snapshot::percent(const std::string& path) const {
   if (keys.empty()) return -1;
-  return lookUp(path, [this](const uint32_t k) {
-    const int at = indexOf(keys, k);
-    return at < 0 ? -1 : static_cast<int>(percents[at]);
+  return lookUp(path, [this](const uint32_t* wanted, const size_t n) {
+    for (size_t i = 0; i < n; i++) {
+      const int at = indexOf(keys, wanted[i]);
+      if (at >= 0) return static_cast<int>(percents[at]);
+    }
+    return -1;
   });
 }
 
 int percent(const std::string& path) {
   if (!Storage.exists(indexPath().c_str())) return -1;
-  return lookUp(path, [](const uint32_t k) {
+  return lookUp(path, [](const uint32_t* wanted, const size_t n) {
     uint8_t pct = 0;
-    return fileIndexOf(k, pct) < 0 ? -1 : static_cast<int>(pct);
+    uint32_t hit;
+    return fileIndexOf(wanted, n, pct, hit) < 0 ? -1 : static_cast<int>(pct);
   });
 }
 
@@ -197,11 +261,9 @@ bool markRead(const std::string& path) {
 bool forget(const std::string& path) {
   // Every book open asks: only one that is in the index loads it.
   uint32_t hit = 0;
-  const bool found = lookUp(path, [&hit](const uint32_t k) {
+  const bool found = lookUp(path, [&hit](const uint32_t* wanted, const size_t n) {
                        uint8_t pct;
-                       if (fileIndexOf(k, pct) < 0) return -1;
-                       hit = k;
-                       return 0;
+                       return fileIndexOf(wanted, n, pct, hit) < 0 ? -1 : 0;
                      }) >= 0;
   if (!found) return false;
   uint32_t account;
