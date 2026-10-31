@@ -26,6 +26,13 @@ void writeLe32(uint8_t* p, const uint32_t value) {
   p[2] = (value >> 16) & 0xFF;
   p[3] = (value >> 24) & 0xFF;
 }
+
+// The reader's saved link back-stack (EpubReaderActivity::saveLinkStack()). After a reset, Back
+// must not return to a page from before it.
+void removeLinkStack(const std::string& cachePath) {
+  const std::string linksPath = cachePath + "/links.bin";
+  if (Storage.exists(linksPath.c_str())) Storage.remove(linksPath.c_str());
+}
 }  // namespace
 
 int mangaProgressPercent(const std::string& path) {
@@ -139,6 +146,7 @@ bool writeFinishedProgress(const std::string& path, const std::string& cachePath
 bool markBookRead(const std::string& path) {
   const std::string cachePath = bookCachePath(path);
   if (cachePath.empty()) return false;
+  removeLinkStack(cachePath);
   // Without a record to write, the progress index holds it.
   return writeFinishedProgress(path, cachePath) || remoteProgress::markRead(path);
 }
@@ -147,6 +155,7 @@ bool markBookUnread(const std::string& path) {
   const std::string cachePath = bookCachePath(path);
   if (cachePath.empty()) return false;
   remoteProgress::forget(path);
+  removeLinkStack(cachePath);
   const std::string progressPath = cachePath + "/progress.bin";
   // Absent already counts as unread, so a book that was never opened is not an error.
   if (!Storage.exists(progressPath.c_str())) return true;

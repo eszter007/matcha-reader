@@ -629,12 +629,9 @@ void EpubReaderActivity::onReaderExit() {
     READING_STATS_STORE.record(update);
   }
 
-  // Leaving mid-footnote loses the in-RAM return stack on deep sleep; persist the
-  // pre-footnote position so the book reopens at the link origin, not the footnote.
-  if (footnoteDepth > 0 && epub) {
-    const SavedPosition& origin = savedPositions[0];
-    saveProgress(origin.spineIndex, origin.pageNumber, 0, verticalOverride, furiganaOverride);
-  }
+  // The per-page autosave already saved the page on screen. Keep the link back-stack too, so Back
+  // still returns to the link when the book reopens (see loadLinkStack()).
+  if (footnoteDepth > 0 && epub) saveLinkStack();
 
   section.reset();
   verticalSection.reset();
@@ -2417,7 +2414,7 @@ bool EpubReaderActivity::launchKOReaderSync() {
       GfxRenderer::FrameBufferLoan loan(renderer);
       localKoPos = ProgressMapper::toSavedProgress(epub, localPos);
     }
-    // The destructor can no longer save the back-stack once epub is gone.
+    // onReaderExit() can no longer save the back-stack once epub is gone.
     if (footnoteDepth > 0) saveLinkStack();
     // Exit skips this once epub is gone, which would leave this book's settings in place.
     restoreGlobalReaderSettings();
@@ -4083,18 +4080,12 @@ void EpubReaderActivity::runPostRenderTail(const uint16_t viewportWidth, const u
   // Horizontal reports estimatedTotalPages(), not pageCount: during a partial build the estimate
   // is the meaningful total, and it moving is itself worth persisting. Compare against the same
   // value that gets stored, or the guard never settles.
-  // Gated on footnoteDepth == 0: currentSpineIndex points at the footnote/endnote target
-  // while footnoteDepth > 0 (see navigateToHref), not the book position the reader should
-  // resume at. onExit() already special-cases this by saving the pre-footnote origin instead
-  // -- but this per-render autosave runs on every page turn, including turns taken while
-  // reading a multi-page endnote, and would otherwise overwrite that origin with the
-  // in-footnote position before onExit ever runs. If the device then crashes or loses power
-  // while still inside the footnote, the saved resume point is left pointing into the notes
-  // file instead of the book.
+  //
+  // Also saved after following a link: footnote links and contents-page links cannot be told apart,
+  // and after a contents link this is the page being read. Back returns through the link stack.
   const int page = vertical ? verticalSection->currentPage : section->currentPage;
   const int pageCount = vertical ? verticalSection->pageCount : section->estimatedTotalPages();
-  if (footnoteDepth == 0 &&
-      (currentSpineIndex != lastSavedSpineIndex || page != lastSavedPage || pageCount != lastSavedPageCount)) {
+  if (currentSpineIndex != lastSavedSpineIndex || page != lastSavedPage || pageCount != lastSavedPageCount) {
     if (saveProgress(currentSpineIndex, page, pageCount, verticalOverride, furiganaOverride)) {
       lastSavedSpineIndex = currentSpineIndex;
       lastSavedPage = page;
