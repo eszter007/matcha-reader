@@ -49,7 +49,9 @@ TEST(SideButtonActions, OptionOrderMatchesPersistedContract) {
   EXPECT_EQ(static_cast<uint8_t>(SideButtonAction::WordLookup), 6);
   EXPECT_EQ(static_cast<uint8_t>(SideButtonAction::None), 7);
   EXPECT_EQ(static_cast<uint8_t>(SideButtonAction::CreateClipping), 8);
-  EXPECT_EQ(static_cast<uint8_t>(SideButtonAction::Count), 9);
+  EXPECT_EQ(static_cast<uint8_t>(SideButtonAction::SyncStatsClock), 9);
+  EXPECT_EQ(static_cast<uint8_t>(SideButtonAction::SyncClock), 10);
+  EXPECT_EQ(static_cast<uint8_t>(SideButtonAction::Count), 11);
 }
 
 TEST(SideButtonActions, LoneReleaseNeedsQuietFrontButtons) {

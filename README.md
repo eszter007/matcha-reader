@@ -139,7 +139,7 @@ A wallpaper laid over the page you were reading, so the book shows through. See 
 - The touch selection bar has a Translate action next to Define: it sends just the selected text to Gemini, in the same panel as page translation (same key and Wi-Fi setup)
 - Reader settings remembered per book
 - Optimize EPUB on upload: splits single-file novels into chapters and fits images to the screen
-- A Power + Up shortcut to sync the clock (Settings → Controls → Shortcuts)
+- A Power + Up shortcut, and Sync Insights & Clock / Sync Clock on every button shortcut (Settings → Controls → Shortcuts)
 - Japanese & Chinese localization
 
 ## Setup

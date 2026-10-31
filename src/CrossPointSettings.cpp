@@ -320,6 +320,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     sleepTimeoutMinutes = sleepTimeoutEnumToMinutes(legacyValue);
     needsResave = true;
   }
+  // The Power + Up on/off toggle became an action; on meant Sync Clock.
+  if (doc["powerUpAction"].isNull() && (doc["powerUpClockSync"] | (uint8_t)0) != 0) {
+    powerUpAction = SIDE_BTN_SYNC_CLOCK;
+    needsResave = true;
+  }
   // Pre-1.5 "Side Button Layout" -> the per-button actions. Only when the new keys are absent,
   // so a device that has already been through the new screen is never overwritten. Prev/Next was
   // the default and needs nothing; Next/Prev becomes an explicit swap, Disabled becomes Off on

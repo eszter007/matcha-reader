@@ -18,6 +18,8 @@ class ClockSyncActivity final : public Activity {
 
   // One sync at a time: the button combination is live on every screen, this one included.
   static bool isRunning() { return running; }
+  // NTP sync over a connected Wi-Fi; on success records that the clock has been set.
+  static bool syncAndRecord();
 
   void onEnter() override;
   void onExit() override;

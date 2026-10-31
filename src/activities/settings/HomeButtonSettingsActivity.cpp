@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include "EnumSettingPopup.h"
 #include "components/UITheme.h"
 
 namespace fui = freeink::ui;
@@ -15,14 +16,7 @@ void HomeButtonSettingsActivity::activateIndex(int index) {
   mappedInput.resetHomeButtonInput();
   app.clearTapFlash();
   nav.selected = index;
-  const auto field = home_button::FIELDS[index];
-  const uint8_t value = SETTINGS.*field;
-  const int current = value < static_cast<uint8_t>(HomeButtonAction::Count) ? value : 0;
-  optionPopup.show(home_button::GESTURE_LABELS[index], home_button::ACTION_LABELS,
-                   static_cast<int>(HomeButtonAction::Count), current, [field](int selected) {
-                     SETTINGS.*field = static_cast<uint8_t>(selected);
-                     SETTINGS.saveToFile();
-                   });
+  editEnumSetting(optionPopup, home_button::setting(index), [] { SETTINGS.saveToFile(); });
   requestUpdate();
 }
 
