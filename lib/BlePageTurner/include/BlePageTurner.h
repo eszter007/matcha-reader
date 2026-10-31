@@ -193,9 +193,11 @@ Why why();
 
 // What the book's status bar says about the remote in place of its title. Connecting from the
 // moment a book is entered until a remote links; Failed when the radio was refused for this
-// visit or ran kLinkNoteFailMs without a link, until the next page turn; None otherwise.
-// nextLinkNote (RadioPolicy.h) decides; tick() and acknowledgeLinkNote() apply it.
-enum class LinkNote : uint8_t { None, Connecting, Failed, Connected, LowMemory };
+// visit or ran kLinkNoteFailMs without a link, until the next page turn; Unmapped, once per
+// visit, when a linked remote without a button table sends a key no page action takes, until
+// the next page turn; None otherwise. nextLinkNote (RadioPolicy.h) decides; tick() and
+// acknowledgeLinkNote() apply it.
+enum class LinkNote : uint8_t { None, Connecting, Failed, Connected, LowMemory, Unmapped };
 // The note for the book in front. Any task.
 LinkNote linkNote();
 // A page turn was applied in the book: a Failed note gives the title back. Main loop.

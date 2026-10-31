@@ -59,6 +59,7 @@ struct Visit {
   bool attempted = false;
   bool reconnectArmed = false;
   bool manualConnect = false;
+  bool unmappedNoted = false;  // the Unmapped note was shown in this visit
   uint32_t retryAtMs = 0;
   uint8_t retries = 0;
 };
@@ -280,7 +281,15 @@ bool serveReader() {
         a == Action::PrevPage   ? "previous"
         : a == Action::NextPage ? "next"
                                 : "none");
-    if (a != Action::PrevPage && a != Action::NextPage) continue;
+    if (a != Action::PrevPage && a != Action::NextPage) {
+      // A remote whose buttons send keys no default takes (BOOX Tappy: bare 0x01/0x02) looks dead
+      // until its buttons are mapped; say so once per visit.
+      if (!viaTable && key.pressed && key.keycode != kUsageNone && key.mods == 0 && !visit.unmappedNoted) {
+        visit.unmappedNoted = true;
+        linkNoteNow.store(LinkNote::Unmapped, std::memory_order_relaxed);
+      }
+      continue;
+    }
     // Only the press acts. Free3 reports a fixed release 60-100 ms after every press however
     // long the button is held, so the release frame carries nothing to act on.
     if (!key.pressed) continue;
@@ -424,6 +433,7 @@ bool tick(const Scene& s) {
     visit.attempted = false;
     visit.reconnectArmed = false;
     visit.manualConnect = false;
+    visit.unmappedNoted = false;
     router = Router();  // the settings screen may have changed the tables meanwhile
     visit.retryAtMs = 0;
     visit.retries = 0;

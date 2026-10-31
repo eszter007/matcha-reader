@@ -75,6 +75,9 @@ TEST(LinkNoteRuleTest, Table) {
       {"disabled", LinkNote::Connecting, disabled, LinkNote::None},
       {"disabled while failed", LinkNote::Failed, disabled, LinkNote::None},
       {"left the book", LinkNote::Failed, leaving, LinkNote::None},
+      {"unmapped stays", LinkNote::Unmapped, in(false, true), LinkNote::Unmapped},
+      {"acknowledge unmapped", LinkNote::Unmapped, in(false, true, false, 0, true), LinkNote::None},
+      {"enter after unmapped", LinkNote::Unmapped, in(true, true), LinkNote::None},
   };
   for (const auto& row : rows) {
     EXPECT_EQ(bleturner::nextLinkNote(row.from, row.inputs), row.to) << row.name;
