@@ -6,6 +6,7 @@
 #include <KOReaderCredentialStore.h>
 #include <KOReaderDocumentId.h>
 #include <Logging.h>
+#include <MangaPanel.h>
 #include <Memory.h>
 #include <ReadingStatsStore.h>
 #include <SecureHttpClient.h>
@@ -285,18 +286,21 @@ struct BookCursor {
 };
 
 // The hash progress sync uses for this book.
+// A manga folder has no file to hash by content, so it goes by its title, as progress sync does.
 std::string documentHashFor(const std::string& path) {
-  return KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::FILENAME
-             ? KOReaderDocumentId::calculateFromFilename(path)
-             : KOReaderDocumentId::calculate(path);
+  if (KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::BINARY) {
+    std::string hash = KOReaderDocumentId::calculate(path);
+    if (!hash.empty() || !manga::MangaBook::isMangaFolder(path)) return hash;
+  }
+  return KOReaderDocumentId::calculateFromFilename(path);
 }
 
-// A deleted book or a manga folder has no document hash and is skipped. Any other failure is a read
-// error that the next sync retries.
+// A deleted book, or a folder that is not a manga, has no document hash and is skipped. Any other
+// failure is a read error that the next sync retries.
 bool unidentifiable(const std::string& path) {
   if (!Storage.exists(path.c_str())) return true;
   HalFile file = Storage.open(path.c_str());
-  return file && file.isDirectory();
+  return file && file.isDirectory() && !manga::MangaBook::isMangaFolder(path);
 }
 
 // One /stats/books body and the matching /documents body, built with no TLS session open: a book's

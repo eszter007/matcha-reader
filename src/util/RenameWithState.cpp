@@ -23,7 +23,7 @@ constexpr int MAX_DEPTH = 8;
 // A missing source is success with moved=false: not every book has a cache or a bookmark.
 bool moveState(const std::string& from, const std::string& to, bool& moved, const char* tag) {
   moved = false;
-  if (from.empty() || to.empty() || !Storage.exists(from.c_str())) return true;
+  if (from.empty() || to.empty() || from == to || !Storage.exists(from.c_str())) return true;
   if (Storage.exists(to.c_str())) {
     LOG_ERR(tag, "Rename state target already exists: %s", to.c_str());
     return false;
@@ -90,9 +90,9 @@ std::string bookCachePath(const std::string& path) {
   } else if (FsHelpers::hasXtcExtension(path)) {
     prefix = "xtc_";
   } else if (manga::MangaBook::isMangaFolder(path)) {
-    // A manga book is a folder of page images; its index and progress live under this hash the
-    // same way an EPUB's do, so a folder rename has to carry them too.
-    prefix = "manga_";
+    // A manga book's index and progress live under this hash the same way an EPUB's do, so a
+    // rename has to carry them too.
+    return manga::MangaBook::cachePathFor(path);
   } else {
     return "";
   }

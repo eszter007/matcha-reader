@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 // This reader's own saved percentage, or -1 when unavailable. Never builds reading caches.
@@ -19,6 +20,10 @@ std::string bookCachePath(const std::string& path);
 // an older firmware), puts it in the progress index (remoteProgress). "Unread" removes the record and the index entry,
 // which is what a book that was never opened looks like.
 bool markBookRead(const std::string& path);
+
+// Sets the saved page of an XTC/XTCH or manga book without opening it, in the record its reader
+// loads (progress sync). False for other books or on a write error.
+bool writePageProgress(const std::string& path, uint32_t page);
 bool markBookUnread(const std::string& path);
 
 // Manga progress from the two small cache reads it takes (current page, page count), with no

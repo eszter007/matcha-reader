@@ -16,6 +16,7 @@
 
 #include "BookStats.h"
 #include "HapticFeedback.h"
+#include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
 #include "activities/ActivityManager.h"
@@ -24,6 +25,16 @@ namespace ReaderUtils {
 
 constexpr unsigned long GO_HOME_MS = 1000;
 constexpr unsigned long GO_BACK_OR_HOME_MS = GO_HOME_MS;
+
+// The page-based readers' (XTC, manga) share of Long-Press Menu: with it set to KOSync, true once
+// Confirm has been held long enough to start a sync. Same hold and conditions as the EPUB reader.
+inline bool confirmHoldStartsSync(MappedInputManager& input) {
+  if (BoardConfig::hasTouch() || SETTINGS.longPressMenuFunction != CrossPointSettings::LP_MENU_KOSYNC ||
+      !KOREADER_STORE.hasCredentials()) {
+    return false;
+  }
+  return input.wasLongPressed(MappedInputManager::Button::Confirm, GO_HOME_MS);
+}
 constexpr unsigned long SKIP_HOLD_MS = 700;
 constexpr unsigned long BOOKMARK_HOLD_MS = 400;
 constexpr unsigned long BOOKMARK_MESSAGE_DURATION_MS = 2500;

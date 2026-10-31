@@ -9,6 +9,7 @@
 #include <Xtc.h>
 
 #include <algorithm>
+#include <cstring>
 
 #include "RemoteProgress.h"
 #include "activities/home/EpubProgressUtil.h"
@@ -29,7 +30,7 @@ void writeLe32(uint8_t* p, const uint32_t value) {
 
 int mangaProgressPercent(const std::string& path) {
   if (!manga::MangaBook::isMangaFolder(path)) return -1;
-  const std::string cachePath = "/.crosspoint/manga_" + std::to_string(std::hash<std::string>{}(path));
+  const std::string cachePath = manga::MangaBook::cachePathFor(path);
   HalFile progressFile;
   uint8_t data[4];
   if (!Storage.openFileForRead("PROG", cachePath + "/progress.bin", progressFile) || progressFile.read(data, 4) != 4) {
@@ -51,8 +52,30 @@ std::string bookCachePath(const std::string& path) {
   // TXT and Markdown are read through the EPUB pipeline, so their cache is an epub_ one too.
   if (FsHelpers::hasReflowableBookExtension(path)) return "/.crosspoint/epub_" + hash;
   if (FsHelpers::hasXtcExtension(path)) return "/.crosspoint/xtc_" + hash;
-  if (manga::MangaBook::isMangaFolder(path)) return "/.crosspoint/manga_" + hash;
+  if (manga::MangaBook::isMangaFolder(path)) return manga::MangaBook::cachePathFor(path);
   return {};
+}
+
+bool writePageProgress(const std::string& path, const uint32_t page) {
+  const std::string cachePath = bookCachePath(path);
+  if (cachePath.empty()) return false;
+  if (FsHelpers::hasXtcExtension(path)) {
+    uint8_t data[4];
+    writeLe32(data, page);
+    return ProgressFile::writeAtomic(cachePath, data, sizeof(data));
+  }
+  if (!manga::MangaBook::isMangaFolder(path)) return false;
+  // MangaReaderActivity's record: page, panel (-1, the full page), panels-only flag (kept).
+  uint8_t data[7] = {};
+  {
+    HalFile f;
+    if (Storage.openFileForRead("PROG", cachePath + "/progress.bin", f)) f.read(data, sizeof(data));
+  }
+  writeLe32(data, page);
+  const int16_t fullPage = -1;
+  memcpy(data + 4, &fullPage, sizeof(fullPage));
+  if (!Storage.exists(cachePath.c_str()) && !Storage.mkdir(cachePath.c_str())) return false;
+  return ProgressFile::writeAtomic(cachePath, data, sizeof(data));
 }
 
 namespace {

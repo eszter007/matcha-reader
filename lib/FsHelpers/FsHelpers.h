@@ -81,6 +81,10 @@ bool hasXtcExtension(std::string_view fileName);
 // Check for .matcha extension (case-insensitive): a manga volume packed into one file.
 bool hasMatchaExtension(std::string_view fileName);
 
+// A .matcha volume is the same book as the folder it was packed from: progress, bookmarks, insights
+// and sync all key it as that folder. Returns the path without ".matcha"; any other path unchanged.
+std::string_view stripMatchaExtension(std::string_view path);
+
 // Check for .txt extension (case-insensitive)
 bool hasTxtExtension(std::string_view fileName);
 inline bool hasTxtExtension(const String& fileName) {

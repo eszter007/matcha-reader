@@ -837,7 +837,9 @@ curl -i "http://<server-ip>:17200/users/create" \
 
 To sync, press **Confirm** while reading to open the reader menu, then select **Sync Progress**.
 
-For a shortcut, set **Settings → Controls → Shortcuts → Long-Press Menu** to **KOSync**. Holding **Confirm** then starts a sync.
+This works in every reader: EPUB, TXT and Markdown, XTC/XTCH and manga. An XTC or manga book syncs its page, the way KOReader syncs a PDF or CBZ. A manga also finds the position of the same title read as `Title.cbz`, `.epub`, `.pdf`, `.xtc` or `.xtch` on another device. Those files number their pages differently, so the reader then goes by the share of the book read, e.g. 40%.
+
+For a shortcut, set **Settings → Controls → Shortcuts → Long-Press Menu** to **KOSync**. Holding **Confirm** then starts a sync, in every reader. In XTC and manga, KOSync is the only Long-Press Menu choice that works.
 
 **Sync Behavior** decides what happens when the device and the server disagree:
 - **Smart Sync** (default for new setups) handles the easy cases on its own. It uploads your position when the server has none or when you are further ahead. It jumps to the server's position when that one is further ahead. If both already match, it confirms and changes nothing.
@@ -1565,6 +1567,8 @@ cover and progress. Both forms keep working side by side.
   `<book folder>.matcha` next to the folder. Copy that file to the card and delete the folder there.
   Renaming a `.zip` you made yourself to `.matcha` does not work: the reader needs the index the script puts at
   the start of the file, and stored (uncompressed) pages.
+- **Swapping keeps your place:** a `.matcha` counts as the folder it was packed from, so replacing one with
+  the other keeps your page, bookmarks and reading insights.
 - **Get the folder back:** a `.matcha` is a normal ZIP. Rename it to `.zip` and unzip it on your computer, e.g.
   by double-clicking it in Finder or with **Extract All** in Windows. You get the book's files back in a folder,
   plus one extra file, `matcha.idx`, which a folder book does not need.

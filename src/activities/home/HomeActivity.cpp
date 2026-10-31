@@ -107,7 +107,7 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
     else if (FsHelpers::hasXtcExtension(path)) {
       currentBookProgress = XtcProgress::percentForBook(path);  // page-based; -1 if none yet
     } else if (manga::MangaBook::isMangaFolder(path)) {
-      std::string mangaCache = "/.crosspoint/manga_" + std::to_string(std::hash<std::string>{}(path));
+      std::string mangaCache = manga::MangaBook::cachePathFor(path);
       HalFile f;
       if (Storage.openFileForRead("HOME", mangaCache + "/progress.bin", f)) {
         uint8_t data[4];

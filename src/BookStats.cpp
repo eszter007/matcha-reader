@@ -1,5 +1,6 @@
 #include "BookStats.h"
 
+#include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <SdSystemDir.h>
@@ -66,11 +67,14 @@ int daysInMonthOf(const uint16_t y, const uint8_t m) {
   if (m == 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) return 29;
   return dm[m];
 }
+// The path a book's insights are filed under. A .matcha volume counts as the folder it was packed
+// from, so replacing one with the other keeps its insights.
+std::string_view statsKey(const std::string_view path) { return FsHelpers::stripMatchaExtension(path); }
 }  // namespace
 
 std::string BookStats::filePathFor(const char* path) {
   // Same 32-bit path hash the library index and cache directories use.
-  const auto h = static_cast<uint32_t>(std::hash<std::string>{}(std::string(path ? path : "")));
+  const auto h = static_cast<uint32_t>(std::hash<std::string_view>{}(statsKey(path ? path : "")));
   char buf[64];
   snprintf(buf, sizeof(buf), "%s/%08lx.bin", statsDir().c_str(), static_cast<unsigned long>(h));
   return std::string(buf);
@@ -124,7 +128,7 @@ bool BookStats::loadLocal(const char* path) {
 
   std::string storedPath(pathLen, '\0');
   if (pathLen && f.read(reinterpret_cast<uint8_t*>(&storedPath[0]), pathLen) != pathLen) return false;
-  if (storedPath != bookPath) {
+  if (statsKey(storedPath) != statsKey(bookPath)) {
     // Hash collision: start clean rather than credit this book with another's history.
     LOG_ERR("BSTAT", "hash collision on %s", file.c_str());
     return true;
