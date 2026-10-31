@@ -169,12 +169,19 @@ class EpubReaderActivity final : public ReaderActivity {
 
   // Toolbar reader menu (SETTINGS.readerMenuStyle == READER_MENU_TOOLBAR): drawn
   // over the page instead of pushing the full-screen list menu. Select opens the
-  // Toolbar; its tools open the Contents/Text/More bottom-sheet panels.
-  enum class Overlay { None, Toolbar, Contents, Text, More };
+  // dock; its tools open the Contents/Text/More bottom-sheet panels or translate the page.
+  enum class Overlay { None, Toolbar, Contents, Text, Page, More };
+  // Each dock tool's panel; Translate is an action and has none.
+  static constexpr Overlay kToolPanels[] = {Overlay::Contents, Overlay::Text, Overlay::Page, Overlay::None,
+                                            Overlay::More};
+  static_assert(std::size(kToolPanels) == ReaderToolbarUi::kToolCount, "one panel entry per dock tool");
+  // The Text and Page panels: control rows instead of a list.
+  bool controlPanelOpen() const { return overlay == Overlay::Text || overlay == Overlay::Page; }
   Overlay overlay = Overlay::None;
-  int focusedTool = 0;     // toolbar tool focus: 0=Contents, 1=Text, 2=More
-  int toolbarControl = 2;  // 0=previous chapter, 1=next chapter, 2..4=tools
-  int panelIndex = 0;      // selected row within the active panel
+  int focusedTool = 0;  // the open panel's tool: 0=Contents, 1=Text, 2=Page, 4=More
+  // Dock button cursor, a ReaderToolbarUi::kFocus* value: chapter steps, bookmark, then the tools.
+  int toolbarControl = ReaderToolbarUi::kFocusFirstTool;
+  int panelIndex = 0;  // selected row within the active panel
   // Panel list navigation: a tap steps one row, a hold jumps PANEL_HOLD_STEP rows in one go
   // (a contents list runs to hundreds of chapters). One jump per hold, not a repeat -- every
   // step repaints the panel, so repeating is bounded by the e-ink refresh anyway and reads as
@@ -617,19 +624,47 @@ class EpubReaderActivity final : public ReaderActivity {
   void renderOverlay();
   std::string currentChapterTitle() const;
   int currentTocIndex() const;
-  // Text panel rows (font, size, line spacing, alignment, focus reading, and for
-  // Japanese content this fork's vertical text / furigana toggles).
-  int textRowCount() const;
-  int textRowAt(int visibleIndex) const;
-  std::string textRowName(int row) const;
-  std::string textRowValue(int row) const;
-  void showTextRowPopup(int row);
+  // The open control panel's controls, in the order shown. Text: size, font, Focus Reading or
+  // Furigana, more settings; Page: spacing, margins, alignment, orientation, writing. Alignment and
+  // Focus Reading are for non-CJK books; Writing and Furigana for books that can be read vertically.
+  enum class TextControl : uint8_t {
+    Size,
+    Font,
+    LineSpacing,
+    Margins,
+    Alignment,
+    Orientation,
+    Writing,
+    Furigana,
+    FocusReading,
+    MoreSettings
+  };
+  static constexpr int kMaxTextControls = 10;
+  int textControls(TextControl* out) const;
+  // The open panel's rows, kept here rather than on the render task's stack.
+  ReaderToolbarUi::TextRow panelRows_[kMaxTextControls];
+  TextControl panelControls_[kMaxTextControls];
+  // A Text or Page change applied live but not yet written to the SD card: written once the
+  // panel closes, not on every step.
+  bool textSettingsDirty = false;
+  void saveTextSettingsIfDirty();
+  // option >= 0: the tapped option cell (a stepper's 0 = smaller, 1 = larger); otherwise step
+  // the value by `step` (buttons, which reach every value the pictures skip).
+  void changeTextControl(TextControl control, int option, int step);
+  void showSizePopup();
+  void openTextSettingsFromPanel();
+  // The text on the page on screen, empty for an image-only page.
+  std::string currentPageText();
+  // Dock tools: Contents, Text, Page and More open their panel; Translate runs straight away.
+  void openTool(int tool);
+  // Closes the overlay and runs an action that leaves the page (a screen, a popup, a dialog).
+  void runOverlayLeafAction(EpubReaderMenuActivity::MenuAction action);
   // Persist + re-paginate + re-render under the open panel (live preview).
   void applyTextSettingLive();
   void paintOverlayPopup();
   // Persist the reader text settings, (re)load the selected SD font, and
   // re-paginate the current chapter so changes apply without re-opening the book.
-  void applyReaderTextSettings();
+  void applyReaderTextSettings(bool persist = true);
   // More panel rows.
   void buildMoreActions();
   std::string moreRowName(int row) const;

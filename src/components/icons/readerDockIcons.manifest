@@ -1,0 +1,19 @@
+# Manifest for src/components/icons/readerDockIcons.h — regenerate with:
+#   python3 scripts/convert_icon.py --manifest src/components/icons/readerDockIcons.manifest \
+#     --svgdir assets/icons/tabler --size 24 --out src/components/icons/readerDockIcons.h --upright
+# then ./bin/clang-format-fix -g. Needs cairosvg and Pillow. Upright: drawn as FreeInkUI bitmaps.
+#
+# Tabler icons (MIT), vendored in assets/icons/tabler/ from
+# https://github.com/tabler/tabler-icons. The toolbar reader menu: its four tools, the chapter
+# steps either side of the progress track, and the bookmark toggle beside the page number.
+DockContentsIcon = list-details
+DockTextIcon = typography
+DockTranslateIcon = language
+DockMoreIcon = dots
+DockPrevChapterIcon = chevron-left-pipe
+DockNextChapterIcon = chevron-right-pipe
+DockBookmarkIcon = bookmark
+DockBookmarkFilledIcon = bookmark-filled
+DockSmallerIcon = letter-a-small
+DockLargerIcon = letter-a
+DockPageIcon = file-text

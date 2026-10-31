@@ -138,6 +138,7 @@ A wallpaper laid over the page you were reading, so the book shows through. See 
 - Clippings and highlights (from upstream) work in vertical text too, with the same buttons, handles and actions
 - The touch selection bar has a Translate action next to Define: it sends just the selected text to Gemini, in the same panel as page translation (same key and Wi-Fi setup)
 - Reader settings remembered per book
+- A Toolbar reader menu laid out as a dock: progress and chapter jumps, a bookmark toggle, and Contents / Text / Page / Translate / More, with the page settings as tap-to-choose page pictures (Settings → Reader → Reader Menu Style)
 - Optimize EPUB on upload: splits single-file novels into chapters and fits images to the screen
 - A Power + Up shortcut, and Sync Insights & Clock / Sync Clock on every button shortcut (Settings → Controls → Shortcuts)
 - Japanese & Chinese localization
