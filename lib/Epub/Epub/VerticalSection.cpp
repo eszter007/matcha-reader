@@ -18,6 +18,7 @@
 #include <string>
 
 #include "Epub/RubyGlossary.h"
+#include "Epub/VerticalBatch.h"
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "Epub/converters/ImageDimsProbe.h"
@@ -364,7 +365,9 @@ struct TextExtractor {
 
   // Headroom to leave behind a growth here, so serving it never takes the last usable block.
   static constexpr uint32_t GROWTH_MARGIN = 2048;
-  static bool canAllocate(const size_t bytes) { return ESP.getMaxAllocHeap() >= bytes + GROWTH_MARGIN; }
+  static bool canAllocate(const size_t bytes) {
+    return vertical_batch::largestBlockFor(bytes) >= bytes + GROWTH_MARGIN;
+  }
 
   // Appends through the same throwing operator new: a string's growth step (it doubles) is refused
   // up front when the heap cannot hold it. A tight heap drops the text and flags the build as
@@ -443,8 +446,10 @@ struct TextExtractor {
   // its RubyRun copies here per forced-split "paragraph" -- transient peaks and buffer growth
   // that shredded the heap's largest block. With a ~2KB cadence every buffer on this layer
   // stays small and stable for the whole build.
-  static constexpr size_t SOFT_FLUSH_BYTES = 2048;
+  // More text per batch on PSRAM boards, where the layout then sees further (vertical_batch::kScale).
+  static constexpr size_t SOFT_FLUSH_BYTES = 2048 * vertical_batch::kScale;
   static constexpr size_t SOFT_FLUSH_RUNS = 48;
+  static_assert(SOFT_FLUSH_BYTES * 2 <= MAX_PARAGRAPH_BYTES, "a soft flush must come well before the paragraph split");
   bool midParagraph = false;
 
   static bool isAsciiWordByte(const unsigned char c) {

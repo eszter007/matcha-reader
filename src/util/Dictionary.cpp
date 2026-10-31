@@ -57,6 +57,21 @@ bool readSampleOffset(HalFile& file, uint32_t sampleIndex, uint32_t* out) {
   return file.read(out, sizeof(*out)) == static_cast<int>(sizeof(*out));
 }
 
+// A dictionary's .idx is kept in PSRAM up to this size; larger ones are searched on the card.
+constexpr uint32_t MAX_RESIDENT_IDX_BYTES = 2 * 1024 * 1024;
+
+// Copies the NUL-terminated headword at `at` into buf the way readWordInto() does (truncated to
+// fit), and returns the offset just past its NUL, or 0 when it runs past the end.
+size_t residentWordInto(const uint8_t* idx, const size_t size, const size_t at, char* buf, const size_t bufSize) {
+  const auto* nul = static_cast<const uint8_t*>(std::memchr(idx + at, 0, size - at));
+  if (!nul) return 0;
+  const size_t len = static_cast<size_t>(nul - (idx + at));
+  const size_t copy = std::min(len, bufSize - 1);
+  std::memcpy(buf, idx + at, copy);
+  buf[copy] = '\0';
+  return at + len + 1;
+}
+
 uint32_t readBe32(const uint8_t* p) {
   return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
          (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
@@ -339,6 +354,18 @@ bool Dictionary::openSession(LookupSession& session) {
     if (header.valid && header.sourceFileSize == session.idxSize) {
       session.sampleCount = header.sampleCount;
       session.entryCount = header.entryCount;
+      if (ResidentFiles::kAvailable && session.idxSize <= MAX_RESIDENT_IDX_BYTES) {
+        // Samples first: they are small, and loading them second could evict the index just loaded.
+        const std::string samplesKey = basePath + ".qidx";
+        const std::string idxKey = basePath + ".idx";
+        session.residentSamples =
+            ResidentFiles::acquire(samplesKey.c_str(), session.sampleCount, session.qidx, SIDECAR_HEADER_BYTES,
+                                   static_cast<size_t>(session.sampleCount) * sizeof(uint32_t));
+        if (session.residentSamples) {
+          session.residentIdx =
+              ResidentFiles::acquire(idxKey.c_str(), session.idxSize, session.idx, 0, session.idxSize);
+        }
+      }
     }
   }
   return true;
@@ -419,6 +446,58 @@ DictLocation Dictionary::locate(LookupSession& session, const char* target, std:
   DictLocation result;
   sameHeadwordCount = 0;
 
+  // One .idx entry (headword, BE32 offset, BE32 size) against the target; false once past it.
+  const auto take = [&](const uint8_t* suffix) {
+    normalizeIndexHeadword(wordBuf);
+    const int cmp = StringUtils::asciiCaseCmp(wordBuf, target);
+    if (cmp == 0 && !result.found) {
+      result.offset = readBe32(suffix);
+      result.size = readBe32(suffix + 4);
+      result.found = true;
+      if (matchedHeadwordOut) *matchedHeadwordOut = wordBuf;
+    } else if (cmp == 0) {
+      // Every further entry of the same headword (homographs) is a definition of its own.
+      if (sameHeadwordCount == MAX_SAME_HEADWORD - 1) return false;
+      DictLocation& more = sameHeadword[sameHeadwordCount++];
+      more = DictLocation{readBe32(suffix), readBe32(suffix + 4), true, false};
+    }
+    return cmp <= 0;
+  };
+
+  const uint8_t* idx = ResidentFiles::data(session.residentIdx);
+  const auto* samples = reinterpret_cast<const uint32_t*>(ResidentFiles::data(session.residentSamples));
+  if (idx && samples) {
+    // The same bisect and scan as below, over the copy in PSRAM.
+    const size_t size = session.idxSize;
+    uint32_t lo = 0;
+    uint32_t hi = session.sampleCount - 1;
+    while (lo < hi) {
+      const uint32_t mid = (lo + hi + 1) / 2;
+      if (samples[mid] >= size || residentWordInto(idx, size, samples[mid], wordBuf, sizeof(wordBuf)) == 0) {
+        lo = 0;
+        break;
+      }
+      normalizeIndexHeadword(wordBuf);
+      if (StringUtils::asciiCaseCmp(wordBuf, target) < 0) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    size_t at = samples[lo];
+    if (at >= size) {
+      result.readError = true;  // as a failed seek on the card
+      return result;
+    }
+    while (at < size) {
+      const size_t next = residentWordInto(idx, size, at, wordBuf, sizeof(wordBuf));
+      if (next == 0 || next + 8 > size) break;
+      if (!take(idx + next)) break;
+      at = next + 8;
+    }
+    return result;
+  }
+
   // Bisect the sampled offsets to the last sample whose headword < target.
   const uint32_t startByte = bisectSamples(session.qidx, session.idx, session.sampleCount, target);
 
@@ -435,23 +514,9 @@ DictLocation Dictionary::locate(LookupSession& session, const char* target, std:
     // the end of the index rather than risk reporting a read failure for what
     // is really a miss.
     if (readWordInto(session.idx, wordBuf, sizeof(wordBuf)) < 0) break;
-    normalizeIndexHeadword(wordBuf);
     uint8_t suffix[8];
     if (session.idx.read(suffix, 8) != 8) break;
-
-    const int cmp = StringUtils::asciiCaseCmp(wordBuf, target);
-    if (cmp == 0 && !result.found) {
-      result.offset = readBe32(suffix);
-      result.size = readBe32(suffix + 4);
-      result.found = true;
-      if (matchedHeadwordOut) *matchedHeadwordOut = wordBuf;
-    } else if (cmp == 0) {
-      // Every further entry of the same headword (homographs) is a definition of its own.
-      if (sameHeadwordCount == MAX_SAME_HEADWORD - 1) break;
-      DictLocation& more = sameHeadword[sameHeadwordCount++];
-      more = DictLocation{readBe32(suffix), readBe32(suffix + 4), true, false};
-    }
-    if (cmp > 0) break;
+    if (!take(suffix)) break;
   }
   return result;
 }

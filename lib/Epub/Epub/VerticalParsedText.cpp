@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 
+#include "Epub/VerticalBatch.h"
 #include "GfxRenderer.h"
 #include "Kinsoku.h"
 
@@ -30,7 +31,9 @@ constexpr uint32_t SMALL_ALLOC_MARGIN = 8 * 1024;
 // Every reserve() here is one contiguous allocation that ABORTS the process on failure under
 // -fno-exceptions, so nothing may be requested without first checking it fits. `margin` is what
 // the request must leave behind for everything else.
-inline bool heapCanAfford(const size_t bytes, const uint32_t margin) { return ESP.getMaxAllocHeap() >= bytes + margin; }
+inline bool heapCanAfford(const size_t bytes, const uint32_t margin) {
+  return vertical_batch::largestBlockFor(bytes) >= bytes + margin;
+}
 
 // Cushion for the per-run reserves in addAnnotatedParagraph, which are a few hundred bytes each --
 // far below MIN_FREE_HEAP_FOR_RESERVE, sized for the multi-KB page and stream reserves. Charging
@@ -507,13 +510,13 @@ void VerticalParsedText::reserveStreamFor(size_t utf8Bytes) {
 }
 
 void VerticalParsedText::preallocateStream() {
-  constexpr size_t STREAM_STABLE_ENTRIES = 512;
+  constexpr size_t STREAM_STABLE_ENTRIES = 512 * vertical_batch::kScale;
   const size_t bytes = STREAM_STABLE_ENTRIES * sizeof(PendingChar);
   if (stream_.capacity() >= STREAM_STABLE_ENTRIES) return;
   if (heapCanAfford(bytes, MIN_FREE_HEAP_FOR_RESERVE)) {
     stream_.reserve(STREAM_STABLE_ENTRIES);
     // A batch's ruby, pinned with the stream for the same reason (a few bytes per ruby'd char).
-    rubyPool_.reserve(1024);
+    rubyPool_.reserve(1024 * vertical_batch::kScale);
   } else {
     LOG_DBG("VPT", "preallocateStream: %u bytes don't fit (maxAlloc=%u); falling back to incremental growth",
             static_cast<unsigned>(bytes), ESP.getMaxAllocHeap());

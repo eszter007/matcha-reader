@@ -3,6 +3,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <ResidentFiles.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -119,6 +120,9 @@ struct DictFileHandles {
   size_t fineCacheBytes = 0;          // allocated size (cstride * SPX_KEY_SIZE)
   uint32_t fineCacheLo = UINT32_MAX;  // fine index of fineCache[0]; UINT32_MAX = empty
   size_t fineCacheCount = 0;          // number of 32-byte keys currently cached
+  // The whole fine tier, resident in PSRAM across lookup sessions (PSRAM boards): spxNarrow()
+  // then reads no SD at all. Invalid elsewhere, or once evicted.
+  ResidentFiles::Ref fineAll;
 
   // Free every cache and close every file, returning ALL memory to the pool. Next lookup relearns
   // lazily. Called via DictIndex::releaseCaches() when a Word Lookup activity exits.
@@ -142,6 +146,7 @@ struct DictFileHandles {
     fineCacheBytes = 0;
     fineCacheLo = UINT32_MAX;
     fineCacheCount = 0;
+    fineAll = {};
   }
 };
 
@@ -428,6 +433,9 @@ void loadSpx(DictFileHandles& h, const char* idxPath, size_t recordCount) {
   h.spxCStride = cstride;
   h.spxCoarseCount = coarseCount;
   h.spxOk = true;
+  // Matched on both counts, so a regenerated dictionary loads fresh.
+  h.fineAll = ResidentFiles::acquire(spxPath, idxCount * 31u + fineCount, h.spxFile, SPX_HEADER_SIZE,
+                                     static_cast<size_t>(fineCount) * SPX_KEY_SIZE);
   LOG_INF("DICT", "spx %s: %u checkpoints, %u coarse in RAM (%u B)", spxPath, fineCount,
           static_cast<unsigned>(coarseCount), static_cast<unsigned>(coarseCount * sizeof(CoarseEntry)));
 }
@@ -452,9 +460,13 @@ bool spxNarrow(DictFileHandles& h, const char* key, size_t recordCount, size_t& 
   const size_t sliceCount = fHi - fLo;
   if (sliceCount == 0 || sliceCount * SPX_KEY_SIZE > h.fineCacheBytes || !h.fineCache) return false;
 
-  // 2) Fetch the fine slice (from the one-slot cache when the coarse bracket is unchanged),
-  //    then binary-search it in RAM: largest f with fine[fLo+f] <= key.
-  if (h.fineCacheLo != fLo || h.fineCacheCount != sliceCount) {
+  // 2) The fine slice: straight from the resident tier when there is one, else fetched (from
+  //    the one-slot cache when the coarse bracket is unchanged).
+  const uint8_t* all = ResidentFiles::data(h.fineAll);
+  const uint8_t* slice = all ? all + static_cast<size_t>(fLo) * SPX_KEY_SIZE : nullptr;
+  if (slice) {
+    g_fineHits++;
+  } else if (h.fineCacheLo != fLo || h.fineCacheCount != sliceCount) {
     g_fineReads++;
     h.spxFile.seek(SPX_HEADER_SIZE + static_cast<size_t>(fLo) * SPX_KEY_SIZE);
     const size_t bytes = sliceCount * SPX_KEY_SIZE;
@@ -467,10 +479,12 @@ bool spxNarrow(DictFileHandles& h, const char* key, size_t recordCount, size_t& 
   } else {
     g_fineHits++;
   }
+  if (!slice) slice = h.fineCache.get();
+  // Binary-search the slice in RAM: largest f with fine[fLo+f] <= key.
   size_t flo = 0, fhi = sliceCount;
   while (flo < fhi) {
     const size_t mid = flo + (fhi - flo) / 2;
-    if (std::memcmp(h.fineCache.get() + mid * SPX_KEY_SIZE, key, SPX_KEY_SIZE) <= 0) {
+    if (std::memcmp(slice + mid * SPX_KEY_SIZE, key, SPX_KEY_SIZE) <= 0) {
       flo = mid + 1;
     } else {
       fhi = mid;
