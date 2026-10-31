@@ -30,7 +30,7 @@ Set `--language` on every book. It splits your reading time by language, and it 
 
 | Flag | Effect |
 | --- | --- |
-| `--x4` / `--x3` | Scale to the device screen. Smaller files, faster page turns, nothing lost. |
+| `--x4` / `--x3` / `--device NAME` | Scale to the device screen. Smaller files, faster page turns, nothing lost. `--device` takes `x4`, `x4c`, `x4pro`, `sticky`, `papermono`, `picco`, `metalio` (all 480×800), `x3` (528×792), `eego` (EEGO Reader A4, 552×768) or `metalio4plus` (Metalio E-Ink 4 Plus, 684×1216). |
 | `--mono` | 1-bit dithered BMP. Good for line art, less so for heavy screentone. |
 | `--no-ocr` | Panel boxes only, no Gemini calls, no text or translations. |
 | `--ltr` | Read panels left-to-right, for western comics and strips. Default is manga order. |

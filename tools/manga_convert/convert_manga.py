@@ -1733,6 +1733,13 @@ def _extract_epub_native_toc(epub_path: str, pages: list[str], work_dir: str) ->
 
 # Device screen sizes (portrait width x height) for --x3 / --x4 downscaling.
 DEVICE_TARGETS = {"x3": (528, 792), "x4": (480, 800)}
+# Every device the firmware supports, by --device name, with its portrait screen size. Same names
+# as the browser tool's device menu.
+DEVICE_SCREENS = {
+    "x4": (480, 800), "x4c": (480, 800), "x4pro": (480, 800), "sticky": (480, 800),
+    "papermono": (480, 800), "picco": (480, 800), "metalio": (480, 800),
+    "x3": (528, 792), "eego": (552, 768), "metalio4plus": (684, 1216),
+}
 
 
 def normalize_for_output(img):
@@ -1921,9 +1928,17 @@ def main():
         action="store_true",
         help="Downscale pages and panel crops to fit the Xteink X4 screen (480x800). See --x3.",
     )
+    size_group.add_argument(
+        "--device",
+        choices=sorted(DEVICE_SCREENS),
+        help="Downscale to this device's screen, like --x3/--x4: 480x800 for x4, x4c, x4pro, sticky, papermono, "
+             "picco and metalio (Metalio E-Ink 4); 528x792 for x3; 552x768 for eego (EEGO Reader A4); 684x1216 "
+             "for metalio4plus (Metalio E-Ink 4 Plus).",
+    )
     args = parser.parse_args()
 
-    device_target = DEVICE_TARGETS["x3"] if args.x3 else DEVICE_TARGETS["x4"] if args.x4 else None
+    device_target = (DEVICE_TARGETS["x3"] if args.x3 else DEVICE_TARGETS["x4"] if args.x4
+                     else DEVICE_SCREENS[args.device] if args.device else None)
 
     api_key = None
     if not args.no_ocr:
