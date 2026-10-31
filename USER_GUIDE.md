@@ -198,7 +198,7 @@ Browse Files shows the folders and files on the SD card. The name of the current
 Files and folders whose names start with a dot are hidden. To show them, turn on **Settings → Display → Show Hidden Files**. You need this to delete the hidden folders a Mac leaves on the card, e.g. `.Spotlight-V100` or `.Trashes`. `System Volume Information` is always hidden.
 
 * **Move through the list:** Use **Left** or **Side Up** to move up, and **Right** or **Side Down** to move down. Hold a button to jump a page at a time.
-* **Open:** Press **Confirm** to open a folder or start reading a book. A `.bmp` file opens in the image viewer. A manga folder opens as a book.
+* **Open:** Press **Confirm** to open a folder or start reading a book. A `.bmp` file opens in the image viewer. A manga folder or `.matcha` file opens as a book.
 * **Go back:** Press **Back** to go up one folder. Hold **Back** to jump to the top of the card.
 * **Delete or rename:** Hold **Confirm** on a file or folder for one second. A menu offers **Open**, **Delete** and **Rename**. The device asks before it deletes anything. Deleting a folder deletes everything in it.
 
@@ -837,7 +837,9 @@ curl -i "http://<server-ip>:17200/users/create" \
 
 To sync, press **Confirm** while reading to open the reader menu, then select **Sync Progress**.
 
-For a shortcut, set **Settings → Controls → Shortcuts → Long-Press Menu** to **KOSync**. Holding **Confirm** then starts a sync.
+This works in every reader: EPUB, TXT and Markdown, XTC/XTCH and manga. An XTC or manga book syncs its page, the way KOReader syncs a PDF or CBZ. A manga also finds the position of the same title read as `Title.cbz`, `.epub`, `.pdf`, `.xtc` or `.xtch` on another device. Those files number their pages differently, so the reader then goes by the share of the book read, e.g. 40%.
+
+For a shortcut, set **Settings → Controls → Shortcuts → Long-Press Menu** to **KOSync**. Holding **Confirm** then starts a sync, in every reader. In XTC and manga, KOSync is the only Long-Press Menu choice that works.
 
 **Sync Behavior** decides what happens when the device and the server disagree:
 - **Smart Sync** (default for new setups) handles the easy cases on its own. It uploads your position when the server has none or when you are further ahead. It jumps to the server's position when that one is further ahead. If both already match, it confirms and changes nothing.
@@ -847,7 +849,7 @@ For a shortcut, set **Settings → Controls → Shortcuts → Long-Press Menu** 
 
 With the CrossPoint sync server, **Sync Progress** also uploads your reading insights: minutes per day, total time, books finished and your longest streak, plus each book's reading time, sessions and finished status (as the finish date it sends the day on the end-of-book stamp, or your last reading day for books finished before that day was saved). The CrossPoint app then shows your measured reading time, overall and per book. Insights are only sent once the clock is set (see [Syncing the Clock](#syncing-the-clock)). The first sync sends up to two years of history and the insights of every book in your reading insights, so it takes longer than usual; later syncs only send the days and books read since. If the upload fails, your progress still syncs and the next sync picks up where it stopped. Your insights then live on the server too, so switching to another reader or resetting this one loses nothing: the CrossPoint app keeps showing your whole history, and **Refresh Insights** brings your daily reading time back to the device (see [Syncing Insights Between Devices](#74-syncing-insights-between-devices)). Dictionary lookups and saved sentences are not synced. Time of day and pages are not recorded on the device, so those charts in the app stay empty for it. All CrossPoint readers on one account count as one device. Ordinary KOSync servers get no insights.
 
-With the CrossPoint sync server, each sync that sends your insights (**Sync Progress**, **Refresh Insights** or **Sync Insights**) also asks the server which books changed their reading position on another device, e.g. the CrossPoint app, KOReader or another reader. The badges in the Library and on Home then show the furthest position: 60% on your phone beats 50% here, and a book finished there shows **Read**, even if you never opened it on this reader. If you start a book over on this reader that was finished elsewhere, its badge follows your new reading as soon as you turn a page. Just opening it keeps **Read**. **Mark as Unread** also resets it. Books are matched by their file name, and also by their content when **Document Matching** is set to **Binary**. The first sync goes through every book on your account, so it takes longer. A book marked as finished in the app without a reading position does not count.
+With the CrossPoint sync server, each sync that sends your insights (**Sync Progress**, **Refresh Insights** or **Sync Insights**) also asks the server which books changed their reading position on another device, e.g. the CrossPoint app, KOReader or another reader. The badges in the Library and on Home then show the furthest position: 60% on your phone beats 50% here, and a book finished there shows **Read**, even if you never opened it on this reader. If you start a book over on this reader that was finished elsewhere, its badge follows your new reading as soon as you turn a page. Just opening it keeps **Read**. **Mark as Unread** also resets it. Books are matched by their file name, and also by their content when **Document Matching** is set to **Binary**. A manga matches by its title: the folder `Title`, `Title.matcha` and a `Title.epub`, `.cbz`, `.pdf`, `.xtc` or `.xtch` on another device all count as the same book. The first sync goes through every book on your account, so it takes longer. A book marked as finished in the app without a reading position does not count.
 
 ### 3.7 Sleep Screen
 
@@ -1499,8 +1501,8 @@ dictionaries in `dictionaries/jp/`, `zh/` or `yue/`. A comic in another language
 lookup in its speech bubbles is not supported yet.
 
 Convert the book with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) and pick the X3 or
-X4 target, so the pages are sized for your screen. Then copy the folder anywhere on the SD card. Any folder name
-and depth works. The book shows up in the Library grid, on shelves and in Continue Reading with its cover, title,
+X4 target, so the pages are sized for your screen. Then copy the `.matcha` file (or, for older firmware, the
+folder; see below) anywhere on the SD card. Any name and depth works. The book shows up in the Library grid, on shelves and in Continue Reading with its cover, title,
 author and progress.
 
 | Button | Full-page view | Panel zoom |
@@ -1508,7 +1510,7 @@ author and progress.
 | Page turn | Zooms in on the first panel | Next panel, then the next page |
 | Confirm | Reader menu | Reader menu |
 | Back | Leave the book | Back to the full page |
-| Hold Back | Open the file browser at the book's folder | Open the file browser at the book's folder |
+| Hold Back | Open the file browser at the book | Open the file browser at the book |
 
 <p align="center">
   <img src="docs/images/screenshots/manga-full-page.png" width="240" alt="Full page view">
@@ -1551,6 +1553,25 @@ Two options change how panels are shown:
 | **Panels Only** | Reader menu | Saved per book. Skips the full-page view and goes straight from panel to panel. When it is off, you see each full page first and then its panels. A page with no panels found still shows as a full page. Only offered for books that have panels. |
 
 Manga converted without full-page images always opens in panel view.
+
+#### One file instead of a folder (`.matcha`)
+
+From firmware 2.0.0-rc-4, a converted book can be a single `.matcha` file instead of a folder. One file is much
+faster to copy to the card than a folder of hundreds of images. The reader opens it like the folder: same pages, panels, word lookup,
+cover and progress. Both forms keep working side by side.
+
+- **New conversions:** the browser tool and `convert_manga.py` write a `.matcha` file. For firmware older than
+  2.0.0-rc-4, which cannot open `.matcha`, pick **Matcha Reader, legacy folder** in the browser tool, or add
+  `--legacy` to the script.
+- **Change an old folder into a `.matcha`:** run `python3 scripts/pack_matcha.py "<book folder>"`. It writes
+  `<book folder>.matcha` next to the folder. Copy that file to the card and delete the folder there.
+  Renaming a `.zip` you made yourself to `.matcha` does not work: the reader needs the index the script puts at
+  the start of the file, and stored (uncompressed) pages.
+- **Swapping keeps your place:** a `.matcha` counts as the folder it was packed from, so replacing one with
+  the other keeps your page, bookmarks and reading insights.
+- **Get the folder back:** a `.matcha` is a normal ZIP. Rename it to `.zip` and unzip it on your computer, e.g.
+  by double-clicking it in Finder or with **Extract All** in Windows. You get the book's files back in a folder,
+  plus one extra file, `matcha.idx`, which a folder book does not need.
 
 Reaching the last page marks the manga as finished in your reading insights, the same as an EPUB.
 

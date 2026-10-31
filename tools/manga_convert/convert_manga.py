@@ -34,7 +34,8 @@ Usage:
     # Skip the Gemini OCR pass entirely (panels only, no text/lookup data):
     python3 convert_manga.py --input ./manga_pages/ --output-dir ./out/ --no-ocr
 
-Output (in --output-dir):
+Output: <output-dir>.matcha, one file holding everything below (see scripts/pack_matcha.py;
+renamed to .zip it unzips back into the folder). With --legacy, the folder itself:
     page_0000.jpg, page_0001.jpg, ...   canonical, trivially-sortable page
                                          images (device scans these directly)
     panels/p<page>_<panel>.jpg          cropped panel images for panel-zoom, in their own
@@ -56,9 +57,13 @@ Binary format (meta.bin):
         uint16  authorLen       UTF-8 byte length of author
     char[]  title               UTF-8 title (titleLen bytes)
     char[]  author              UTF-8 author (authorLen bytes)
-    Optional trailer (only present when a language is known):
-        uint16  languageLen     UTF-8 byte length of language tag
+    Optional trailer (only present when a language or series is known):
+        uint16  languageLen     UTF-8 byte length of language tag (0 when only the series is known)
         char[]  language        UTF-8 BCP-47/ISO-639 tag, e.g. "ja", "en"
+    Optional series trailer (only present when a series is known), after the language trailer:
+        uint16  seriesLen       UTF-8 byte length of series name
+        char[]  series          UTF-8 series name
+        float32 seriesIndex     volume number in the series, NaN when unknown
 
     The trailer is appended WITHOUT bumping the version: firmware predating it reads
     exactly the header + title + author and never looks further, so it ignores the extra
@@ -1422,6 +1427,7 @@ def write_toc(output_dir: str, entries: list[tuple], add_cover: bool = True):
 META_FORMAT_VERSION = 1
 META_HEADER = "<IHH"  # version(4) + titleLen(2) + authorLen(2) = 8 bytes
 META_LANGUAGE_TRAILER = "<H"  # optional, appended after author: languageLen(2) + language bytes
+META_SERIES_TRAILER = "<H"  # optional, after the language trailer: seriesLen(2) + series bytes + float32 index
 
 
 # Country codes commonly typed in place of the language code. The device normalises these too,
@@ -1446,23 +1452,31 @@ def normalize_language(language: str) -> str:
     return corrected
 
 
-def write_meta(output_dir: str, title: str, author: str, language: str = "") -> None:
-    """Write meta.bin: book title, author and (optionally) language for the CrossPoint library."""
-    if not title and not author and not language:
+def write_meta(output_dir: str, title: str, author: str, language: str = "", series: str = "",
+               series_index: float | None = None) -> None:
+    """Write meta.bin: book title, author and (optionally) language and series for the CrossPoint library."""
+    if not title and not author and not language and not series:
         return
     language = normalize_language(language)
     title_bytes = title.encode("utf-8")[:0xFFFF]
     author_bytes = author.encode("utf-8")[:0xFFFF]
     language_bytes = language.encode("utf-8")[:0xFFFF]
+    series_bytes = series.encode("utf-8")[:255].decode("utf-8", "ignore").encode("utf-8")  # whole characters
     meta_path = os.path.join(output_dir, "meta.bin")
     with open(meta_path, "wb") as f:
         f.write(struct.pack(META_HEADER, META_FORMAT_VERSION, len(title_bytes), len(author_bytes)))
         f.write(title_bytes)
         f.write(author_bytes)
-        if language_bytes:
+        if language_bytes or series_bytes:
             f.write(struct.pack(META_LANGUAGE_TRAILER, len(language_bytes)))
             f.write(language_bytes)
-    print(f"  {meta_path}: title={title!r}, author={author!r}, language={language!r}")
+        if series_bytes:
+            f.write(struct.pack(META_SERIES_TRAILER, len(series_bytes)))
+            f.write(series_bytes)
+            in_range = series_index is not None and abs(series_index) < 3.0e38  # float32
+            f.write(struct.pack("<f", series_index if in_range else float("nan")))
+    print(f"  {meta_path}: title={title!r}, author={author!r}, language={language!r}, series={series!r} "
+          f"#{series_index}")
 
 
 _XML_ENTITIES = {"amp": "&", "lt": "<", "gt": ">", "quot": '"', "apos": "'"}
@@ -1500,13 +1514,29 @@ def xml_unescape(text: str) -> str:
     return _XML_ENTITY_RE.sub(_sub, text)
 
 
-def extract_metadata(input_path: str, work_dir: str) -> tuple[str, str, str]:
-    """Best-effort extraction of (title, author, language) from EPUB OPF, CBZ ComicInfo.xml, or PDF metadata.
+def calibre_meta(opf: str, name: str):
+    """The content="..." of <meta name="NAME" .../>, whichever order its attributes come in."""
+    for tag in re.findall(r'<meta\b[^>]*>', opf):
+        if re.search(r'\bname="' + re.escape(name) + '"', tag):
+            return re.search(r'\bcontent="([^"]*)"', tag)
+    return None
 
-    PDF has no standard language field, so it yields an empty language -- use --language there.
+
+def parse_series_index(text: str) -> float | None:
+    try:
+        return float(text.strip())
+    except ValueError:
+        return None
+
+
+def extract_metadata(input_path: str, work_dir: str) -> tuple[str, str, str, str, float | None]:
+    """Best-effort extraction of (title, author, language, series, series index) from EPUB OPF, CBZ
+    ComicInfo.xml, or PDF metadata.
+
+    PDF has no standard language or series field, so those stay empty -- use --language/--series there.
     """
     p = Path(input_path)
-    title, author, language = "", "", ""
+    title, author, language, series, series_index = "", "", "", "", None
 
     if p.suffix.lower() == ".epub":
         try:
@@ -1524,6 +1554,15 @@ def extract_metadata(input_path: str, work_dir: str) -> tuple[str, str, str]:
                     lang = re.search(r'<dc:language[^>]*>([^<]+)</dc:language>', opf)
                     if lang:
                         language = xml_unescape(lang.group(1)).strip()
+                    # Calibre's series meta, else EPUB 3's belongs-to-collection.
+                    sm = calibre_meta(opf, "calibre:series")
+                    im = calibre_meta(opf, "calibre:series_index")
+                    if not sm:
+                        sm = re.search(r'<meta[^>]*property="belongs-to-collection"[^>]*>([^<]+)</meta>', opf)
+                        im = re.search(r'<meta[^>]*property="group-position"[^>]*>([^<]+)</meta>', opf)
+                    if sm:
+                        series = xml_unescape(sm.group(1)).strip()
+                        series_index = parse_series_index(im.group(1)) if im else None
         except Exception:
             pass
 
@@ -1542,6 +1581,11 @@ def extract_metadata(input_path: str, work_dir: str) -> tuple[str, str, str]:
                     lang = re.search(r'<LanguageISO>([^<]+)</LanguageISO>', xml)
                     if lang:
                         language = xml_unescape(lang.group(1)).strip()
+                    sm = re.search(r'<Series>([^<]+)</Series>', xml)
+                    if sm:
+                        series = xml_unescape(sm.group(1)).strip()
+                        nm = re.search(r'<Number>([^<]+)</Number>', xml)
+                        series_index = parse_series_index(nm.group(1)) if nm else None
         except Exception:
             pass
 
@@ -1555,7 +1599,7 @@ def extract_metadata(input_path: str, work_dir: str) -> tuple[str, str, str]:
         except Exception:
             pass
 
-    return title, author, language
+    return title, author, language, series, series_index
 
 
 def parse_toc_file(toc_file: str) -> list[tuple]:
@@ -1689,6 +1733,13 @@ def _extract_epub_native_toc(epub_path: str, pages: list[str], work_dir: str) ->
 
 # Device screen sizes (portrait width x height) for --x3 / --x4 downscaling.
 DEVICE_TARGETS = {"x3": (528, 792), "x4": (480, 800)}
+# Every device the firmware supports, by --device name, with its portrait screen size. Same names
+# as the browser tool's device menu.
+DEVICE_SCREENS = {
+    "x4": (480, 800), "x4c": (480, 800), "x4pro": (480, 800), "sticky": (480, 800),
+    "papermono": (480, 800), "picco": (480, 800), "metalio": (480, 800),
+    "x3": (528, 792), "eego": (552, 768), "metalio4plus": (684, 1216),
+}
 
 
 def normalize_for_output(img):
@@ -1774,13 +1825,27 @@ def fit_to_device(img, target):
     return img.resize((new_w, new_h), Image.LANCZOS)
 
 
+def pack_into_matcha(output_dir):
+    """Replaces the converted folder with <output_dir>.matcha."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    from pack_matcha import pack
+
+    folder = os.path.normpath(output_dir)
+    try:
+        pack(folder, folder + ".matcha")
+    except ValueError as e:
+        sys.exit(f"Could not pack {folder}: {e}. The folder is kept; it also works on the device.")
+    shutil.rmtree(folder)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Convert manga (image folder / CBZ / EPUB) into CrossPoint Reader format.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--input", required=True, help="Image folder, .cbz/.zip, or .epub")
-    parser.add_argument("--output-dir", required=True, help="Directory to write pages, panels, and panels.idx/dat")
+    parser.add_argument("--output-dir", required=True, help="Book folder to write pages, panels and panels.idx/dat into; packed into <output-dir>.matcha "
+                        "afterwards unless --legacy")
     parser.add_argument("--page-order-file", help="Text file listing source filenames in reading order, one per line")
     parser.add_argument("--gemini-key-file", help="Path to a file containing the Gemini API key")
     parser.add_argument("--no-ocr", action="store_true", help="Skip Gemini OCR -- panel boxes only, no text")
@@ -1825,11 +1890,20 @@ def main():
     )
     parser.add_argument("--title", help="Book title written to meta.bin (overrides value auto-detected from source)")
     parser.add_argument("--author", help="Book author written to meta.bin (overrides value auto-detected from source)")
+    parser.add_argument("--series", help="Series name written to meta.bin (overrides a CBZ's ComicInfo <Series> or an "
+                                          "EPUB's calibre:series); sent to the sync server with the book")
+    parser.add_argument("--series-index", type=float, help="Volume number in the series (overrides ComicInfo <Number>)")
     parser.add_argument(
         "--language",
         help="Book language tag written to meta.bin, e.g. 'ja' or 'en' (overrides the value auto-detected from "
              "an EPUB's <dc:language> or a CBZ's ComicInfo <LanguageISO>). Used to break reading stats down by "
              "language; PDF sources carry no language field, so set it here for those.",
+    )
+    parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="Write the legacy folder instead of one <output-dir>.matcha file. The .matcha file needs firmware "
+             "2.0.0-rc-4 or later; use this for older firmware.",
     )
     parser.add_argument(
         "--mono",
@@ -1854,9 +1928,17 @@ def main():
         action="store_true",
         help="Downscale pages and panel crops to fit the Xteink X4 screen (480x800). See --x3.",
     )
+    size_group.add_argument(
+        "--device",
+        choices=sorted(DEVICE_SCREENS),
+        help="Downscale to this device's screen, like --x3/--x4: 480x800 for x4, x4c, x4pro, sticky, papermono, "
+             "picco and metalio (Metalio E-Ink 4); 528x792 for x3; 552x768 for eego (EEGO Reader A4); 684x1216 "
+             "for metalio4plus (Metalio E-Ink 4 Plus).",
+    )
     args = parser.parse_args()
 
-    device_target = DEVICE_TARGETS["x3"] if args.x3 else DEVICE_TARGETS["x4"] if args.x4 else None
+    device_target = (DEVICE_TARGETS["x3"] if args.x3 else DEVICE_TARGETS["x4"] if args.x4
+                     else DEVICE_SCREENS[args.device] if args.device else None)
 
     api_key = None
     if not args.no_ocr:
@@ -1909,15 +1991,17 @@ def main():
         os.makedirs(args.output_dir, exist_ok=True)
 
         # Extract and write book metadata (title + author + language).
-        auto_title, auto_author, auto_language = extract_metadata(args.input, work_dir)
+        auto_title, auto_author, auto_language, auto_series, auto_series_index = extract_metadata(args.input, work_dir)
         meta_title = args.title if args.title else auto_title
         meta_author = args.author if args.author else auto_author
         # Normalised here rather than only inside write_meta, because the OCR prompt is built
         # from the same tag and 'jp' must reach it as 'ja'. normalize_language is idempotent,
         # so write_meta's own call is a no-op and prints no second note.
         meta_language = normalize_language(args.language if args.language else auto_language)
-        if meta_title or meta_author or meta_language:
-            write_meta(args.output_dir, meta_title, meta_author, meta_language)
+        meta_series = args.series if args.series else auto_series
+        meta_series_index = args.series_index if args.series_index is not None else auto_series_index
+        if meta_title or meta_author or meta_language or meta_series:
+            write_meta(args.output_dir, meta_title, meta_author, meta_language, meta_series, meta_series_index)
 
         # Webtoon panels are a single top-to-bottom column with horizontal text, so the
         # right-to-left hint that suits a manga page is wrong for them however the book
@@ -2142,6 +2226,8 @@ def main():
         print(f"  Text blocks: {total_text_blocks}")
         if toc_entries:
             write_toc(args.output_dir, toc_entries)
+        if not args.legacy:
+            pack_into_matcha(args.output_dir)
         print("Done.")
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

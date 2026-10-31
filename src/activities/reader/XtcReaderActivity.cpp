@@ -20,6 +20,7 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "EpubReaderPercentSelectionActivity.h"
+#include "KOReaderSyncActivity.h"
 #include "MangaBookmarksActivity.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
@@ -96,6 +97,10 @@ void XtcReaderActivity::readerLoop() {
 
   // Open the reader menu on Confirm (swallow the release that opened the book from the library),
   // or on the touch menu gesture.
+  if (!ignoreNextConfirmRelease && ReaderUtils::confirmHoldStartsSync(mappedInput)) {
+    onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SYNC);
+    return;
+  }
   const bool touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || touchMenu) {
     if (ignoreNextConfirmRelease) {
@@ -252,6 +257,21 @@ void XtcReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction a
       pendingScreenshot = true;
       requestUpdate();
       break;
+    case EpubReaderMenuActivity::MenuAction::SYNC: {
+      if (!xtc) break;
+      PagedSyncBook paged;
+      paged.page = currentPage;
+      paged.pageCount = xtc->getPageCount();
+      paged.title = xtc->getTitle();
+      paged.author = xtc->getAuthor();
+      auto sync = makeUniqueNoThrow<KOReaderSyncActivity>(renderer, mappedInput, xtc->getPath(), std::move(paged));
+      if (!sync) {
+        LOG_ERR("SYNC", "OOM: sync activity");
+        break;
+      }
+      activityManager.replaceActivity(std::move(sync));
+      return;
+    }
     case EpubReaderMenuActivity::MenuAction::DELETE_CACHE: {
       if (xtc) {
         const std::string cachePath = xtc->getCachePath();

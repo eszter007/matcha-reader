@@ -26,6 +26,7 @@
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderTranslationActivity.h"
 #include "HapticFeedback.h"
+#include "KOReaderSyncActivity.h"
 #include "MangaBookmarksActivity.h"
 #include "MangaChapterSelectionActivity.h"
 #include "MangaWordLookupActivity.h"
@@ -716,6 +717,10 @@ void MangaReaderActivity::loop() {
     return;
   }
 
+  if (!ignoreNextConfirmRelease && ReaderUtils::confirmHoldStartsSync(mappedInput)) {
+    onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SYNC);
+    return;
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || touchMenu) {
     if (ignoreNextConfirmRelease) {
       ignoreNextConfirmRelease = false;
@@ -2258,11 +2263,25 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
       requestUpdate();
       break;
     }
-    case EpubReaderMenuActivity::MenuAction::SYNC:
-      // KOReader sync matches progress against a document hash computed from
-      // an actual ebook file. A manga folder of images has no equivalent
-      // document on the KOReader server side, so sync is not applicable.
-      break;
+    case EpubReaderMenuActivity::MenuAction::SYNC: {
+      if (!book) break;
+      saveProgress();
+      PagedSyncBook paged;
+      paged.page = currentPage;
+      paged.pageCount = book->getPageCount();
+      paged.title = book->getTitle();
+      paged.author = book->getAuthor();
+      paged.language = book->getLanguage();
+      paged.series = book->getSeries();
+      paged.seriesIndex = book->getSeriesIndex();
+      auto sync = makeUniqueNoThrow<KOReaderSyncActivity>(renderer, mappedInput, book->getFolder(), std::move(paged));
+      if (!sync) {
+        LOG_ERR("SYNC", "OOM: sync activity");
+        break;
+      }
+      activityManager.replaceActivity(std::move(sync));
+      return;
+    }
     default:
       // AUTO_PAGE_TURN handled above in launchMenu(); FOOTNOTES,
       // TOGGLE_VERTICAL, TOGGLE_FURIGANA are not applicable for manga.

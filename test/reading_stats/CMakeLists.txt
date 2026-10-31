@@ -22,6 +22,8 @@ add_executable(ReadingStatsTest
   ${REPO_ROOT}/src/ReadingStatsStore.cpp
   ${REPO_ROOT}/src/BookStats.cpp
   ${REPO_ROOT}/src/BookStatsDownload.cpp
+  ${REPO_ROOT}/lib/FsHelpers/FsHelpers.cpp
+  ${REPO_ROOT}/lib/Utf8/Utf8.cpp
   ${REPO_ROOT}/lib/I18n/I18n.cpp
   ${I18N_GEN_DIR}/I18nStrings.cpp
 )
@@ -35,6 +37,11 @@ target_include_directories(ReadingStatsTest BEFORE PRIVATE
   ${REPO_ROOT}/lib/I18n
   # makeUniqueNoThrow, used by the language-pack loader. Host-portable as written.
   ${REPO_ROOT}/lib/Memory
+  # stripMatchaExtension: a .matcha volume keeps its folder's stats. WString.h comes from the
+  # FsHelpers test's stubs.
+  ${REPO_ROOT}/lib/FsHelpers
+  ${REPO_ROOT}/lib/Utf8
+  ${REPO_ROOT}/test/fs_helpers/stubs
 )
 
 target_link_libraries(ReadingStatsTest PRIVATE

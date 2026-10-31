@@ -10,6 +10,18 @@
 #include "activities/Activity.h"
 #include "components/UiAppHost.h"
 
+// A book read by page (XTC/XTCH, manga). Its position is a page index, and KOReader's convention for
+// paged documents applies: the progress string is the 1-based page number.
+struct PagedSyncBook {
+  uint32_t page = 0;  // 0-based
+  uint32_t pageCount = 0;
+  std::string title;
+  std::string author;
+  std::string language;  // empty when unknown
+  std::string series;    // empty when unknown
+  std::optional<float> seriesIndex;
+};
+
 /**
  * Activity for syncing reading progress with KOReader sync server.
  *
@@ -25,6 +37,8 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   explicit KOReaderSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& epubPath,
                                 CrossPointPosition localPosition, SavedProgressPosition localKoPos,
                                 std::string localChapterName, const bool pluginEventsOnly = false);
+  KOReaderSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& path,
+                       PagedSyncBook book);
 
   void onEnter() override;
   void onExit() override;
@@ -54,6 +68,10 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   State state = WIFI_SELECTION;
   std::string statusMessage;
   std::string documentHash;
+
+  // Set for a paged book; the EPUB-only members above then stay unused.
+  std::optional<PagedSyncBook> paged;
+  uint32_t remotePage = 0;
 
   // Remote progress data
   bool hasRemoteProgress = false;
@@ -87,6 +105,8 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   void markAutoReturn();
   void completeAlreadySynced();
   void ensureEpubLoaded();
+  KOReaderSyncClient::Error fetchTwinProgress();
+  void decidePaged(bool fromTwin);
   void saveProgressAndReturn(int spineIndex, int page);
   void returnToReader();
 

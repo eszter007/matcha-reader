@@ -54,6 +54,8 @@ class HalStorage {
   // Ensure a directory exists, creating it if necessary. Returns true on success.
   bool ensureDirectoryExists(const char* path);
 
+  // Paths inside a .matcha volume ("vol.matcha/page_0001.jpg", see MatchaContainer.h) work only
+  // with exists() and openFileForRead(); every other call sees the real SD card.
   HalFile open(const char* path, const oflag_t oflag = O_RDONLY);
   bool mkdir(const char* path, const bool pFlag = true);
   bool exists(const char* path);
@@ -129,6 +131,11 @@ class HalFile : public Print {
   HalFile openNextFile();
   bool isOpen() const;
   operator bool() const;
+
+ private:
+  // Narrows a read-only file to [offset, offset + length): an entry inside a .matcha container
+  // (see MatchaContainer.h). Positions, sizes and reads are then relative to the entry.
+  bool setWindow(uint32_t offset, uint32_t length);
 };
 
 // Downstream code must use Storage instead of SdMan

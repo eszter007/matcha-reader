@@ -35,6 +35,18 @@ class KOReaderDocumentId {
    */
   static std::string calculateFromFilename(const std::string& filePath);
 
+  // Copies of one manga carry its title with different extensions: the folder or .matcha "Title"
+  // here, "Title.cbz" or "Title.epub" on another device. MAX_TWINS bounds what twinFilenameHashes
+  // writes.
+  static constexpr size_t MAX_TWINS = 5;
+
+  /**
+   * Filename hashes of the book's twins: for a manga (folder or .matcha), "Title" with each of
+   * .epub, .cbz, .pdf, .xtc, .xtch; for a file with one of those extensions, the bare "Title".
+   * Returns how many were written; 0 for any other book.
+   */
+  static size_t twinFilenameHashes(const std::string& filePath, std::string (&hashes)[MAX_TWINS]);
+
  private:
   // Size of each chunk to read at each offset
   static constexpr size_t CHUNK_SIZE = 1024;

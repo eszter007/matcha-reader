@@ -6,8 +6,8 @@ device is in the [User Guide §6.6](../USER_GUIDE.md#66-manga-manhua-and-comics)
 
 ## In the browser (recommended)
 
-Open [**Matcha Reader Tools**](https://eszter007.github.io/matcha-reader-tools/), drop in the book (CBZ, ZIP or PDF), and copy the folder it gives
-you anywhere on the SD card. Nothing to install. The OCR step sends panels to Gemini under your own key.
+Open [**Matcha Reader Tools**](https://eszter007.github.io/matcha-reader-tools/), drop in the book (CBZ, ZIP or PDF), and copy the `.matcha` file it gives
+you anywhere on the SD card. For firmware older than 2.0.0-rc-4, pick **Matcha Reader, legacy folder** instead. Nothing to install. The OCR step sends panels to Gemini under your own key.
 
 ## As a script
 
@@ -30,7 +30,7 @@ Set `--language` on every book. It splits your reading time by language, and it 
 
 | Flag | Effect |
 | --- | --- |
-| `--x4` / `--x3` | Scale to the device screen. Smaller files, faster page turns, nothing lost. |
+| `--x4` / `--x3` / `--device NAME` | Scale to the device screen. Smaller files, faster page turns, nothing lost. `--device` takes `x4`, `x4c`, `x4pro`, `sticky`, `papermono`, `picco`, `metalio` (all 480×800), `x3` (528×792), `eego` (EEGO Reader A4, 552×768) or `metalio4plus` (Metalio E-Ink 4 Plus, 684×1216). |
 | `--mono` | 1-bit dithered BMP. Good for line art, less so for heavy screentone. |
 | `--no-ocr` | Panel boxes only, no Gemini calls, no text or translations. |
 | `--ltr` | Read panels left-to-right, for western comics and strips. Default is manga order. |
@@ -40,6 +40,7 @@ Set `--language` on every book. It splits your reading time by language, and it 
 | `--max-pages N` | Convert the first N pages as a cheap test. |
 | `--title` / `--author` | Override metadata. |
 | `--language` | Book language tag. See above. |
+| `--series` / `--series-index` | Series name and volume number. Read from a CBZ's ComicInfo (`<Series>`, `<Number>`) or an EPUB's series metadata when present. Sent with your progress to sync servers set to **Other**. |
 
 Panels are found with a YOLO model trained on Manga109 ([leoxs22/manga-panel-detector-yolo26n](https://huggingface.co/leoxs22/manga-panel-detector-yolo26n)), falling back to a white-gutter heuristic without `ultralytics`. Gemini then reads and translates each panel.
 
@@ -53,4 +54,15 @@ Manhwa and other vertical-scroll webcomics need `--webtoon`. A webtoon is one co
 
 Add `--trim-margins` for anything scanned from print. It crops the paper border away before panels are detected, which both fills the screen and measurably improves detection: a Moomin page that came back as 9 panels untrimmed, with one whole strip undivided, split into all 11 once the margin was gone.
 
-The output is a folder of images, panel crops and three small index files. Drop it anywhere on the card, the Library finds any folder containing `panels.idx`.
+The output is one file, `<output-dir>.matcha`, holding the page images, panel crops and three small index files. Copy it anywhere on the card. With `--legacy` you get the folder instead, for firmware older than 2.0.0-rc-4; the Library finds any folder containing `panels.idx`.
+
+To turn a folder (from `--legacy` or an older conversion) into a `.matcha`:
+
+```bash
+python3 scripts/pack_matcha.py "<book folder>"
+```
+
+This also works for books converted earlier. The `.matcha` is a ZIP with every entry stored uncompressed and a
+`matcha.idx` lookup table as the first entry, so the reader finds a page in a few small reads. Rename it to `.zip`
+and any unzip tool gives back the folder (plus `matcha.idx`). A ZIP made with another tool and renamed to `.matcha`
+does not open, because it has no `matcha.idx`. The format is in [file-formats.md](file-formats.md#matcha--single-file-manga-volume).

@@ -1,11 +1,17 @@
 #include "BookmarkUtil.h"
 
+#include <FsHelpers.h>
+
 #include <algorithm>
 #include <string>
 
 std::string BookmarkUtil::getBookmarksDir() { return "/.crosspoint/bookmarks/"; }
 
 std::string BookmarkUtil::getBookmarkPath(const std::string& bookPath) {
+  // A .matcha volume shares bookmarks with the folder it was packed from.
+  if (FsHelpers::hasMatchaExtension(bookPath)) {
+    return getBookmarkPath(std::string(FsHelpers::stripMatchaExtension(bookPath)));
+  }
   // remove leading slash and replace internal slashes to create a flat filename
   std::string bookName = std::string(bookPath).erase(0, 1);
   std::replace(bookName.begin(), bookName.end(), '/', '_');

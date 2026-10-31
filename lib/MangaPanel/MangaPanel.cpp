@@ -9,6 +9,7 @@
 #include <PngToBmpConverter.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace manga {
@@ -77,10 +78,9 @@ bool MangaBook::isMangaFolder(const std::string& folderPath) {
 std::string MangaBook::getTitle() const {
   if (!metaTitle.empty()) return metaTitle;
   auto pos = folderPath.find_last_of('/');
-  if (pos != std::string::npos && pos + 1 < folderPath.size()) {
-    return folderPath.substr(pos + 1);
-  }
-  return folderPath;
+  std::string name = pos != std::string::npos && pos + 1 < folderPath.size() ? folderPath.substr(pos + 1) : folderPath;
+  name.resize(FsHelpers::stripMatchaExtension(name).size());
+  return name;
 }
 
 std::string MangaBook::findCoverImage(const std::string& folderPath, BmpConvertCancelFn shouldCancel, void* cancelCtx) {
@@ -91,12 +91,12 @@ std::string MangaBook::findCoverImage(const std::string& folderPath, BmpConvertC
     if (Storage.exists(path.c_str())) return path;
   }
 
-  auto dir = Storage.open(folderPath.c_str());
-  if (!dir || !dir.isDirectory()) return "";
-  dir.rewindDirectory();
+  // A .matcha container cannot be listed; its converter always writes the canonical names.
+  auto dir = FsHelpers::hasMatchaExtension(folderPath) ? HalFile() : Storage.open(folderPath.c_str());
   std::string firstPageImage;
   std::string firstAnyImage;
-  for (auto mf = dir.openNextFile(); mf; mf = dir.openNextFile()) {
+  if (dir && dir.isDirectory()) dir.rewindDirectory();
+  for (auto mf = dir && dir.isDirectory() ? dir.openNextFile() : HalFile(); mf; mf = dir.openNextFile()) {
     if (shouldCancel && shouldCancel(cancelCtx)) return "";
     char imgName[200];
     mf.getName(imgName, sizeof(imgName));
@@ -115,7 +115,7 @@ std::string MangaBook::findCoverImage(const std::string& folderPath, BmpConvertC
       if (firstAnyImage.empty() || imgFn < firstAnyImage) firstAnyImage = imgName;
     }
   }
-  dir.close();
+  if (dir) dir.close();
   const std::string& chosen = !firstPageImage.empty() ? firstPageImage : firstAnyImage;
   if (!chosen.empty()) return folderPath + "/" + chosen;
 
@@ -184,10 +184,12 @@ bool MangaBook::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, vo
   return ok;
 }
 
-std::string MangaBook::getCachePath() const {
-  size_t hash = std::hash<std::string>{}(folderPath);
+std::string MangaBook::getCachePath() const { return cachePathFor(folderPath); }
+
+std::string MangaBook::cachePathFor(const std::string& bookPath) {
   char buf[64];
-  snprintf(buf, sizeof(buf), "/.crosspoint/manga_%zu", hash);
+  snprintf(buf, sizeof(buf), "/.crosspoint/manga_%zu",
+           std::hash<std::string_view>{}(FsHelpers::stripMatchaExtension(bookPath)));
   return std::string(buf);
 }
 
@@ -289,6 +291,9 @@ bool MangaBook::buildCanonicalPageList() {
 
 bool MangaBook::scanImages() {
   imageFiles.clear();
+
+  // A .matcha container cannot be listed; its pages are always the canonical names.
+  if (FsHelpers::hasMatchaExtension(folderPath)) return buildCanonicalPageList();
 
   const unsigned long canonStart = millis();
   if (buildCanonicalPageList()) {
@@ -582,9 +587,26 @@ void MangaBook::loadMeta() {
     // Language tags are a handful of bytes ("ja", "zh-Hant"); anything longer is a malformed
     // or misaligned file, so ignore it rather than allocate on its say-so.
     char langBuf[16];
-    if (languageLen > 0 && languageLen <= sizeof(langBuf) &&
-        f.read(reinterpret_cast<uint8_t*>(langBuf), languageLen) == languageLen) {
-      language.assign(langBuf, languageLen);
+    const bool languageRead =
+        languageLen == 0 ||
+        (languageLen <= sizeof(langBuf) && f.read(reinterpret_cast<uint8_t*>(langBuf), languageLen) == languageLen);
+    if (languageRead && languageLen > 0) language.assign(langBuf, languageLen);
+
+    // Optional series trailer after it: uint16 seriesLen + UTF-8 name + float32 index (NaN when
+    // unknown). Only trusted when the language trailer was read in full, so the position is right.
+    uint8_t seriesHdr[2];
+    if (languageRead && f.read(seriesHdr, 2) == 2) {
+      const uint16_t seriesLen = readU16(seriesHdr);
+      uint8_t indexBytes[4];
+      series.resize(seriesLen <= 255 ? seriesLen : 0);
+      if (!series.empty() && f.read(reinterpret_cast<uint8_t*>(&series[0]), seriesLen) != seriesLen) series.clear();
+      if (!series.empty()) {
+        float index;
+        if (f.read(indexBytes, 4) == 4) {
+          memcpy(&index, indexBytes, sizeof(index));
+          if (!std::isnan(index)) seriesIndex = index;
+        }
+      }
     }
   }
 
