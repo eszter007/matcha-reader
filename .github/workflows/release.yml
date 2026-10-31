@@ -20,7 +20,38 @@ permissions:
   contents: read
 
 jobs:
+  # A release whose firmware was built by hand and attached while it was a draft (debug builds for
+  # testers) keeps it: publishing then only adds the language packs and the file tables.
+  prebuilt:
+    runs-on: ubuntu-latest
+    outputs:
+      firmware: ${{ steps.check.outputs.firmware }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_TAG" ]; then
+            echo "firmware=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          assets="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for asset in x4old-x3-firmware.bin x4c-firmware.bin sticky-firmware.bin \
+                       x4pro-firmware.bin papermono-firmware.bin metalio_eink4-firmware.bin \
+                       eego_a4-firmware.bin picco-firmware.bin; do
+            if ! grep -qxF "$asset" <<<"$assets"; then
+              echo "firmware=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "Release already carries every firmware file; not rebuilding"
+          echo "firmware=true" >> "$GITHUB_OUTPUT"
+
   build-release:
+    needs: prebuilt
+    if: needs.prebuilt.outputs.firmware != 'true'
     runs-on: ubuntu-latest
     # One name for the environment this job builds, because four steps have to agree on it:
     # the build, the asset copy and the two artifact paths all read `.pio/build/<env>/`. A
@@ -169,8 +200,8 @@ jobs:
   publish-release:
     # Only a published release has somewhere to attach to. On a bare tag push this is
     # skipped and the artifacts remain available for a manual upload.
-    if: github.event_name == 'release'
-    needs: [build-release, language-packs]
+    if: github.event_name == 'release' && !failure() && !cancelled()
+    needs: [prebuilt, build-release, language-packs]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -181,6 +212,7 @@ jobs:
           path: dist
 
       - name: Attach firmware to the release
+        if: needs.prebuilt.outputs.firmware != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -198,6 +230,13 @@ jobs:
             fi
             gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY" --clobber
           done
+
+      - name: Attach the language pack bundle to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
           pack="$(find dist -type f -name language-packs.zip | head -1)"
           if [ -z "$pack" ]; then
             echo "No language-packs.zip among the built artifacts" >&2
@@ -277,7 +316,8 @@ jobs:
           flags=()
           [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
           if gh release view "$tag" --repo "$ASSETS_REPO" >/dev/null 2>&1; then
-            gh release edit "$tag" --repo "$ASSETS_REPO" --notes-file packs.md
+            # A pack release prepared as a draft beside a draft firmware release goes out with it.
+            gh release edit "$tag" --repo "$ASSETS_REPO" --notes-file packs.md --draft=false
           else
             gh release create "$tag" --repo "$ASSETS_REPO" --latest=false "${flags[@]}" \
               --title "Language packs $RELEASE_TAG" --notes-file packs.md
