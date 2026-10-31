@@ -95,6 +95,15 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 111 (fork numbering)
+
+Upstream merge (their versions 72 and 73). The layout format is unchanged. Ruby layout now
+follows Chromium's defaults (`ruby-align: space-around; ruby-overhang: auto`): an annotation may
+overhang its neighbours by at most half its edge character and a quarter of the neighbouring
+word, and a base narrower than its annotation is spaced out to the annotation's width. TrueType
+fonts draw and advance `.notdef` for missing glyphs. Lines move, so older sections are rebuilt;
+book metadata and progress are kept.
+
 ### Version 110 (fork numbering)
 
 Upstream merge (their versions 69 to 71). The layout format is unchanged. Line spacing now
@@ -352,7 +361,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 110
+#define EXPECTED_VERSION 111
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256

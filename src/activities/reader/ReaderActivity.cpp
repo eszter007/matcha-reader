@@ -138,7 +138,7 @@ void ReaderActivity::onExit() {
   // Before onReaderExit(): it releases the book (and may move a finished one), after which
   // neither the session's document id nor the exit percentage can be computed.
   flushReaderSession();
-  const int exitPercent = hasBook() ? getScreenshotInfo().progressPercent : 0;
+  const ScreenshotInfo exitInfo = hasBook() ? getScreenshotInfo() : ScreenshotInfo{};
   const bool hadBook = hasBook();
   onReaderExit();
   // Read from the saved progress, as on entry, so a book opened without moving compares equal.
@@ -155,9 +155,11 @@ void ReaderActivity::onExit() {
   // on the exit notification. A book that never opened has no exit to report.
   if (hadBook && pluginevents::anySubscriber(pluginevents::Event::ReaderExit)) {
     char percent[8];
-    snprintf(percent, sizeof(percent), "%d", exitPercent);
-    const pluginevents::Var vars[] = {{"book", bookPath.c_str()}, {"percent", percent}};
-    pluginevents::emit(pluginevents::Event::ReaderExit, vars, 2);
+    char endPercent[8];
+    snprintf(percent, sizeof(percent), "%d", exitInfo.progressPercent);
+    snprintf(endPercent, sizeof(endPercent), "%d", exitInfo.endProgressPercent);
+    const pluginevents::Var vars[] = {{"book", bookPath.c_str()}, {"percent", percent}, {"end_percent", endPercent}};
+    pluginevents::emit(pluginevents::Event::ReaderExit, vars, 3);
   }
 
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
