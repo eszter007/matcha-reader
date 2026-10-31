@@ -9,11 +9,13 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 
 #include "../../lib/Epub/Epub/CjkBreaks.h"
 #include "DictZip.h"
 #include "DictionaryRegistry.h"
 #include "StringUtils.h"
+#include "TxtToHtml.h"
 
 namespace {
 
@@ -94,6 +96,7 @@ struct IfoFacts {
   bool offsets64 = false;        // idxoffsetbits=64 (unsupported)
   bool htmlDefinitions = false;  // sametypesequence=h or x (HTML or XDXF)
   std::string bookName;          // bookname=, shown in the definition panel's footer
+  bool inlineTypes = false;      // no sametypesequence: each field carries its own type byte
 };
 
 IfoFacts readIfoFacts(const std::string& ifoPath) {
@@ -109,6 +112,7 @@ IfoFacts readIfoFacts(const std::string& ifoPath) {
   facts.offsets64 = eq && strtol(eq + 1, nullptr, 10) == 64;
   line = strstr(buf, "sametypesequence");
   eq = line ? strchr(line, '=') : nullptr;
+  facts.inlineTypes = !eq;
   if (eq) {
     // HTML and XDXF share the styled renderer; multi-type entries stay plain text.
     facts.htmlDefinitions = (eq[1] == 'h' || eq[1] == 'x') && (eq[2] == '\0' || eq[2] == '\r' || eq[2] == '\n');
@@ -122,6 +126,89 @@ IfoFacts readIfoFacts(const std::string& ifoPath) {
     facts.bookName.assign(eq + 1, static_cast<size_t>(end - (eq + 1)));
   }
   return facts;
+}
+
+bool readInlineField(std::string_view& input, char& type, std::string_view& field, bool truncated) {
+  type = input.front();
+  input.remove_prefix(1);
+  if (type >= 'A' && type <= 'Z') {
+    if (input.size() < 4) return false;
+    const size_t size = readBe32(reinterpret_cast<const uint8_t*>(input.data()));
+    input.remove_prefix(4);
+    if (size > input.size()) return false;
+    input.remove_prefix(size);
+    field = {};
+    return true;
+  }
+  if (type < 'a' || type > 'z') return false;
+  const size_t end = input.find('\0');
+  if (end == std::string_view::npos && !truncated) return false;
+  field = input.substr(0, end);
+  input.remove_prefix(end == std::string_view::npos ? input.size() : end + 1);
+  return true;
+}
+
+Dictionary::LookupResult decodeInlineFields(std::string& text, size_t start, bool truncated, bool* exceedsLimit) {
+  const auto source = std::string_view(text).substr(start);
+  size_t decodedSize = start;
+  bool onlyMarkup = true;
+  std::string decoded;
+  for (int pass = 0; pass < 2; ++pass) {
+    auto input = source;
+    while (!input.empty()) {
+      char type;
+      std::string_view field;
+      if (!readInlineField(input, type, field, truncated)) {
+        LOG_ERR("DICT", "Invalid inline definition field");
+        return Dictionary::LookupResult::ReadError;
+      }
+      if (field.empty()) continue;
+      const bool markup = type == 'h' || type == 'x';
+      if (pass == 0) {
+        onlyMarkup = onlyMarkup && markup;
+        decodedSize += markup ? field.size() : sizeof("<pre></pre>") - 1 + TxtToHtml::escapedHtmlSize(field);
+        // Escaping plus <pre> wrappers expands bounded raw input by less than six times.
+        const size_t limit = Dictionary::MAX_DEFINITION_BYTES * (exceedsLimit ? 1 : 6);
+        if (decodedSize > limit) {
+          if (exceedsLimit) *exceedsLimit = true;
+          LOG_INF("DICT", "Decoded definition exceeds byte limit");
+          return Dictionary::LookupResult::ReadError;
+        }
+      } else if (markup) {
+        decoded.append(field);
+      } else {
+        decoded += "<pre>";
+        TxtToHtml::appendEscapedHtml(decoded, field);
+        decoded += "</pre>";
+      }
+    }
+    if (pass == 0) {
+      if (decodedSize == start) return Dictionary::LookupResult::NotFound;
+      // Markup only shrinks, so remove its framing without another text buffer.
+      if (onlyMarkup) {
+        auto fields = source;
+        size_t written = start;
+        while (!fields.empty()) {
+          char type;
+          std::string_view field;
+          if (!readInlineField(fields, type, field, truncated)) return Dictionary::LookupResult::ReadError;
+          if (field.empty()) continue;
+          memmove(text.data() + written, field.data(), field.size());
+          written += field.size();
+        }
+        text.resize(written);
+        return Dictionary::LookupResult::Found;
+      }
+      if (ESP.getMaxAllocHeap() < decodedSize + 1 + DEFINITION_HEAP_HEADROOM_BYTES) {
+        LOG_ERR("DICT", "Low heap for %u byte decoded definition", static_cast<unsigned>(decodedSize));
+        return Dictionary::LookupResult::LowMemory;
+      }
+      decoded.reserve(decodedSize);
+      decoded.append(text.data(), start);
+    }
+  }
+  text.swap(decoded);
+  return Dictionary::LookupResult::Found;
 }
 
 }  // namespace
@@ -159,7 +246,9 @@ bool Dictionary::open(const char* folderName, const char* languageTag) {
     return false;
   }
   hasSyn = Storage.exists((resolved + ".syn").c_str());
-  htmlDefinitions = ifo.htmlDefinitions;
+  inlineTypes = ifo.inlineTypes;
+  // Decoded inline fields come out as markup (plain fields wrapped in <pre>).
+  htmlDefinitions = ifo.htmlDefinitions || inlineTypes;
   bookName = ifo.bookName.empty() ? (folderName ? folderName : "") : ifo.bookName;
 
   // The book's own tag wins; an untagged book falls back to the language folder
@@ -664,6 +753,13 @@ bool Dictionary::readDefinition(const DictLocation& location, std::string& out, 
   if (dict.read(&out[0], size) != static_cast<int>(size)) {
     out.clear();
     return fail(LookupResult::ReadError);
+  }
+  if (inlineTypes) {
+    const auto result = decodeInlineFields(out, 0, location.size > size, nullptr);
+    if (result != LookupResult::Found) {
+      out.clear();
+      return fail(result);
+    }
   }
   // Keep room for the viewer's plain-text fallback while retaining the input.
   if (htmlDefinitions && ESP.getMaxAllocHeap() < out.size() + DEFINITION_HEAP_HEADROOM_BYTES) {
