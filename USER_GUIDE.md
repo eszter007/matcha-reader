@@ -509,8 +509,8 @@ to that book only.
   - **Suppress**: leaves them out.
   - **Black & White**: draws them as a black-and-white dot pattern, so pages with pictures turn as fast as text pages.
 
-- **Reader Menu Style**: How the reader menu looks: **List** (default), a full-screen list, or **Toolbar**, bars at
-  the top and bottom of the page.
+- **Reader Menu Style**: How the reader menu looks: **List** (default), a full-screen list, or **Toolbar**, a dock
+  at the bottom of the page.
 
 - **Customise Status Bar**: The line of information at the edge of the page while you read. Set it up one item at a
   time: chapter page count, book progress percentage, progress bar (book, chapter or hidden) and its thickness, title,
@@ -1111,7 +1111,15 @@ The menu shows these entries, top to bottom. Some only appear when they apply to
 | **Sync Progress** | Sends or fetches your reading position with a KOReader sync server (see [KOReader Sync Quick Setup](#3611-koreader-sync-quick-setup)). |
 | **Delete Book Cache** | Deletes the saved page layout for this book and closes it. The book is prepared again the next time you open it. Your reading position is kept. |
 
-**Reader Settings → Reader Menu Style** switches between this list (the default) and **Toolbar**. The toolbar is a strip at the bottom of the page with three tools: the table of contents, a quick text panel and **More**, which holds everything else from the list. The text panel has font, font size, line spacing, paragraph alignment and **Focus Reading**. In Japanese and Chinese books it has font, font size, line spacing, **Vertical Text** and **Furigana** (**Pinyin** in Chinese books).
+**Reader Settings → Reader Menu Style** switches between this list (the default) and **Toolbar**, a dock at the bottom of the page:
+
+* **Progress row:** drag the knob or tap the line to jump through the book; the buttons at either end go to the previous or next chapter.
+* **Chapter line:** the chapter, the page and the book percentage, and a bookmark you tap to mark or unmark the page.
+* **Contents** lists the chapters. **Translate** translates the page straight away. **More** lists everything else from the full menu.
+* **Text:** the font size (the small and large A step it down and up), the font, **Focus Reading**, and **More text settings** for the full list (word spacing, hyphenation, indents and more). Japanese and Chinese books show **Furigana** (**Pinyin** in Chinese books) instead of Focus Reading.
+* **Page:** line spacing, margins, alignment and orientation as small page pictures: tap one to choose it. Japanese and Chinese books get **Vertical Text** (lines or columns) instead of alignment.
+
+With buttons, Left and Right move between the dock's controls and Select uses one. In the Text and Page panels, Up and Down choose a row, and Left and Right change it one step at a time, which reaches every value, not just the ones the pictures show. On the Text panel's Font and More text settings rows, Left and Right switch to the next panel instead; on the Page panel, go back to the dock to change panel. Back steps from a panel to the dock, and from the dock to the page.
 
 ### 5.1 Chapter Selection
 
@@ -1128,7 +1136,7 @@ Press **Back** to return to the Reader Menu without changing chapter.
 
 A bookmark saves your place so you can come back to it later.
 
-**To add a bookmark**, choose **Toggle Bookmark** in the Reader Menu. A short message says **Bookmark Added.** Choosing it again on the same page removes the bookmark. On button-only devices you can also hold **Confirm**, if **Long-Press Menu** is set to **Bookmark** (see [System Navigation](#system-navigation)).
+**To add a bookmark**, choose **Toggle Bookmark** in the Reader Menu. A short message says **Bookmark Added.** Choosing it again on the same page removes the bookmark. With the **Toolbar** menu style, tap the bookmark on the dock's chapter line instead. On button-only devices you can also hold **Confirm**, if **Long-Press Menu** is set to **Bookmark** (see [System Navigation](#system-navigation)).
 
 **To open a bookmark**, choose **Bookmarks** in the Reader Menu, highlight one and press **Confirm**.
 

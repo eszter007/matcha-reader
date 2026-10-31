@@ -12,10 +12,13 @@ class MappedInputManager;
 // FreeInkUI chrome for the toolbar reader menu (Settings -> Reader -> Reader
 // Menu Style -> Toolbar), painted over the page that is already on screen:
 //
-//  - Toolbar: a bottom sheet holding a chapter scrub row (< capsule >) and a
-//    Contents / Text / More tile row; the page above it stays untouched.
+//  - Toolbar (the dock): a chapter scrub row (|< track >|), the chapter title
+//    with page, percent and a bookmark toggle, and the Contents / Text / Page /
+//    Translate / More tools, each an icon over its name; the page above it
+//    stays untouched.
 //  - Panel: a taller bottom sheet with a title, a paged row list (name left,
-//    value right) and the same tile row as a switcher.
+//    value right) or the Text / Page panel's control rows, and the same tool row as
+//    a switcher.
 //
 // EpubReaderActivity owns the state (which overlay, selection, row contents)
 // and the physical-button handling; this class owns the layout, the tap
@@ -24,25 +27,67 @@ class MappedInputManager;
 // clears the screen: the page stays visible around the chrome.
 class ReaderToolbarUi : public UiAppHost {
  public:
-  enum class Event { None = 0, Dismiss = 1, Tool = 2, PrevChapter = 3, NextChapter = 4, Scrub = 5, Row = 6 };
+  // Option: a Text control row's option cell or stepper half, value = row * 16 + option.
+  enum class Event {
+    None = 0,
+    Dismiss = 1,
+    Tool = 2,
+    PrevChapter = 3,
+    NextChapter = 4,
+    Scrub = 5,
+    Row = 6,
+    Bookmark = 7,
+    Option = 8
+  };
+
+  static constexpr int kToolCount = 5;  // Contents, Text, Page, Translate, More
+  static constexpr int kTranslateTool = 3;
+  // Event::Option packs a control row and its option as row * kOptionStride + option.
+  static constexpr int kOptionStride = 16;
+  // Toolbar button cursor: the chapter steps, the bookmark, then the tools.
+  static constexpr int kFocusPrevChapter = 0;
+  static constexpr int kFocusNextChapter = 1;
+  static constexpr int kFocusBookmark = 2;
+  static constexpr int kFocusFirstTool = 3;
+  static constexpr int kFocusCount = kFocusFirstTool + kToolCount;
+
+  // One Text or Page panel row: a label and the control that changes it. On the Page panel the
+  // Options rows show page pictures.
+  struct TextRow {
+    enum class Kind : uint8_t { Stepper, Chooser, Options, Toggle };
+    // The drawn pictures of an Options row.
+    enum class Picture : uint8_t { None, LineSpacing, Margins, Alignment, Orientation, Writing };
+    Kind kind = Kind::Chooser;
+    Picture picture = Picture::None;
+    const char* label = nullptr;
+    const char* value = nullptr;  // Stepper: the number; Chooser: the current choice
+    uint8_t optionCount = 0;      // Options
+    int8_t selected = -1;         // Options: lit cell, -1 = none; Toggle: 0/1
+  };
 
   struct Model {
     bool panel = false;  // false = toolbar, true = a Contents/Text/More panel
     // Toolbar
     const char* chapterTitle = nullptr;
-    const char* pageInfo = nullptr;  // "12/40   51%"
+    const char* pageInfo = nullptr;  // "p. 12/40 · 51%"
     int progressPermille = 0;        // 0..1000 book progress (scrub handle)
-    int activeChapterStep = 0;       // -1 = previous, 0 = none, 1 = next
+    int toolbarFocus = -1;           // button cursor (kFocus*), -1 = none shown
+    bool bookmarked = false;         // the page carries a bookmark
     // Panel
-    const char* panelTitle = nullptr;
     int itemCount = 0;
     int selectedIndex = -1;  // row the buttons' cursor sits on; -1 = none shown
     std::function<std::string(int)> rowText;
     std::function<std::string(int)> rowValue;
     // -1 = regular value row, 0 = unchecked switch, 1 = checked switch.
     std::function<int(int)> rowToggleState;
-    // Tile row: the tool in focus (toolbar) / the open panel (panel). 0..2.
-    int activeTool = 0;
+    // Text panel: control rows instead of the list (rows stay alive until render() returns).
+    const TextRow* textRows = nullptr;
+    int textRowCount = 0;
+    bool pageGrid = false;  // the Page panel: rows of page pictures
+    // Tool row: the open panel, -1 = none.
+    int activeTool = -1;
+    // A short list (More) that should show whole rather than page.
+    bool fitAllRows = false;
     // Button boards keep the theme's denser list row height (as every other
     // list does there); touch boards use FreeInkUI's finger-sized rows.
     bool denseRows = false;
@@ -82,6 +127,12 @@ class ReaderToolbarUi : public UiAppHost {
   static void onAction(const freeink::ui::ActionEvent& event, void* user);
   void buildToolbar(UiScreen& screen);
   void buildPanel(UiScreen& screen);
+  void buildTextRows(UiScreen& screen, freeink::ui::Rect area);
+  int textContentHeight() const;
+  // Page panel geometry: full size, or shrunk to fit a landscape screen (set by buildPanel()).
+  int16_t groupH_ = 0;
+  int16_t thumbW_ = 0;
+  int16_t thumbH_ = 0;
   void buildToolRow(UiScreen& screen, freeink::ui::LayoutAnchor anchor, int16_t sideInset);
 
   Model model_;
@@ -98,5 +149,4 @@ class ReaderToolbarUi : public UiAppHost {
   // them off the stack (AGENTS.md: locals stay under 256 bytes).
   freeink::ui::ButtonProps stepProps_;
   freeink::ui::ListProps listProps_;
-  freeink::ui::Rect pageIndicatorRect_{};
 };

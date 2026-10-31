@@ -616,6 +616,7 @@ int EpubReaderActivity::bookPercentFor(const ChapterPosition& position) const {
 }
 
 void EpubReaderActivity::onReaderExit() {
+  saveTextSettingsIfDirty();  // a Text/Page change made with a panel still open
   // The extractor holds a raw pointer to this activity's epub; drop it before
   // the activity (and the shared_ptr) goes away.
   ImageBlock::setExtractor(nullptr, nullptr);
@@ -3836,8 +3837,17 @@ void EpubReaderActivity::finishPageRender(const uint16_t viewportWidth, const ui
   // Toolbar menu: overlay the toolbar / panel on top of the freshly rendered page.
   if (overlay != Overlay::None && usesToolbarMenu()) {
     // The page just re-rendered under the overlay: refresh the snapshot that
-    // backs panel->toolbar restores (any previous copy is stale).
-    overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
+    // backs panel->toolbar restores (any previous copy is stale). Not while the
+    // chapter is still being built in slices (a live Text/Page change): the
+    // copy would take the heap the build needs, and the panels re-render the
+    // page without one.
+    const bool building = verticalBuildInProgress_.load(std::memory_order_relaxed) ||
+                          (verticalSection && verticalSection->isBuilding()) || (section && section->isBuilding());
+    if (building) {
+      discardOverlayPage();
+    } else {
+      overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
+    }
     renderOverlay();
     // An open option picker rides on top of the freshly drawn panel.
     if (overlayPopup.isActive()) overlayPopup.render(renderer);
@@ -6200,17 +6210,17 @@ void EpubReaderActivity::openTranslationPanel() {
     openTranslationFor(std::move(text), StrId::STR_TRANSLATE);
     return;
   }
-  std::string pageText;
+  std::string pageText = currentPageText();
+  if (!pageText.empty()) openTranslationFor(std::move(pageText), StrId::STR_TRANSLATE_PAGE);
+}
+
+std::string EpubReaderActivity::currentPageText() {
   if (verticalSection) {
     RenderLock lock(*this);  // shared page slot -- see openReaderMenu()
     const VerticalPage* page = verticalSection->getPage();
-    if (page) {
-      pageText = PageTextExtractor::fromVerticalPage(*page);
-    }
-  } else if (section) {
-    pageText = section->getTextFromSectionFile();
+    return page ? PageTextExtractor::fromVerticalPage(*page) : std::string();
   }
-  if (!pageText.empty()) openTranslationFor(std::move(pageText), StrId::STR_TRANSLATE_PAGE);
+  return section ? section->getTextFromSectionFile() : std::string();
 }
 
 void EpubReaderActivity::openTranslationFor(std::string text, const StrId title) {
@@ -6276,21 +6286,27 @@ void EpubReaderActivity::openFootnotesPanel() {
 // ---------------------------------------------------------------------------
 
 namespace {
-// The five upstream rows, then this fork's two. Vertical Text / Furigana are appended
-// rather than interleaved so a row index doubles as the table index, and they are shown
-// only for Japanese content (textRowCount()).
-constexpr StrId kTextRowNames[] = {StrId::STR_FONT,           StrId::STR_FONT_SIZE,     StrId::STR_LINE_SPACING,
-                                   StrId::STR_PARA_ALIGNMENT, StrId::STR_FOCUS_READING, StrId::STR_VERTICAL_TEXT_LABEL,
-                                   StrId::STR_FURIGANA_LABEL};
-constexpr StrId kAlignIds[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
-                               StrId::STR_BOOK_S_STYLE};
-constexpr int kTextRowCount = static_cast<int>(std::size(kTextRowNames));
-// Rows every book gets; the two beyond this are Japanese-only.
-constexpr int kBaseTextRowCount = 5;
-constexpr int kRowFocusReading = 4;
-constexpr int kRowVerticalText = 5;
-constexpr int kRowFurigana = 6;
-static_assert(std::size(kAlignIds) == CrossPointSettings::PARAGRAPH_ALIGNMENT_COUNT, "alignment labels");
+// The Text panel's pictures stand for these values; buttons step through every value.
+constexpr uint8_t kSpacingPicks[] = {CrossPointSettings::LINE_SPACING_100, CrossPointSettings::LINE_SPACING_120,
+                                     CrossPointSettings::LINE_SPACING_145, CrossPointSettings::LINE_SPACING_175};
+constexpr uint8_t kMarginPicks[] = {CrossPointSettings::SCREEN_MARGIN_MIN, 15, 30};
+static_assert(kMarginPicks[2] <= CrossPointSettings::SCREEN_MARGIN_MAX, "margin pictures in range");
+static_assert(std::size(kSpacingPicks) < ReaderToolbarUi::kOptionStride &&
+                  CrossPointSettings::ORIENTATION_COUNT < ReaderToolbarUi::kOptionStride,
+              "options fit the event packing");
+// Justify, left, centre, right: the PARAGRAPH_ALIGNMENT values the pictures draw. Book's
+// own style stays in the full text settings.
+constexpr int kAlignPicks = 4;
+
+// The picture closest to `value`, so a value set between two pictures still lights one.
+template <size_t N>
+int nearestPick(const uint8_t (&picks)[N], const int value) {
+  int best = 0;
+  for (size_t i = 1; i < N; ++i) {
+    if (std::abs(picks[i] - value) < std::abs(picks[best] - value)) best = static_cast<int>(i);
+  }
+  return best;
+}
 }  // namespace
 
 bool EpubReaderActivity::usesToolbarMenu() const {
@@ -6346,110 +6362,159 @@ std::string EpubReaderActivity::currentChapterTitle() const {
   return tr(STR_UNNAMED);
 }
 
-// The rows shown, as kTextRowNames indices. CJK books omit Paragraph Alignment and Focus
-// Reading for Vertical Text / Furigana; a Latin book switched to vertical keeps every row; other
-// books show the upstream five. Listed rather than offset, so a new row cannot alias another.
-namespace {
-constexpr int kCjkTextRows[] = {0, 1, 2, kRowVerticalText, kRowFurigana};
-constexpr int kAllTextRows[] = {0, 1, 2, 3, kRowFocusReading, kRowVerticalText, kRowFurigana};
-static_assert(std::size(kAllTextRows) == kTextRowCount, "every text row listed");
-}  // namespace
-
-int EpubReaderActivity::textRowCount() const {
-  if (isCjkBook()) return static_cast<int>(std::size(kCjkTextRows));
-  return showVerticalToggle() ? kTextRowCount : kBaseTextRowCount;
-}
-
-int EpubReaderActivity::textRowAt(const int visibleIndex) const {
-  if (visibleIndex < 0 || visibleIndex >= textRowCount()) return -1;
-  return isCjkBook() ? kCjkTextRows[visibleIndex] : kAllTextRows[visibleIndex];
-}
-
-std::string EpubReaderActivity::textRowName(int row) const {
-  if (row < 0 || row >= textRowCount()) return "";
-  const StrId name = kTextRowNames[textRowAt(row)];
-  // A Chinese book's ruby is pinyin or zhuyin, not furigana.
-  if (name == StrId::STR_FURIGANA_LABEL && isChineseBook()) return I18N.get(StrId::STR_PINYIN_LABEL);
-  return I18N.get(name);
-}
-
-std::string EpubReaderActivity::textRowValue(int row) const {
-  static constexpr StrId kFamily[] = {StrId::STR_NOTO_SERIF};
-  row = textRowAt(row);
-  switch (row) {
-    case 0:
-      // The same label as the font picker: the CJK cut standing in for the Noto Sans row reads
-      // "Noto Sans", whichever script cut the book then loads.
-      if (SETTINGS.sdFontFamilyName[0] != '\0') {
-        return SdCardFontSystem::pickerLabel(SETTINGS.sdFontFamilyName, &sdFontSystem.registry());
-      }
-      return I18N.get(kFamily[SETTINGS.fontFamily % CrossPointSettings::FONT_FAMILY_COUNT]);
-    case 1:
-      return std::to_string(SETTINGS.fontPointSize) + " pt";
-    case 2:
-      return I18N.get(LINE_SPACING_IDS[SETTINGS.lineSpacing % CrossPointSettings::LINE_COMPRESSION_COUNT]);
-    case 3:
-      return I18N.get(kAlignIds[SETTINGS.paragraphAlignment % CrossPointSettings::PARAGRAPH_ALIGNMENT_COUNT]);
-    case 4:
-      return SETTINGS.focusReadingEnabled ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-    case kRowVerticalText:
-      return useVerticalText() ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-    case kRowFurigana:
-      return useFurigana() ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-    default:
-      return "";
+int EpubReaderActivity::textControls(TextControl* out) const {
+  int n = 0;
+  const bool cjk = isCjkBook();
+  const bool vertical = cjk || showVerticalToggle();
+  if (overlay == Overlay::Text) {
+    out[n++] = TextControl::Size;
+    out[n++] = TextControl::Font;
+    if (vertical) out[n++] = TextControl::Furigana;
+    if (!cjk) out[n++] = TextControl::FocusReading;
+    out[n++] = TextControl::MoreSettings;
+  } else {
+    out[n++] = TextControl::LineSpacing;
+    out[n++] = TextControl::Margins;
+    if (!cjk) out[n++] = TextControl::Alignment;
+    out[n++] = TextControl::Orientation;
+    if (vertical) out[n++] = TextControl::Writing;
   }
+  return n;
+}
+
+void EpubReaderActivity::changeTextControl(const TextControl control, const int option, const int step) {
+  // What a live re-layout depends on: an unchanged value (a step at its limit) does no work.
+  const auto layoutState = [] {
+    return std::array<uint8_t, 5>{SETTINGS.fontPointSize, SETTINGS.lineSpacing, SETTINGS.screenMargin,
+                                  SETTINGS.paragraphAlignment, SETTINGS.focusReadingEnabled};
+  };
+  const auto before = layoutState();
+  const auto cycle = [](const int value, const int delta, const int count) { return (value + delta + count) % count; };
+  switch (control) {
+    case TextControl::Size: {
+      const auto sizes = SdCardFontSystem::selectablePointSizes(&sdFontSystem.registry(), fontScript());
+      if (sizes.empty()) return;
+      const uint8_t cur = snapToNearestPointSize(sizes, SETTINGS.fontPointSize);
+      int idx = 0;
+      for (size_t i = 0; i < sizes.size(); ++i) {
+        if (sizes[i] == cur) idx = static_cast<int>(i);
+      }
+      const int delta = option >= 0 ? (option == 0 ? -1 : 1) : step;
+      const int next = std::clamp(idx + delta, 0, static_cast<int>(sizes.size()) - 1);
+      if (sizes[next] == SETTINGS.fontPointSize) return;
+      SETTINGS.fontPointSize = sizes[next];
+      break;
+    }
+    case TextControl::LineSpacing:
+      SETTINGS.lineSpacing = option >= 0
+                                 ? kSpacingPicks[option % std::size(kSpacingPicks)]
+                                 : static_cast<uint8_t>(std::clamp(SETTINGS.lineSpacing + step, 0,
+                                                                   CrossPointSettings::LINE_COMPRESSION_COUNT - 1));
+      break;
+    case TextControl::Margins:
+      SETTINGS.screenMargin =
+          option >= 0
+              ? kMarginPicks[option % std::size(kMarginPicks)]
+              : static_cast<uint8_t>(std::clamp(SETTINGS.screenMargin + step * CrossPointSettings::SCREEN_MARGIN_STEP,
+                                                static_cast<int>(CrossPointSettings::SCREEN_MARGIN_MIN),
+                                                static_cast<int>(CrossPointSettings::SCREEN_MARGIN_MAX)));
+      break;
+    case TextControl::Alignment:
+      SETTINGS.paragraphAlignment = static_cast<uint8_t>(
+          option >= 0
+              ? option % kAlignPicks
+              : cycle(SETTINGS.paragraphAlignment < kAlignPicks ? SETTINGS.paragraphAlignment : 0, step, kAlignPicks));
+      break;
+    case TextControl::FocusReading:
+      SETTINGS.focusReadingEnabled = SETTINGS.focusReadingEnabled ? 0 : 1;
+      break;
+    case TextControl::Orientation: {
+      const int target = option >= 0 ? option % CrossPointSettings::ORIENTATION_COUNT
+                                     : cycle(SETTINGS.orientation, step, CrossPointSettings::ORIENTATION_COUNT);
+      if (target == SETTINGS.orientation) return;
+      applyOrientation(static_cast<uint8_t>(target));
+      discardOverlayPage();  // laid out for the old orientation
+      requestUpdate();
+      return;
+    }
+    case TextControl::Writing:
+    case TextControl::Furigana: {
+      // Pass the other override's CURRENT state so applyVerticalFuriganaOverride() leaves it alone:
+      // it acts only on a value that differs from what is in effect.
+      const int8_t verticalNow = useVerticalText() ? 1 : 0;
+      const int8_t furiganaNow = useFurigana() ? 1 : 0;
+      int8_t vertical = verticalNow;
+      int8_t furigana = furiganaNow;
+      if (control == TextControl::Writing) {
+        vertical = static_cast<int8_t>(option >= 0 ? (option == 1 ? 1 : 0) : 1 - verticalNow);
+      } else {
+        furigana = static_cast<int8_t>(1 - furiganaNow);
+      }
+      if (vertical == verticalNow && furigana == furiganaNow) return;
+      applyVerticalFuriganaOverride(vertical, furigana);
+      // Vertical drops the section; furigana is a section-cache layout parameter. Either way the
+      // stored page snapshot no longer matches what will be drawn.
+      discardOverlayPage();
+      requestUpdate();
+      return;
+    }
+    case TextControl::Font:
+    case TextControl::MoreSettings:
+      openTextSettingsFromPanel();
+      return;
+  }
+  if (layoutState() != before) applyTextSettingLive();
 }
 
 // Live apply: persist, re-paginate, and let renderBook() redraw the page with
 // the open panel back on top -- the book itself is the preview.
 void EpubReaderActivity::applyTextSettingLive() {
-  applyReaderTextSettings();
+  applyReaderTextSettings(/*persist=*/false);
+  textSettingsDirty = true;
   discardOverlayPage();  // the stored page is laid out with the old settings
   requestUpdate();
 }
 
-// Settings-style option pickers for the Text panel's enum rows. Every
-// selection applies immediately to the page under the sheet.
-void EpubReaderActivity::showTextRowPopup(const int row) {
-  switch (row) {
-    case 1: {
-      // The point sizes this book can render at with the selected row.
-      const auto sizes = SdCardFontSystem::selectablePointSizes(&sdFontSystem.registry(), fontScript());
-      if (sizes.empty()) return;
-      std::vector<std::string> labels;
-      labels.reserve(sizes.size());
-      for (const uint8_t size : sizes) labels.push_back(std::to_string(size) + " pt");
-      const uint8_t cur = snapToNearestPointSize(sizes, SETTINGS.fontPointSize);
-      int curIdx = 0;
-      for (size_t i = 0; i < sizes.size(); ++i) {
-        if (sizes[i] == cur) curIdx = static_cast<int>(i);
-      }
-      overlayPopup.show(StrId::STR_FONT_SIZE, labels, curIdx, [this, sizes](int idx) {
-        if (idx < 0 || idx >= static_cast<int>(sizes.size())) return;
-        SETTINGS.fontPointSize = sizes[idx];
-        applyTextSettingLive();
-      });
-      break;
-    }
-    case 2:
-      overlayPopup.show(StrId::STR_LINE_SPACING, LINE_SPACING_IDS, static_cast<int>(std::size(LINE_SPACING_IDS)),
-                        SETTINGS.lineSpacing % CrossPointSettings::LINE_COMPRESSION_COUNT, [this](int idx) {
-                          SETTINGS.lineSpacing = static_cast<uint8_t>(idx);
-                          applyTextSettingLive();
-                        });
-      break;
-    case 3:
-      overlayPopup.show(StrId::STR_PARA_ALIGNMENT, kAlignIds, static_cast<int>(std::size(kAlignIds)),
-                        SETTINGS.paragraphAlignment % CrossPointSettings::PARAGRAPH_ALIGNMENT_COUNT, [this](int idx) {
-                          SETTINGS.paragraphAlignment = static_cast<uint8_t>(idx);
-                          applyTextSettingLive();
-                        });
-      break;
-    default:
-      return;
+// The point sizes this book can render at, as a picker (Select on the Size row).
+void EpubReaderActivity::showSizePopup() {
+  const auto sizes = SdCardFontSystem::selectablePointSizes(&sdFontSystem.registry(), fontScript());
+  if (sizes.empty()) return;
+  std::vector<std::string> labels;
+  labels.reserve(sizes.size());
+  for (const uint8_t size : sizes) labels.push_back(std::to_string(size) + " pt");
+  const uint8_t cur = snapToNearestPointSize(sizes, SETTINGS.fontPointSize);
+  int curIdx = 0;
+  for (size_t i = 0; i < sizes.size(); ++i) {
+    if (sizes[i] == cur) curIdx = static_cast<int>(i);
   }
+  overlayPopup.show(StrId::STR_FONT_SIZE, labels, curIdx, [this, sizes](int idx) {
+    if (idx < 0 || idx >= static_cast<int>(sizes.size())) return;
+    SETTINGS.fontPointSize = sizes[idx];
+    applyTextSettingLive();
+  });
   paintOverlayPopup();
+}
+
+// The full text settings (font picker with live preview, spacing, hyphenation, ...): the same
+// screen Settings uses. Back returns to the Text panel.
+void EpubReaderActivity::openTextSettingsFromPanel() {
+  overlay = Overlay::None;
+  overlayPopup.dismiss();
+  discardOverlayPage();
+  {
+    RenderLock lock;  // the picker paints the framebuffer next
+    settleOverlayRefresh();
+  }
+  dropSectionsKeepingPosition();  // room for the picker; reloaded on return
+  startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
+                                                                bookTextProfile_, bookScript(), useVerticalText()),
+                         [this](const ActivityResult&) {
+                           applyReaderTextSettings();
+                           overlay = Overlay::Text;  // back to the Text panel
+                           panelIndex = 0;
+                           if (toolbarUi) toolbarUi->begin();  // the picker drew its own FUI screen
+                           requestUpdate();                    // re-render page + Text panel
+                         });
 }
 
 void EpubReaderActivity::discardOverlayPage() {
@@ -6503,7 +6568,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
   switch (target) {
     case Overlay::Toolbar:
       focusedTool = 0;
-      toolbarControl = 2;
+      toolbarControl = ReaderToolbarUi::kFocusFirstTool;
       break;
     case Overlay::Contents:
       panelIndex = std::max(0, currentTocIndex());
@@ -6512,6 +6577,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
       toolbarUi->nav().top = panelIndex;
       break;
     case Overlay::Text:
+    case Overlay::Page:
       panelIndex = 0;
       toolbarUi->nav().reset();
       break;
@@ -6564,6 +6630,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
 
 // Grayscale panels re-render to restore AA; other boards restore the B/W snapshot.
 void EpubReaderActivity::closeOverlayToPage() {
+  saveTextSettingsIfDirty();
   mappedInput.resetHomeButtonInput();
   overlay = Overlay::None;
   overlayPopup.dismiss();  // an option picker cannot outlive its panel
@@ -6587,13 +6654,12 @@ void EpubReaderActivity::renderOverlay() {
   if (!epub || (!section && !verticalSection) || !toolbarUi) return;
 
   ReaderToolbarUi::Model model;
-  // The toolbar's tool pill is the button-navigation cursor: tap-first (same
-  // convention as the panel lists), it only shows once a button has moved it.
-  // Panels override below: there the pill marks the open panel on every board.
-  model.activeTool = overlay == Overlay::Toolbar ? toolbarControl - 2 : focusedTool;
-  model.activeChapterStep = overlay == Overlay::Toolbar ? (toolbarControl == 0 ? -1 : toolbarControl == 1 ? 1 : 0) : 0;
+  // The dock's button cursor is tap-first (same convention as the panel lists): it only
+  // shows once a button has moved it. On a panel the open tool is underlined instead.
+  model.toolbarFocus = overlay == Overlay::Toolbar && panelCursorShown ? toolbarControl : -1;
+  model.activeTool = overlay == Overlay::Toolbar ? -1 : focusedTool;
   // Strings the model points at live here until render() returns.
-  std::string chapterTitle, pageInfo;
+  std::string chapterTitle, pageInfo, fontName;
 
   if (overlay == Overlay::Toolbar) {
     chapterTitle = currentChapterTitle();
@@ -6602,9 +6668,10 @@ void EpubReaderActivity::renderOverlay() {
     const float chapterProgress =
         pageCount > 0 ? static_cast<float>(currentPage + 1) / static_cast<float>(pageCount) : 0.0f;
     const float bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress);
-    pageInfo = std::to_string(currentPage + 1) + "/" + std::to_string(pageCount) + "   " +
+    pageInfo = std::to_string(currentPage + 1) + "/" + std::to_string(pageCount) + " \xC2\xB7 " +
                std::to_string(clampPercent(static_cast<int>(bookProgress * 100.0f + 0.5f))) + "%";
     model.chapterTitle = chapterTitle.c_str();
+    model.bookmarked = currentPageBookmarked;
     model.pageInfo = pageInfo.c_str();
     model.progressPermille = static_cast<int>(bookProgress * 1000.0f + 0.5f);
     toolbarUi->setModel(model);
@@ -6621,33 +6688,105 @@ void EpubReaderActivity::renderOverlay() {
   // tapped row does not stay inverted after its action.
   model.selectedIndex = panelCursorShown ? panelIndex : -1;
   if (overlay == Overlay::Contents) {
-    model.panelTitle = tr(STR_TOOL_CONTENTS);
     model.itemCount = epub->getTocItemsCount();
     model.rowText = [this](int i) {
       const auto item = epub->getTocItem(i);
       const int depth = item.level > 1 ? (item.level - 1) * 2 : 0;
       return std::string(depth, ' ') + item.title;
     };
-  } else if (overlay == Overlay::Text) {
-    model.panelTitle = tr(STR_TOOL_TEXT);
-    model.itemCount = textRowCount();
-    model.rowText = [this](int i) { return textRowName(i); };
-    model.rowValue = [this](int i) { return textRowValue(i); };
-    model.rowToggleState = [this](int i) {
-      switch (textRowAt(i)) {
-        case kRowFocusReading:
-          return SETTINGS.focusReadingEnabled ? 1 : 0;
-        case kRowVerticalText:
-          return useVerticalText() ? 1 : 0;
-        case kRowFurigana:
-          return useFurigana() ? 1 : 0;
-        default:
-          return -1;
+  } else if (controlPanelOpen()) {
+    using Row = ReaderToolbarUi::TextRow;
+    TextControl* controls = panelControls_;
+    const int count = textControls(controls);
+    Row* rows = panelRows_;
+    // A control can drop out (Writing off removes it): keep the cursor on a row that exists.
+    panelIndex = std::min(panelIndex, count - 1);
+    char sizeValue[8];
+    snprintf(sizeValue, sizeof(sizeValue), "%u", static_cast<unsigned>(SETTINGS.fontPointSize));
+    if (SETTINGS.sdFontFamilyName[0] != '\0') {
+      fontName = SdCardFontSystem::pickerLabel(SETTINGS.sdFontFamilyName, &sdFontSystem.registry());
+    } else {
+      fontName = tr(STR_NOTO_SERIF);
+    }
+    for (int i = 0; i < count; ++i) {
+      Row& r = rows[i];
+      switch (controls[i]) {
+        case TextControl::Size:
+          r = {Row::Kind::Stepper, Row::Picture::None, tr(STR_SIZE), sizeValue, 0, -1};
+          break;
+        case TextControl::Font:
+          r = {Row::Kind::Chooser, Row::Picture::None, tr(STR_FONT), fontName.c_str(), 0, -1};
+          break;
+        case TextControl::LineSpacing:
+          r = {Row::Kind::Options,
+               Row::Picture::LineSpacing,
+               tr(STR_LINE_SPACING),
+               nullptr,
+               static_cast<uint8_t>(std::size(kSpacingPicks)),
+               static_cast<int8_t>(nearestPick(kSpacingPicks, SETTINGS.lineSpacing))};
+          break;
+        case TextControl::Margins:
+          r = {Row::Kind::Options,
+               Row::Picture::Margins,
+               tr(STR_MARGINS),
+               nullptr,
+               static_cast<uint8_t>(std::size(kMarginPicks)),
+               static_cast<int8_t>(nearestPick(kMarginPicks, SETTINGS.screenMargin))};
+          break;
+        case TextControl::Alignment:
+          r = {Row::Kind::Options,
+               Row::Picture::Alignment,
+               tr(STR_ALIGNMENT),
+               nullptr,
+               kAlignPicks,
+               static_cast<int8_t>(SETTINGS.paragraphAlignment < kAlignPicks ? SETTINGS.paragraphAlignment : -1)};
+          break;
+        case TextControl::Orientation:
+          r = {Row::Kind::Options,
+               Row::Picture::Orientation,
+               tr(STR_ORIENTATION_SHORT),
+               nullptr,
+               CrossPointSettings::ORIENTATION_COUNT,
+               static_cast<int8_t>(SETTINGS.orientation)};
+          break;
+        case TextControl::Writing:
+          r = {Row::Kind::Options,
+               Row::Picture::Writing,
+               tr(STR_VERTICAL_TEXT_LABEL),
+               nullptr,
+               2,
+               static_cast<int8_t>(useVerticalText() ? 1 : 0)};
+          break;
+        case TextControl::Furigana:
+          r = {Row::Kind::Toggle,
+               Row::Picture::None,
+               isChineseBook() ? tr(STR_PINYIN_LABEL) : tr(STR_FURIGANA_LABEL),
+               nullptr,
+               0,
+               static_cast<int8_t>(useFurigana() ? 1 : 0)};
+          break;
+        case TextControl::FocusReading:
+          r = {Row::Kind::Toggle,
+               Row::Picture::None,
+               tr(STR_FOCUS_READING),
+               nullptr,
+               0,
+               static_cast<int8_t>(SETTINGS.focusReadingEnabled ? 1 : 0)};
+          break;
+        case TextControl::MoreSettings:
+          r = {Row::Kind::Chooser, Row::Picture::None, tr(STR_MORE_TEXT_SETTINGS), nullptr, 0, -1};
+          break;
       }
-    };
+    }
+    model.textRows = rows;
+    model.textRowCount = count;
+    model.pageGrid = overlay == Overlay::Page;
+    toolbarUi->setModel(model);
+    toolbarUi->render();
+    return;
   } else {
-    model.panelTitle = tr(STR_TOOL_MORE);
     model.itemCount = static_cast<int>(moreItems.size());
+    model.fitAllRows = true;
     model.rowText = [this](int i) { return moreRowName(i); };
     model.rowValue = [this](int i) { return moreRowValue(i); };
     model.rowToggleState = [this](int i) {
@@ -6715,9 +6854,6 @@ void EpubReaderActivity::handleOverlayInput() {
     }
     requestUpdate();
   };
-  const auto toolOverlay = [](int tool) {
-    return tool == 0 ? Overlay::Contents : (tool == 1 ? Overlay::Text : Overlay::More);
-  };
 
   // Touch first: FreeInkUI routes the frame against the tap targets the last
   // render registered and hands back the action it mapped to.
@@ -6730,9 +6866,12 @@ void EpubReaderActivity::handleOverlayInput() {
         closeOverlayToPage();
         return;
       case ReaderToolbarUi::Event::Tool:
-        focusedTool = routed.value;
-        toolbarControl = focusedTool + 2;
-        openOverlay(toolOverlay(focusedTool));
+        toolbarControl = ReaderToolbarUi::kFocusFirstTool + routed.value;
+        openTool(routed.value);
+        return;
+      case ReaderToolbarUi::Event::Bookmark:
+        addBookmark();
+        fastRedraw();
         return;
       case ReaderToolbarUi::Event::PrevChapter:
         gotoSpine(currentSpineIndex - 1);
@@ -6759,19 +6898,22 @@ void EpubReaderActivity::handleOverlayInput() {
     const bool nextControl = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenRight, 0) ||
                              mappedInput.wasLongPressed(MappedInputManager::Button::ScreenDown, 0);
     if (previousControl || nextControl) {
-      toolbarControl = (toolbarControl + (nextControl ? 1 : 4)) % 5;
-      if (toolbarControl >= 2) focusedTool = toolbarControl - 2;
+      constexpr int kCount = ReaderToolbarUi::kFocusCount;
+      toolbarControl = (toolbarControl + (nextControl ? 1 : kCount - 1)) % kCount;
       panelCursorShown = true;
       fastRedraw();
       return;
     }
     if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, 0)) {
-      if (toolbarControl == 0) {
+      if (toolbarControl == ReaderToolbarUi::kFocusPrevChapter) {
         gotoSpine(currentSpineIndex - 1);
-      } else if (toolbarControl == 1) {
+      } else if (toolbarControl == ReaderToolbarUi::kFocusNextChapter) {
         gotoSpine(currentSpineIndex + 1);
+      } else if (toolbarControl == ReaderToolbarUi::kFocusBookmark) {
+        addBookmark();
+        fastRedraw();
       } else {
-        openOverlay(toolOverlay(focusedTool));
+        openTool(toolbarControl - ReaderToolbarUi::kFocusFirstTool);
       }
       return;
     }
@@ -6779,57 +6921,24 @@ void EpubReaderActivity::handleOverlayInput() {
   }
 
   // --- Panels (Contents / Text / More) ---
+  TextControl textCtl[kMaxTextControls];
+  const int textCount = controlPanelOpen() ? textControls(textCtl) : 0;
   const int count = overlay == Overlay::Contents ? epub->getTocItemsCount()
-                    : overlay == Overlay::Text   ? textRowCount()
+                    : controlPanelOpen()         ? textCount
                                                  : static_cast<int>(moreItems.size());
   const int pageRows = std::max(1, toolbarUi->visibleRows());
 
   // Activate the highlighted row: change a value / jump to a chapter / run an
   // action. Shared by the Confirm button and a row tap.
-  const auto activateRow = [this, count, &fastRedraw] {
+  const auto activateRow = [this, count, &textCtl] {
     if (panelIndex < 0 || panelIndex >= count) return;
-    if (overlay == Overlay::Text) {
-      const int row = textRowAt(panelIndex);
-      if (row == 0) {
-        // Full font picker (built-in + SD fonts, live preview) -- the same
-        // screen Settings uses; a popup cannot scroll a long font list.
-        overlay = Overlay::None;
-        overlayPopup.dismiss();
-        discardOverlayPage();
-        {
-          RenderLock lock;  // the picker paints the framebuffer next
-          settleOverlayRefresh();
-        }
-        dropSectionsKeepingPosition();  // room for the picker; reloaded on return
-        startActivityForResult(
-            std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(), bookTextProfile_,
-                                                   bookScript(), useVerticalText()),
-            [this](const ActivityResult&) {
-              applyReaderTextSettings();
-              overlay = Overlay::Text;  // back to the Text panel
-              panelIndex = 0;
-              if (toolbarUi) toolbarUi->begin();  // the picker drew its own FUI screen
-              requestUpdate();                    // re-render page + Text panel
-            });
-      } else if (row == kRowFocusReading) {
-        // Focus Reading is a genuine on/off: a tap toggles and applies live.
-        SETTINGS.focusReadingEnabled = SETTINGS.focusReadingEnabled ? 0 : 1;
-        applyTextSettingLive();
-      } else if (row == kRowVerticalText || row == kRowFurigana) {
-        // This fork's per-book overrides, toggled in place like Focus Reading. Pass the
-        // other one's CURRENT state so applyVerticalFuriganaOverride() leaves it alone --
-        // it acts only on a value that differs from what is in effect.
-        const int8_t vertical = row == kRowVerticalText ? (useVerticalText() ? 0 : 1) : (useVerticalText() ? 1 : 0);
-        const int8_t furigana = row == kRowFurigana ? (useFurigana() ? 0 : 1) : (useFurigana() ? 1 : 0);
-        applyVerticalFuriganaOverride(vertical, furigana);
-        // Toggling vertical drops the section; furigana is a section-cache layout
-        // parameter, so the next render rebuilds on the mismatch. Either way the stored
-        // page snapshot no longer matches what will be drawn.
-        discardOverlayPage();
-        requestUpdate();
+    if (controlPanelOpen()) {
+      // Select: a picker for Size, Font and More; a toggle flips; an option row steps on.
+      const TextControl control = textCtl[panelIndex];
+      if (control == TextControl::Size) {
+        showSizePopup();
       } else {
-        // Enum rows open the Settings-style option picker.
-        showTextRowPopup(row);
+        changeTextControl(control, -1, 1);
       }
     } else if (overlay == Overlay::Contents) {
       const auto item = epub->getTocItem(panelIndex);
@@ -6858,7 +6967,7 @@ void EpubReaderActivity::handleOverlayInput() {
   // the sheet.
   const auto dismissPanel = [this, &fastRedraw] {
     overlay = Overlay::Toolbar;
-    toolbarControl = focusedTool + 2;
+    toolbarControl = ReaderToolbarUi::kFocusFirstTool + focusedTool;
     // Restore the snapshotted page under the toolbar instead of re-rendering
     // it (2+ refreshes -> one FAST). Re-store right away so another panel
     // round-trip can restore again.
@@ -6882,6 +6991,7 @@ void EpubReaderActivity::handleOverlayInput() {
   // from what is visible; on touch boards only the viewport moves.
   const auto pageList = [this, count, pageRows, &fastRedraw](int direction) {
     if (count <= 0) return;
+    if (controlPanelOpen()) return;  // shown whole, never paged
     const bool moved = toolbarUi->nav().scrollBy(direction * pageRows, count);
     if (panelCursorShown) {
       panelIndex = std::clamp(panelIndex + direction * pageRows, 0, count - 1);
@@ -6895,16 +7005,25 @@ void EpubReaderActivity::handleOverlayInput() {
     case ReaderToolbarUi::Event::Dismiss:
       dismissPanel();
       return;
-    case ReaderToolbarUi::Event::Tool: {
-      // Sheet-bottom tool switcher: hop straight to another panel.
-      const Overlay target = toolOverlay(routed.value);
-      if (target != overlay) {
-        focusedTool = routed.value;
-        openOverlay(target);
+    case ReaderToolbarUi::Event::Tool:
+      // Sheet-bottom tool switcher: hop straight to another panel (or translate).
+      if (routed.value != focusedTool) openTool(routed.value);
+      return;
+    case ReaderToolbarUi::Event::Option: {
+      const int row = routed.value / ReaderToolbarUi::kOptionStride;
+      if (controlPanelOpen() && row >= 0 && row < textCount) {
+        panelIndex = row;
+        changeTextControl(textCtl[row], routed.value % ReaderToolbarUi::kOptionStride, 0);
       }
       return;
     }
     case ReaderToolbarUi::Event::Row:
+      if (controlPanelOpen()) {
+        panelIndex = routed.value;
+        panelCursorShown = false;
+        activateRow();
+        return;
+      }
       // A tap on the right-edge strip pages the sheet instead (upper half =
       // previous page, lower half = next): swipes are unreliable on etched
       // glass, and a long contents list needs a fast way through.
@@ -6938,8 +7057,21 @@ void EpubReaderActivity::handleOverlayInput() {
   const bool previousPanel = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenLeft, 0);
   const bool nextPanel = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenRight, 0);
   if (previousPanel || nextPanel) {
-    focusedTool = (focusedTool + (nextPanel ? 1 : 2)) % 3;
-    openOverlay(toolOverlay(focusedTool));
+    // On the Text panel Left/Right change the row under the cursor, in single steps.
+    if (controlPanelOpen() && panelIndex >= 0 && panelIndex < textCount) {
+      const TextControl control = textCtl[panelIndex];
+      if (control != TextControl::Font && control != TextControl::MoreSettings) {
+        panelCursorShown = true;
+        changeTextControl(control, -1, nextPanel ? 1 : -1);
+        return;
+      }
+    }
+    // Otherwise they switch to the next tool with a panel (Translate has none).
+    int tool = focusedTool;
+    do {
+      tool = (tool + (nextPanel ? 1 : ReaderToolbarUi::kToolCount - 1)) % ReaderToolbarUi::kToolCount;
+    } while (kToolPanels[tool] == Overlay::None);
+    openTool(tool);
     return;
   }
 
@@ -6988,7 +7120,13 @@ void EpubReaderActivity::paintOverlayPopup() {
   pushOverlayRefresh();
 }
 
-void EpubReaderActivity::applyReaderTextSettings() {
+void EpubReaderActivity::saveTextSettingsIfDirty() {
+  if (!textSettingsDirty) return;
+  textSettingsDirty = false;
+  SETTINGS.saveToFile();
+}
+
+void EpubReaderActivity::applyReaderTextSettings(const bool persist) {
   {
     RenderLock lock;
     if (section) {
@@ -7000,7 +7138,7 @@ void EpubReaderActivity::applyReaderTextSettings() {
     // Release the old parser and page table before settings serialization needs heap.
     section.reset();  // force re-pagination with the new settings
   }
-  SETTINGS.saveToFile();
+  if (persist) SETTINGS.saveToFile();
   // (Re)load or unload the selected SD-card font for the current family/size.
   // The reader otherwise only loads SD fonts on book open, so without this an
   // in-reader font change wouldn't take effect until re-opening the book.
@@ -7010,7 +7148,8 @@ void EpubReaderActivity::applyReaderTextSettings() {
 }
 
 // The More panel carries everything the classic list menu offers except the
-// two entries that have their own tool (chapters -> Contents, text -> Text).
+// entries the dock covers: chapters (Contents), text and orientation (Text),
+// translation (Translate) and the page bookmark (the dock's bookmark toggle).
 void EpubReaderActivity::buildMoreActions() {
   using MA = EpubReaderMenuActivity::MenuAction;
   // Mirrors the full menu's row set -- this fork's buildMenuItems takes the Japanese-reading
@@ -7023,7 +7162,9 @@ void EpubReaderActivity::buildMoreActions() {
       /*showPanelsOnlyToggle=*/false, CLIPPINGS.hasClippings());
   moreItems.erase(std::remove_if(moreItems.begin(), moreItems.end(),
                                  [](const auto& item) {
-                                   return item.action == MA::SELECT_CHAPTER || item.action == MA::TEXT_SETTINGS;
+                                   return item.action == MA::SELECT_CHAPTER || item.action == MA::TEXT_SETTINGS ||
+                                          item.action == MA::TRANSLATE_PAGE || item.action == MA::TOGGLE_BOOKMARK ||
+                                          item.action == MA::ROTATE_SCREEN;
                                  }),
                   moreItems.end());
 }
@@ -7064,21 +7205,6 @@ void EpubReaderActivity::activateMoreRow(int row) {
   const auto action = moreItems[row].action;
   // In-place toggles keep the panel open and re-render the page beneath it.
   switch (action) {
-    case MA::ROTATE_SCREEN: {
-      static constexpr StrId kOrientIds[] = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW,
-                                             StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW};
-      static_assert(std::size(kOrientIds) == CrossPointSettings::ORIENTATION_COUNT, "orientation options");
-      overlayPopup.show(StrId::STR_ORIENTATION, kOrientIds, static_cast<int>(std::size(kOrientIds)),
-                        SETTINGS.orientation % CrossPointSettings::ORIENTATION_COUNT, [this](int idx) {
-                          if (idx == SETTINGS.orientation) return;
-                          applyOrientation(static_cast<uint8_t>(idx));
-                          // The stored page is laid out for the old orientation.
-                          discardOverlayPage();
-                          requestUpdate();
-                        });
-      paintOverlayPopup();
-      return;
-    }
     case MA::AUTO_PAGE_TURN: {
       std::vector<std::string> labels;
       labels.reserve(std::size(PAGE_TURN_RATES));
@@ -7119,6 +7245,28 @@ void EpubReaderActivity::activateMoreRow(int row) {
     }
     default:
       break;
+  }
+  runOverlayLeafAction(action);
+}
+
+void EpubReaderActivity::openTool(const int tool) {
+  using MA = EpubReaderMenuActivity::MenuAction;
+  if (tool == ReaderToolbarUi::kTranslateTool) {
+    // An image-only page has nothing to translate: stay on the dock, as the list menu greys it out.
+    if (currentPageText().empty()) return;
+    runOverlayLeafAction(MA::TRANSLATE_PAGE);
+    return;
+  }
+  focusedTool = tool;
+  openOverlay(kToolPanels[tool % ReaderToolbarUi::kToolCount]);
+}
+
+void EpubReaderActivity::runOverlayLeafAction(const EpubReaderMenuActivity::MenuAction action) {
+  using MA = EpubReaderMenuActivity::MenuAction;
+  saveTextSettingsIfDirty();
+  {
+    RenderLock lock;  // several actions launch screens that paint the framebuffer
+    settleOverlayRefresh();
   }
   // Leaf actions open their own screen / perform the action; close the overlay first. The sheet's
   // tables go too: left allocated they split the heap the next screen or a chapter build needs.
