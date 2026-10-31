@@ -83,9 +83,19 @@ jobs:
 
       - name: Install cppcheck runtime dependency
         run: |
-          # pioarduino's Linux cppcheck binary links against libpcre.so.3.
+          # pioarduino's Linux cppcheck binary links against libpcre.so.3. Ubuntu 26.04 and later no
+          # longer ship libpcre3, so when the runner image lacks it, install Ubuntu 24.04's package
+          # (it depends on libc6 alone), checksum-verified, from the archive or, after 24.04's end
+          # of life, old-releases.
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libpcre3
+          if ! sudo apt-get install -y --no-install-recommends libpcre3; then
+            deb=libpcre3_8.39-15build1_amd64.deb
+            for base in http://archive.ubuntu.com/ubuntu http://old-releases.ubuntu.com/ubuntu; do
+              curl -fsSL -o "$deb" "$base/pool/universe/p/pcre3/$deb" && break
+            done
+            echo "62b2ea8d178a59495df00b777660377e0fb8d716be3fc552439796f77f515d43  $deb" | sha256sum -c -
+            sudo dpkg -i "$deb"
+          fi
 
       - name: Run cppcheck
         run: pio check --fail-on-defect low --fail-on-defect medium --fail-on-defect high
