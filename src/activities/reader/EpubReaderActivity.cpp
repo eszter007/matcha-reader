@@ -4431,8 +4431,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   renderer.setDitherImagesInBw(!imageGrayscale);
   const bool pageHasImages = imageGrayscale && page->hasImages();
   shownPageHasImages_ = pageHasImages;
-  const bool needsTextGrayscale = SETTINGS.textAntiAliasing;
-  const bool needsAnyGrayscale = needsTextGrayscale || (pageHasImages && !BoardConfig::isEegoA4());
+  // Under the open toolbar the chrome's FAST push follows, and on Xteink panels
+  // closing it re-renders the page with grays anyway: skip the gray pass here.
+  const bool underToolbar = overlay != Overlay::None && usesToolbarMenu() && xteinkClassPanel();
+  const bool needsTextGrayscale = SETTINGS.textAntiAliasing && !underToolbar;
+  const bool needsAnyGrayscale = needsTextGrayscale || (pageHasImages && !BoardConfig::isEegoA4() && !underToolbar);
   const bool absoluteImageGrayscale = pageHasImages && !gpio.deviceIsX3() &&
                                       display.getController() == HalDisplay::Controller::UC8279 &&
                                       renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
@@ -6846,6 +6849,9 @@ void EpubReaderActivity::handleOverlayInput() {
       currentSpineIndex = target;
       section.reset();
       verticalSection.reset();
+      // The snapshot shows the old chapter; holding its ~48 KB through the
+      // section load starves the new page's font caches and gray pass.
+      discardOverlayPage();
     }
     requestUpdate();
   };
