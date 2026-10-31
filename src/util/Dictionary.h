@@ -207,6 +207,7 @@ class Dictionary {
   bool hasPlainDict = false;
   bool hasSyn = false;  // a <stem>.syn synonym index exists next to the .idx
   bool htmlDefinitions = false;
+  bool inlineTypes = false;  // .ifo without sametypesequence (see decodeInlineFields)
   // The .ifo's bookname=, or the folder name when the .ifo does not declare one.
   std::string bookName;
 

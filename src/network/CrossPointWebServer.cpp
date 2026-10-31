@@ -52,7 +52,9 @@
 #include "html/assets/iconsSvg.generated.h"
 #include "html/assets/matcha_iconSvg.generated.h"
 #include "html/assets/webCss.generated.h"
+#include "html/js/epub_optimizerJs.generated.h"
 #include "html/js/jszip_minJs.generated.h"
+#include "html/js/plugin_hostJs.generated.h"
 #include "util/BookCacheUtils.h"
 #include "util/DeleteUtils.h"
 #include "util/DictionaryRegistry.h"
@@ -283,6 +285,13 @@ void CrossPointWebServer::begin() {
   server->on("/", HTTP_GET, [this] { handleRoot(); });
   server->on("/files", HTTP_GET, [this] { handleFileList(); });
   server->on("/js/jszip.min.js", HTTP_GET, [this] { handleJszip(); });
+  server->on("/js/epub-optimizer.js", HTTP_GET, [this] {
+    sendStaticContent(server.get(), epub_optimizerJs, sizeof(epub_optimizerJs), epub_optimizerJsETag,
+                      "application/javascript");
+  });
+  server->on("/js/plugin-host.js", HTTP_GET, [this] {
+    sendStaticContent(server.get(), plugin_hostJs, sizeof(plugin_hostJs), plugin_hostJsETag, "application/javascript");
+  });
 
   server->on("/assets/web.css", HTTP_GET,
              [this] { sendStaticContent(server.get(), webCss, sizeof(webCss), webCssETag, "text/css"); });
@@ -2143,7 +2152,7 @@ void CrossPointWebServer::handlePluginFile() const {
 //      headers in X-Relay-Headers ([[name, value], ...] JSON, duplicates kept)
 // Lets a plugin make an outbound HTTP(S) call the browser can't (CORS): the
 // device makes it via SecureNet. Sending the body raw avoids escaping it into
-// JSON on the device; PluginHost.relay() rebuilds {status, headers, body}.
+// JSON on the device; CrossPoint.relay() rebuilds {status, headers, body}.
 void CrossPointWebServer::handleRelay() {
   if (rejectIfPluginsDisabled()) return;
   JsonDocument req;
