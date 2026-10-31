@@ -1,6 +1,7 @@
 #pragma once
 
 #include <HalStorage.h>
+#include <ResidentFiles.h>
 
 #include <cstdint>
 #include <string>
@@ -145,6 +146,10 @@ class Dictionary {
     // so a miss is an unfinished search rather than a verdict. Distinct from
     // "this dictionary has no .syn", which is a legitimate miss.
     bool synFailed = false;
+    // The .idx and its sample offsets resident in PSRAM (PSRAM boards, ResidentFiles):
+    // locate() then searches memory instead of the SD card. Invalid otherwise.
+    ResidentFiles::Ref residentIdx;
+    ResidentFiles::Ref residentSamples;
   };
 
   // Open .idx (required) and .qidx (optional — locate() falls back to a full

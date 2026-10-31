@@ -12,6 +12,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
+#include <ResidentFiles.h>
 
 #include <algorithm>
 #include <climits>
@@ -1688,6 +1689,7 @@ void MangaReaderActivity::dropLookupPrescan() {
 }
 
 void MangaReaderActivity::stepLookupPrescan() {
+  const ResidentFiles::NoLoads noLoads;  // a slice must not stall on a whole-file read
   // Same pacing as EpubReaderActivity::stepLookupPrescan().
   constexpr unsigned long PRESCAN_REST_MS = 1500;
   constexpr uint32_t PRESCAN_SLICE_MS = 25;

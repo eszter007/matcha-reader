@@ -21,6 +21,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <ResidentFiles.h>
 #include <Serialization.h>
 #include <TrustedTime.h>
 #include <WiFi.h>
@@ -5871,6 +5872,7 @@ bool EpubReaderActivity::repaintPageForPanel() {
 }
 
 void EpubReaderActivity::stepLookupPrescan() {
+  const ResidentFiles::NoLoads noLoads;            // a slice must not stall on a whole-file read
   constexpr unsigned long PRESCAN_REST_MS = 1500;  // after the page is up: past a run of turns
   constexpr uint32_t PRESCAN_SLICE_MS = 25;
   constexpr uint32_t PRESCAN_MIN_ALLOC = 40 * 1024;
