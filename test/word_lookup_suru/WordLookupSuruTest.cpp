@@ -28,7 +28,8 @@ void writeU32(std::string& out, uint32_t v) {
 
 // Records must be in memcmp order of their headwords.
 void buildDictionary(const std::filesystem::path& dir, std::vector<Rec> recs) {
-  std::sort(recs.begin(), recs.end(), [](const Rec& a, const Rec& b) { return std::strcmp(a.headword, b.headword) < 0; });
+  std::sort(recs.begin(), recs.end(),
+            [](const Rec& a, const Rec& b) { return std::strcmp(a.headword, b.headword) < 0; });
   std::string idx, dat;
   for (const Rec& r : recs) {
     char hw[DictIndexRecord::HEADWORD_SIZE] = {};

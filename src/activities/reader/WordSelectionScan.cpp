@@ -642,7 +642,7 @@ namespace {
 // the tate-chu-yoko NUL truncation, where a match claimed the cells of the word after an upright
 // "!?" run: the word stayed unselectable on that page for good, since nothing re-examined a
 // cache that looked valid. Rebuilding costs one rescan (~300 ms, once per page).
-constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x324D4C57;  // "WLM2" -- was "WLSM" before the tcy fix
+constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x334D4C57;  // "WLM3" -- WLM2 predates suru-noun lookup
 constexpr uint16_t WLSCAN_MAX_PAGES = 8;
 constexpr size_t WLSCAN_MAX_CARRY_BYTES = 4096;  // bound on the older entries carried forward
 

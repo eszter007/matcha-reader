@@ -175,10 +175,16 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
       const auto& text = candidate.text;
       if (text.size() <= kSuruBytes || text.compare(text.size() - kSuruBytes, kSuruBytes, kSuru) != 0) continue;
       if (candidate.condition != WordCondition::VS && candidate.condition != WordCondition::DICT) continue;
-      const std::string noun = text.substr(0, text.size() - kSuruBytes);
+      // lookupExact rejects keys of HEADWORD_SIZE bytes or more, so a stack key covers every stem it accepts.
+      const size_t nounBytes = text.size() - kSuruBytes;
+      char noun[DictIndexRecord::HEADWORD_SIZE];
+      if (nounBytes >= sizeof(noun)) continue;
+      std::memcpy(noun, text.data(), nounBytes);
+      noun[nounBytes] = '\0';
       // Dictionaries converted before suru tags became POS_VS flag these nouns POS_OTHER. A kanji
-      // or katakana stem keeps particles (にする) from matching that way.
-      if (hasNameChar(noun) && DictIndex::lookupExact(noun.c_str(), entry, DictIndex::DICT_JMDICT, needDefinition,
+      // or katakana stem keeps particles (にする) from matching that way; the する suffix is
+      // hiragana, so testing the whole text tests the stem.
+      if (hasNameChar(text) && DictIndex::lookupExact(noun, entry, DictIndex::DICT_JMDICT, needDefinition,
                                                       DictIndexRecord::POS_VS | DictIndexRecord::POS_OTHER)) {
         out.entry = std::move(entry);
         out.matchLength = window.size();
