@@ -974,6 +974,8 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
 
 bool DictIndex::longerHeadwordMayExist() { return g_longerMayExist; }
 
+bool DictIndex::fitsInHeap(const size_t bytes) { return dictFitsWithReserve(bytes); }
+
 bool DictIndex::consumeHeapLimited() {
   const bool limited = g_heapLimited;
   g_heapLimited = false;

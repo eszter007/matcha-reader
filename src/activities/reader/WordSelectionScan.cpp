@@ -634,19 +634,19 @@ void WordSelectionScan::aimAtGlyph(const size_t glyphIndex) {
   // Already segmented: nothing to aim at, and re-reading it would only cost SD time.
   if (isGlyphMapped(glyphIndex)) return;
   // The walk is already within context range of this target, so it will reach it on its own in
-  // the next few positions. Re-aiming would rewind scanPos by kMaxLookupChars to re-read context
+  // the next few positions. Re-aiming would rewind scanPos by kMaxMatchChars to re-read context
   // the walk is about to read anyway -- and a caller that re-aims on EVERY tick (the parked
   // column jump in resolvePendingMove(), whose nearest-unmapped target shifts by one cell as each
   // is mapped) then cancels out exactly what stepScan() advances. The frontier stops dead, so the
   // scan never finishes, so the move never resolves, and handleSelectInput() swallows Confirm the
   // whole time: the panel is frozen (device: scanPos pinned at 36/90 for as long as it was left).
   // A genuine jump -- backwards, or far enough ahead to be worth skipping to -- still re-aims.
-  if (glyphIndex >= scanPos && glyphIndex - scanPos <= static_cast<size_t>(kMaxLookupChars)) return;
+  if (glyphIndex >= scanPos && glyphIndex - scanPos <= static_cast<size_t>(kMaxMatchChars)) return;
   recordFrom = glyphIndex;
   // Back up for context so a word overlapping the target is segmented as that word rather than
-  // as a fragment starting mid-way through it. kMaxLookupChars bounds how far back a word can
+  // as a fragment starting mid-way through it. kMaxMatchChars bounds how far back a word can
   // begin, so this is always far enough.
-  scanPos = glyphIndex > static_cast<size_t>(kMaxLookupChars) ? glyphIndex - kMaxLookupChars : 0;
+  scanPos = glyphIndex > static_cast<size_t>(kMaxMatchChars) ? glyphIndex - kMaxMatchChars : 0;
   skipUntil = scanPos;
 }
 
@@ -694,7 +694,7 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
         break;
       }
       recordFrom = resume;
-      scanPos = resume > static_cast<size_t>(kMaxLookupChars) ? resume - kMaxLookupChars : 0;
+      scanPos = resume > static_cast<size_t>(kMaxMatchChars) ? resume - kMaxMatchChars : 0;
       skipUntil = scanPos;
       continue;
     }
@@ -721,7 +721,7 @@ namespace {
 // the tate-chu-yoko NUL truncation, where a match claimed the cells of the word after an upright
 // "!?" run: the word stayed unselectable on that page for good, since nothing re-examined a
 // cache that looked valid. Rebuilding costs one rescan (~300 ms, once per page).
-constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x384D4C57;  // "WLM8": bumped whenever segmentation changes
+constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x414D4C57;  // "WLMA": bumped whenever segmentation changes
 constexpr uint16_t WLSCAN_MAX_PAGES = 8;
 constexpr size_t WLSCAN_MAX_CARRY_BYTES = 4096;  // bound on the older entries carried forward
 
@@ -1064,6 +1064,16 @@ void WordSelectionScan::scanOnePosition() {
     // boundary in any case: no entry spans it.
     if (allGlyphs[j].codepoint == 0) break;
     encodeUtf8(allGlyphs[j].codepoint, text);
+    charCount++;
+  }
+  // A conjugation running on in hiragana past the window (食べさせられなかった) gets the rest of
+  // the run, up to MAX_CONJUGATION_CHARS; WordLookup reads past the window only then.
+  const bool fullWindow = charCount == kMaxLookupChars;
+  for (size_t j = scanStart + charCount;
+       fullWindow && j < allGlyphs.size() && charCount < WordLookup::MAX_CONJUGATION_CHARS; j++) {
+    const uint32_t cp = allGlyphs[j].codepoint;
+    if (allGlyphs[j].paragraphIndex != paraIdx || cp < 0x3041 || cp > 0x3096) break;
+    encodeUtf8(cp, text);
     charCount++;
   }
 

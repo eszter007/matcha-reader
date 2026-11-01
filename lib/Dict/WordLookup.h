@@ -11,6 +11,10 @@ struct WordLookupResult {
   bool deinflected = false;  // true if the hit came from a deinflection candidate, not the raw window
 };
 
+// Opens a further entry in a definition: another headword the same text can be (分かつ after 分かる),
+// followed by that headword on the rest of the line. The panel shows each as a page of its own.
+inline constexpr char kAlternativeSeparator[] = "\n\n---\n\xe2\x86\x92 ";  // →
+
 // Given a paragraph's source text and a byte offset into it, tries
 // decreasing-length windows (8 characters down to 1) at that position,
 // looking up each window — both raw and deinflected — in the dictionary
@@ -32,6 +36,13 @@ class WordLookup {
 
   // Maximum number of characters to consider in the scanning window.
   static constexpr int MAX_WINDOW_CHARS = 8;
+  // A conjugation may run on to this many characters (食べさせられなかった) when everything from
+  // the MAX_WINDOW_CHARS-th character on is hiragana; callers pass the longer text only then.
+  static constexpr int MAX_CONJUGATION_CHARS = 12;
+
+  // True when `chars` characters at byteOffset end a hiragana run that starts at or before the
+  // MAX_WINDOW_CHARS-th character: the text a caller may pass past MAX_WINDOW_CHARS.
+  static bool isLongConjugationTail(const std::string& text, size_t byteOffset, int chars);
 
   // Every exact-match window length at byteOffset, for a segmenter that weighs alternatives
   // instead of taking the longest: bit L-1 of the result is set when the window of L characters

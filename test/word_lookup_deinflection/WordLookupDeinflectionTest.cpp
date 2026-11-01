@@ -79,7 +79,17 @@ class WordLookupDeinflection : public ::testing::Test {
                             {"勉強", 255, DictIndexRecord::POS_VS | OTHER, "study"},
                             {"まず", 255, OTHER, "first of all"},
                             {"必ず", 255, OTHER, "certainly"},
-                            {"かわいそう", 255, OTHER, "pitiful"}});
+                            {"かわいそう", 255, OTHER, "pitiful"},
+                            {"ありがとうございます", 255, OTHER, "thank you"},
+                            {"分かつ", 255, V5, "【わかつ】\n• to divide"},
+                            {"分かる", 255, V5, "【わかる】\n• to understand\n• to comprehend\n• to grasp"},
+                            {"入る", 255, V5, "to enter"},
+                            {"見える", 255, V1, "to be visible"},
+                            {"小さい", 255, DictIndexRecord::POS_ADJ_I, "small"},
+                            {"帰る", 255, V5, "to return"},
+                            {"て", 255, OTHER, "particle"},
+                            {"出る", 255, V1, "to leave"},
+                            {"でる", 255, V1, "to leave (kana)"}});
     testRoot() = root_.string();
     DictIndex::releaseCaches();
   }
@@ -144,6 +154,74 @@ TEST_F(WordLookupDeinflection, WordsEndingLikeASuffixStayThemselves) {
   EXPECT_EQ(lookup("まず、"), both("まず", "まず"));
   EXPECT_EQ(lookup("必ず来る"), both("必ず", "必ず"));
   EXPECT_EQ(lookup("かわいそうな"), both("かわいそう", "かわいそう"));
+}
+
+TEST_F(WordLookupDeinflection, ConjugationPastTheWindowWhenTheTextRunsOnInHiragana) {
+  EXPECT_EQ(lookup("食べさせられなかった。"), both("食べる", "食べさせられなかった"));
+  EXPECT_EQ(lookup("ありがとうございます。"), both("ありがとうございます", "ありがとうございます"));
+}
+
+TEST_F(WordLookupDeinflection, WindowStaysAtEightWithoutAHiraganaTail) {
+  // The text runs on, but in kanji: the normal window decides.
+  EXPECT_EQ(lookup("食べさせられ勉強勉強").second, "食べさせられ");
+}
+
+TEST_F(WordLookupDeinflection, LongSuruConjugationFindsItsNoun) {
+  EXPECT_EQ(lookup("勉強させられなかった。"), both("勉強", "勉強させられなかった"));
+}
+
+TEST_F(WordLookupDeinflection, LongPassStopsAtANul) {
+  std::string text = "来";
+  text.push_back('\0');
+  text += "ああああああああ";
+  WordLookupResult r;
+  if (WordLookup::lookup(text, 0, r)) {
+    EXPECT_LE(r.matchLength, std::string("来").size());
+  }
+}
+
+TEST_F(WordLookupDeinflection, EveryHeadwordTheTextCanBeMostCommonFirst) {
+  WordLookupResult r;
+  ASSERT_TRUE(WordLookup::lookup("分かって。", 0, r));
+  EXPECT_EQ(r.entry.headword, "分かる");
+  const std::string alternative = std::string(kAlternativeSeparator) + "分かつ\n【わかつ】";
+  EXPECT_NE(r.entry.definition.find(alternative), std::string::npos) << r.entry.definition;
+  EXPECT_LT(r.entry.definition.find("understand"), r.entry.definition.find("divide"));
+}
+
+TEST_F(WordLookupDeinflection, TheScanTakesTheFirstHitWithoutAlternatives) {
+  WordLookupResult r;
+  ASSERT_TRUE(WordLookup::lookup("分かって。", 0, r, /*needDefinition=*/false));
+  EXPECT_EQ(r.entry.definition.find(kAlternativeSeparator), std::string::npos);
+  EXPECT_EQ(r.matchLength, std::string("分かって").size());
+}
+
+TEST_F(WordLookupDeinflection, AuxiliariesReachTheVerbThroughTheTeForm) {
+  EXPECT_EQ(lookup("帰っていった。"), both("帰る", "帰っていった"));
+  EXPECT_EQ(lookup("勉強してくれた。"), both("勉強", "勉強してくれた"));
+}
+
+TEST_F(WordLookupDeinflection, AdjectivePlusNaru) {
+  EXPECT_EQ(lookup("小さくなった。"), both("小さい", "小さくなった"));
+  EXPECT_EQ(lookup("見えなくなった。"), both("見える", "見えなくなった"));
+}
+
+TEST_F(WordLookupDeinflection, UnrelatedRulesDoNotChain) {
+  // よかった is a word of its own: no chain of rules may fold it into 入る.
+  EXPECT_NE(lookup("入っていってよかった。").second, "入っていってよかった");
+}
+
+TEST_F(WordLookupDeinflection, TheBareTeFormIsNeverAWordOfItsOwn) {
+  for (const auto& c : Deinflector::deinflect("帰っていった")) {
+    if (c.text == "帰って") {
+      EXPECT_EQ(c.condition, WordCondition::STEM);
+    }
+  }
+}
+
+TEST_F(WordLookupDeinflection, AnAuxiliaryNeedsAWordBeforeIt) {
+  for (const auto& c : Deinflector::deinflect("できた")) EXPECT_NE(c.text, "でる");
+  EXPECT_EQ(lookup("読んできた。"), both("読む", "読んできた"));
 }
 
 }  // namespace
