@@ -1621,8 +1621,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     if (grammar != sectionKind.end()) currentSection = static_cast<int>(grammar - sectionKind.begin());
   }
   if (sectionText.empty())
-    DefinitionText::formatEntryBody(resultDefinition,
-                                    resultDict == DictIndex::DICT_GRAMMAR ? resultHeadword : std::string());
+    DefinitionText::formatEntryBody(
+        resultDefinition, resultDict == DictIndex::DICT_GRAMMAR ? resultHeadword : std::string(), resultGrammar);
   requestUpdate();
 }
 
@@ -1961,7 +1961,8 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
         if (metadata.reading.empty()) metadata.reading = resultReading;
         if (metadata.grammar.empty()) metadata.grammar = resultGrammar;
       }
-      DefinitionText::formatEntryBody(piece, kind == StrId::STR_DICT_KIND_GRAMMAR ? head : std::string());
+      DefinitionText::formatEntryBody(piece, kind == StrId::STR_DICT_KIND_GRAMMAR ? head : std::string(),
+                                      metadata.grammar);
 
       bool duplicate = false;
       size_t replaceAt = sectionText.size();

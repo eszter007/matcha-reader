@@ -251,23 +251,47 @@ void formatGrammarBody(std::string& text, const std::string& headword) {
 #endif
 }
 
-bool parseTags(const std::string& line, const size_t start, std::string& grammar) {
+// Parses a sense's tag line: `[noun] [kana] 〔一連 only〕`. The trailing 〔…〕 restricts the
+// sense to some spellings and goes to `restriction`. Tags already in `exclude` (an earlier
+// " · "-joined list) are skipped, so a sense repeats only what differs from the header.
+bool parseTags(const std::string& line, const size_t start, std::string& grammar, std::string* restriction = nullptr,
+               const std::string* exclude = nullptr) {
+  static constexpr char kRestrictOpen[] = "\xe3\x80\x94";
+  static constexpr char kRestrictClose[] = "\xe3\x80\x95";
+  static constexpr char kSeparator[] = " \xc2\xb7 ";
   grammar.clear();
+  if (restriction) restriction->clear();
+  bool any = false;
   size_t pos = start;
   while (pos < line.size()) {
     while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) pos++;
-    if (pos == line.size()) return !grammar.empty();
+    if (pos == line.size()) return any;
+    if (line.compare(pos, sizeof(kRestrictOpen) - 1, kRestrictOpen) == 0) {
+      const size_t close = line.find(kRestrictClose, pos);
+      if (close == std::string::npos) return false;
+      if (restriction) {
+        *restriction = line.substr(pos + sizeof(kRestrictOpen) - 1, close - pos - (sizeof(kRestrictOpen) - 1));
+        trim(*restriction);
+      }
+      any = true;
+      pos = close + sizeof(kRestrictClose) - 1;
+      continue;
+    }
     if (line[pos] != '[') return false;
     const size_t close = line.find(']', pos + 1);
     if (close == std::string::npos) return false;
     std::string formatted = formatTag(line.substr(pos + 1, close - pos - 1));
-    if (!formatted.empty()) {
-      if (!grammar.empty()) grammar += " \xc2\xb7 ";
+    any = true;
+    const bool repeated =
+        exclude && (std::string(kSeparator) + *exclude + kSeparator).find(kSeparator + formatted + kSeparator) !=
+                       std::string::npos;
+    if (!formatted.empty() && !repeated) {
+      if (!grammar.empty()) grammar += kSeparator;
       grammar += formatted;
     }
     pos = close + 1;
   }
-  return !grammar.empty();
+  return any;
 }
 
 bool containsJapanese(const std::string& text, const size_t startOffset = 0, size_t end = std::string::npos) {
@@ -445,12 +469,16 @@ void extractEntryMetadata(std::string& text, const std::string& fallbackHeadword
 
     const size_t tagStart = firstLine.find('[');
     std::string grammar;
-    if (tagStart != std::string::npos && parseTags(firstLine, tagStart, grammar) && (sourceLine || tagStart == 0)) {
+    std::string restriction;
+    if (tagStart != std::string::npos && parseTags(firstLine, tagStart, grammar, &restriction) && !grammar.empty() &&
+        (sourceLine || tagStart == 0)) {
       metadata.grammar = std::move(grammar);
       text.erase(0, lineEnd == std::string::npos ? text.size() : lineEnd + 1);
       while (!text.empty() &&
              (text.front() == ' ' || text.front() == '\t' || text.front() == '\r' || text.front() == '\n'))
         text.erase(0, 1);
+      // The restriction belongs to the first sense, not the whole entry.
+      if (!restriction.empty()) text.insert(0, "\xe3\x80\x94" + restriction + "\xe3\x80\x95\n");
       continue;
     }
 
@@ -469,7 +497,7 @@ void extractEntryMetadata(std::string& text, const std::string& fallbackHeadword
   if (!grammarEntry && metadata.reading.empty() && isKanaOnly(fallbackHeadword)) metadata.reading = fallbackHeadword;
 }
 
-void formatEntryBody(std::string& text, const std::string& omitLeading) {
+void formatEntryBody(std::string& text, const std::string& omitLeading, const std::string& headerGrammar) {
   if (text.empty()) return;
   if (!omitLeading.empty()) {
     formatGrammarBody(text, omitLeading);
@@ -481,7 +509,7 @@ void formatEntryBody(std::string& text, const std::string& omitLeading) {
   if (grammarAt != std::string::npos) {
     std::string grammar = text.substr(grammarAt + 2);
     text.erase(grammarAt);
-    formatEntryBody(text, {});
+    formatEntryBody(text, {}, headerGrammar);
     formatGrammarBody(grammar, {});
     if (!text.empty() && !grammar.empty()) text += "\n\n";
     text += grammar;
@@ -494,6 +522,8 @@ void formatEntryBody(std::string& text, const std::string& omitLeading) {
   std::string formatted;
   formatted.reserve(text.size() + 64);
   std::string glosses;
+  std::string previousTags = headerGrammar;
+  std::string pendingTagNote;  // goes under the next numbered sense
   int senseNumber = 1;
   int nameNumber = 1;
   static constexpr char kBullet[] = "\xe2\x80\xa2";
@@ -507,6 +537,10 @@ void formatEntryBody(std::string& text, const std::string& omitLeading) {
     if (glosses.empty()) return;
     appendLine(std::to_string(senseNumber++) + ". " + glosses);
     glosses.clear();
+    if (!pendingTagNote.empty()) {
+      appendLine(pendingTagNote);
+      pendingTagNote.clear();
+    }
   };
 
   size_t pos = 0;
@@ -613,9 +647,21 @@ void formatEntryBody(std::string& text, const std::string& omitLeading) {
       }
       continue;
     }
-    std::string ignoredTags;
-    if (line.front() == '[' && parseTags(line, 0, ignoredTags)) {
+    // A sense's own tag line: show only the tags its predecessor did not have, plus any
+    // spelling restriction, as a note under that sense's glosses.
+    std::string senseTags;
+    std::string restriction;
+    if ((line.front() == '[' || line.rfind("\xe3\x80\x94", 0) == 0) &&
+        parseTags(line, 0, senseTags, &restriction, &previousTags)) {
       flushGlosses();
+      std::string allTags;
+      parseTags(line, 0, allTags);
+      if (!allTags.empty()) previousTags = std::move(allTags);
+      if (!restriction.empty()) {
+        if (!senseTags.empty()) senseTags += " \xc2\xb7 ";
+        senseTags += restriction;
+      }
+      if (!senseTags.empty()) pendingTagNote = "\xe2\x86\x92 " + senseTags;
       continue;
     }
 
@@ -626,6 +672,7 @@ void formatEntryBody(std::string& text, const std::string& omitLeading) {
   }
 
   flushGlosses();
+  if (!pendingTagNote.empty()) appendLine(pendingTagNote);
   text = std::move(formatted);
 }
 
@@ -719,6 +766,44 @@ int drawEntryMetadata(const GfxRenderer& renderer, const Rect& body, const int f
   return std::min(baseY + (y - startY), clipBottom);
 }
 
+// The renderer sends a whole string to the CJK fallback face when it holds one glyph the primary
+// lacks, which sets the Latin around a Japanese word in the fallback's own Latin. Measure and draw
+// each script run on its own instead. `buf` is cut in place with a NUL and restored, so no copy
+// is allocated. Returns the advance in pixels.
+int layoutScriptRuns(const GfxRenderer& renderer, const int fontId, std::string& buf, const int x, const int y,
+                     const uint16_t scale, const bool draw, const bool black, const EpdFontFamily::Style style) {
+  int advance = 0;
+  size_t runStart = 0;
+  int runCjk = -1;  // unknown until the run's first non-space character
+  const auto emitRun = [&](const size_t end) {
+    if (end <= runStart) return;
+    const char saved = buf[end];
+    buf[end] = '\0';
+    const char* run = buf.c_str() + runStart;
+    if (draw) renderer.drawTextScaled(fontId, x + advance, y, run, scale, black, style);
+    advance += renderer.getTextWidthScaled(fontId, run, scale, style);
+    buf[end] = saved;
+    runStart = end;
+  };
+  for (size_t pos = 0; pos < buf.size();) {
+    const auto c0 = static_cast<unsigned char>(buf[pos]);
+    const size_t len = std::min(utf8CharLen(c0), buf.size() - pos);
+    uint32_t cp = c0;
+    if (len == 3) {
+      cp = ((c0 & 0x0F) << 12) | ((static_cast<unsigned char>(buf[pos + 1]) & 0x3F) << 6) |
+           (static_cast<unsigned char>(buf[pos + 2]) & 0x3F);
+    }
+    if (cp != ' ') {
+      const int cjk = utf8IsCjkCodepoint(cp) ? 1 : 0;
+      if (runCjk >= 0 && cjk != runCjk) emitRun(pos);
+      runCjk = cjk;
+    }
+    pos += len;
+  }
+  emitRun(buf.size());
+  return advance;
+}
+
 WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,
                            const int startY, const int lineHeight, const int maxWidth, const int maxY,
                            const int scrollOffset, const uint16_t scale, std::string& lineBuf) {
@@ -766,17 +851,23 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
     // An example is indented on every line, its first included: the marker is stripped before
     // measuring, so there is no leading prefix to stand in for the indent the way "1. " does on a
     // numbered sense.
+    // A note's arrow is drawn on its own (see drawWrappedLine), so all of its text lines up.
     const auto lineIndent = [&](const bool firstLine) {
-      return (isNote || isExample) ? (firstLine ? hangingIndent : continuationIndent)
-                                   : (firstLine ? 0 : continuationIndent);
+      return isNote ? continuationIndent : isExample ? hangingIndent : (firstLine ? 0 : continuationIndent);
     };
     const auto availableWidth = [&](const bool firstLine) { return std::max(1, maxWidth - lineIndent(firstLine)); };
     const int exampleRuleX =
         isExample ? textX + renderer.getTextWidthScaled(fontId, "1. ", paragraphScale, EpdFontFamily::REGULAR) : 0;
     static constexpr char kExamplePrefix[] = "  │ ";
-    const auto drawWrappedLine = [&](const char* line, const bool firstLine, const int y) {
-      renderer.drawTextScaled(fontId, textX + lineIndent(firstLine), y, line, paragraphScale, paragraphBlack,
-                              paragraphStyle);
+    const auto drawWrappedLine = [&](std::string& line, const bool firstLine, const int y) {
+      // Drawn apart from the text: the renderer routes a whole string to the CJK fallback when
+      // one glyph is missing, and the serif face has no arrow.
+      if (isNote && firstLine) {
+        renderer.drawTextScaled(fontId, textX + hangingIndent, y, "\xe2\x86\x92", paragraphScale, paragraphBlack,
+                                EpdFontFamily::REGULAR);
+      }
+      layoutScriptRuns(renderer, fontId, line, textX + lineIndent(firstLine), y, paragraphScale, /*draw=*/true,
+                       paragraphBlack, paragraphStyle);
       if (isExample) renderer.drawLine(exampleRuleX, y, exampleRuleX, y + lineHeight - 1, 1, paragraphBlack);
     };
     bool firstParagraphLine = true;
@@ -788,6 +879,11 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
     if (isExample && contentStart + sizeof(kExamplePrefix) - 1 <= paraEnd &&
         text.compare(contentStart, sizeof(kExamplePrefix) - 1, kExamplePrefix) == 0) {
       remStart += sizeof(kExamplePrefix) - 1;
+    }
+    if (isNote) {
+      while (remStart < paraEnd && (text[remStart] == ' ' || text[remStart] == '\t')) remStart++;
+      remStart += sizeof("\xe2\x86\x92") - 1;
+      while (remStart < paraEnd && text[remStart] == ' ') remStart++;
     }
     const size_t remEndFixed = paraEnd;
     nlPos = nextNl == std::string::npos ? text.size() + 1 : nextNl + 1;
@@ -805,13 +901,13 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
       // remainder could never fit one line anyway.)
       if (remLen < LINE_BUF_CAP) {
         lineBuf.assign(text, remStart, remLen);
-        if (renderer.getTextWidthScaled(fontId, lineBuf.c_str(), paragraphScale, measurementStyle) <=
+        if (layoutScriptRuns(renderer, fontId, lineBuf, 0, 0, paragraphScale, /*draw=*/false, true, measurementStyle) <=
             availableWidth(firstParagraphLine)) {
           lineIndex++;
           const int lineY =
               isNote && !firstParagraphLine && lineIndex - 1 > scrollOffset ? defY - std::max(1, lineHeight / 3) : defY;
           if (lineIndex > scrollOffset && lineY + lineHeight <= maxY) {
-            drawWrappedLine(lineBuf.c_str(), firstParagraphLine, lineY);
+            drawWrappedLine(lineBuf, firstParagraphLine, lineY);
             defY = lineY + lineHeight;
             out.linesDrawn++;
           }
@@ -836,7 +932,8 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
         if (charLen > remEndFixed - pos) charLen = remEndFixed - pos;
         if (lineBuf.size() + charLen >= LINE_BUF_CAP) break;  // buffer full -> hard break, no realloc
         lineBuf.append(text, pos, charLen);
-        if (renderer.getTextWidthScaled(fontId, lineBuf.c_str(), paragraphScale, measurementStyle) > lineWidth) {
+        if (layoutScriptRuns(renderer, fontId, lineBuf, 0, 0, paragraphScale, /*draw=*/false, true, measurementStyle) >
+            lineWidth) {
           // Never orphan sentence-ending punctuation at the start of the next line.
           uint32_t cp = 0;
           if (charLen == 3) {
@@ -886,7 +983,7 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
       const int lineY =
           isNote && !firstParagraphLine && lineIndex - 1 > scrollOffset ? defY - std::max(1, lineHeight / 3) : defY;
       if (lineIndex > scrollOffset && lineY + lineHeight <= maxY) {
-        drawWrappedLine(lineBuf.c_str(), firstParagraphLine, lineY);
+        drawWrappedLine(lineBuf, firstParagraphLine, lineY);
         defY = lineY + lineHeight;
         out.linesDrawn++;
       }
