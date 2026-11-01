@@ -1354,7 +1354,8 @@ Reader Settings from the reader menu. Your choice is saved for that book and app
 - **Three dictionaries:** vocabulary, names and grammar. A word in both the vocabulary and the grammar dictionary
   gets one page for each. For short grammar words such as こと or よう, the grammar page opens first.
 - **The book's own readings come first.** If the book puts furigana on a word, its entry starts with
-  "In this book:" and that reading (e.g. はやし).
+  "In this book:" and that reading (e.g. はやし). Names the book annotates are picked whole, even when the
+  dictionary only has their parts (緋 and 美津子 in 緋倉美津子).
 - **Words split across pages still work.** Lookup reads a few characters onto the next page, so picking the part
   you can see finds the whole word.
 

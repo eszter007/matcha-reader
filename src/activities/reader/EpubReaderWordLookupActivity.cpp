@@ -134,6 +134,7 @@ void EpubReaderWordLookupActivity::reclaimFontHeap() {
 
 // A persisted scan for this exact page skips all scanning; otherwise start progressively.
 void EpubReaderWordLookupActivity::initScanFromCacheOrBurst(const char* label) {
+  scan.setBookGlossary(bookCachePath);
   if (!scanCachePath.empty() && scan.tryLoadCache(scanCachePath, scanSpine, scanPage)) {
     return;
   }
@@ -1357,6 +1358,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   sectionGrammar.clear();
   sectionKind.clear();
   sectionHead.clear();
+  retainedPrefixHead.clear();
   currentSection = 0;
   resultMatchLen = 0;
   scrollOffset = 0;
@@ -1522,6 +1524,48 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
           grammarDefinition = std::move(gramEntry.definition);
         }
       }
+    }
+  }
+
+  // A name the book annotated whose whole the dictionary lacks (緋倉美津子, known only as 緋 and
+  // 美津子): the book's furigana is the only source for it. A dictionary match of two or more
+  // characters (東京 of 東京駅) stays below the reading; a single kanji is dropped.
+  if (digitPrefix.empty() && scan.glossarySpanAt(text) > resultMatchLen) {
+    std::string base;
+    std::string readings;
+    if (RubyGlossary::longestPrefix(bookCachePath, text, base, readings) &&
+        static_cast<int>(RubyGlossary::charCount(base)) > resultMatchLen) {
+      std::string definition = tr(STR_IN_THIS_BOOK);
+      definition += ' ';
+      definition += readings;
+      // The dictionary entries follow on pages of their own, under their own headword. Both copies of
+      // the definition are live while it is appended, so it is kept only when that fits.
+      const bool keepPrefix = hasResult && resultMatchLen >= 2 &&
+                              ESP.getMaxAllocHeap() > definition.size() + resultDefinition.size() + 8 * 1024;
+      if (keepPrefix) {
+        static constexpr char kEntrySep[] = "\n\n---\n";
+        definition.reserve(definition.size() + sizeof(kEntrySep) - 1 + resultDefinition.size());
+        definition += kEntrySep;
+        definition += resultDefinition;
+        retainedPrefixHead = std::move(resultHeadword);
+      } else {
+        definition += "\n\n";
+        // Shown as a name, but credited to no dictionary: the reading is the book's.
+        definition += tr(STR_LOOKUP_NAME);
+        resultDict = DictIndex::DICT_NAMES;
+        resultSource = nullptr;
+        resultDictionaryLabel.clear();
+      }
+      resultDefinition.clear();
+      hasResult = true;
+      hasGrammar = false;
+      grammarFirst = false;
+      promotedGrammarLen = 0;
+      resultMatchLen = static_cast<int>(RubyGlossary::charCount(base));
+      resultHeadword = std::move(base);
+      resultDefinition = std::move(definition);
+      resultReading = std::move(readings);
+      resultGrammar.clear();
     }
   }
 
@@ -1929,6 +1973,9 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
       head.erase(tailSpace == std::string::npos ? 0 : tailSpace + 1);
       piece.erase(0, lineEnd == std::string::npos ? piece.size() : lineEnd + 1);
       grammarHead = head;
+    } else if (kind != StrId::STR_DICT_KIND_GRAMMAR && !sectionText.empty() && !retainedPrefixHead.empty()) {
+      // Every page after the book's reading is a dictionary entry for the retained prefix.
+      head = retainedPrefixHead;
     } else if (kind == StrId::STR_DICT_KIND_GRAMMAR) {
       // The heading is written once, but the grammar index can return several entries for that
       // one pattern, separated like any others. They are all about the pattern, so they keep its

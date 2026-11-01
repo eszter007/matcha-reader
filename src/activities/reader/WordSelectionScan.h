@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Epub/RubyGlossary.h>
 #include <Epub/VerticalParsedText.h>
 #include <WordLookup.h>
 
@@ -88,6 +89,12 @@ class WordSelectionScan {
   // geometry (column/row/x/y) must stop here: context cells carry no position, and 0/0 is a valid
   // vertical cell. Text building may read past it -- that is what the context is for.
   size_t onPageGlyphCount() const { return contextStart; }
+  // Lets a name the book annotated (緋倉美津子) be selected whole when the dictionary only knows
+  // its parts. Call before tryLoadCache: the glossary size is part of the cache fingerprint.
+  void setBookGlossary(const std::string& bookCachePath);
+  // Characters of the longest glossary base `text` starts with, or 0. RAM only; a hash hit is
+  // confirmed against the file by RubyGlossary::longestPrefix when the word is looked up.
+  int glossarySpanAt(const std::string& text) const;
   static constexpr int kLookupContextChars = 8;  // == kMaxLookupChars, asserted below
 
   // Run scan/filter work for up to maxMillis (pass UINT32_MAX to run to completion).
@@ -246,6 +253,9 @@ class WordSelectionScan {
   // heuristics of scanOnePosition() never fire and a crossing ambiguity (结婚的/和尚/未) is best
   // settled by comparing whole-run splits.
   bool chineseMode_ = false;
+  std::vector<RubyGlossary::SpanKey> glossaryKeys_;  // sorted by hash
+  uint16_t glossaryCount_ = 0;
+  uint32_t segmentationFingerprint() const;
   // Longest hanzi run the segmenter weighs at once. Chinese clauses rarely run longer between
   // punctuation marks, and the run can always continue with the next call.
   static constexpr size_t kRunMax = 24;
