@@ -293,6 +293,8 @@ class EpubReaderWordLookupActivity final : public Activity {
   // answers with a pattern of its own (なんて for a lookup of なんて言う), and naming it in the
   // panel header is clearer than repeating the surface word above an entry about the pattern.
   std::vector<std::string> sectionHead;
+  // Headword of the dictionary entries kept under a book-annotated name (東京 of 東京太郎).
+  std::string retainedPrefixHead;
   int currentSection = 0;
   void splitDefinitionIntoSections();
   void moveSection(int delta);
@@ -332,6 +334,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   // After a number written in digits (６月): put the dictionary's counter sense first and give it
   // the whole reading (ろくがつ) from CounterReading.
   void readAsCounter(const std::string& digits, const std::string& counter);
+  // Moves the dictionary entry whose reading starts with the book's furigana for `surface` (or
+  // for its leading kanji) to the front, so 謀反 shows むほん, not the higher-ranked むへん.
+  void promoteBookReading(const std::string& surface);
 
   // Open on the page with a word cursor when the reader supplied a select context.
   void beginSelectMode();

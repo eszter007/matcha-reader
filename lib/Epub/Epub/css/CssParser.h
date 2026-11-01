@@ -79,7 +79,9 @@ class CssParser {
   //      chapter linking only an EBPAJ book-style.css also applies the sheets it imports.
   // v27: upstream merge (their v19): `font-weight: inherit` and `font-style: inherit` are stored
   //      as a third value instead of falling back to normal. Framing is unchanged.
-  static constexpr uint8_t CSS_CACHE_VERSION = 27;
+  // v28: a margin's `auto` is stored as CssUnit::Auto instead of 0px (vertical block alignment).
+  //      Framing is unchanged.
+  static constexpr uint8_t CSS_CACHE_VERSION = 28;
 
   // The stylesheets one chapter links, as indices into the book's stylesheet list. A record from a
   // stylesheet the chapter does not link is skipped on load: an image-page stylesheet's
@@ -274,6 +276,9 @@ class CssParser {
   [[nodiscard]] StylesheetFilter stylesheetFilterFor(const std::vector<std::string>& linkedPaths) const;
   bool endCacheAppend(bool discard);
 
+  // VerticalBlockStyle::blockAlign values.
+  static constexpr uint8_t VERTICAL_BLOCK_CENTER = 1;
+  static constexpr uint8_t VERTICAL_BLOCK_END = 2;
   /**
    * Distilled per-block layout parameters the VERTICAL engine consumes, in em units (the
    * layout converts em -> cells). Populated from unscoped rules plus the EBPAJ "v|" scope.
@@ -284,11 +289,13 @@ class CssParser {
     float afterEm = 0;         // v margin-left: extra gap after the block's last column
     float hangEm = 0;          // v padding-top + negative text-indent: hanging indent for wrapped lines
     bool alignCenter = false;  // text-align: center -> column content vertically centered
+    bool alignEnd = false;     // text-align: right/end -> each column ends at the foot
+    uint8_t blockAlign = 0;    // VERTICAL_BLOCK_*: auto head/foot margins place the whole block
     uint8_t borderEdges = 0;   // CssStyle::BORDER_* edge mask; vertical rendering stays solid
     float indentEm = -1;       // text-indent: a paragraph's first column starts this far down; -1 = not set
     [[nodiscard]] bool any() const {
-      return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || borderEdges != 0 ||
-             indentEm >= 0;
+      return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || alignEnd || blockAlign != 0 ||
+             borderEdges != 0 || indentEm >= 0;
     }
   };
 
@@ -461,6 +468,8 @@ class CssParser {
   static CssTextEmphasis interpretTextEmphasis(std::string_view val);
   static CssListStyleType interpretListStyleType(std::string_view val);
   static CssLength interpretLength(std::string_view val);
+  // interpretLength, but `auto` is kept as CssUnit::Auto (margins only).
+  static CssLength interpretMargin(std::string_view val);
   /** Returns true only when a numeric length was parsed (e.g. 2em, 50%). False for auto/inherit/initial. */
   static bool tryInterpretLength(std::string_view val, CssLength& out);
 };

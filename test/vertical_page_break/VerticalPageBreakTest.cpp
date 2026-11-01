@@ -138,3 +138,131 @@ TEST(VerticalPageBreak, OpeningBracketFollowsRubyGroupOntoTheNextPage) {
   EXPECT_EQ(bracket->column, 0);
   EXPECT_EQ(bracket->row, 0);
 }
+
+namespace {
+
+// One styled block holding two paragraphs ("あい", "うえお"), ending with the chapter.
+std::vector<VerticalPage> layoutBlock(const VerticalBlockParams& params) {
+  GfxRenderer renderer;
+  VerticalParsedText text(renderer, 0, VIEWPORT_W, VIEWPORT_H);
+  text.markBlockStart(params);
+  text.addParagraph("あい");
+  text.addParagraph("うえお");
+  text.markBlockEnd();
+  return text.layoutPages(nullptr, nullptr, true);
+}
+
+}  // namespace
+
+TEST(VerticalPageBreak, BlockCentredAlongTheColumnKeepsItsColumnsStartingTogether) {
+  VerticalBlockParams params;
+  params.blockAlign = VerticalBlockParams::BlockAlign::Center;
+  const auto pages = layoutBlock(params);
+  ASSERT_EQ(pages.size(), 1u);
+  // Three rows used of ten: the block moves down (10 - 3) / 2 = 3 rows, both columns alike.
+  EXPECT_EQ(firstGlyphOf(pages[0], U'あ')->y, 3 * 20);
+  EXPECT_EQ(firstGlyphOf(pages[0], U'う')->y, 3 * 20);
+}
+
+TEST(VerticalPageBreak, BlockPushedToTheFootEndsWithItsLongestColumn) {
+  VerticalBlockParams params;
+  params.blockAlign = VerticalBlockParams::BlockAlign::End;
+  const auto pages = layoutBlock(params);
+  ASSERT_EQ(pages.size(), 1u);
+  EXPECT_EQ(firstGlyphOf(pages[0], U'う')->y, 7 * 20);
+  EXPECT_EQ(firstGlyphOf(pages[0], U'あ')->y, 7 * 20);
+}
+
+TEST(VerticalPageBreak, EndAlignedColumnsEachEndAtTheFoot) {
+  VerticalBlockParams params;
+  params.alignEnd = true;
+  const auto pages = layoutBlock(params);
+  ASSERT_EQ(pages.size(), 1u);
+  EXPECT_EQ(firstGlyphOf(pages[0], U'い')->y, 9 * 20);
+  EXPECT_EQ(firstGlyphOf(pages[0], U'お')->y, 9 * 20);
+}
+
+TEST(VerticalPageBreak, EndAlignedFullColumnWithAHangingStopStaysPut) {
+  // A framed block's columns are a row short of the foot: nine cells and a 。 hanging past them.
+  const auto layoutFramed = [](const bool alignEnd) {
+    GfxRenderer renderer;
+    VerticalParsedText text(renderer, 0, VIEWPORT_W, VIEWPORT_H);
+    VerticalBlockParams params;
+    params.borderEdges = 1;
+    params.alignEnd = alignEnd;
+    text.markBlockStart(params);
+    text.addParagraph("人物なのだかきくけ。");
+    text.markBlockEnd();
+    return text.layoutPages(nullptr, nullptr, true);
+  };
+  const auto plain = layoutFramed(false);
+  const auto aligned = layoutFramed(true);
+  ASSERT_EQ(aligned.size(), 1u);
+  ASSERT_EQ(plain.size(), 1u);
+  const VerticalGlyph* stop = firstGlyphOf(aligned[0], U'。');
+  ASSERT_NE(stop, nullptr);
+  ASSERT_EQ(stop->column, firstGlyphOf(aligned[0], U'人')->column) << "the 。 must hang in the same column";
+  EXPECT_EQ(firstGlyphOf(aligned[0], U'人')->y, firstGlyphOf(plain[0], U'人')->y);
+  EXPECT_EQ(firstGlyphOf(aligned[0], U'物')->y, firstGlyphOf(plain[0], U'物')->y);
+}
+
+namespace {
+
+std::vector<VerticalPage> layoutOneBlock(const VerticalBlockParams& params, const char* paragraph) {
+  GfxRenderer renderer;
+  VerticalParsedText text(renderer, 0, VIEWPORT_W, VIEWPORT_H);
+  text.markBlockStart(params);
+  text.addParagraph(paragraph);
+  text.markBlockEnd();
+  return text.layoutPages(nullptr, nullptr, true);
+}
+
+}  // namespace
+
+TEST(VerticalPageBreak, UnframedBlockColumnsRunToTheFoot) {
+  VerticalBlockParams params;
+  params.startEm = 0.0f;
+  params.alignEnd = true;
+  const auto pages = layoutOneBlock(params, TEN);  // ten cells in a ten-row column
+  ASSERT_EQ(pages.size(), 1u);
+  for (const auto& g : pages[0].glyphs) EXPECT_EQ(g.column, 0) << "no foot reserve without a frame";
+}
+
+TEST(VerticalPageBreak, EndAlignedIndentedHangingColumnDoesNotMoveUp) {
+  VerticalBlockParams params;
+  params.borderEdges = 1;
+  params.startEm = 1.0f;
+  const auto plain = layoutOneBlock(params, "人物なのだかきく。");  // eight cells from row 1, then a hanging 。
+  params.alignEnd = true;
+  const auto aligned = layoutOneBlock(params, "人物なのだかきく。");
+  ASSERT_EQ(plain.size(), 1u);
+  ASSERT_EQ(aligned.size(), 1u);
+  EXPECT_EQ(firstGlyphOf(aligned[0], U'人')->y, firstGlyphOf(plain[0], U'人')->y);
+  EXPECT_EQ(firstGlyphOf(aligned[0], U'。')->y, firstGlyphOf(plain[0], U'。')->y);
+}
+
+TEST(VerticalPageBreak, EndAlignedSidewaysRunStaysAboveTheFoot) {
+  VerticalBlockParams params;
+  params.alignEnd = true;
+  const auto pages = layoutOneBlock(params, "あいabcdefgh");
+  ASSERT_EQ(pages.size(), 1u);
+  GfxRenderer renderer;
+  for (const auto& g : pages[0].glyphs) {
+    if (g.renderKind != VerticalGlyph::RotatedRun) continue;
+    const int length = renderer.getRenderAdvanceX(0, pages[0].glyphText(g), EpdFontFamily::REGULAR);
+    EXPECT_LE(g.y + length, VIEWPORT_H) << "the whole run ends inside the column";
+    EXPECT_GT(g.y, 0) << "and it did move toward the foot";
+  }
+}
+
+TEST(VerticalPageBreak, FrameOfABlockFillingItsLastColumnEndsThere) {
+  VerticalBlockParams params;
+  params.borderEdges = 0x0F;
+  const auto partial = layoutOneBlock(params, "あいうえお");
+  const auto full = layoutOneBlock(params, "あいうえおかきくけ");  // a framed column holds nine
+  ASSERT_EQ(partial.size(), 1u);
+  ASSERT_EQ(full.size(), 1u);
+  ASSERT_EQ(partial[0].boxes.size(), 1u);
+  ASSERT_EQ(full[0].boxes.size(), 1u);
+  EXPECT_EQ(full[0].boxes[0].w, partial[0].boxes[0].w) << "one column of text, one column of frame";
+}

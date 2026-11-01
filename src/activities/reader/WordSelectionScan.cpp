@@ -668,13 +668,13 @@ namespace {
 // rebuilt, which is the right outcome for a disposable cache.
 //
 // Bump this whenever a change alters what a scan of the SAME page produces. The entry is
-// validated on glyphHash (codepoints + paragraph indices) and dictSize, neither of which moves
+// validated on glyphHash (codepoints + paragraph indices) and segFingerprint, neither of which moves
 // when the segmentation logic changes -- so a cache written by a version that segmented wrongly
 // still validates and is served back, and the fix never reaches the reader. That happened with
 // the tate-chu-yoko NUL truncation, where a match claimed the cells of the word after an upright
 // "!?" run: the word stayed unselectable on that page for good, since nothing re-examined a
 // cache that looked valid. Rebuilding costs one rescan (~300 ms, once per page).
-constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x334D4C57;  // "WLM3" -- WLM2 predates suru-noun lookup
+constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x344D4C57;  // "WLM4": bumped whenever segmentation changes
 constexpr uint16_t WLSCAN_MAX_PAGES = 8;
 constexpr size_t WLSCAN_MAX_CARRY_BYTES = 4096;  // bound on the older entries carried forward
 
@@ -691,7 +691,7 @@ struct Header {
   uint16_t spine;
   uint16_t page;
   uint32_t glyphHash;
-  uint32_t dictSize;
+  uint32_t segFingerprint;  // segmentationFingerprint()
   uint16_t count;
   uint16_t lastCursor;
 } __attribute__((packed));
@@ -734,6 +734,35 @@ uint32_t WordSelectionScan::glyphContentHash() const {
   return h;
 }
 
+// Dictionary size plus glossary record count. The glossary only grows as chapters are parsed, so
+// its count changes whenever a name is harvested and a scan made before that is redone.
+uint32_t WordSelectionScan::segmentationFingerprint() const {
+  return dictFingerprint() ^ (static_cast<uint32_t>(glossaryCount_) * 2654435761u);
+}
+
+void WordSelectionScan::setBookGlossary(const std::string& bookCachePath) {
+  glossaryCount_ = RubyGlossary::loadSpanKeys(bookCachePath, glossaryKeys_);
+}
+
+int WordSelectionScan::glossarySpanAt(const std::string& text) const {
+  if (glossaryKeys_.empty()) return 0;
+  int best = 0;
+  int chars = 0;
+  for (size_t pos = 0; pos < text.size();) {
+    pos++;
+    while (pos < text.size() && (static_cast<unsigned char>(text[pos]) & 0xC0) == 0x80) pos++;
+    chars++;
+    if (chars < 2) continue;
+    const uint32_t h = RubyGlossary::hashText(text.data(), pos);
+    auto it = std::lower_bound(glossaryKeys_.begin(), glossaryKeys_.end(), h,
+                               [](const RubyGlossary::SpanKey& k, uint32_t v) { return k.hash < v; });
+    for (; it != glossaryKeys_.end() && it->hash == h; ++it) {
+      if (it->chars == chars) best = chars;
+    }
+  }
+  return best;
+}
+
 bool WordSelectionScan::tryLoadCache(const std::string& path, const uint16_t spineIndex, const uint16_t pageIndex) {
   HalFile f;
   if (!Storage.openFileForRead("WLS", path, f)) {
@@ -750,13 +779,13 @@ bool WordSelectionScan::tryLoadCache(const std::string& path, const uint16_t spi
   // Walk the entries, skipping over the records of the ones that do not match. Entries are small
   // and there are at most WLSCAN_MAX_PAGES, so this costs a read or two.
   const uint32_t wantHash = glyphContentHash();
-  const uint32_t wantDict = dictFingerprint();
+  const uint32_t wantDict = segmentationFingerprint();
   bool found = false;
   for (uint16_t e = 0; e < fileHdr.entryCount && e < WLSCAN_MAX_PAGES; e++) {
     if (f.read(reinterpret_cast<uint8_t*>(&hdr), sizeof(hdr)) != static_cast<int>(sizeof(hdr))) return false;
     if (hdr.magic != WLSCAN_MAGIC) return false;
-    if (hdr.spine == spineIndex && hdr.page == pageIndex && hdr.glyphHash == wantHash && hdr.dictSize == wantDict &&
-        hdr.count <= allGlyphs.size()) {
+    if (hdr.spine == spineIndex && hdr.page == pageIndex && hdr.glyphHash == wantHash &&
+        hdr.segFingerprint == wantDict && hdr.count <= allGlyphs.size()) {
       found = true;
       break;
     }
@@ -879,7 +908,7 @@ bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineI
   hdr.spine = spineIndex;
   hdr.page = pageIndex;
   hdr.glyphHash = glyphContentHash();
-  hdr.dictSize = dictFingerprint();
+  hdr.segFingerprint = segmentationFingerprint();
   hdr.count = static_cast<uint16_t>(selectToAllIdx.size());
   hdr.lastCursor = cursorIndex < hdr.count ? cursorIndex : 0;
   f.write(reinterpret_cast<const uint8_t*>(&hdr), sizeof(hdr));
@@ -1088,7 +1117,24 @@ void WordSelectionScan::scanOnePosition() {
             result.entry.priority < kMinKanaExactPriority) {
           hasMatch = false;
         }
+        // A reading record that opens with the copula な or the nominaliser の straight after
+        // other text is grammar on the page, not the word: なのか in 誰なのか matched 七日 even
+        // though that record is common. Other particle kana stay, so でんわ and はな still match.
+        const uint32_t lead = allGlyphs[scanStart].codepoint;
+        const bool afterText = scanStart > 0 && allGlyphs[scanStart - 1].paragraphIndex == paraIdx;
+        if (hasMatch && !result.deinflected && (lead == 0x306A || lead == 0x306E) && afterText && !usuallyKana &&
+            (result.entry.posFlags & DictIndexRecord::POS_READING) != 0) {
+          hasMatch = false;
+        }
       }
+    }
+
+    // A name that opens with the copula な right after hiragana: な子 in 哀れな子 is な plus 子,
+    // not a name. の is left alone: before a name it is the possessive (妹ののり子).
+    if (hasMatch && result.entry.sourceDict == DictIndex::DICT_NAMES && scanStart > 0 &&
+        allGlyphs[scanStart - 1].paragraphIndex == paraIdx) {
+      const uint32_t prev = allGlyphs[scanStart - 1].codepoint;
+      if (allGlyphs[scanStart].codepoint == 0x306A && prev >= 0x3041 && prev <= 0x309F) hasMatch = false;
     }
 
     // A match that STARTS with a case/topic particle usually mis-segments: the particle should
@@ -1134,6 +1180,13 @@ void WordSelectionScan::scanOnePosition() {
         // particle-led mis-segmentations without disturbing real particle-initial words.
         if (nmc >= matchChars) hasMatch = false;  // let the next char start the longer word
       }
+    }
+
+    // A name the book annotated: select it whole when the dictionary only covers a part (緋 of
+    // 緋倉美津子). Only extends a dictionary match, so a kanji the dictionary lacks stays unselected.
+    if (digitGlyphs == 0 && isCJK(allGlyphs[scanStart].codepoint)) {
+      const int glossChars = glossarySpanAt(text);
+      if (glossChars > matchChars) matchChars = glossChars;
     }
 
     // Fictional katakana name + honorific: group the whole run as one selectable unit even when
