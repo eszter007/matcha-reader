@@ -43,13 +43,18 @@ class WordSelectionScan {
     // a vertical page: its cells are the caller's cellPx.
     uint8_t width;
     // Index into the scan's furigana list for the ruby printed on this glyph (a group reading sits
-    // on its first glyph), or kNoRuby.
+    // on its first glyph), kRubyCovered for a glyph under another glyph's ruby, or kNoRuby.
     uint16_t ruby = 0xFFFF;
   };
   static constexpr uint16_t kNoRuby = 0xFFFF;
+  static constexpr uint16_t kRubyCovered = 0xFFFE;
+  // Longer furigana is not a word reading; it is not kept.
+  static constexpr size_t kMaxRubyBytes = 48;
   // The furigana printed on allGlyphs[i], or nullptr.
   const std::string* rubyAt(size_t i) const {
-    return i < allGlyphs.size() && allGlyphs[i].ruby < rubies_.size() ? &rubies_[allGlyphs[i].ruby] : nullptr;
+    return i < allGlyphs.size() && allGlyphs[i].ruby < rubies_.size() && allGlyphs[i].ruby != kRubyCovered
+               ? &rubies_[allGlyphs[i].ruby]
+               : nullptr;
   }
 
   // Where a horizontal page's characters are drawn, one entry per codepoint of every word in

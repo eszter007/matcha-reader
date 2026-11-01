@@ -339,7 +339,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   void promoteBookReading(const std::string& surface, bool name = false);
   // Moves the dictionary entry whose reading starts with `reading` (kana folded: small kana and
   // katakana match their full-size hiragana) to the front. True when it is now first.
-  bool promoteEntryReading(const std::string& reading);
+  bool promoteEntryReading(std::string_view reading);
   // promoteEntryReading with the furigana printed over the matched glyphs [start, start + chars).
   // False when the page does not annotate the word.
   bool promotePageReading(size_t start, size_t chars);

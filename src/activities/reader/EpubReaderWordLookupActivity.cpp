@@ -18,6 +18,7 @@
 #include <climits>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 
 #include "BookStats.h"
 #include "CrossPointSettings.h"
@@ -1425,7 +1426,7 @@ uint32_t foldKana(uint32_t cp) {
   }
 }
 
-uint32_t nextCp(const std::string& s, size_t& at) {
+uint32_t nextCp(const std::string_view s, size_t& at) {
   const auto c0 = static_cast<unsigned char>(s[at]);
   const size_t len = c0 < 0x80 ? 1 : (c0 & 0xE0) == 0xC0 ? 2 : (c0 & 0xF0) == 0xE0 ? 3 : 4;
   if (at + len > s.size()) {
@@ -1438,66 +1439,118 @@ uint32_t nextCp(const std::string& s, size_t& at) {
   return cp;
 }
 
-// True when the text at `at` in `s` begins with `prefix`, kana folded.
-bool startsWithKana(const std::string& s, size_t at, const std::string& prefix) {
+// True when the text at `at` in `s` begins with `prefix`; with `fold`, kana compare folded.
+bool startsWithKana(const std::string& s, size_t at, const std::string_view prefix, const bool fold) {
   size_t p = 0;
   while (p < prefix.size()) {
     if (at >= s.size()) return false;
-    if (foldKana(nextCp(s, at)) != foldKana(nextCp(prefix, p))) return false;
+    const uint32_t a = nextCp(s, at);
+    const uint32_t b = nextCp(prefix, p);
+    if (fold ? foldKana(a) != foldKana(b) : a != b) return false;
   }
   return true;
 }
+
+bool isKana(const uint32_t cp) { return cp >= 0x3041 && cp <= 0x30FA; }
+
+// A reading assembled from a page's furigana, in a fixed buffer: built during lookup, after the
+// definition has taken its share of the heap.
+struct PageReading {
+  char bytes[96];
+  size_t size = 0;
+  bool overflow = false;
+
+  void append(const std::string_view text) {
+    if (size + text.size() > sizeof(bytes)) {
+      overflow = true;
+      return;
+    }
+    memcpy(bytes + size, text.data(), text.size());
+    size += text.size();
+  }
+  void append(const uint32_t cp) {
+    std::string utf8;  // at most 4 bytes: stays in the small-string buffer
+    WordSelectionScan::encodeUtf8(cp, utf8);
+    append(std::string_view(utf8));
+  }
+  // The last codepoint, removed when it equals `cp` kana-folded.
+  bool popIf(const uint32_t cp) {
+    size_t start = size;
+    while (start > 0 && (static_cast<unsigned char>(bytes[start - 1]) & 0xC0) == 0x80) start--;
+    if (start <= 1) return false;  // keep at least one character
+    start--;
+    size_t at = start;
+    if (foldKana(nextCp(view(), at)) != foldKana(cp)) return false;
+    size = start;
+    return true;
+  }
+  std::string_view view() const { return {bytes, size}; }
+};
 }  // namespace
 
-bool EpubReaderWordLookupActivity::promoteEntryReading(const std::string& reading) {
+bool EpubReaderWordLookupActivity::promoteEntryReading(const std::string_view reading) {
   static constexpr char kEntrySep[] = "\n\n---\n";
   static constexpr char kOpen[] = "\xe3\x80\x90";  // 【
   if (reading.empty()) return false;
-  const auto readsAs = [&](const size_t at) {
-    return resultDefinition.compare(at, sizeof(kOpen) - 1, kOpen) == 0 &&
-           startsWithKana(resultDefinition, at + sizeof(kOpen) - 1, reading);
-  };
-  if (readsAs(0)) return true;
-  for (size_t at = resultDefinition.find(kEntrySep); at != std::string::npos;) {
-    const size_t start = at + sizeof(kEntrySep) - 1;
-    const size_t end = resultDefinition.find(kEntrySep, start);
-    if (readsAs(start)) {
-      // Rotated in place: a definition can run to 16 KB, and a copy of it is an unguarded
-      // allocation on a fragmented heap. [0, at) sep entry -> entry [0, at) sep -> entry sep [0, at).
-      const size_t stop = end == std::string::npos ? resultDefinition.size() : end;
-      const size_t entryLen = stop - start;
-      const auto begin = resultDefinition.begin();
-      std::rotate(begin, begin + start, begin + stop);
-      std::rotate(begin + entryLen, begin + entryLen + at, begin + stop);
-      return true;
+  // Exact kana first, so ねっき on the page is not taken by ねつき; folded second, for books that
+  // print small kana full-size.
+  for (const bool fold : {false, true}) {
+    const auto readsAs = [&](const size_t at) {
+      return resultDefinition.compare(at, sizeof(kOpen) - 1, kOpen) == 0 &&
+             startsWithKana(resultDefinition, at + sizeof(kOpen) - 1, reading, fold);
+    };
+    if (readsAs(0)) return true;
+    for (size_t at = resultDefinition.find(kEntrySep); at != std::string::npos;) {
+      const size_t start = at + sizeof(kEntrySep) - 1;
+      const size_t end = resultDefinition.find(kEntrySep, start);
+      if (readsAs(start)) {
+        // Rotated in place: a definition can run to 16 KB, and a copy of it is an unguarded
+        // allocation on a fragmented heap. [0, at) sep entry -> entry [0, at) sep -> entry sep [0, at).
+        const size_t stop = end == std::string::npos ? resultDefinition.size() : end;
+        const size_t entryLen = stop - start;
+        const auto begin = resultDefinition.begin();
+        std::rotate(begin, begin + start, begin + stop);
+        std::rotate(begin + entryLen, begin + entryLen + at, begin + stop);
+        return true;
+      }
+      at = end;
     }
-    at = end;
   }
   return false;
 }
 
 bool EpubReaderWordLookupActivity::promotePageReading(const size_t start, const size_t chars) {
   // The furigana printed over the matched glyphs, up to the last annotated one: や for 止めて,
-  // みなも for 水面 (one group reading on its first kanji). A kanji with none before any
-  // furigana means the page does not annotate this word.
-  std::string reading;
+  // みなも for 水面. Kana outside any annotation is okurigana and joins the reading; kana under
+  // one is already in it. A kanji with no furigana means the page does not annotate this word.
+  PageReading reading;
   size_t readingEnd = 0;
+  size_t lastAnnotated = start;
   bool annotated = false;
-  for (size_t i = start; i < start + chars && i < scan.onPageGlyphCount(); i++) {
+  const size_t end = std::min(start + chars, scan.onPageGlyphCount());
+  for (size_t i = start; i < end; i++) {
     const uint32_t cp = scan.allGlyphs[i].codepoint;
-    if (const std::string* ruby = scan.rubyAt(i)) {
-      reading += *ruby;
-      readingEnd = reading.size();
-      annotated = true;
-    } else if (WordSelectionScan::isCJK(cp)) {
-      if (!annotated) return false;  // inside a group reading otherwise
-    } else {
-      WordSelectionScan::encodeUtf8(cp, reading);  // okurigana between annotated kanji
+    const uint16_t ruby = scan.allGlyphs[i].ruby;
+    if (const std::string* text = scan.rubyAt(i)) {
+      reading.append(std::string_view(*text));
+    } else if (ruby != WordSelectionScan::kRubyCovered) {  // covered glyphs are in the reading already
+      if (WordSelectionScan::isCJK(cp)) return false;
+      reading.append(cp);  // okurigana between annotated kanji
+      continue;
     }
+    annotated = true;
+    readingEnd = reading.size;
+    lastAnnotated = i;
   }
-  if (!annotated) return false;
-  reading.resize(readingEnd);
-  return promoteEntryReading(reading);
+  if (!annotated || reading.overflow) return false;
+  reading.size = readingEnd;
+  // Okurigana inside the annotation (止めて/やめて) is inflected; the dictionary lists the stem's
+  // reading before its own ending, so drop the kana the annotation shares with the page text.
+  for (size_t i = lastAnnotated + 1; i-- > start;) {
+    const uint32_t cp = scan.allGlyphs[i].codepoint;
+    if (!isKana(cp) || !reading.popIf(cp)) break;
+  }
+  return promoteEntryReading(reading.view());
 }
 
 void EpubReaderWordLookupActivity::performLookup() {
