@@ -259,10 +259,10 @@ class WordSelectionScan {
   // Longest hanzi run the segmenter weighs at once. Chinese clauses rarely run longer between
   // punctuation marks, and the run can always continue with the next call.
   static constexpr size_t kRunMax = 24;
-  // Longest window probed per cell. Chinese words are one to four characters and idioms four;
-  // the few longer headwords are proper nouns whose four-character prefix is itself an entry, so
-  // stopping at six saves a quarter of the SD probes a page costs without losing real words.
-  static constexpr int kChineseMaxWindow = 6;
+  // Longest window probed per cell: the full lookup window, so seven- and eight-character set
+  // phrases and names (一年之计在于春, 中华人民共和国) are found. lookupAll() stops at the first
+  // prefix no headword starts with, so most cells cost two or three probes whatever the limit.
+  static constexpr int kChineseMaxWindow = kMaxLookupChars;
   // Per-cell candidate priorities for the run being segmented (index: cell, window length - 1)
   // and the dynamic-programming tables. Members, not locals: ~250 bytes is past the stack budget.
   uint8_t runPriority_[kRunMax][kMaxLookupChars] = {};

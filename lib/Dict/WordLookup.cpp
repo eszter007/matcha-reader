@@ -79,6 +79,8 @@ uint8_t WordLookup::lookupAll(const std::string& paragraphText, const size_t byt
     if (DictIndex::lookupExact(window, entry, DictIndex::DICT_ALL, /*needDefinition=*/false)) {
       found |= static_cast<uint8_t>(1u << (windowChars - 1));
       priority[windowChars - 1] = entry.priority;
+    } else if (!DictIndex::longerHeadwordMayExist()) {
+      break;
     }
   }
   return found;

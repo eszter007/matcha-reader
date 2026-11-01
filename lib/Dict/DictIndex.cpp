@@ -78,6 +78,8 @@ bool g_heapLimited = false;
 // answer the caller's release-fonts-and-retry from the memo before it could reach the SD card.
 // Reset at the top of every lookupExact().
 bool g_lookupIncomplete = false;
+// Whether a headword longer than the last lookupExact() key may start with it (see longerHeadwordMayExist).
+bool g_longerMayExist = true;
 static uint32_t g_missMemoHits = 0;  // lookups answered from the negative memo (no SD traffic)
 uint32_t g_recordCacheHits = 0;
 uint32_t g_recordCacheMisses = 0;
@@ -681,6 +683,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
     } else if (cmp > 0) {
       lo = mid + 1;
     } else {
+      g_longerMayExist = true;  // the headword exists, so longer ones may too; not checked
       // POS gate: a record with flags counts only if it intersects the caller's mask; a record
       // with posFlags==0 (no POS data, e.g. a pre-flags dict file) always counts. posMask==0
       // means the caller doesn't care (exact surface-form lookups).
@@ -875,6 +878,16 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
     }
   }
 
+  // A miss leaves lo at the key's insertion point: the record there is the next headword in sort
+  // order, and a longer word beginning with the key would sort right there.
+  if (lo < recordCount && !g_lookupIncomplete) {
+    if (!readIndexRecord(h, lo, recordCount, rec)) {
+      g_lookupIncomplete = true;
+    } else if (std::memcmp(rec.headword, key, len) == 0) {
+      g_longerMayExist = true;
+    }
+  }
+  if (g_lookupIncomplete) g_longerMayExist = true;
   return false;
 }
 
@@ -933,8 +946,11 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
   const uint64_t missTag = missTagFor(headword, dictMask, posMask);
   if (g_missMemo && g_missMemo[missTag % kMissMemoSlots] == missTag) {
     g_missMemoHits++;
+    g_longerMayExist = true;  // the memo keeps only the miss
     return false;
   }
+  // Each searched file that could hold a longer word sets it (lookupInFile).
+  g_longerMayExist = false;
   // No Storage.exists() pre-checks needed here -- lookupInFile()'s own open-once cache already
   // makes a missing optional dictionary (grammar, jmnedict) a cheap no-op after the first attempt,
   // and an existence check would itself be a filesystem call repeated on every lookup otherwise.
@@ -955,6 +971,8 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
   if (!g_lookupIncomplete) rememberMiss(missTag);
   return false;
 }
+
+bool DictIndex::longerHeadwordMayExist() { return g_longerMayExist; }
 
 bool DictIndex::consumeHeapLimited() {
   const bool limited = g_heapLimited;
