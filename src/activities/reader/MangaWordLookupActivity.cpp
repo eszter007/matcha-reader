@@ -449,8 +449,8 @@ void MangaWordLookupActivity::performLookupImpl() {
     }
   }
 
-  DefinitionText::formatEntryBody(resultDefinition,
-                                  resultDict == DictIndex::DICT_GRAMMAR ? resultHeadword : std::string());
+  DefinitionText::formatEntryBody(
+      resultDefinition, resultDict == DictIndex::DICT_GRAMMAR ? resultHeadword : std::string(), resultGrammar);
   requestUpdate();
 }
 
