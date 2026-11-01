@@ -79,7 +79,8 @@ class WordLookupDeinflection : public ::testing::Test {
                             {"勉強", 255, DictIndexRecord::POS_VS | OTHER, "study"},
                             {"まず", 255, OTHER, "first of all"},
                             {"必ず", 255, OTHER, "certainly"},
-                            {"かわいそう", 255, OTHER, "pitiful"}});
+                            {"かわいそう", 255, OTHER, "pitiful"},
+                            {"ありがとうございます", 255, OTHER, "thank you"}});
     testRoot() = root_.string();
     DictIndex::releaseCaches();
   }
@@ -144,6 +145,16 @@ TEST_F(WordLookupDeinflection, WordsEndingLikeASuffixStayThemselves) {
   EXPECT_EQ(lookup("まず、"), both("まず", "まず"));
   EXPECT_EQ(lookup("必ず来る"), both("必ず", "必ず"));
   EXPECT_EQ(lookup("かわいそうな"), both("かわいそう", "かわいそう"));
+}
+
+TEST_F(WordLookupDeinflection, ConjugationPastTheWindowWhenTheTextRunsOnInHiragana) {
+  EXPECT_EQ(lookup("食べさせられなかった。"), both("食べる", "食べさせられなかった"));
+  EXPECT_EQ(lookup("ありがとうございます。"), both("ありがとうございます", "ありがとうございます"));
+}
+
+TEST_F(WordLookupDeinflection, WindowStaysAtEightWithoutAHiraganaTail) {
+  // The text runs on, but in kanji: the normal window decides.
+  EXPECT_EQ(lookup("食べさせられ勉強勉強").second, "食べさせられ");
 }
 
 }  // namespace

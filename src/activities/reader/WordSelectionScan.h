@@ -186,9 +186,14 @@ class WordSelectionScan {
   // cut at the page edge and its span is only the on-page part of a longer match; otherwise the
   // full window, for the longest-match path.
   int lookupCharLimit(size_t selectableIdx) const {
-    if (!chineseMode_ || selectableIdx >= selectableGlyphs.size() || selectableIdx >= selectToAllIdx.size()) {
-      return kMaxLookupChars;
+    if (selectableIdx >= selectableGlyphs.size() || selectableIdx >= selectToAllIdx.size()) return kMaxLookupChars;
+    // A conjugation the scan matched past the window (see WordLookup::MAX_CONJUGATION_CHARS). A
+    // span the page edge cut is shorter than the word, so the lookup then reads the longest match.
+    const uint8_t matched = selectableGlyphs[selectableIdx].matchLen;
+    if (!chineseMode_ && matched > kMaxLookupChars) {
+      return selectToAllIdx[selectableIdx] + matched < contextStart ? matched : kMaxMatchChars;
     }
+    if (!chineseMode_) return kMaxLookupChars;
     const uint8_t span = selectableGlyphs[selectableIdx].matchLen;
     if (span == 0 || selectToAllIdx[selectableIdx] + span >= contextStart) return kMaxLookupChars;
     return span < kMaxLookupChars ? span : kMaxLookupChars;
@@ -196,6 +201,8 @@ class WordSelectionScan {
 
   // Shared helpers, also used by EpubReaderWordLookupActivity's runtime lookups.
   static constexpr int kMaxLookupChars = 8;
+  // The longest match a word can have: a conjugation may run past the lookup window.
+  static constexpr int kMaxMatchChars = WordLookup::MAX_CONJUGATION_CHARS;
   // The context is exactly one lookup window: a word beginning on the last on-page character
   // reaches at most kMaxLookupChars - 1 further, and nothing past that can ever be matched.
   static_assert(kLookupContextChars == kMaxLookupChars, "context must cover one lookup window");

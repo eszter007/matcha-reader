@@ -140,9 +140,103 @@ uint8_t WordLookup::lookupAll(const std::string& paragraphText, const size_t byt
   return found;
 }
 
+bool WordLookup::isLongConjugationTail(const std::string& text, const size_t byteOffset, const int chars) {
+  size_t pos = advanceChars(text, byteOffset, MAX_WINDOW_CHARS - 1);
+  for (int i = MAX_WINDOW_CHARS; i <= chars; i++) {
+    if (pos >= text.size()) return false;
+    const uint32_t cp = decodeCp(text, pos);
+    if (cp < 0x3041 || cp > 0x3096) return false;
+    pos = advanceChars(text, pos, 1);
+  }
+  return true;
+}
+
+namespace {
+// Windows past MAX_WINDOW_CHARS: a whole headword (ありがとうございました), else a verb or adjective
+// conjugated past the normal window, checked against its word class. Reached only when the text
+// runs on in hiragana. Headwords are probed upward and stop at the first prefix no headword
+// continues, so a kana-heavy page costs about one probe per position; conjugations need a kanji or
+// katakana stem.
+bool lookupLongConjugation(const std::string& text, const size_t byteOffset, WordLookupResult& out,
+                           const bool needDefinition) {
+  int available = 0;
+  for (size_t pos = byteOffset; pos < text.size() && available < WordLookup::MAX_CONJUGATION_CHARS;) {
+    pos = advanceChars(text, pos, 1);
+    available++;
+  }
+  int longest = WordLookup::MAX_WINDOW_CHARS;
+  while (longest < available && WordLookup::isLongConjugationTail(text, byteOffset, longest + 1)) longest++;
+  if (longest == WordLookup::MAX_WINDOW_CHARS) return false;
+  const auto windowOf = [&](const int chars) {
+    return text.substr(byteOffset, advanceChars(text, byteOffset, chars) - byteOffset);
+  };
+
+  DictEntry entry;
+  int exactChars = 0;
+  for (int chars = WordLookup::MAX_WINDOW_CHARS + 1; chars <= longest; chars++) {
+    const std::string window = windowOf(chars);
+    if (window.size() >= DictIndexRecord::HEADWORD_SIZE) break;
+    if (DictIndex::lookupExact(window.c_str(), entry, DictIndex::DICT_JMDICT | DictIndex::DICT_GRAMMAR, false)) {
+      exactChars = chars;
+    } else if (!DictIndex::longerHeadwordMayExist()) {
+      break;
+    }
+  }
+  if (exactChars > 0) {
+    const std::string window = windowOf(exactChars);
+    if (DictIndex::lookupExact(window.c_str(), entry, DictIndex::DICT_JMDICT | DictIndex::DICT_GRAMMAR,
+                               needDefinition)) {
+      out.entry = std::move(entry);
+      out.matchLength = window.size();
+      out.deinflected = false;
+      return true;
+    }
+  }
+
+  const uint32_t first = decodeCp(text, byteOffset);
+  const bool stem = (first >= 0x4E00 && first <= 0x9FFF) || (first >= 0x3400 && first <= 0x4DBF) ||
+                    (first >= 0x30A1 && first <= 0x30FA);
+  if (!stem) return false;
+  for (int chars = longest; chars > WordLookup::MAX_WINDOW_CHARS; chars--) {
+    const std::string window = windowOf(chars);
+    const auto candidates = Deinflector::deinflect(window);
+    for (size_t i = 1; i < candidates.size(); i++) {
+      uint8_t posMask = 0;
+      switch (candidates[i].condition) {
+        case WordCondition::V1:
+          posMask = DictIndexRecord::POS_V1;
+          break;
+        case WordCondition::V5:
+          posMask = DictIndexRecord::POS_V5;
+          break;
+        case WordCondition::VS:
+          posMask = DictIndexRecord::POS_VS;
+          break;
+        case WordCondition::VK:
+          posMask = DictIndexRecord::POS_VK;
+          break;
+        case WordCondition::ADJ_I:
+          posMask = DictIndexRecord::POS_ADJ_I;
+          break;
+        case WordCondition::DICT:
+          continue;  // an unclassed candidate this long is a phrase guess, not a conjugation
+      }
+      if (DictIndex::lookupExact(candidates[i].text.c_str(), entry, DictIndex::DICT_JMDICT, needDefinition, posMask)) {
+        out.entry = std::move(entry);
+        out.matchLength = window.size();
+        out.deinflected = true;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+}  // namespace
+
 bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, WordLookupResult& out, bool needDefinition,
                         const uint32_t precedingCp) {
   if (byteOffset >= paragraphText.size()) return false;
+  if (lookupLongConjugation(paragraphText, byteOffset, out, needDefinition)) return true;
 
   // Try decreasing window lengths: 8 characters down to 1.
   // For each window, try the raw text first, then deinflected candidates.
