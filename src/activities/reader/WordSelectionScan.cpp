@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <numeric>
 
 #include "Epub/Kinsoku.h"
 #include "Epub/Page.h"
@@ -30,9 +31,10 @@ uint32_t decodeFirst(const std::string_view s) {
   const size_t len = utf8Len(c0);
   if (s.size() < len) return 0;
   if (len == 1) return c0;
-  uint32_t cp = c0 & (len == 2 ? 0x1Fu : len == 3 ? 0x0Fu : 0x07u);
-  for (size_t k = 1; k < len; k++) cp = (cp << 6) | (static_cast<unsigned char>(s[k]) & 0x3Fu);
-  return cp;
+  const uint32_t lead = c0 & (len == 2 ? 0x1Fu : len == 3 ? 0x0Fu : 0x07u);
+  return std::accumulate(
+      s.begin() + 1, s.begin() + static_cast<std::ptrdiff_t>(len), lead,
+      [](const uint32_t cp, const char c) { return (cp << 6) | (static_cast<unsigned char>(c) & 0x3Fu); });
 }
 // Bare vector growth (reserve()/push_back() past capacity) calls operator new, which aborts the
 // whole device on OOM under -fno-exceptions instead of returning nullptr (see CLAUDE.md). Word
