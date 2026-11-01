@@ -24,6 +24,10 @@ struct Rule {
 
 // clang-format off
 static constexpr Rule kRules[] = {
+    // ございます in the past. First, so its unclassed candidate is the one kept: した→す reaches the
+    // same text as a godan verb, which ございます is not. Other verbs need no ました rule.
+    {"\xe3\x81\x94\xe3\x81\x96\xe3\x81\x84\xe3\x81\xbe\xe3\x81\x97\xe3\x81\x9f", "\xe3\x81\x94\xe3\x81\x96\xe3\x81\x84\xe3\x81\xbe\xe3\x81\x99", WordCondition::DICT, WordCondition::DICT},  // ございました→ございます
+
     // ── Ichidan (v1) verbs: dictionary form ends in -る ──────────
     // Negative
     {"\xe3\x81\xaa\xe3\x81\x84", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // ない→る
@@ -342,6 +346,54 @@ static constexpr Rule kRules[] = {
     {"\xe3\x82\x8c\xe3\x82\x8b", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V5},  // れる→る
     {"\xe3\x81\x88\xe3\x82\x8b", "\xe3\x81\x86", WordCondition::DICT, WordCondition::V5},  // える→う
 
+    // Classical negative -ず (笑わず, 食べず, せず, こず).
+    {"\xe3\x81\x8b\xe3\x81\x9a", "\xe3\x81\x8f", WordCondition::DICT, WordCondition::V5},  // かず→く
+    {"\xe3\x81\x8c\xe3\x81\x9a", "\xe3\x81\x90", WordCondition::DICT, WordCondition::V5},  // がず→ぐ
+    {"\xe3\x81\x95\xe3\x81\x9a", "\xe3\x81\x99", WordCondition::DICT, WordCondition::V5},  // さず→す
+    {"\xe3\x81\x9f\xe3\x81\x9a", "\xe3\x81\xa4", WordCondition::DICT, WordCondition::V5},  // たず→つ
+    {"\xe3\x81\xaa\xe3\x81\x9a", "\xe3\x81\xac", WordCondition::DICT, WordCondition::V5},  // なず→ぬ
+    {"\xe3\x81\xb0\xe3\x81\x9a", "\xe3\x81\xb6", WordCondition::DICT, WordCondition::V5},  // ばず→ぶ
+    {"\xe3\x81\xbe\xe3\x81\x9a", "\xe3\x82\x80", WordCondition::DICT, WordCondition::V5},  // まず→む
+    {"\xe3\x82\x89\xe3\x81\x9a", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V5},  // らず→る
+    {"\xe3\x82\x8f\xe3\x81\x9a", "\xe3\x81\x86", WordCondition::DICT, WordCondition::V5},  // わず→う
+    {"\xe3\x81\x9a", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // ず→る
+    {"\xe3\x81\x9b\xe3\x81\x9a", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // せず→する
+    {"\xe3\x81\x93\xe3\x81\x9a", "\xe3\x81\x8f\xe3\x82\x8b", WordCondition::DICT, WordCondition::VK},  // こず→くる
+    // Colloquial -てる/-てた for -ている/-ていた (食べてる, 読んでる, してた).
+    {"\xe3\x81\xa6\xe3\x82\x8b", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // てる→る
+    {"\xe3\x81\xa6\xe3\x81\x9f", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // てた→る
+    {"\xe3\x81\xa3\xe3\x81\xa6\xe3\x82\x8b", "\xe3\x81\x86", WordCondition::DICT, WordCondition::V5},  // ってる→う
+    {"\xe3\x81\xa3\xe3\x81\xa6\xe3\x82\x8b", "\xe3\x81\xa4", WordCondition::DICT, WordCondition::V5},  // ってる→つ
+    {"\xe3\x81\xa3\xe3\x81\xa6\xe3\x82\x8b", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V5},  // ってる→る
+    {"\xe3\x82\x93\xe3\x81\xa7\xe3\x82\x8b", "\xe3\x82\x80", WordCondition::DICT, WordCondition::V5},  // んでる→む
+    {"\xe3\x82\x93\xe3\x81\xa7\xe3\x82\x8b", "\xe3\x81\xac", WordCondition::DICT, WordCondition::V5},  // んでる→ぬ
+    {"\xe3\x82\x93\xe3\x81\xa7\xe3\x82\x8b", "\xe3\x81\xb6", WordCondition::DICT, WordCondition::V5},  // んでる→ぶ
+    {"\xe3\x81\x84\xe3\x81\xa6\xe3\x82\x8b", "\xe3\x81\x8f", WordCondition::DICT, WordCondition::V5},  // いてる→く
+    {"\xe3\x81\x84\xe3\x81\xa7\xe3\x82\x8b", "\xe3\x81\x90", WordCondition::DICT, WordCondition::V5},  // いでる→ぐ
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x82\x8b", "\xe3\x81\x99", WordCondition::DICT, WordCondition::V5},  // してる→す
+    {"\xe3\x81\xa3\xe3\x81\xa6\xe3\x81\x9f", "\xe3\x81\x86", WordCondition::DICT, WordCondition::V5},  // ってた→う
+    {"\xe3\x81\xa3\xe3\x81\xa6\xe3\x81\x9f", "\xe3\x81\xa4", WordCondition::DICT, WordCondition::V5},  // ってた→つ
+    {"\xe3\x81\xa3\xe3\x81\xa6\xe3\x81\x9f", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V5},  // ってた→る
+    {"\xe3\x82\x93\xe3\x81\xa7\xe3\x81\x9f", "\xe3\x82\x80", WordCondition::DICT, WordCondition::V5},  // んでた→む
+    {"\xe3\x81\x84\xe3\x81\xa6\xe3\x81\x9f", "\xe3\x81\x8f", WordCondition::DICT, WordCondition::V5},  // いてた→く
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x9f", "\xe3\x81\x99", WordCondition::DICT, WordCondition::V5},  // してた→す
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x82\x8b", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // してる→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x9f", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // してた→する
+    // Appearance -そう on the stem (食べそう, 降りそう, 高そう, 勉強しそう). Ichidan first: できそう is
+    // できる, not the rare godan reading the い-row stem also allows.
+    {"\xe3\x81\x9d\xe3\x81\x86", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // そう→る
+    {"\xe3\x81\x8d\xe3\x81\x9d\xe3\x81\x86", "\xe3\x81\x8f", WordCondition::DICT, WordCondition::V5},  // きそう→く
+    {"\xe3\x81\x8e\xe3\x81\x9d\xe3\x81\x86", "\xe3\x81\x90", WordCondition::DICT, WordCondition::V5},  // ぎそう→ぐ
+    {"\xe3\x81\x97\xe3\x81\x9d\xe3\x81\x86", "\xe3\x81\x99", WordCondition::DICT, WordCondition::V5},  // しそう→す
+    {"\xe3\x81\xa1\xe3\x81\x9d\xe3\x81\x86", "\xe3\x81\xa4", WordCondition::DICT, WordCondition::V5},  // ちそう→つ
+    {"\xe3\x81\xab\xe3\x81\x9d\xe3\x81\x86", "\xe3\x81\xac", WordCondition::DICT, WordCondition::V5},  // にそう→ぬ
+    {"\xe3\x81\xb3\xe3\x81\x9d\xe3\x81\x86", "\xe3\x81\xb6", WordCondition::DICT, WordCondition::V5},  // びそう→ぶ
+    {"\xe3\x81\xbf\xe3\x81\x9d\xe3\x81\x86", "\xe3\x82\x80", WordCondition::DICT, WordCondition::V5},  // みそう→む
+    {"\xe3\x82\x8a\xe3\x81\x9d\xe3\x81\x86", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V5},  // りそう→る
+    {"\xe3\x81\x84\xe3\x81\x9d\xe3\x81\x86", "\xe3\x81\x86", WordCondition::DICT, WordCondition::V5},  // いそう→う
+    {"\xe3\x81\x9d\xe3\x81\x86", "\xe3\x81\x84", WordCondition::DICT, WordCondition::ADJ_I},  // そう→い
+    {"\xe3\x81\x97\xe3\x81\x9d\xe3\x81\x86", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // しそう→する
+
     // ── I-adjective (adj-i): dictionary form ends in -い ─────────
     {"\xe3\x81\x8f\xe3\x81\xaa\xe3\x81\x84", "\xe3\x81\x84", WordCondition::DICT, WordCondition::ADJ_I},  // くない→い (negative)
     {"\xe3\x81\x8b\xe3\x81\xa3\xe3\x81\x9f", "\xe3\x81\x84", WordCondition::DICT, WordCondition::ADJ_I},  // かった→い (past)
@@ -373,6 +425,15 @@ static constexpr Rule kRules[] = {
     {"\xe3\x81\x93\xe3\x82\x89\xe3\x82\x8c\xe3\x82\x8b", "\xe3\x81\x8f\xe3\x82\x8b", WordCondition::DICT, WordCondition::VK},  // こられる→くる
     {"\xe3\x81\x93\xe3\x82\x88\xe3\x81\x86", "\xe3\x81\x8f\xe3\x82\x8b", WordCondition::DICT, WordCondition::VK},  // こよう→くる
     {"\xe3\x81\x8f\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x81\x8f\xe3\x82\x8b", WordCondition::DICT, WordCondition::VK},  // くれば→くる
+    // The same in kanji: 来 keeps its spelling, so these do not reach 来る through the kana rows.
+    {"\xe6\x9d\xa5\xe3\x81\xaa\xe3\x81\x84", "\xe6\x9d\xa5\xe3\x82\x8b", WordCondition::DICT, WordCondition::VK},  // 来ない→来る
+    {"\xe6\x9d\xa5\xe3\x81\xbe\xe3\x81\x99", "\xe6\x9d\xa5\xe3\x82\x8b", WordCondition::DICT, WordCondition::VK},  // 来ます→来る
+    {"\xe6\x9d\xa5\xe3\x81\xa6", "\xe6\x9d\xa5\xe3\x82\x8b", WordCondition::DICT, WordCondition::VK},  // 来て→来る
+    {"\xe6\x9d\xa5\xe3\x81\x9f", "\xe6\x9d\xa5\xe3\x82\x8b", WordCondition::DICT, WordCondition::VK},  // 来た→来る
+    {"\xe6\x9d\xa5\xe3\x82\x8c\xe3\x81\xb0", "\xe6\x9d\xa5\xe3\x82\x8b", WordCondition::DICT, WordCondition::VK},  // 来れば→来る
+    {"\xe6\x9d\xa5\xe3\x82\x88\xe3\x81\x86", "\xe6\x9d\xa5\xe3\x82\x8b", WordCondition::DICT, WordCondition::VK},  // 来よう→来る
+    {"\xe6\x9d\xa5\xe3\x82\x89\xe3\x82\x8c\xe3\x82\x8b", "\xe6\x9d\xa5\xe3\x82\x8b", WordCondition::DICT, WordCondition::VK},  // 来られる→来る
+    {"\xe6\x9d\xa5\xe3\x81\x9a", "\xe6\x9d\xa5\xe3\x82\x8b", WordCondition::DICT, WordCondition::VK},  // 来ず→来る
 
     // ── Iku (行く) irregular te/ta forms ─────────────────────────
     {"\xe3\x81\xa3\xe3\x81\x9f", "\xe3\x81\x8f", WordCondition::DICT, WordCondition::V5},  // った→く (行った→行く, duplicates godan る but also matches く)
@@ -420,10 +481,11 @@ std::vector<DeinflectionCandidate> Deinflector::deinflect(const std::string& sur
 
       std::string newText = text.substr(0, text.size() - fromLen) + rule.to;
 
-      // Avoid duplicates.
+      // Avoid duplicates. A kuru candidate is kept beside the same text from another rule: 来ない
+      // reaches 来る through ない→る first, as an ichidan verb, which 来る's entry is not.
       bool found = false;
       for (const auto& existing : results) {
-        if (existing.text == newText) {
+        if (existing.text == newText && (existing.condition == rule.condOut || rule.condOut != WordCondition::VK)) {
           found = true;
           break;
         }
