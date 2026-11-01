@@ -114,6 +114,7 @@ class WordLookupAll : public ::testing::Test {
                             {"中华", 150, OTHER, "zhonghua"},
                             {"中华人民共和国", 170, OTHER, "PRC"},
                             {"人民", 190, OTHER, "renmin"},
+                            {"联合国安全理事会", 160, OTHER, "UN Security Council"},
                             {"成立", 180, OTHER, "chengli"}});
     testRoot() = root_.string();
     DictIndex::releaseCaches();
@@ -147,6 +148,14 @@ TEST_F(WordLookupAll, StopsAtAPrefixNoHeadwordStartsWith) {
   uint8_t priority[WordLookup::MAX_WINDOW_CHARS] = {};
   EXPECT_EQ(WordLookup::lookupAll("人民共和国", 0, priority), 0b10);
   EXPECT_FALSE(DictIndex::longerHeadwordMayExist());  // stopped at 人民共
+}
+
+TEST_F(WordLookupAll, FindsAnEightCharacterWordOnlyWithTheFullWindow) {
+  uint8_t priority[WordLookup::MAX_WINDOW_CHARS] = {};
+  EXPECT_EQ(WordLookup::lookupAll("联合国安全理事会开会", 0, priority), 0b10000000);
+  EXPECT_EQ(priority[7], 160);
+  uint8_t shorter[WordLookup::MAX_WINDOW_CHARS] = {};
+  EXPECT_EQ(WordLookup::lookupAll("联合国安全理事会开会", 0, shorter, 7), 0);
 }
 
 }  // namespace

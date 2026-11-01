@@ -299,4 +299,29 @@ TEST_F(DictSiblingWindow, LongRunMergesTheTopFiveSensesOfTheWholeRun) {
   EXPECT_EQ(fallback.definition, expected);
 }
 
+// After a miss, whether a longer headword may start with the key. Every headword plus "~" sorts
+// just after it and starts no headword: its successor is often the first record past a .spx
+// stride window. Every six-character prefix starts ten headwords. Both answers must hold on both
+// search paths.
+TEST_F(DictSiblingWindow, PrefixAnswerAfterAMissMatchesAcrossSearchPaths) {
+  for (const bool withSpx : {true, false}) {
+    if (withSpx) {
+      restoreSpx();
+    } else {
+      hideSpx();
+    }
+    DictEntry entry;
+    for (size_t i = 0; i < HEADWORD_COUNT; i++) {
+      const std::string past = headwordAt(i) + "~";
+      ASSERT_FALSE(DictIndex::lookupExact(past.c_str(), entry, DictIndex::DICT_JMDICT, false));
+      EXPECT_FALSE(DictIndex::longerHeadwordMayExist()) << past << " spx=" << withSpx;
+    }
+    for (size_t i = 0; i < HEADWORD_COUNT; i += 10) {
+      const std::string prefix = headwordAt(i).substr(0, 6);
+      ASSERT_FALSE(DictIndex::lookupExact(prefix.c_str(), entry, DictIndex::DICT_JMDICT, false));
+      EXPECT_TRUE(DictIndex::longerHeadwordMayExist()) << prefix << " spx=" << withSpx;
+    }
+  }
+}
+
 }  // namespace
