@@ -108,6 +108,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   // after a font-cache reclaim. Reported as low memory instead of "no match", which would be a
   // false statement about the word.
   bool lowMemoryResult = false;
+  bool slabWasEnabled = true;  // the glyph slab's state on entry, restored on exit
   // Set when a lookup was actually defeated by the heap. Gates the pre-emptive font release in
   // performLookup(), so the reload it causes is paid only after a real failure.
   bool lastLookupHeapLimited = false;

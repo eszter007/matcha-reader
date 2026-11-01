@@ -233,12 +233,14 @@ void EpubReaderWordLookupActivity::onEnter() {
   // enter AND exit so a leak per open/close cycle shows as a declining series.
   LOG_INF("WLA", "onEnter heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   // Suspend the glyph slab for the session -- 24KB back, and it cannot creep in again while the
-  // panel is up. Restored in onExit(). Under the render lock: setSlabEnabled(false) FREES the
-  // slab, and the render task may be mid-render holding pointers into it -- the same cross-task
-  // use-after-free reclaimFontHeap() takes the lock for.
+  // panel is up. onExit() restores the state it found (the reader keeps it suspended as well).
+  // Under the render lock: setSlabEnabled(false) FREES the slab, and the render task may be
+  // mid-render holding pointers into it -- the same cross-task use-after-free reclaimFontHeap()
+  // takes the lock for.
   if (auto* fcm = renderer.getFontCacheManager()) {
     if (auto* fd = fcm->getDecompressor()) {
       RenderLock lock;
+      slabWasEnabled = fd->slabEnabled();
       fd->setSlabEnabled(false);
     }
   }
@@ -302,7 +304,7 @@ void EpubReaderWordLookupActivity::onExit() {
   if (auto* fcm = renderer.getFontCacheManager()) {
     if (auto* fd = fcm->getDecompressor()) {
       RenderLock lock;  // mutates decompressor state; see the matching call in onEnter()
-      fd->setSlabEnabled(true);
+      fd->setSlabEnabled(slabWasEnabled);
     }
   }
   // Persist the current cursor position (a no-op if the scan never finished, or the cache path

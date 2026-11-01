@@ -499,6 +499,18 @@ void EpubReaderActivity::onReaderEnter() {
   // Some entry screens open on Confirm press, others on release. Swallow only
   // a release that is still pending; otherwise the first real reader click vanished.
   ignoreNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+  // Suspend the glyph slab while the book is open. Page text is prewarmed and never uses it; it
+  // caches stray fallback glyphs and the glyphs of small screens drawn over the book, which then
+  // redraw from their groups instead. Its 24KB split the heap the reader and Word Lookup need.
+  // Under the render lock: suspending frees it, and the render task may hold pointers into it.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor()) {
+      RenderLock lock;
+      slabWasEnabled = fd->slabEnabled();
+      fd->setSlabEnabled(false);
+      slabSuspended = true;
+    }
+  }
   ImageBlock::clearRenderFailures();
   // Lazy image extraction: section builds only header-probe images, so the first
   // render of an image page pulls the file out of the EPUB through this hook.
@@ -618,6 +630,13 @@ int EpubReaderActivity::bookPercentFor(const ChapterPosition& position) const {
 
 void EpubReaderActivity::onReaderExit() {
   saveTextSettingsIfDirty();  // a Text/Page change made with a panel still open
+  if (auto* fcm = renderer.getFontCacheManager(); fcm && slabSuspended) {
+    if (auto* fd = fcm->getDecompressor()) {
+      RenderLock lock;
+      fd->setSlabEnabled(slabWasEnabled);
+    }
+    slabSuspended = false;
+  }
   // The extractor holds a raw pointer to this activity's epub; drop it before
   // the activity (and the shared_ptr) goes away.
   ImageBlock::setExtractor(nullptr, nullptr);

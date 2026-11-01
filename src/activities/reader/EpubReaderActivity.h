@@ -133,6 +133,10 @@ class EpubReaderActivity final : public ReaderActivity {
   bool showDictionaryMessage = false;
   unsigned long dictionaryMessageTime = 0UL;
   bool ignoreNextConfirmRelease = false;
+  // The glyph slab is suspended while the book is open (see onReaderEnter); set when this reader
+  // suspended it, with the state it found.
+  bool slabSuspended = false;
+  bool slabWasEnabled = true;
   bool showFontDamagedMessage = false;
   unsigned long fontDamagedMessageTime = 0UL;
   bool showClippingMessage = false;
