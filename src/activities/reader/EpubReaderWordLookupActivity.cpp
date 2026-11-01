@@ -1503,7 +1503,17 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   }
 
   WordLookupResult result;
-  if (WordLookup::lookup(text, 0, result)) {
+  // The character before the word, from the same paragraph: a particle there makes a verb stem of
+  // 乗り in バスに乗り、.
+  uint32_t precedingCp = 0;
+  if (digitPrefix.empty()) {
+    const size_t start = currentAllGlyphIndex();
+    if (start > 0 && start < scan.allGlyphs.size() &&
+        scan.allGlyphs[start - 1].paragraphIndex == scan.allGlyphs[start].paragraphIndex) {
+      precedingCp = scan.allGlyphs[start - 1].codepoint;
+    }
+  }
+  if (WordLookup::lookup(text, 0, result, /*needDefinition=*/true, precedingCp)) {
     WordSelectionScan::stripTrailingParticle(text, result);
     hasResult = true;
     resultHeadword = digitPrefix + result.entry.headword;

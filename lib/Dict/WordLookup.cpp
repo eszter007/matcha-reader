@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <string_view>
 
 #include "Deinflector.h"
 
@@ -56,6 +57,59 @@ bool hasNameChar(const std::string& text) {
   return false;
 }
 
+// A verb from its continuative stem (乗り -> 乗る, 出し -> 出す): the stem + ます, deinflected, must
+// name a verb of the class the rule produced.
+bool lookupVerbFromStem(const std::string& stem, DictEntry& entry, const bool needDefinition) {
+  if (stem.empty() || stem.size() + 6 >= DictIndexRecord::HEADWORD_SIZE) return false;
+  // A single-kanji suru verb (愛し -> 愛する, 察し -> 察する) before its godan variant (愛す).
+  static constexpr char kShi[] = "\xe3\x81\x97";  // し
+  if (stem.size() > 3 && stem.compare(stem.size() - 3, 3, kShi) == 0) {
+    const std::string suru = stem.substr(0, stem.size() - 3) + "\xe3\x81\x99\xe3\x82\x8b";  // する
+    if (DictIndex::lookupExact(suru.c_str(), entry, DictIndex::DICT_JMDICT, needDefinition, DictIndexRecord::POS_VS)) {
+      return true;
+    }
+  }
+  const auto candidates = Deinflector::deinflect(stem + "\xe3\x81\xbe\xe3\x81\x99");  // ます
+  for (size_t i = 1; i < candidates.size(); i++) {
+    uint8_t posMask = 0;
+    switch (candidates[i].condition) {
+      case WordCondition::V1:
+        posMask = DictIndexRecord::POS_V1;
+        break;
+      case WordCondition::V5:
+        posMask = DictIndexRecord::POS_V5;
+        break;
+      case WordCondition::VK:
+        posMask = DictIndexRecord::POS_VK;
+        break;
+      default:
+        continue;  // only real verb classes: a stem is never a noun or adjective
+    }
+    if (DictIndex::lookupExact(candidates[i].text.c_str(), entry, DictIndex::DICT_JMDICT, needDefinition, posMask)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Hiragana that end a godan continuative stem (乗り, 書き, 話し, 待ち, 死に, 飛び, 読み, 泳ぎ, 買い).
+bool endsInIRow(const std::string& s) {
+  static constexpr const char* kIRow[] = {"い", "き", "ぎ", "し", "ち", "に", "び", "み", "り"};
+  for (const char* k : kIRow) {
+    const size_t n = std::strlen(k);
+    if (s.size() > n && s.compare(s.size() - n, n, k) == 0) return true;
+  }
+  return false;
+}
+
+// お or ご in front of a word: お出しする, ご説明する.
+size_t honorificPrefixBytes(const std::string& s) {
+  static constexpr char kO[] = "\xe3\x81\x8a";   // お
+  static constexpr char kGo[] = "\xe3\x81\x94";  // ご
+  if (s.size() > 3 && (s.compare(0, 3, kO) == 0 || s.compare(0, 3, kGo) == 0)) return 3;
+  return 0;
+}
+
 }  // namespace
 
 uint8_t WordLookup::lookupAll(const std::string& paragraphText, const size_t byteOffset,
@@ -84,8 +138,8 @@ uint8_t WordLookup::lookupAll(const std::string& paragraphText, const size_t byt
   return found;
 }
 
-bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, WordLookupResult& out,
-                        bool needDefinition) {
+bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, WordLookupResult& out, bool needDefinition,
+                        const uint32_t precedingCp) {
   if (byteOffset >= paragraphText.size()) return false;
 
   // Try decreasing window lengths: 8 characters down to 1.
@@ -113,6 +167,47 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
 
     DictEntry entry;
     if (DictIndex::lookupExact(window.c_str(), entry, dictMask, needDefinition)) {
+      // A noun that is also a verb's continuative stem, between an argument particle and a comma,
+      // is the verb linking two clauses: バスに乗り、 is 乗る, not the noun 乗り "ride". After の, a
+      // comma or the start of a sentence it stays the noun (夏の祭り、). Frequency cannot decide:
+      // both sides of almost every pair are at the top priority.
+      constexpr uint8_t kVerbBits =
+          DictIndexRecord::POS_V1 | DictIndexRecord::POS_V5 | DictIndexRecord::POS_VS | DictIndexRecord::POS_VK;
+      const size_t next = byteOffset + window.size();
+      const bool beforeComma = next < paragraphText.size() && (decodeCp(paragraphText, next) == 0x3001 ||
+                                                               decodeCp(paragraphText, next) == 0xFF0C);  // 、 ，
+      bool afterArgument = false;
+      uint32_t before = precedingCp;
+      if (byteOffset > 0) {
+        size_t prev = byteOffset - 1;
+        while (prev > 0 && (static_cast<unsigned char>(paragraphText[prev]) & 0xC0) == 0x80) prev--;
+        before = decodeCp(paragraphText, prev);
+      }
+      {
+        switch (before) {
+          case 0x3092:  // を
+          case 0x306B:  // に
+          case 0x3078:  // へ
+          case 0x3067:  // で
+          case 0x3068:  // と
+          case 0x304C:  // が
+          case 0x3082:  // も
+            afterArgument = true;
+            break;
+          default:
+            break;
+        }
+      }
+      DictEntry verb;
+      // 通り after まで or いつも is the suffix "as" (今まで通り、), far more often than 通る.
+      static constexpr char kDoori[] = "\xe9\x80\x9a\xe3\x82\x8a";  // 通り
+      if (beforeComma && afterArgument && window != kDoori && (entry.posFlags & kVerbBits) == 0 &&
+          hasNameChar(window) && endsInIRow(window) && lookupVerbFromStem(window, verb, needDefinition)) {
+        out.entry = std::move(verb);
+        out.matchLength = window.size();
+        out.deinflected = true;
+        return true;
+      }
       out.entry = std::move(entry);
       out.matchLength = window.size();
       out.deinflected = false;
@@ -181,11 +276,40 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
       if (nounBytes >= sizeof(noun)) continue;
       std::memcpy(noun, text.data(), nounBytes);
       noun[nounBytes] = '\0';
+      // Humble/honorific お/ご + stem + する is the verb (お出しする -> 出す), not a noun that happens
+      // to start with お (お出し "dashi"). A real お-noun (お茶する) is still found below.
+      const size_t prefix = honorificPrefixBytes(noun);
+      // An お-noun that is itself a suru noun (お願いする, おしゃべりする) stays that noun. The
+      // flags of older dictionaries do not say so, its tags do: one definition read, only here.
+      bool suruNoun = false;
+      if (prefix > 0) {
+        DictEntry own;
+        if (DictIndex::lookupExact(noun, own, DictIndex::DICT_JMDICT, /*needDefinition=*/true)) {
+          const std::string_view head(own.definition.data(), std::min<size_t>(own.definition.size(), 96));
+          suruNoun = head.find("[suru]") != std::string_view::npos;
+        }
+      }
+      if (prefix > 0 && !suruNoun &&
+          lookupVerbFromStem(std::string(noun + prefix, nounBytes - prefix), entry, needDefinition)) {
+        out.entry = std::move(entry);
+        out.matchLength = window.size();
+        out.deinflected = true;
+        return true;
+      }
       // Dictionaries converted before suru tags became POS_VS flag these nouns POS_OTHER. A kanji
       // or katakana stem keeps particles (にする) from matching that way; the する suffix is
       // hiragana, so testing the whole text tests the stem.
       if (hasNameChar(text) && DictIndex::lookupExact(noun, entry, DictIndex::DICT_JMDICT, needDefinition,
                                                       DictIndexRecord::POS_VS | DictIndexRecord::POS_OTHER)) {
+        out.entry = std::move(entry);
+        out.matchLength = window.size();
+        out.deinflected = true;
+        return true;
+      }
+      // ご説明する: the suru noun without its honorific prefix.
+      if (prefix > 0 && hasNameChar(text) &&
+          DictIndex::lookupExact(noun + prefix, entry, DictIndex::DICT_JMDICT, needDefinition,
+                                 DictIndexRecord::POS_VS | DictIndexRecord::POS_OTHER)) {
         out.entry = std::move(entry);
         out.matchLength = window.size();
         out.deinflected = true;
