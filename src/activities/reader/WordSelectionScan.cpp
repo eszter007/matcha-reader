@@ -634,14 +634,14 @@ void WordSelectionScan::aimAtGlyph(const size_t glyphIndex) {
   // Already segmented: nothing to aim at, and re-reading it would only cost SD time.
   if (isGlyphMapped(glyphIndex)) return;
   // The walk is already within context range of this target, so it will reach it on its own in
-  // the next few positions. Re-aiming would rewind scanPos by kMaxLookupChars to re-read context
+  // the next few positions. Re-aiming would rewind scanPos by kMaxMatchChars to re-read context
   // the walk is about to read anyway -- and a caller that re-aims on EVERY tick (the parked
   // column jump in resolvePendingMove(), whose nearest-unmapped target shifts by one cell as each
   // is mapped) then cancels out exactly what stepScan() advances. The frontier stops dead, so the
   // scan never finishes, so the move never resolves, and handleSelectInput() swallows Confirm the
   // whole time: the panel is frozen (device: scanPos pinned at 36/90 for as long as it was left).
   // A genuine jump -- backwards, or far enough ahead to be worth skipping to -- still re-aims.
-  if (glyphIndex >= scanPos && glyphIndex - scanPos <= static_cast<size_t>(kMaxLookupChars)) return;
+  if (glyphIndex >= scanPos && glyphIndex - scanPos <= static_cast<size_t>(kMaxMatchChars)) return;
   recordFrom = glyphIndex;
   // Back up for context so a word overlapping the target is segmented as that word rather than
   // as a fragment starting mid-way through it. kMaxMatchChars bounds how far back a word can

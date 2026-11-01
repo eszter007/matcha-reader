@@ -152,6 +152,77 @@ bool WordLookup::isLongConjugationTail(const std::string& text, const size_t byt
 }
 
 namespace {
+enum class SuruNoun : uint8_t { Found, Missing, Unresolved };
+
+// JMdict files a suru verb under its noun (嘲笑, not 嘲笑する). Tried after every candidate, so a
+// verb headword of its own (対する) wins over its single-kanji noun (対).
+// Unresolved: the noun's entry did not load (low heap), so the caller answers nothing and the
+// heap-limited retry runs.
+SuruNoun lookupSuruNoun(const std::vector<DeinflectionCandidate>& candidates, const size_t matchLength,
+                        const bool needDefinition, WordLookupResult& out) {
+  DictEntry entry;
+  for (const auto& candidate : candidates) {
+    const auto& text = candidate.text;
+    if (text.size() <= kSuruBytes || text.compare(text.size() - kSuruBytes, kSuruBytes, kSuru) != 0) continue;
+    if (candidate.condition != WordCondition::VS && candidate.condition != WordCondition::DICT) continue;
+    // lookupExact rejects keys of HEADWORD_SIZE bytes or more, so a stack key covers every stem it accepts.
+    const size_t nounBytes = text.size() - kSuruBytes;
+    char noun[DictIndexRecord::HEADWORD_SIZE];
+    if (nounBytes >= sizeof(noun)) continue;
+    std::memcpy(noun, text.data(), nounBytes);
+    noun[nounBytes] = '\0';
+    // Humble/honorific お/ご + stem + する is the verb (お出しする -> 出す), not a noun that happens
+    // to start with お (お出し "dashi"). A real お-noun (お茶する) is still found below.
+    const size_t prefix = honorificPrefixBytes(noun);
+    // An お-noun that is itself a suru noun (お願いする, おしゃべりする) stays that noun. Newer
+    // dictionaries flag it POS_VS; older ones only say so in its tags: one definition read, only here.
+    bool suruNoun = false;
+    if (prefix > 0) {
+      DictEntry own;
+      if (DictIndex::lookupExact(noun, own, DictIndex::DICT_JMDICT, /*needDefinition=*/false,
+                                 DictIndexRecord::POS_VS)) {
+        suruNoun = true;
+      } else if (DictIndex::lookupExact(noun, own, DictIndex::DICT_JMDICT, /*needDefinition=*/true)) {
+        const std::string_view head(own.definition.data(), std::min<size_t>(own.definition.size(), 96));
+        suruNoun = head.find("[suru]") != std::string_view::npos;
+      } else if (DictIndex::lookupExact(noun, own, DictIndex::DICT_JMDICT, /*needDefinition=*/false)) {
+        // The noun exists but its definition did not load (low heap): leave the lookup unresolved
+        // so the heap-limited retry runs, rather than answering with the verb.
+        return SuruNoun::Unresolved;
+      }
+    }
+    if (prefix > 0 && !suruNoun &&
+        lookupVerbFromStem(std::string(noun + prefix, nounBytes - prefix), entry, needDefinition)) {
+      out.entry = std::move(entry);
+      out.matchLength = matchLength;
+      out.deinflected = true;
+      return SuruNoun::Found;
+    }
+    // Dictionaries converted before suru tags became POS_VS flag these nouns POS_OTHER. A kanji
+    // or katakana stem keeps particles (にする) from matching that way; the する suffix is
+    // hiragana, so testing the whole text tests the stem.
+    if (hasNameChar(text) && DictIndex::lookupExact(noun, entry, DictIndex::DICT_JMDICT, needDefinition,
+                                                    DictIndexRecord::POS_VS | DictIndexRecord::POS_OTHER)) {
+      out.entry = std::move(entry);
+      out.matchLength = matchLength;
+      out.deinflected = true;
+      return SuruNoun::Found;
+    }
+    // ご説明する: the suru noun without its honorific prefix.
+    if (prefix > 0 && hasNameChar(text) &&
+        DictIndex::lookupExact(noun + prefix, entry, DictIndex::DICT_JMDICT, needDefinition,
+                               DictIndexRecord::POS_VS | DictIndexRecord::POS_OTHER)) {
+      out.entry = std::move(entry);
+      out.matchLength = matchLength;
+      out.deinflected = true;
+      return SuruNoun::Found;
+    }
+  }
+  return SuruNoun::Missing;
+}
+}  // namespace
+
+namespace {
 // Windows past MAX_WINDOW_CHARS: a whole headword (ありがとうございました), else a verb or adjective
 // conjugated past the normal window, checked against its word class. Reached only when the text
 // runs on in hiragana. Headwords are probed upward and stop at the first prefix no headword
@@ -160,7 +231,9 @@ namespace {
 bool lookupLongConjugation(const std::string& text, const size_t byteOffset, WordLookupResult& out,
                            const bool needDefinition) {
   int available = 0;
-  for (size_t pos = byteOffset; pos < text.size() && available < WordLookup::MAX_CONJUGATION_CHARS;) {
+  // A NUL ends the text the dictionary would see (see the window trim in lookup()).
+  for (size_t pos = byteOffset;
+       pos < text.size() && text[pos] != '\0' && available < WordLookup::MAX_CONJUGATION_CHARS;) {
     pos = advanceChars(text, pos, 1);
     available++;
   }
@@ -227,6 +300,14 @@ bool lookupLongConjugation(const std::string& text, const size_t byteOffset, Wor
         out.deinflected = true;
         return true;
       }
+    }
+    switch (lookupSuruNoun(candidates, window.size(), needDefinition, out)) {
+      case SuruNoun::Found:
+        return true;
+      case SuruNoun::Unresolved:
+        return false;
+      case SuruNoun::Missing:
+        break;
     }
   }
   return false;
@@ -360,64 +441,13 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
         return true;
       }
     }
-    // JMdict files a suru verb under its noun (嘲笑, not 嘲笑する). Tried after every candidate, so a
-    // verb headword of its own (対する) wins over its single-kanji noun (対).
-    for (const auto& candidate : candidates) {
-      const auto& text = candidate.text;
-      if (text.size() <= kSuruBytes || text.compare(text.size() - kSuruBytes, kSuruBytes, kSuru) != 0) continue;
-      if (candidate.condition != WordCondition::VS && candidate.condition != WordCondition::DICT) continue;
-      // lookupExact rejects keys of HEADWORD_SIZE bytes or more, so a stack key covers every stem it accepts.
-      const size_t nounBytes = text.size() - kSuruBytes;
-      char noun[DictIndexRecord::HEADWORD_SIZE];
-      if (nounBytes >= sizeof(noun)) continue;
-      std::memcpy(noun, text.data(), nounBytes);
-      noun[nounBytes] = '\0';
-      // Humble/honorific お/ご + stem + する is the verb (お出しする -> 出す), not a noun that happens
-      // to start with お (お出し "dashi"). A real お-noun (お茶する) is still found below.
-      const size_t prefix = honorificPrefixBytes(noun);
-      // An お-noun that is itself a suru noun (お願いする, おしゃべりする) stays that noun. Newer
-      // dictionaries flag it POS_VS; older ones only say so in its tags: one definition read, only here.
-      bool suruNoun = false;
-      if (prefix > 0) {
-        DictEntry own;
-        if (DictIndex::lookupExact(noun, own, DictIndex::DICT_JMDICT, /*needDefinition=*/false,
-                                   DictIndexRecord::POS_VS)) {
-          suruNoun = true;
-        } else if (DictIndex::lookupExact(noun, own, DictIndex::DICT_JMDICT, /*needDefinition=*/true)) {
-          const std::string_view head(own.definition.data(), std::min<size_t>(own.definition.size(), 96));
-          suruNoun = head.find("[suru]") != std::string_view::npos;
-        } else if (DictIndex::lookupExact(noun, own, DictIndex::DICT_JMDICT, /*needDefinition=*/false)) {
-          // The noun exists but its definition did not load (low heap): leave the lookup unresolved
-          // so the heap-limited retry runs, rather than answering with the verb.
-          return false;
-        }
-      }
-      if (prefix > 0 && !suruNoun &&
-          lookupVerbFromStem(std::string(noun + prefix, nounBytes - prefix), entry, needDefinition)) {
-        out.entry = std::move(entry);
-        out.matchLength = window.size();
-        out.deinflected = true;
+    switch (lookupSuruNoun(candidates, window.size(), needDefinition, out)) {
+      case SuruNoun::Found:
         return true;
-      }
-      // Dictionaries converted before suru tags became POS_VS flag these nouns POS_OTHER. A kanji
-      // or katakana stem keeps particles (にする) from matching that way; the する suffix is
-      // hiragana, so testing the whole text tests the stem.
-      if (hasNameChar(text) && DictIndex::lookupExact(noun, entry, DictIndex::DICT_JMDICT, needDefinition,
-                                                      DictIndexRecord::POS_VS | DictIndexRecord::POS_OTHER)) {
-        out.entry = std::move(entry);
-        out.matchLength = window.size();
-        out.deinflected = true;
-        return true;
-      }
-      // ご説明する: the suru noun without its honorific prefix.
-      if (prefix > 0 && hasNameChar(text) &&
-          DictIndex::lookupExact(noun + prefix, entry, DictIndex::DICT_JMDICT, needDefinition,
-                                 DictIndexRecord::POS_VS | DictIndexRecord::POS_OTHER)) {
-        out.entry = std::move(entry);
-        out.matchLength = window.size();
-        out.deinflected = true;
-        return true;
-      }
+      case SuruNoun::Unresolved:
+        return false;
+      case SuruNoun::Missing:
+        break;
     }
   }
 
