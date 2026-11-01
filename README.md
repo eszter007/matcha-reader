@@ -140,7 +140,7 @@ A wallpaper laid over the page you were reading, so the book shows through. See 
 - Reader settings remembered per book
 - A Toolbar reader menu laid out as a dock: progress and chapter jumps, a bookmark toggle, and Contents / Text / Page / Translate / More, with the page settings as tap-to-choose page pictures (Settings → Reader → Reader Menu Style)
 - Optimize EPUB on upload: splits single-file novels into chapters and fits images to the screen
-- A Power + Up shortcut, and Sync Insights & Clock / Sync Clock on every button shortcut (Settings → Controls → Shortcuts)
+- A Power + Up shortcut, and Sync Insights & Clock / Sync Clock on every button shortcut (Settings → Controls → Shortcuts); with a book open on screen and a KOReader sync account, Sync Insights & Clock also syncs the reading position
 - Japanese & Chinese localization
 
 ## Setup

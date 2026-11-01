@@ -159,8 +159,10 @@ void ActivityManager::loop() {
       return;
     }
 
-    // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed
-    currentActivity->loop();
+    // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed.
+    // Not while leaving: a reader that let go of its book for a sync would close itself and drop
+    // the sync, and the page turner can hold a screen change over several passes.
+    if (pendingAction == PendingAction::None) currentActivity->loop();
   }
 
   while (pendingAction != PendingAction::None) {
@@ -629,6 +631,10 @@ bool ActivityManager::applyQueuedRemoteInput() {
 }
 
 bool ActivityManager::handleForcedRefresh() { return currentActivity && currentActivity->handleForcedRefresh(); }
+
+bool ActivityManager::startShortcutSync() {
+  return pendingAction == PendingAction::None && currentActivity && currentActivity->startShortcutSync();
+}
 
 bool ActivityManager::skipLoopDelay() const { return currentActivity && currentActivity->skipLoopDelay(); }
 

@@ -1047,6 +1047,8 @@ static void startClockSyncFromCombo() {
 // its Wi-Fi stopped), and a board that ends Wi-Fi in place must return to it.
 static void startStatsSyncFromShortcut() {
   if (StatsSyncActivity::isRunning() || ClockSyncActivity::isRunning()) return;
+  // Over a book with a sync account, its progress sync carries the clock and Insights too.
+  if (activityManager.startShortcutSync()) return;
   const auto origin = activityManager.isReaderActivity() ? StatsSyncActivity::Origin::ShortcutInReader
                                                          : StatsSyncActivity::Origin::Shortcut;
   auto sync = makeUniqueNoThrow<StatsSyncActivity>(renderer, mappedInputManager, origin, /*syncClock=*/true);

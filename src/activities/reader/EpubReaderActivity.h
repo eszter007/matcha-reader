@@ -708,7 +708,8 @@ class EpubReaderActivity final : public ReaderActivity {
                                 const std::string& lookupText = {});
   // Returns true if sync acted (launched, or surfaced a save error); false if it was a no-op
   // because no KOReader credentials are stored.
-  bool launchKOReaderSync();
+  bool launchKOReaderSync(bool withClockAndInsights = false);
+  bool startShortcutSync() override;
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   // True when the reader moved (or, mid-build, when the page was requested).

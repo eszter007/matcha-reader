@@ -27,6 +27,7 @@
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderTranslationActivity.h"
 #include "HapticFeedback.h"
+#include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #include "MangaBookmarksActivity.h"
 #include "MangaChapterSelectionActivity.h"
@@ -2265,25 +2266,9 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
       requestUpdate();
       break;
     }
-    case EpubReaderMenuActivity::MenuAction::SYNC: {
-      if (!book) break;
-      saveProgress();
-      PagedSyncBook paged;
-      paged.page = currentPage;
-      paged.pageCount = book->getPageCount();
-      paged.title = book->getTitle();
-      paged.author = book->getAuthor();
-      paged.language = book->getLanguage();
-      paged.series = book->getSeries();
-      paged.seriesIndex = book->getSeriesIndex();
-      auto sync = makeUniqueNoThrow<KOReaderSyncActivity>(renderer, mappedInput, book->getFolder(), std::move(paged));
-      if (!sync) {
-        LOG_ERR("SYNC", "OOM: sync activity");
-        break;
-      }
-      activityManager.replaceActivity(std::move(sync));
-      return;
-    }
+    case EpubReaderMenuActivity::MenuAction::SYNC:
+      if (launchSync(false)) return;
+      break;
     default:
       // AUTO_PAGE_TURN handled above in launchMenu(); FOOTNOTES,
       // TOGGLE_VERTICAL, TOGGLE_FURIGANA are not applicable for manga.
@@ -2538,5 +2523,28 @@ bool MangaReaderActivity::updateOutlineInPlace() {
   drawnOutline_ = std::move(next);
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   if (displayedRotated_) renderer.setOrientation(saved);
+  return true;
+}
+
+bool MangaReaderActivity::startShortcutSync() { return KOREADER_STORE.hasCredentials() && launchSync(true); }
+
+bool MangaReaderActivity::launchSync(const bool withClockAndInsights) {
+  if (!book) return false;
+  saveProgress();
+  PagedSyncBook paged;
+  paged.page = currentPage;
+  paged.pageCount = book->getPageCount();
+  paged.title = book->getTitle();
+  paged.author = book->getAuthor();
+  paged.language = book->getLanguage();
+  paged.series = book->getSeries();
+  paged.seriesIndex = book->getSeriesIndex();
+  auto sync = makeUniqueNoThrow<KOReaderSyncActivity>(renderer, mappedInput, book->getFolder(), std::move(paged));
+  if (!sync) {
+    LOG_ERR("SYNC", "OOM: sync activity");
+    return false;
+  }
+  if (withClockAndInsights) sync->alsoSyncClockAndInsights();
+  activityManager.replaceActivity(std::move(sync));
   return true;
 }

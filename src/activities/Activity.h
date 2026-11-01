@@ -57,6 +57,9 @@ class Activity {
   virtual bool acceptsRemoteInput() const { return false; }
   // Returns true when the activity schedules its own forced refresh.
   virtual bool handleForcedRefresh() { return false; }
+  // The Sync Insights & Clock shortcut over this book: starts its progress sync with the clock and
+  // Insights added. False when the screen has no book position to sync.
+  virtual bool startShortcutSync() { return false; }
   virtual bool isHomeActivity() const { return false; }
   virtual bool handleHomeGesture() { return false; }
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }
