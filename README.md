@@ -23,7 +23,7 @@ This page is the short version. How to use everything is in the [User Guide](USE
 
 ## Word lookup, sentence mining and page translation
 
-Look up any word on the page, in vertical or horizontal text. In Japanese and Chinese the page is split into words first, so the cursor only lands on words that have an entry. The definition opens in a panel over the page. On touch devices, long-press a word to open it. See [Guide §6.1](USER_GUIDE.md#61-word-lookup).
+Look up any word on the page, in vertical or horizontal text. In Japanese and Chinese the page is split into words first. The cursor only lands on words that have an entry. The definition opens in a panel over the page. On touch devices, long-press a word to open it. See [Guide §6.1](USER_GUIDE.md#61-word-lookup).
 
 <p align="center">
   <img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence">
@@ -64,13 +64,13 @@ Vertical text is detected from the book, with right-to-left columns, kinsoku, em
 
 With the Japanese dictionaries installed:
 
-Conjugated words resolve to their dictionary form, so 食べませんでした finds 食べる. A name the book gives furigana for is picked whole. Vocabulary, names and grammar each come from their own dictionary (Jitendex and JMdict).
+Conjugated words resolve to their dictionary form: 食べませんでした finds 食べる. A name the book gives furigana for is picked whole. Vocabulary, names and grammar each come from their own dictionary (Jitendex and JMdict).
 
 See [Guide §6.3](USER_GUIDE.md#63-japanese-books).
 
 ## Chinese: Mandarin and Cantonese
 
-Simplified books open horizontally. Traditional books open vertically when they are written right to left. An SD font is required, because the built-in glyphs are the Japanese set. A wrong language tag is recognised from the text, or fixed by hand with Book Language. A script can add pinyin or zhuyin above the text of an EPUB.
+Simplified books open horizontally. Traditional books open vertically when they are written right to left. An SD font is required. The built-in glyphs are the Japanese set. A wrong language tag is recognised from the text, or fixed by hand with Book Language. A script can add pinyin or zhuyin above the text of an EPUB.
 
 <p align="center"><img src="docs/images/screenshots/pinyin-ruby.png" width="260" alt="A page of 紅樓夢 (Project Gutenberg) with pinyin above every character"></p>
 
@@ -83,7 +83,7 @@ Simplified books open horizontally. Traditional books open vertically when they 
 
 With a Chinese dictionary installed:
 
-Words are split by frequency rather than longest match, so 结婚的和尚未结婚的 reads 和 + 尚未, not 和尚. Simplified books show pinyin and the HSK level. Traditional books add zhuyin, the TOCFL level and a monolingual MoE entry. Cantonese has its own dictionary and shows jyutping. One dictionary serves both scripts and shows the other form of each word, 說 next to 说.
+Words are split by frequency rather than longest match: 结婚的和尚未结婚的 reads 和 + 尚未, not 和尚. Simplified books show pinyin and the HSK level. Traditional books add zhuyin, the TOCFL level and a monolingual MoE entry. Cantonese has its own dictionary and shows jyutping. One dictionary serves both scripts and shows the other form of each word, 說 next to 说.
 
 See [Guide §6.4](USER_GUIDE.md#64-chinese-books).
 
@@ -136,7 +136,7 @@ Streak, minutes this week, books finished and a calendar, split by language. Eac
 
 ### Transparent sleep screen
 
-A wallpaper over the page you were reading, so the book shows through. See [Guide §3.7](USER_GUIDE.md#37-sleep-screen).
+A wallpaper over the page you were reading. The book shows through. See [Guide §3.7](USER_GUIDE.md#37-sleep-screen).
 
 <p align="center"><img src="docs/images/screenshots/sleep-screen-transparent.png" width="260" alt="Sleep wallpaper over the page text, which stays readable behind it"></p>
 
