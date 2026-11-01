@@ -492,6 +492,13 @@ to that book only.
   - **Fallback for other languages**: The StarDict dictionary for word lookups, or **None**. Lookups use a dictionary
     that matches the book's language first, then this one. Only shown when a dictionary folder exists under
     `/dictionaries/` or `/.dictionaries/` on the SD card. See [docs/dictionary.md](docs/dictionary.md).
+- **Plugins** (**Settings → Connectivity**): Enable or disable SD-card plugins. Clean installs start disabled; upgrades with existing plugins are kept enabled automatically. Disabling plugins leaves all plugin files on the SD card but stops plugin discovery and execution until they are enabled again.
+  - Enabling plugins immediately adds **Plugins** to the Home screen, even when no plugins are installed yet. Sideloaded SD-card plugins work without Plugin Hub.
+  - Open **Home → Plugins** to view installed plugins. Hold **Confirm** on a selected installed plugin for one second (or long-press its row on a touch device) to open an uninstall confirmation. Confirming deletes that plugin's installed folder and files; cancelling leaves it installed. If no usable on-device Plugin Hub is available and its installer has not been hidden, a **Plugin Hub — Download, discover, and update plugins** entry is also shown. A manually sideloaded Hub with a valid `device.json` is recognized without requiring the optional README or browser files.
+  - Selecting that Plugin Hub entry offers **Install**, **Hide**, or **Cancel**. **Install** downloads Plugin Hub over Wi-Fi. If you back out of Wi-Fi selection, installation is cancelled, Wi-Fi is turned back off, and you return to Plugins with the installer still available. **Hide** removes only the Plugin Hub install entry; it does not disable plugins or affect sideloaded plugins. **Cancel** leaves the entry unchanged.
+  - **Hide** persists across reboots. Setting **Settings → Connectivity → Plugins** to **Enabled** again brings the installer back.
+  - Plugins with web settings appear on the **Plugins** page of the web UI while **File Transfer** is running. Its link is hidden while plugins are disabled.
+  - Plugin Hub is optional. Users who prefer manual installation can download it directly from [crosspoint-plugin-hub releases](https://github.com/crosspoint-reader/crosspoint-plugin-hub/releases) and copy/extract the `pluginhub` folder so it ends up at `/.crosspoint/plugins/pluginhub/`, `/plugins/pluginhub/`, or `/.plugins/pluginhub/`. Once installed, Plugin Hub appears as a normal entry under **Home → Plugins**.
 
 - **Reading Orientation**:
   - **Portrait** (default)
@@ -952,7 +959,7 @@ Fonts come in `.cpfont` files, one file per size. You can convert any TTF or OTF
 **Ways to install a font**
 
 1. **Download on the device (easiest):** Go to **Settings → Reader → Text Settings**, pick a profile, open **Font**, scroll to the bottom of the list and select **Manage Fonts**. Pick a font family to download it over Wi-Fi.
-2. **Upload from a browser:** In **File Transfer** mode, open the device's web page and use the **Fonts** tab. It takes `.cpfont` files. On boards with PSRAM it also takes `.ttf` and `.otf`.
+2. **Upload from a browser:** In **File Transfer** mode, open the device's web page and use the **Fonts** tab. It takes `.cpfont` files, and on boards with PSRAM also `.ttf` and `.otf`. Choose the folder that holds the family's files. For `.ttc` files, copy them to the card instead (item 3).
 3. **Copy to the SD card:** Put each font in its own folder inside `/.fonts/` (or `/fonts/`), named like this: `.fonts/<Family>/<Family>_<size>.cpfont`, e.g. `.fonts/NotoSansSC/NotoSansSC_16.cpfont`. Ready-made `.cpfont` families are in the [crosspoint-fonts repository](https://github.com/crosspoint-reader/crosspoint-fonts).
 
 Installed fonts appear in the font list of every profile in **Settings → Reader → Text Settings**, next to the built-in ones.
