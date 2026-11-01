@@ -22,6 +22,15 @@ inline bool subtagIs(std::string_view tag, const char* want) {
   return i == tag.size() && want[i] == '\0';
 }
 
+// Cantonese: "yue", or the legacy "zh-yue".
+inline bool isCantoneseTag(std::string_view tag) {
+  const size_t sep = tag.find_first_of("-_");
+  if (subtagIs(tag.substr(0, sep), "yue")) return true;
+  if (sep == std::string_view::npos || !subtagIs(tag.substr(0, sep), "zh")) return false;
+  const std::string_view rest = tag.substr(sep + 1);
+  return subtagIs(rest.substr(0, rest.find_first_of("-_")), "yue");
+}
+
 // Classify a dc:language / BCP-47 tag ("ja", "zh-Hant", "zh_TW", "cmn-Hans-CN", "yue").
 // Chinese with no script or region subtag is treated as simplified, the mainland default.
 inline CjkScript scriptForLanguage(std::string_view tag) {
@@ -30,7 +39,7 @@ inline CjkScript scriptForLanguage(std::string_view tag) {
   const std::string_view primary = tag.substr(0, sep);
   if (subtagIs(primary, "ja") || subtagIs(primary, "jpn")) return CjkScript::Japanese;
   // yue (Cantonese) is written in traditional characters in practice.
-  if (subtagIs(primary, "yue")) return CjkScript::TraditionalChinese;
+  if (isCantoneseTag(tag)) return CjkScript::TraditionalChinese;
   if (!subtagIs(primary, "zh") && !subtagIs(primary, "zho") && !subtagIs(primary, "chi") && !subtagIs(primary, "cmn")) {
     return CjkScript::None;
   }
@@ -56,6 +65,7 @@ inline bool isUnscriptedChinese(std::string_view tag) {
   if (!subtagIs(primary, "zh") && !subtagIs(primary, "zho") && !subtagIs(primary, "chi") && !subtagIs(primary, "cmn")) {
     return false;
   }
+  if (isCantoneseTag(tag)) return false;
   std::string_view rest = sep == std::string_view::npos ? std::string_view{} : tag.substr(sep + 1);
   while (!rest.empty()) {
     const size_t next = rest.find_first_of("-_");
@@ -69,12 +79,12 @@ inline bool isUnscriptedChinese(std::string_view tag) {
   return true;
 }
 
-// A Han ideograph: CJK Unified, Extension A, the compatibility block and Extensions B-G (rare
-// hanzi, common in traditional Chinese names). The one definition the scan, the sniff and the
-// font coverage probe share.
+// A Han ideograph: 〇 (the ideographic zero of 二〇〇八年), CJK Unified, Extension A, the
+// compatibility block and Extensions B-G (rare hanzi, common in traditional Chinese names). The one definition the
+// scan, the sniff and the font coverage probe share.
 inline bool isHan(const uint32_t cp) {
-  return (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0xF900 && cp <= 0xFAFF) ||
-         (cp >= 0x20000 && cp <= 0x3134F);
+  return cp == 0x3007 || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
+         (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0x20000 && cp <= 0x3134F);
 }
 
 inline bool isChinese(const CjkScript s) {
@@ -88,12 +98,27 @@ inline const char* dictIndexFolder(const CjkScript s) {
   return nullptr;
 }
 
+// Chinese tagged for Hong Kong or Macau ("zh-HK", "zh-Hant-MO"). Such a book may be standard
+// written Chinese or Cantonese, so the text decides.
+inline bool isHongKongChinese(std::string_view tag) {
+  const size_t sep = tag.find_first_of("-_");
+  const std::string_view primary = tag.substr(0, sep);
+  if (!subtagIs(primary, "zh") && !subtagIs(primary, "zho") && !subtagIs(primary, "chi")) return false;
+  std::string_view rest = sep == std::string_view::npos ? std::string_view{} : tag.substr(sep + 1);
+  while (!rest.empty()) {
+    const size_t next = rest.find_first_of("-_");
+    const std::string_view sub = rest.substr(0, next);
+    if (subtagIs(sub, "hk") || subtagIs(sub, "mo")) return true;
+    rest = next == std::string_view::npos ? std::string_view{} : rest.substr(next + 1);
+  }
+  return false;
+}
+
 // The folder for a book's language tag. Cantonese is written in traditional characters but is
 // its own language with its own words (唔, 嘅, 佢哋), so a yue book reads /dictionaries/yue, where
 // CC-Canto sits beside CC-CEDICT; every other tag follows its script.
 inline const char* dictIndexFolderForLanguage(std::string_view tag) {
-  const std::string_view primary = tag.substr(0, tag.find_first_of("-_"));
-  if (subtagIs(primary, "yue")) return "yue";
+  if (isCantoneseTag(tag)) return "yue";
   return dictIndexFolder(scriptForLanguage(tag));
 }
 
@@ -139,6 +164,7 @@ struct ScriptSniff {
   uint32_t latin = 0;
   uint32_t simplifiedOnly = 0;
   uint32_t traditionalOnly = 0;
+  uint32_t cantonese = 0;  // characters only written Cantonese uses (嘅, 咗, 冇, 喺, 佢, 哋)
   // A UTF-8 sequence cut by a chunk boundary.
   uint32_t pending = 0;
   uint8_t pendingNeed = 0;
@@ -195,6 +221,8 @@ struct ScriptSniff {
     if (han < latin) return CjkScript::None;           // a Latin book quoting a little Chinese
     return traditionalOnly > simplifiedOnly ? CjkScript::TraditionalChinese : CjkScript::SimplifiedChinese;
   }
+  // Written Cantonese: its particles make up well over 1% of the hanzi, standard Chinese has none.
+  bool isCantonese() const { return han >= 20 && cantonese * 100 >= han; }
 
  private:
   static bool tagIs(const char* name, const char* want) {
@@ -254,7 +282,13 @@ struct ScriptSniff {
       han++;
       if (isSimplifiedOnly(cp)) simplifiedOnly++;
       if (isTraditionalOnly(cp)) traditionalOnly++;
+      if (isCantoneseMarker(cp)) cantonese++;
     }
+  }
+
+  static bool isCantoneseMarker(const uint32_t cp) {
+    static constexpr uint16_t kMarkers[] = {0x5605, 0x5497, 0x5187, 0x55BA, 0x4F62, 0x54CB, 0x5572, 0x569F, 0x4E5C};
+    return std::find(std::begin(kMarkers), std::end(kMarkers), cp) != std::end(kMarkers);
   }
 
   // The commonest characters that exist in only one of the two scripts, in matching pairs.

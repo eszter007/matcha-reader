@@ -1928,7 +1928,7 @@ void EpubReaderActivity::applyLanguageState() {
   // Word lookup reads the converted dictionary of the book's language, and traditional Chinese
   // sets its vertical punctuation differently from Japanese. Both are process-wide and decided
   // here, before any layout or lookup runs.
-  DictIndex::setLanguageFolder(cjk::dictFolderFor(effectiveLanguage(), fontScript()));
+  DictIndex::setLanguageFolder(DictIndex::installedFolderFor(cjk::dictFolderFor(effectiveLanguage(), fontScript())));
   Kinsoku::setCentredPunctuation(bookScript() == CjkScript::TraditionalChinese);
 }
 
@@ -1952,9 +1952,10 @@ class SniffSink : public Print {
 
 void EpubReaderActivity::sniffLanguageIfNeeded() {
   if (!epub || languageOverride != cjk::LANG_AUTO || detectedLanguage != 0) return;
-  // The tag is enough -- unless it is Chinese without a script, where it is only a default.
+  // The tag is enough -- unless it is Chinese without a script, where it is only a default, or
+  // Hong Kong Chinese, which may be Cantonese.
   if (cjk::scriptForLanguage(epub->getLanguage()) != CjkScript::None &&
-      !cjk::isUnscriptedChinese(epub->getLanguage())) {
+      !cjk::isUnscriptedChinese(epub->getLanguage()) && !cjk::isHongKongChinese(epub->getLanguage())) {
     return;
   }
   const int spineCount = epub->getSpineItemsCount();
@@ -1990,10 +1991,12 @@ void EpubReaderActivity::sniffLanguageIfNeeded() {
       detectedLanguage = cjk::LANG_JA;
       break;
     case CjkScript::SimplifiedChinese:
-      detectedLanguage = cjk::LANG_ZH_HANS;
+      // Cantonese particles decide it before the script does: a short sample may hold none of
+      // the traditional-only characters the script count looks for.
+      detectedLanguage = sn.isCantonese() ? cjk::LANG_YUE : cjk::LANG_ZH_HANS;
       break;
     case CjkScript::TraditionalChinese:
-      detectedLanguage = cjk::LANG_ZH_HANT;
+      detectedLanguage = sn.isCantonese() ? cjk::LANG_YUE : cjk::LANG_ZH_HANT;
       break;
     default:
       detectedLanguage = LANGUAGE_SNIFFED_NONE;
@@ -2011,24 +2014,35 @@ std::string EpubReaderActivity::effectiveLanguage() const {
   if (cjk::isUnscriptedChinese(tag)) {
     // Plain "zh": the text decides between the two scripts; anything else it found (a page of
     // English front matter) leaves the tag's own default standing.
-    return detectedLanguage == cjk::LANG_ZH_HANT ? cjk::languageTagForChoice(detectedLanguage) : tag;
+    return detectedLanguage == cjk::LANG_ZH_HANT || detectedLanguage == cjk::LANG_YUE
+               ? cjk::languageTagForChoice(detectedLanguage)
+               : tag;
   }
+  if (cjk::isHongKongChinese(tag) && detectedLanguage == cjk::LANG_YUE) return "yue";
   if (cjk::scriptForLanguage(tag) != CjkScript::None) return tag;
   if (const char* sniffed = cjk::languageTagForChoice(detectedLanguage)) return sniffed;
   return tag;
 }
 
-// language.bin beside progress.bin: [0] the user's Book Language choice, [1] the sniff result.
-// Separate from progress.bin, whose layout other readers of it depend on.
+// language.bin beside progress.bin: [0] the user's Book Language choice, [1] the sniff result,
+// [2] the sniff's version. Separate from progress.bin, whose layout other readers of it depend on.
+// A sniff result from an older version is dropped so the book is judged again (it could not
+// tell Cantonese); the user's own choice is kept.
+namespace {
+constexpr uint8_t kLanguageSniffVersion = 1;
+}
+
 void EpubReaderActivity::loadLanguageChoice() {
   languageOverride = cjk::LANG_AUTO;
   detectedLanguage = 0;
   if (!epub) return;
   HalFile f;
   if (!Storage.openFileForRead("ERS", (epub->getCachePath() + "/language.bin").c_str(), f)) return;
-  uint8_t data[2] = {0, 0};
-  if (f.read(data, sizeof(data)) < 1) return;
+  uint8_t data[3] = {0, 0, 0};
+  const int n = f.read(data, sizeof(data));
+  if (n < 1) return;
   if (data[0] < cjk::LANGUAGE_CHOICE_COUNT) languageOverride = data[0];
+  if (n < 3 || data[2] != kLanguageSniffVersion) return;
   if (data[1] < cjk::LANGUAGE_CHOICE_COUNT || data[1] == LANGUAGE_SNIFFED_NONE) detectedLanguage = data[1];
 }
 
@@ -2039,7 +2053,7 @@ void EpubReaderActivity::saveLanguageChoice() const {
     LOG_ERR("ERS", "Cannot save language choice");
     return;
   }
-  const uint8_t data[2] = {languageOverride, detectedLanguage};
+  const uint8_t data[3] = {languageOverride, detectedLanguage, kLanguageSniffVersion};
   f.write(data, sizeof(data));
 }
 

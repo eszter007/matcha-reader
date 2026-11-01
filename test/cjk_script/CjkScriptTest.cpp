@@ -145,3 +145,40 @@ TEST(CjkScriptTest, ChineseTagWithoutAScriptIsOnlyADefault) {
   EXPECT_FALSE(cjk::isUnscriptedChinese("yue"));
   EXPECT_FALSE(cjk::isUnscriptedChinese(""));
 }
+
+namespace {
+
+TEST(CjkScriptTest, CantoneseTags) {
+  EXPECT_TRUE(cjk::isCantoneseTag("yue"));
+  EXPECT_TRUE(cjk::isCantoneseTag("zh-yue"));
+  EXPECT_TRUE(cjk::isCantoneseTag("zh_YUE-HK"));
+  EXPECT_FALSE(cjk::isCantoneseTag("zh-HK"));
+  EXPECT_STREQ(cjk::dictIndexFolderForLanguage("zh-yue"), "yue");
+  EXPECT_EQ(cjk::scriptForLanguage("zh-yue"), CjkScript::TraditionalChinese);
+  EXPECT_FALSE(cjk::isUnscriptedChinese("zh-yue"));
+  EXPECT_TRUE(cjk::isHongKongChinese("zh-HK"));
+  EXPECT_TRUE(cjk::isHongKongChinese("zh-Hant-MO"));
+  EXPECT_FALSE(cjk::isHongKongChinese("zh-TW"));
+  EXPECT_STREQ(cjk::dictIndexFolderForLanguage("zh-HK"), "zh");
+}
+
+TEST(CjkScriptTest, SniffTellsCantoneseFromStandardChinese) {
+  std::string canto, standard;
+  for (int i = 0; i < 10; i++) {
+    canto += "<p>佢哋喺度食緊飯，我哋冇去。</p>";
+    standard += "<p>他們在這裡吃飯，我們沒有去。</p>";
+  }
+  cjk::ScriptSniff a, b;
+  a.feed(reinterpret_cast<const uint8_t*>(canto.data()), canto.size());
+  b.feed(reinterpret_cast<const uint8_t*>(standard.data()), standard.size());
+  EXPECT_TRUE(cjk::isChinese(a.verdict()));
+  EXPECT_TRUE(a.isCantonese());
+  EXPECT_FALSE(b.isCantonese());
+}
+
+TEST(CjkScriptTest, IdeographicZeroIsHan) {
+  EXPECT_TRUE(cjk::isHan(0x3007));  // 〇
+  EXPECT_FALSE(cjk::isHan(0x3006));
+}
+
+}  // namespace

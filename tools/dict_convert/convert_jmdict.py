@@ -633,7 +633,7 @@ def pinyin_syllable_to_marks(syllable: str) -> str:
     m = _SYLLABLE_RE.match(syllable)
     if not m:
         return syllable
-    base = m.group(1).replace("u:", "ü").replace("U:", "Ü")
+    base = m.group(1).replace("u:", "ü").replace("U:", "Ü").replace("v", "ü").replace("V", "Ü")
     tone = int(m.group(2))
     if tone == 5:
         return base
@@ -655,9 +655,14 @@ def pinyin_syllable_to_marks(syllable: str) -> str:
     return base[:idx] + marked + base[idx + 1:]
 
 
+_NUMBERED_SYLLABLE_RE = re.compile(r"[A-Za-zü:]+[1-5]")
+
+
 def pinyin_to_marks(numbered: str) -> str:
-    """Convert a space-separated numbered-tone string ('ni3 hao3') to diacritics."""
-    return " ".join(pinyin_syllable_to_marks(part) for part in numbered.split(" "))
+    """Convert a numbered-tone string ('ni3 hao3') to diacritics. An erhua r5 joins the syllable
+    before it (hua1 r5 -> huār); separators other than spaces (commas, ·) are kept."""
+    marked = _NUMBERED_SYLLABLE_RE.sub(lambda m: pinyin_syllable_to_marks(m.group(0)), numbered)
+    return re.sub(r"(?<=\S) r(?=$|[\s,·])", "r", marked)
 
 
 _ZHUYIN_INITIALS = [
@@ -709,7 +714,8 @@ def pinyin_syllable_to_zhuyin(syllable: str) -> str:
             return syllable
         body = initial + final
     if tone == 5:
-        return "˙" + body
+        # Erhua ㄦ is written without the neutral-tone dot (哪兒 ㄋㄚˇ ㄦ).
+        return body if base == "r" else "˙" + body
     return body + _ZHUYIN_TONES[tone]
 
 
@@ -717,7 +723,7 @@ def pinyin_to_zhuyin(numbered: str) -> str:
     return " ".join(pinyin_syllable_to_zhuyin(part) for part in numbered.split(" "))
 
 
-_BRACKETED_PINYIN_RE = re.compile(r"\[([A-Za-z0-9:\u00fc\u00dc ,]+)\]")
+_BRACKETED_PINYIN_RE = re.compile(r"\[([A-Za-z0-9:\u00fc\u00dc ,\u00b7]+)\]")
 
 
 # A word given in both scripts inside a gloss: 個|个, 237號房間|237号房间, 對…|对…. Not every bar:
@@ -764,7 +770,8 @@ def load_frequency(path: str, kind: str = "auto") -> dict:
     """
     rows = []
     graded = False  # a level band (7-9) seen: the numbers in this file are levels, not counts
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    opener = __import__("gzip").open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip().lstrip("\ufeff")
             if not line or line.startswith("#"):
@@ -805,19 +812,36 @@ def load_frequency(path: str, kind: str = "auto") -> dict:
     return priorities
 
 
-def apply_frequency(records: list, priorities: dict, twins: dict = None) -> list:
+def shared_simplified_counts(trads_of: dict) -> dict:
+    """{traditional form: how many traditional forms share its simplified form} from
+    {simplified: {traditional, ...}}, for apply_frequency. 干 stands for 乾, 幹 and 干 itself: 3."""
+    shares = {}
+    for trads in trads_of.values():
+        if len(trads) > 1:
+            for trad in trads:
+                shares[trad] = max(shares.get(trad, 1), len(trads))
+    return shares
+
+
+def apply_frequency(records: list, priorities: dict, twins: dict = None, shares: dict = None) -> list:
     """Replace each record's priority with its frequency rank, taken from either script's form of
     the word (twins, from CC-CEDICT): the lists are written in one script, and the device segments
     a traditional book with the traditional records."""
     if not priorities:
         return records
     twins = twins or {}
+    shares = shares or {}
     out = []
     for hw, d, _, pos in records:
         word = hw.decode("utf-8")
         # The larger of the two forms' ranks: jieba's list is simplified but carries a few stray
         # traditional characters with tiny counts (說 3, 這 7), which must not outrank 说 and 这.
-        p = max(priorities.get(word, 0), priorities.get(twins.get(word, ""), 0)) or UNRANKED_PRIORITY
+        # A simplified form that stands for several traditional ones (干: 乾, 幹, 干) has its
+        # count split between them, as if each were that many times rarer.
+        borrowed = priorities.get(twins.get(word, ""), 0)
+        if borrowed and shares.get(word, 1) > 1:
+            borrowed = max(UNRANKED_PRIORITY + 1, borrowed - int(round(28 * math.log10(shares[word]))))
+        p = max(priorities.get(word, 0), borrowed) or UNRANKED_PRIORITY
         out.append((hw, d, p, pos))
     return out
 
@@ -997,17 +1021,23 @@ def split_cedict_glosses(body: str) -> list:
 
 def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, levels: dict = None,
                    jyutping: dict = None, sentence_pairs: list = None, twins: dict = None,
-                   examples_script: str = "any") -> tuple:
+                   examples_script: str = "any", trads_of: dict = None, seen: dict = None) -> tuple:
     """Convert a raw CC-CEDICT (or CC-Canto) file to index records, one per traditional and
     simplified form. Returns (vocab_records, name_records); the second list is empty unless
     split_names routes proper nouns (capitalised pinyin) into the names slot. twins, when given,
     is filled with each form's other-script form, so apply_frequency can rank a traditional
-    record from a simplified word list and the reverse."""
+    record from a simplified word list and the reverse. trads_of, shared across the inputs of one
+    build, collects each simplified form's traditional forms (see shared_simplified_counts). seen,
+    shared likewise, drops an entry an earlier input already held (CC-Canto repeats CC-CEDICT
+    entries it adapted) unless only this copy carries a Cantonese reading.
+    """
     print(f"Loading {path}...")
     levels = levels or {}
     jyutping = jyutping or {}
     parsed = []  # (trad, simp, pinyin, canto, glosses)
     forms = {}
+    if trads_of is None:
+        trads_of = {}
     skipped = 0
     opener = __import__("gzip").open if path.endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", errors="replace") as f:
@@ -1019,8 +1049,17 @@ def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, l
                 skipped += 1
                 continue
             trad, simp, pinyin, canto, body = m.groups()
+            glosses = split_cedict_glosses(body)
+            trads_of.setdefault(simp, set()).add(trad)
+            if seen is not None:
+                key = (trad, simp, pinyin.lower(), tuple(glosses))
+                has_canto = bool(canto or jyutping.get((trad, simp, pinyin)))
+                if key in seen and (seen[key] or not has_canto):
+                    skipped += 1
+                    continue
+                seen[key] = has_canto
             idx = len(parsed)
-            parsed.append((trad, simp, pinyin, canto, split_cedict_glosses(body)))
+            parsed.append((trad, simp, pinyin, canto, glosses))
             # Examples go to the everyday entry of a form: 周 the week over the surname, and among
             # lowercase readings the one with more senses (東西 "thing" over "east and west").
             glosses = parsed[idx][4]
@@ -1062,7 +1101,12 @@ def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, l
             if len(hw_bytes) >= HEADWORD_SIZE:
                 skipped += 1
                 continue
-            target.append((hw_bytes, def_bytes, 100, POS_OTHER))
+            # The everyday entry of a form goes first (周 the week before the surname): records
+            # sharing a headword keep this order on the device when their priorities tie.
+            target.append((hw_bytes, def_bytes, 100, POS_OTHER, forms.get(hw) != idx))
+    for out in (records, names):
+        out.sort(key=lambda r: (r[0], r[4]))
+        out[:] = [r[:4] for r in out]
     print(f"Processed {len(parsed)} CC-CEDICT entries ({skipped} skipped) → {len(records)} vocab records"
           + (f", {len(names)} name records" if split_names else ""))
     return records, names
@@ -1074,7 +1118,8 @@ def load_levels(path: str, name: str) -> dict:
     """{word: "HSK 3"} from a graded CSV/TSV: every Han field in a row is a form of the word,
     and the level is the first field that is a small number or a band such as "7-9"."""
     out = {}
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    opener = __import__("gzip").open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip().lstrip("\ufeff")
             if not line or line.startswith("#"):
@@ -1368,6 +1413,8 @@ def main():
     records = []
     name_records = []
     twins = {}  # trad <-> simp forms from CC-CEDICT, for apply_frequency
+    trads_of = {}  # simplified form -> its traditional forms, over every input
+    seen = {}  # CC-CEDICT entries already converted from an earlier input -> has a Cantonese reading
     bilingual_headwords = set()  # what CC-CEDICT left in the vocabulary; see keep_names_together
     titles = []
     for path in args.input:
@@ -1382,7 +1429,7 @@ def main():
         elif fmt == "cedict":
             part, names = convert_cedict(path, zhuyin=args.zhuyin, split_names=args.split_names, levels=levels,
                                          jyutping=jyutping, sentence_pairs=sentence_pairs, twins=twins,
-                                         examples_script=args.examples_script)
+                                         examples_script=args.examples_script, trads_of=trads_of, seen=seen)
             name_records.extend(names)
             bilingual_headwords.update(r[0] for r in part)
             if "canto" in os.path.basename(path).lower():
@@ -1403,8 +1450,9 @@ def main():
 
     if args.frequency:
         priorities = load_frequency(args.frequency, args.frequency_kind)
-        records = apply_frequency(records, priorities, twins)
-        name_records = apply_frequency(name_records, priorities, twins)
+        shares = shared_simplified_counts(trads_of)
+        records = apply_frequency(records, priorities, twins, shares)
+        name_records = apply_frequency(name_records, priorities, twins, shares)
 
     title = args.title or ""
     if not title and chinese and titles:

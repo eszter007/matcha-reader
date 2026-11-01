@@ -56,6 +56,9 @@ class DictIndex {
   // Select the language folder the files are read from: "jp" (default) or "zh". The reader sets
   // it when a book opens. Switching releases every cache, so call it between lookup sessions.
   static void setLanguageFolder(const char* folder);
+  // The folder a book should read: `folder`, except a Cantonese book without the yue dictionary
+  // reads the Mandarin one, which covers most of its words. Probes the card; call on book open.
+  static const char* installedFolderFor(const char* folder);
   static const char* languageFolder();
 
   // Display name of a dictionary slot (DICT_JMDICT, DICT_NAMES or DICT_GRAMMAR), from the

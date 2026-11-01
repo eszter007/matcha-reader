@@ -576,6 +576,12 @@ void DictIndex::setLanguageFolder(const char* folder) {
   LOG_DBG("DICT", "Dictionary folder: %s", g_languageFolder);
 }
 
+const char* DictIndex::installedFolderFor(const char* folder) {
+  if (!folder || std::strcmp(folder, "yue") != 0 || isInstalled("yue") || !isInstalled("zh")) return folder;
+  LOG_INF("DICT", "No Cantonese dictionary; using the Mandarin one");
+  return "zh";
+}
+
 const char* DictIndex::languageFolder() { return g_languageFolder; }
 
 const char* DictIndex::slotTitle(const uint8_t dict) {

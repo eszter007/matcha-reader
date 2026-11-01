@@ -1375,7 +1375,7 @@ apart by the book's language:
 
 | | Mandarin, simplified | Mandarin, traditional | Cantonese |
 | --- | --- | --- | --- |
-| Book language | `zh-CN`, `zh-Hans`, `zh-SG` | `zh-TW`, `zh-Hant`, `zh-HK`, `zh-MO` | `yue` |
+| Book language | `zh-CN`, `zh-Hans`, `zh-SG` | `zh-TW`, `zh-Hant`, `zh-HK`, `zh-MO` | `yue`, `zh-yue` |
 | Dictionary folder | `dictionaries/zh/` | `dictionaries/zh/` | `dictionaries/yue/` |
 | Dictionary | CC-CEDICT | CC-CEDICT, with the MoE 重編國語辭典 entry below it | CC-Canto and CC-CEDICT together |
 | Reading in the entry | Pinyin | Pinyin and zhuyin | Pinyin and jyutping |
@@ -1386,6 +1386,11 @@ apart by the book's language:
 | Saved words | `sentences-zh.csv` | `sentences-zh.csv` | `sentences-yue.csv` |
 
 A book marked only `zh` or `cmn` does not say which script it uses. The reader decides from its characters.
+A book marked `zh-HK` or `zh-MO`, or not marked at all, is read as Cantonese when its text uses Cantonese words
+such as 嘅, 咗, 冇, 喺 and 佢.
+
+A Cantonese book reads `dictionaries/yue/`. If only `dictionaries/zh/` is installed, it uses the Mandarin
+dictionary instead, which covers most of its words but not the Cantonese-only ones.
 
 The reading and level rows describe the ready-made dictionary packs in
 [docs/dictionary-setup.md](docs/dictionary-setup.md). If you convert a dictionary yourself, you choose what it
