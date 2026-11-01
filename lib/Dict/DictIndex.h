@@ -123,6 +123,10 @@ class DictIndex {
   static bool lookupExact(const char* headword, DictEntry& out, uint8_t dictMask = DICT_ALL, bool needDefinition = true,
                           uint8_t posMask = 0);
 
+  // After a lookupExact() miss: false when no headword in the searched dictionaries starts with
+  // the key, so no longer window can match either. True after a hit or when that is not known.
+  static bool longerHeadwordMayExist();
+
   // Look up in a specific index/dat file pair. Collects ALL entries with
   // the same headword (scanning adjacent records) and merges definitions
   // (unless needDefinition=false; see lookupExact). posMask: see lookupExact.
