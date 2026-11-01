@@ -330,10 +330,13 @@ class EpubReaderWordLookupActivity final : public Activity {
   // glossary has an entry for the selected surface text (see RubyGlossary). Books
   // typically annotate a name's reading only on first appearance -- this surfaces it
   // on every later occurrence too. No entry -> no line.
-  void prependBookReading(const std::string& surface);
+  void prependBookReading(const std::string& surface, bool name = false);
+  // After a number written in digits (６月): put the dictionary's counter sense first and give it
+  // the whole reading (ろくがつ) from CounterReading.
+  void readAsCounter(const std::string& digits, const std::string& counter);
   // Moves the dictionary entry whose reading starts with the book's furigana for `surface` (or
   // for its leading kanji) to the front, so 謀反 shows むほん, not the higher-ranked むへん.
-  void promoteBookReading(const std::string& surface);
+  void promoteBookReading(const std::string& surface, bool name = false);
 
   // Open on the page with a word cursor when the reader supplied a select context.
   void beginSelectMode();

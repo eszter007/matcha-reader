@@ -412,5 +412,7 @@ class MangaReaderActivity final : public Activity {
   void launchWordLookupCurrentView();
   void launchMenu();
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
+  bool launchSync(bool withClockAndInsights);
+  bool startShortcutSync() override;
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
 };

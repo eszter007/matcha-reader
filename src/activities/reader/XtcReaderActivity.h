@@ -38,6 +38,8 @@ class XtcReaderActivity final : public ReaderActivity {
 
   void launchMenu();
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
+  bool launchSync(bool withClockAndInsights);
+  bool startShortcutSync() override;
   void addBookmark();
   void loadCachedBookmarks();
   void updateBookmarkFlag();

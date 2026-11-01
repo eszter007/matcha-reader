@@ -2345,7 +2345,12 @@ unsigned long EpubReaderActivity::confirmLongPressThreshold() const {
   }
 }
 
-bool EpubReaderActivity::launchKOReaderSync() {
+bool EpubReaderActivity::startShortcutSync() {
+  // No book after a failed load (its error dialog is up): the plain Insights sync runs instead.
+  return epub && KOREADER_STORE.hasCredentials() && launchKOReaderSync(/*withClockAndInsights=*/true);
+}
+
+bool EpubReaderActivity::launchKOReaderSync(const bool withClockAndInsights) {
   // Without a KOReader server, sync only sends queued plugin events. With no plugin listening there
   // is nothing to send, so stay in the reader instead of joining WiFi for nothing.
   if (!KOREADER_STORE.hasCredentials()) {
@@ -2429,8 +2434,15 @@ bool EpubReaderActivity::launchKOReaderSync() {
   }
   LOG_DBG("KOSync", "Epub released (heap after: %u)", (unsigned)ESP.getFreeHeap());
 
-  activityManager.replaceActivity(std::make_unique<KOReaderSyncActivity>(
-      renderer, mappedInput, savedEpubPath, localPos, std::move(localKoPos), std::move(localChapterName)));
+  auto sync = makeUniqueNoThrow<KOReaderSyncActivity>(renderer, mappedInput, savedEpubPath, localPos,
+                                                      std::move(localKoPos), std::move(localChapterName));
+  if (!sync) {
+    LOG_ERR("KOSync", "OOM: sync activity");
+    activityManager.goToReader(savedEpubPath);  // the book is released: reopen it
+    return true;
+  }
+  if (withClockAndInsights) sync->alsoSyncClockAndInsights();
+  activityManager.replaceActivity(std::move(sync));
   return true;  // acted: launched the sync activity
 }
 

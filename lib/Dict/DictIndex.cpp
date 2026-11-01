@@ -833,13 +833,14 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       }
 
       if (entries.empty()) return false;
-      // Equal priority keeps index order, which put the suffix 中 (じゅう) and prefix 前 (ぜん)
-      // ahead of the nouns なか and まえ. A standalone match is rarely an affix, so on a tie the
-      // affix goes last.
+      // Equal priority keeps index order, which put the suffix 中 (じゅう), the prefix 前 (ぜん)
+      // and the abbreviation 日 (にち, "Sunday") ahead of the nouns なか, まえ and ひ. A standalone
+      // match is rarely an affix or an abbreviation, so on a tie those go last.
       const auto isAffix = [](const std::string& def) {
         const size_t tagEnd = std::min<size_t>(def.size(), 96);
         const std::string_view head(def.data(), tagEnd);
-        return head.find("[suffix]") != std::string_view::npos || head.find("[prefix]") != std::string_view::npos;
+        return head.find("[suffix]") != std::string_view::npos || head.find("[prefix]") != std::string_view::npos ||
+               head.find("[abbr.]") != std::string_view::npos;
       };
       std::stable_sort(entries.begin(), entries.end(), [&](const Entry& a, const Entry& b) {
         if (a.priority != b.priority) return a.priority > b.priority;

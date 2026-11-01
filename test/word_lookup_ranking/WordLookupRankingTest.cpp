@@ -63,6 +63,8 @@ class WordLookupRanking : public ::testing::Test {
     buildDictionary(root_, {{"中", 255, OTHER, "【じゅう】\n\n[suffix] \n• through"},
                             {"中", 255, OTHER, "【なか】\n\n[noun] \n• inside"},
                             {"中", 227, OTHER, "【うち】\n\n[noun] \n• within"},
+                            {"日", 255, OTHER, "【にち】\n\n[noun] [abbr.] \n• Sunday"},
+                            {"日", 255, OTHER, "【ひ】\n\n[noun] \n• day"},
                             {"清める", 128, DictIndexRecord::POS_V1, "【きよめる】\n\n[1-dan] \n• to purify"}});
     testRoot() = root_.string();
     DictIndex::releaseCaches();
@@ -78,6 +80,12 @@ TEST_F(WordLookupRanking, AffixGoesBehindAnEqualPriorityNoun) {
   WordLookupResult r;
   ASSERT_TRUE(WordLookup::lookup("中から", 0, r));
   EXPECT_EQ(r.entry.definition.rfind("【なか】", 0), 0u) << r.entry.definition;
+}
+
+TEST_F(WordLookupRanking, AbbreviationGoesBehindAnEqualPriorityNoun) {
+  WordLookupResult r;
+  ASSERT_TRUE(WordLookup::lookup("日から", 0, r));
+  EXPECT_EQ(r.entry.definition.rfind("【ひ】", 0), 0u) << r.entry.definition;
 }
 
 TEST_F(WordLookupRanking, HigherPriorityStillWinsOverANonAffix) {
