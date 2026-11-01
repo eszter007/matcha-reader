@@ -1,1 +1,8 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
+contact_links:
+  - name: Feature idea or device support
+    url: https://github.com/eszter007/matcha-reader/discussions/categories/ideas
+    about: Suggest a feature or ask for a new device in Discussions first.
+  - name: Question
+    url: https://github.com/eszter007/matcha-reader/discussions/categories/q-a
+    about: Ask how something works or get help with setup.

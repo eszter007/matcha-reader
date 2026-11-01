@@ -2,6 +2,11 @@ name: Bug Report
 description: Report an issue or unexpected behavior
 labels: ["bug"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        **One bug per issue.** If you found several, open one issue for each. Feature ideas and device requests go to [Discussions](https://github.com/eszter007/matcha-reader/discussions/categories/ideas), not here.
+
   - type: dropdown
     id: device
     attributes:
@@ -35,7 +40,7 @@ body:
     id: bug-description
     attributes:
       label: Describe the Bug
-      description: A clear and concise description of what the bug is.
+      description: A clear and concise description of what the bug is. For a lookup problem, give the book's language and the word.
       placeholder:
     validations:
       required: true
@@ -63,6 +68,16 @@ body:
   - type: textarea
     id: logs
     attributes:
-      label: Logs or screenshots
-      description: Serial log output or photos of the screen, if you have them. To capture a log, connect the device by USB and use the [logging tool](https://eszter007.github.io/crosspoint-logging/) in Chrome or Edge. For a lookup problem, include the book's language and the word.
+      label: Logs
+      description: Serial log output. Connect the device by USB and capture it with the [logging tool](https://eszter007.github.io/crosspoint-logging/) in Chrome or Edge.
       render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Photos or screenshots of the screen. Drag and drop images here.
+    validations:
+      required: false
