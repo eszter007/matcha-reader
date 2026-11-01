@@ -160,14 +160,18 @@ bool WordSelectionScan::stripTrailingParticle(const std::string& text, WordLooku
   // 私は→私). Kana stems are ambiguous — ちょっと's と is part of the word, not a
   // particle — so never strip after kana.
   if (!isCJK(prevCp)) return false;
-
   std::string stem = text.substr(0, lastStart);
   WordLookupResult sr;
-  if (WordLookup::lookup(stem, 0, sr, needDefinition) && sr.matchLength == stem.size()) {
-    result = std::move(sr);
-    return true;
+  if (!WordLookup::lookup(stem, 0, sr, needDefinition) || sr.matchLength != stem.size()) return false;
+  // An adverb the dictionary lists with its に (急に, 特に) keeps it when it is at least as common
+  // as the bare word; 時に and 次に are rarer than 時 and 次, so その時に stays 時 + に. Only に:
+  // 今日は and 彼の are headwords too, but in running text they are 今日 and 彼 before a particle.
+  if (lastCp == 0x306B && !result.deinflected && result.entry.sourceDict == DictIndex::DICT_JMDICT &&
+      result.entry.priority >= sr.entry.priority) {
+    return false;
   }
-  return false;
+  result = std::move(sr);
+  return true;
 }
 
 void WordSelectionScan::encodeUtf8(uint32_t cp, std::string& out) {
@@ -717,7 +721,7 @@ namespace {
 // the tate-chu-yoko NUL truncation, where a match claimed the cells of the word after an upright
 // "!?" run: the word stayed unselectable on that page for good, since nothing re-examined a
 // cache that looked valid. Rebuilding costs one rescan (~300 ms, once per page).
-constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x374D4C57;  // "WLM7": bumped whenever segmentation changes
+constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x384D4C57;  // "WLM8": bumped whenever segmentation changes
 constexpr uint16_t WLSCAN_MAX_PAGES = 8;
 constexpr size_t WLSCAN_MAX_CARRY_BYTES = 4096;  // bound on the older entries carried forward
 
@@ -1231,7 +1235,17 @@ void WordSelectionScan::scanOnePosition() {
         }
         // >= matchChars keeps the original 2-char behavior (nmc>=2) and extends it to longer
         // particle-led mis-segmentations without disturbing real particle-initial words.
-        if (nmc >= matchChars) hasMatch = false;  // let the next char start the longer word
+        // A は right after に/で/と is the second half of には/では/とは, so a word one char shorter
+        // still wins over a conjugation: 笑わずには いられない, not はいられ (入る). An exact
+        // headword (友達にはなす, 話す) stays.
+        const uint32_t prevCp = scanStart > 0 && allGlyphs[scanStart - 1].paragraphIndex == paraIdx
+                                    ? allGlyphs[scanStart - 1].codepoint
+                                    : 0;
+        const bool compoundParticle =
+            allGlyphs[scanStart].codepoint == 0x306F && (prevCp == 0x306B || prevCp == 0x3067 || prevCp == 0x3068);
+        if (nmc >= matchChars || (compoundParticle && result.deinflected && nmc >= 2 && nmc + 1 >= matchChars)) {
+          hasMatch = false;  // let the next char start the longer word
+        }
       }
     }
 
