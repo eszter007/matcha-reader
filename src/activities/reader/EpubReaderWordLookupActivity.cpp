@@ -1358,6 +1358,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   sectionGrammar.clear();
   sectionKind.clear();
   sectionHead.clear();
+  retainedPrefixHead.clear();
   currentSection = 0;
   resultMatchLen = 0;
   scrollOffset = 0;
@@ -1537,18 +1538,25 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       std::string definition = tr(STR_IN_THIS_BOOK);
       definition += ' ';
       definition += readings;
-      definition += "\n\n";
-      if (hasResult && resultMatchLen >= 2) {
-        definition += resultHeadword;
-        definition += '\n';
+      // The dictionary entries follow on pages of their own, under their own headword. Both copies of
+      // the definition are live while it is appended, so it is kept only when that fits.
+      const bool keepPrefix = hasResult && resultMatchLen >= 2 &&
+                              ESP.getMaxAllocHeap() > definition.size() + resultDefinition.size() + 8 * 1024;
+      if (keepPrefix) {
+        static constexpr char kEntrySep[] = "\n\n---\n";
+        definition.reserve(definition.size() + sizeof(kEntrySep) - 1 + resultDefinition.size());
+        definition += kEntrySep;
         definition += resultDefinition;
+        retainedPrefixHead = std::move(resultHeadword);
       } else {
+        definition += "\n\n";
         // Shown as a name, but credited to no dictionary: the reading is the book's.
         definition += tr(STR_LOOKUP_NAME);
         resultDict = DictIndex::DICT_NAMES;
         resultSource = nullptr;
         resultDictionaryLabel.clear();
       }
+      resultDefinition.clear();
       hasResult = true;
       hasGrammar = false;
       grammarFirst = false;
@@ -1556,7 +1564,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       resultMatchLen = static_cast<int>(RubyGlossary::charCount(base));
       resultHeadword = std::move(base);
       resultDefinition = std::move(definition);
-      resultReading.clear();
+      resultReading = std::move(readings);
       resultGrammar.clear();
     }
   }
@@ -1965,6 +1973,9 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
       head.erase(tailSpace == std::string::npos ? 0 : tailSpace + 1);
       piece.erase(0, lineEnd == std::string::npos ? piece.size() : lineEnd + 1);
       grammarHead = head;
+    } else if (kind != StrId::STR_DICT_KIND_GRAMMAR && !sectionText.empty() && !retainedPrefixHead.empty()) {
+      // Every page after the book's reading is a dictionary entry for the retained prefix.
+      head = retainedPrefixHead;
     } else if (kind == StrId::STR_DICT_KIND_GRAMMAR) {
       // The heading is written once, but the grammar index can return several entries for that
       // one pattern, separated like any others. They are all about the pattern, so they keep its

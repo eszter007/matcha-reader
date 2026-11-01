@@ -215,6 +215,27 @@ bool lookup(const std::string& bookCachePath, const std::string& base, std::stri
   return !outReadings.empty();
 }
 
+namespace {
+constexpr size_t MAX_PREFIX_READINGS_BYTES = 96;
+constexpr char kReadingSep[] = "\xE3\x83\xBB";  // '・'
+
+// Appends `ruby` to the '・'-joined list unless it is already there or would pass the cap.
+void appendDistinctReading(std::string& joined, const std::string_view ruby) {
+  size_t from = 0;
+  while (from <= joined.size()) {
+    const size_t sep = joined.find(kReadingSep, from);
+    const size_t end = sep == std::string::npos ? joined.size() : sep;
+    if (std::string_view(joined).substr(from, end - from) == ruby) return;
+    if (sep == std::string::npos) break;
+    from = sep + sizeof(kReadingSep) - 1;
+  }
+  const size_t sepBytes = joined.empty() ? 0 : sizeof(kReadingSep) - 1;
+  if (joined.size() + sepBytes + ruby.size() > MAX_PREFIX_READINGS_BYTES) return;
+  if (sepBytes) joined += kReadingSep;
+  joined.append(ruby.data(), ruby.size());
+}
+}  // namespace
+
 bool longestPrefix(const std::string& bookCachePath, const std::string& text, std::string& outBase,
                    std::string& outReadings) {
   outBase.clear();
@@ -224,25 +245,21 @@ bool longestPrefix(const std::string& bookCachePath, const std::string& text, st
   uint16_t count = 0;
   if (!openAndReadHeader(glossaryPath(bookCachePath), f, count)) return false;
   const std::string_view view(text);
-  // One pass: readings restart whenever a longer base is found, as lookup() would collect them.
-  std::vector<std::string> readings;
+  // One pass: readings restart whenever a longer base is found. They are joined in place and
+  // capped, so a base with hundreds of readings cannot grow a vector of strings mid-lookup.
+  outReadings.reserve(MAX_PREFIX_READINGS_BYTES);
   const bool ok = forEachRecord(f, count, [&](std::string_view base, std::string_view ruby) {
     if (base.size() < outBase.size() || view.substr(0, base.size()) != base || charCount(base) < 2) return;
     if (base.size() > outBase.size()) {
       outBase.assign(base);
-      readings.clear();
+      outReadings.clear();
     }
-    if (std::none_of(readings.begin(), readings.end(), [&](const std::string& r) { return r == ruby; })) {
-      readings.emplace_back(ruby);
-    }
+    appendDistinctReading(outReadings, ruby);
   });
   if (!ok || outBase.empty()) {
     outBase.clear();
+    outReadings.clear();
     return false;
-  }
-  for (const auto& r : readings) {
-    if (!outReadings.empty()) outReadings += "\xE3\x83\xBB";  // '・'
-    outReadings += r;
   }
   return true;
 }
