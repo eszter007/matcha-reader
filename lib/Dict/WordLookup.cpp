@@ -234,6 +234,7 @@ uint8_t posMaskFor(const WordCondition condition) {
     case WordCondition::ADJ_I:
       return DictIndexRecord::POS_ADJ_I;
     case WordCondition::DICT:
+    case WordCondition::STEM:
       break;
   }
   return 0;
@@ -254,6 +255,7 @@ bool resolveCandidates(const std::vector<DeinflectionCandidate>& candidates, con
   std::vector<DictEntry> hits;
   DictEntry entry;
   for (size_t i = 1; i < candidates.size() && hits.size() < kMaxHits; i++) {
+    if (candidates[i].condition == WordCondition::STEM) continue;  // an in-between form, not a word
     if (classedOnly && candidates[i].condition == WordCondition::DICT) continue;
     // Deinflected forms are conjugated verbs/adjectives -> only ever in jmdict.
     if (!DictIndex::lookupExact(candidates[i].text.c_str(), entry, DictIndex::DICT_JMDICT, needDefinition,

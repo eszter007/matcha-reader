@@ -82,7 +82,12 @@ class WordLookupDeinflection : public ::testing::Test {
                             {"かわいそう", 255, OTHER, "pitiful"},
                             {"ありがとうございます", 255, OTHER, "thank you"},
                             {"分かつ", 255, V5, "【わかつ】\n• to divide"},
-                            {"分かる", 255, V5, "【わかる】\n• to understand\n• to comprehend\n• to grasp"}});
+                            {"分かる", 255, V5, "【わかる】\n• to understand\n• to comprehend\n• to grasp"},
+                            {"入る", 255, V5, "to enter"},
+                            {"見える", 255, V1, "to be visible"},
+                            {"小さい", 255, DictIndexRecord::POS_ADJ_I, "small"},
+                            {"帰る", 255, V5, "to return"},
+                            {"て", 255, OTHER, "particle"}});
     testRoot() = root_.string();
     DictIndex::releaseCaches();
   }
@@ -187,6 +192,29 @@ TEST_F(WordLookupDeinflection, TheScanTakesTheFirstHitWithoutAlternatives) {
   ASSERT_TRUE(WordLookup::lookup("分かって。", 0, r, /*needDefinition=*/false));
   EXPECT_EQ(r.entry.definition.find(kAlternativeSeparator), std::string::npos);
   EXPECT_EQ(r.matchLength, std::string("分かって").size());
+}
+
+TEST_F(WordLookupDeinflection, AuxiliariesReachTheVerbThroughTheTeForm) {
+  EXPECT_EQ(lookup("帰っていった。"), both("帰る", "帰っていった"));
+  EXPECT_EQ(lookup("勉強してくれた。"), both("勉強", "勉強してくれた"));
+}
+
+TEST_F(WordLookupDeinflection, AdjectivePlusNaru) {
+  EXPECT_EQ(lookup("小さくなった。"), both("小さい", "小さくなった"));
+  EXPECT_EQ(lookup("見えなくなった。"), both("見える", "見えなくなった"));
+}
+
+TEST_F(WordLookupDeinflection, UnrelatedRulesDoNotChain) {
+  // よかった is a word of its own: no chain of rules may fold it into 入る.
+  EXPECT_NE(lookup("入っていってよかった。").second, "入っていってよかった");
+}
+
+TEST_F(WordLookupDeinflection, TheBareTeFormIsNeverAWordOfItsOwn) {
+  for (const auto& c : Deinflector::deinflect("帰っていった")) {
+    if (c.text == "帰って") {
+      EXPECT_EQ(c.condition, WordCondition::STEM);
+    }
+  }
 }
 
 }  // namespace
