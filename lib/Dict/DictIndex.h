@@ -146,6 +146,8 @@ class DictIndex {
   // memory and retry instead of presenting the empty result to the reader as "no definition".
   // Reading the flag clears it.
   static bool consumeHeapLimited();
+  // Whether a block of `bytes` fits with the headroom lookups keep for the rest of the system.
+  static bool fitsInHeap(size_t bytes);
 
   static void releaseCaches();
 

@@ -160,14 +160,18 @@ bool WordSelectionScan::stripTrailingParticle(const std::string& text, WordLooku
   // 私は→私). Kana stems are ambiguous — ちょっと's と is part of the word, not a
   // particle — so never strip after kana.
   if (!isCJK(prevCp)) return false;
-
   std::string stem = text.substr(0, lastStart);
   WordLookupResult sr;
-  if (WordLookup::lookup(stem, 0, sr, needDefinition) && sr.matchLength == stem.size()) {
-    result = std::move(sr);
-    return true;
+  if (!WordLookup::lookup(stem, 0, sr, needDefinition) || sr.matchLength != stem.size()) return false;
+  // An adverb the dictionary lists with its に (急に, 特に) keeps it when it is at least as common
+  // as the bare word; 時に and 次に are rarer than 時 and 次, so その時に stays 時 + に. Only に:
+  // 今日は and 彼の are headwords too, but in running text they are 今日 and 彼 before a particle.
+  if (lastCp == 0x306B && !result.deinflected && result.entry.sourceDict == DictIndex::DICT_JMDICT &&
+      result.entry.priority >= sr.entry.priority) {
+    return false;
   }
-  return false;
+  result = std::move(sr);
+  return true;
 }
 
 void WordSelectionScan::encodeUtf8(uint32_t cp, std::string& out) {
@@ -630,19 +634,19 @@ void WordSelectionScan::aimAtGlyph(const size_t glyphIndex) {
   // Already segmented: nothing to aim at, and re-reading it would only cost SD time.
   if (isGlyphMapped(glyphIndex)) return;
   // The walk is already within context range of this target, so it will reach it on its own in
-  // the next few positions. Re-aiming would rewind scanPos by kMaxLookupChars to re-read context
+  // the next few positions. Re-aiming would rewind scanPos by kMaxMatchChars to re-read context
   // the walk is about to read anyway -- and a caller that re-aims on EVERY tick (the parked
   // column jump in resolvePendingMove(), whose nearest-unmapped target shifts by one cell as each
   // is mapped) then cancels out exactly what stepScan() advances. The frontier stops dead, so the
   // scan never finishes, so the move never resolves, and handleSelectInput() swallows Confirm the
   // whole time: the panel is frozen (device: scanPos pinned at 36/90 for as long as it was left).
   // A genuine jump -- backwards, or far enough ahead to be worth skipping to -- still re-aims.
-  if (glyphIndex >= scanPos && glyphIndex - scanPos <= static_cast<size_t>(kMaxLookupChars)) return;
+  if (glyphIndex >= scanPos && glyphIndex - scanPos <= static_cast<size_t>(kMaxMatchChars)) return;
   recordFrom = glyphIndex;
   // Back up for context so a word overlapping the target is segmented as that word rather than
-  // as a fragment starting mid-way through it. kMaxLookupChars bounds how far back a word can
+  // as a fragment starting mid-way through it. kMaxMatchChars bounds how far back a word can
   // begin, so this is always far enough.
-  scanPos = glyphIndex > static_cast<size_t>(kMaxLookupChars) ? glyphIndex - kMaxLookupChars : 0;
+  scanPos = glyphIndex > static_cast<size_t>(kMaxMatchChars) ? glyphIndex - kMaxMatchChars : 0;
   skipUntil = scanPos;
 }
 
@@ -690,7 +694,7 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
         break;
       }
       recordFrom = resume;
-      scanPos = resume > static_cast<size_t>(kMaxLookupChars) ? resume - kMaxLookupChars : 0;
+      scanPos = resume > static_cast<size_t>(kMaxMatchChars) ? resume - kMaxMatchChars : 0;
       skipUntil = scanPos;
       continue;
     }
@@ -717,7 +721,7 @@ namespace {
 // the tate-chu-yoko NUL truncation, where a match claimed the cells of the word after an upright
 // "!?" run: the word stayed unselectable on that page for good, since nothing re-examined a
 // cache that looked valid. Rebuilding costs one rescan (~300 ms, once per page).
-constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x384D4C57;  // "WLM8": bumped whenever segmentation changes
+constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x424D4C57;  // "WLMB": bumped whenever segmentation changes
 constexpr uint16_t WLSCAN_MAX_PAGES = 8;
 constexpr size_t WLSCAN_MAX_CARRY_BYTES = 4096;  // bound on the older entries carried forward
 
@@ -1062,6 +1066,16 @@ void WordSelectionScan::scanOnePosition() {
     encodeUtf8(allGlyphs[j].codepoint, text);
     charCount++;
   }
+  // A conjugation running on in hiragana past the window (食べさせられなかった) gets the rest of
+  // the run, up to MAX_CONJUGATION_CHARS; WordLookup reads past the window only then.
+  const bool fullWindow = charCount == kMaxLookupChars;
+  for (size_t j = scanStart + charCount;
+       fullWindow && j < allGlyphs.size() && charCount < WordLookup::MAX_CONJUGATION_CHARS; j++) {
+    const uint32_t cp = allGlyphs[j].codepoint;
+    if (allGlyphs[j].paragraphIndex != paraIdx || cp < 0x3041 || cp > 0x3096) break;
+    encodeUtf8(cp, text);
+    charCount++;
+  }
 
   // Try dictionary lookup to find match length. The definition text is only consulted by the
   // hiragana/[kana] suppression check below, which only runs for positions that start with
@@ -1231,7 +1245,17 @@ void WordSelectionScan::scanOnePosition() {
         }
         // >= matchChars keeps the original 2-char behavior (nmc>=2) and extends it to longer
         // particle-led mis-segmentations without disturbing real particle-initial words.
-        if (nmc >= matchChars) hasMatch = false;  // let the next char start the longer word
+        // A は right after に/で/と is the second half of には/では/とは, so a word one char shorter
+        // still wins over a conjugation: 笑わずには いられない, not はいられ (入る). An exact
+        // headword (友達にはなす, 話す) stays.
+        const uint32_t prevCp = scanStart > 0 && allGlyphs[scanStart - 1].paragraphIndex == paraIdx
+                                    ? allGlyphs[scanStart - 1].codepoint
+                                    : 0;
+        const bool compoundParticle =
+            allGlyphs[scanStart].codepoint == 0x306F && (prevCp == 0x306B || prevCp == 0x3067 || prevCp == 0x3068);
+        if (nmc >= matchChars || (compoundParticle && result.deinflected && nmc >= 2 && nmc + 1 >= matchChars)) {
+          hasMatch = false;  // let the next char start the longer word
+        }
       }
     }
 

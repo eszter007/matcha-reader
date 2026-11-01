@@ -95,9 +95,8 @@ class WordSelectionScan {
   //
   // Context only. These glyphs carry no page position and never become selectable -- the reader
   // cannot put a cursor on a character that is not on screen -- so they extend what a word at the
-  // page end can MATCH without adding anywhere new to point at. 8 characters is the most that can
-  // matter: WordLookup's longest window is MAX_WINDOW_CHARS (8), so a word beginning on the last
-  // on-page character reaches at most 7 further.
+  // page end can MATCH without adding anywhere new to point at. A word beginning on the last
+  // on-page character reaches at most WordLookup::MAX_CONJUGATION_CHARS - 1 further.
   void appendLookupContext(const std::string& utf8, uint32_t paragraphIndex);
   // Number of leading allGlyphs entries that are really on the page. Anything reading a glyph's
   // geometry (column/row/x/y) must stop here: context cells carry no position, and 0/0 is a valid
@@ -109,7 +108,7 @@ class WordSelectionScan {
   // Characters of the longest glossary base of at most maxChars that `text` starts with, or 0. RAM only; a hash hit is
   // confirmed against the file by RubyGlossary::longestPrefix when the word is looked up.
   int glossarySpanAt(std::string_view text, int maxChars = 255) const;
-  static constexpr int kLookupContextChars = 8;  // == kMaxLookupChars, asserted below
+  static constexpr int kLookupContextChars = WordLookup::MAX_CONJUGATION_CHARS - 1;
 
   // Run scan/filter work for up to maxMillis (pass UINT32_MAX to run to completion).
   // Returns true when the scan is fully done.
@@ -187,19 +186,25 @@ class WordSelectionScan {
   // cut at the page edge and its span is only the on-page part of a longer match; otherwise the
   // full window, for the longest-match path.
   int lookupCharLimit(size_t selectableIdx) const {
-    if (!chineseMode_ || selectableIdx >= selectableGlyphs.size() || selectableIdx >= selectToAllIdx.size()) {
-      return kMaxLookupChars;
-    }
+    if (selectableIdx >= selectableGlyphs.size() || selectableIdx >= selectToAllIdx.size()) return kMaxLookupChars;
     const uint8_t span = selectableGlyphs[selectableIdx].matchLen;
-    if (span == 0 || selectToAllIdx[selectableIdx] + span >= contextStart) return kMaxLookupChars;
+    const bool cutAtPageEdge = span > 0 && selectToAllIdx[selectableIdx] + span >= contextStart;
+    if (!chineseMode_) {
+      // A span the page edge cut is shorter than the word: read the longest match. A conjugation
+      // the scan matched past the window keeps its own length (WordLookup::MAX_CONJUGATION_CHARS).
+      if (cutAtPageEdge) return kMaxMatchChars;
+      return span > kMaxLookupChars ? span : kMaxLookupChars;
+    }
+    if (span == 0 || cutAtPageEdge) return kMaxLookupChars;
     return span < kMaxLookupChars ? span : kMaxLookupChars;
   }
 
   // Shared helpers, also used by EpubReaderWordLookupActivity's runtime lookups.
   static constexpr int kMaxLookupChars = 8;
-  // The context is exactly one lookup window: a word beginning on the last on-page character
-  // reaches at most kMaxLookupChars - 1 further, and nothing past that can ever be matched.
-  static_assert(kLookupContextChars == kMaxLookupChars, "context must cover one lookup window");
+  // The longest match a word can have: a conjugation may run past the lookup window.
+  static constexpr int kMaxMatchChars = WordLookup::MAX_CONJUGATION_CHARS;
+  // A word beginning on the last on-page character reaches at most kMaxMatchChars - 1 further.
+  static_assert(kLookupContextChars >= kMaxMatchChars - 1, "context must cover the longest match");
   static void encodeUtf8(uint32_t cp, std::string& out);
   static bool isLookupableChar(uint32_t cp);
   static bool isKatakana(uint32_t cp);

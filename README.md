@@ -1,6 +1,6 @@
-# Matcha Reader, a language-learning fork of CrossPoint
+# Matcha Reader, a Japanese & Chinese reading fork of CrossPoint
 
-A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware, built for reading books and comics in a language you are learning. It is set up first for **Japanese** and **Chinese** (simplified or traditional; both Mandarin & Cantonese), and gives learners of French, English and other languages the same lookup, sentence-mining and translation tools.
+Matcha Reader is a fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware designed for reading books and manga in the languages you’re learning or simply love to read. It focuses on **Japanese** and **Chinese** (Simplified and Traditional, for both Mandarin and Cantonese), while offering readers of French, English, and other languages the same tools for dictionary lookups, sentence mining, and translation.
 
 It includes everything in upstream CrossPoint. You can try it in the [simulator](https://github.com/eszter007/crosspoint-simulator-ios) first, on a desktop or an iPhone, with no device.
 
@@ -15,7 +15,29 @@ It includes everything in upstream CrossPoint. You can try it in the [simulator]
 
 This page is the short version. How to use everything is in the [User Guide](USER_GUIDE.md).
 
-## What each learner gets
+## Reading, learning, or both
+
+**Just reading:** flash it and copy your books. You get everything from CrossPoint, plus a cover grid library, reading insights, manga, vertical Japanese text and new sleep screens. Only Chinese needs a font on the card.
+
+**Learning:** add a dictionary and you can look up any word on the page, save it for Anki or translate the page. Japanese and Chinese have the most support. Other languages work with any StarDict dictionary.
+
+## Word lookup, sentence mining and page translation
+
+Look up any word on the page, in vertical or horizontal text. In Japanese and Chinese the page is split into words first. The cursor only lands on words that have an entry. The definition opens in a panel over the page. On touch devices, long-press a word to open it. See [Guide §6.1](USER_GUIDE.md#61-word-lookup).
+
+<p align="center">
+  <img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence">
+  <img src="docs/images/screenshots/chinese-text.png" width="260" alt="A page of 紅樓夢 (Project Gutenberg) in traditional Chinese">
+  <img src="docs/images/screenshots/word-lookup-chinese.png" width="260" alt="Word lookup panel over a page of 紅樓夢: 繁華 with pinyin and zhuyin, both scripts and two senses">
+</p>
+
+**Sentence mining.** Save a word with its sentence to a CSV per language that Anki imports as is. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
+
+**Page translation.** Translates the page to English with Gemini, in the same panel. Needs Wi-Fi and your own API key. See [Guide §6.2](USER_GUIDE.md#62-page-translation).
+
+<p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
+
+Install a dictionary and that language's books get word lookup:
 
 | | Japanese | Mandarin, simplified | Mandarin, traditional | Cantonese | Other languages |
 | --- | --- | --- | --- | --- | --- |
@@ -28,31 +50,9 @@ This page is the short version. How to use everything is in the [User Guide](USE
 
 Comics, sentence mining and page translation work in every column.
 
-## Features
+## Japanese
 
-### Word lookup
-
-Look up any word on the page, in vertical or horizontal text. In Japanese and Chinese the page is scanned first, so the cursor only lands on words that have an entry. In Japanese, a name the book gives furigana for, such as 緋倉美津子, is picked whole even when the dictionary only knows its parts. The definition opens in a panel floating over the page. On a touch device, long-press a word to open it directly (or tap it, when page turns use swipes only), then drag one of the handles beside the word to turn the lookup into a clipping selection. See [Guide §6.1](USER_GUIDE.md#61-word-lookup).
-
-<p align="center">
-  <img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence">
-  <img src="docs/images/screenshots/chinese-text.png" width="260" alt="A page of 紅樓夢 (Project Gutenberg) in traditional Chinese">
-  <img src="docs/images/screenshots/word-lookup-chinese.png" width="260" alt="Word lookup panel over a page of 紅樓夢: 繁華 with pinyin and zhuyin, both scripts and two senses">
-</p>
-
-**Sentence mining.** Save a looked-up word with its sentence, ready for Anki. Each save adds a line to a CSV per language (`sentences-ja.csv`, `sentences-zh.csv`, …) that Anki imports as is. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
-
-**Page translation.** Translates the current page to English with Gemini, in the same panel. Needs Wi-Fi and your own API key. See [Guide §6.2](USER_GUIDE.md#62-page-translation).
-
-<p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
-
-### For Japanese learners
-
-- **Vertical text**, detected from the book: right-to-left columns, kinsoku line breaking, emphasis marks and furigana. Both the layout and the furigana can be switched per book, and **Tategaki** in the Japanese text settings opens every Japanese book vertically or horizontally.
-- **Conjugations resolve to the dictionary form**: 読んで becomes 読む, 食べませんでした becomes 食べる, and a する verb such as 嘲笑されている finds its noun 嘲笑.
-- **Vocabulary, names and grammar** each come from their own dictionary.
-- **Furigana for books that have none**: a script adds it to the EPUB on your computer.
-- **A font is built in.** An SD font looks better and adds rare kanji.
+Vertical text is detected from the book, with right-to-left columns, kinsoku, emphasis marks and furigana. Layout and furigana can be switched per book or for all books. A Japanese font is built in, and an SD font looks better and adds rare kanji. Books without furigana can get it from a script that edits the EPUB.
 
 <p align="center">
   <img src="docs/images/screenshots/vertical-text.png" width="260" alt="Vertical Japanese text">
@@ -60,16 +60,17 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
 </p>
 <p align="center"><em>The same passage, Vertical Text on and off</em></p>
 
+### Learning Japanese
+
+With the Japanese dictionaries installed:
+
+Conjugated words resolve to their dictionary form: 食べませんでした finds 食べる. A name the book gives furigana for is picked whole. Vocabulary, names and grammar each come from their own dictionary (Jitendex and JMdict).
+
 See [Guide §6.3](USER_GUIDE.md#63-japanese-books).
 
-### For Chinese learners
+## Chinese: Mandarin and Cantonese
 
-- **Words are split by frequency**, not longest match, so 结婚的和尚未结婚的 reads 和 + 尚未, not 和尚.
-- **Simplified** books show pinyin and the HSK level. **Traditional** books add zhuyin, the TOCFL level and a monolingual MoE entry, and open vertically when the book is right-to-left. **Cantonese** has its own dictionary and shows jyutping.
-- **Both scripts are indexed**, so one dictionary serves simplified and traditional books.
-- **A wrong language tag is caught**: the book is recognised from its text, and **Book Language** re-tags it by hand.
-- **Pinyin or zhuyin above the text**: a script adds it to the EPUB on your computer.
-- **An SD font is required**: the built-in CJK glyphs are the Japanese set.
+Simplified books open horizontally. Traditional books open vertically when they are written right to left. An SD font is required. The built-in glyphs are the Japanese set. A wrong language tag is recognised from the text, or fixed by hand with Book Language. A script can add pinyin or zhuyin above the text of an EPUB.
 
 <p align="center"><img src="docs/images/screenshots/pinyin-ruby.png" width="260" alt="A page of 紅樓夢 (Project Gutenberg) with pinyin above every character"></p>
 
@@ -78,17 +79,23 @@ See [Guide §6.3](USER_GUIDE.md#63-japanese-books).
 | <img src="docs/images/screenshots/chinese-simplified.png" width="180" alt="西游记 chapter 1 in simplified Chinese, horizontal"> | <img src="docs/images/screenshots/chinese-traditional.png" width="180" alt="紅樓夢 chapter 1 in traditional Chinese, horizontal"> | <img src="docs/images/screenshots/chinese-traditional-vertical.png" width="180" alt="西遊記 chapter 1 in traditional Chinese, set vertically right to left"> | <img src="docs/images/screenshots/cantonese.png" width="180" alt="A short story in written Cantonese"> |
 | 西游记 | 紅樓夢 | 西遊記 | 落雨天 |
 
+### Learning Chinese
+
+With a Chinese dictionary installed:
+
+Words are split by frequency rather than longest match: 结婚的和尚未结婚的 reads 和 + 尚未, not 和尚. Simplified books show pinyin and the HSK level. Traditional books add zhuyin, the TOCFL level and a monolingual MoE entry. Cantonese has its own dictionary and shows jyutping. One dictionary serves both scripts and shows the other form of each word, 說 next to 说.
+
 See [Guide §6.4](USER_GUIDE.md#64-chinese-books).
 
-### For learners of other languages
+## French, English and other languages
 
-Any StarDict dictionary works, picked by the book's language, with no conversion. A lookup that misses is retried with word-form rules: fullest for French (`l'eau` → `eau`, `journaux` → `journal`, `parlaient` → `parler`), plurals and verb endings elsewhere. See [Guide §6.5](USER_GUIDE.md#65-books-in-other-languages).
+Any StarDict dictionary works, picked by the book's language. A missed lookup is retried with word-form rules, most complete for French, where `parlaient` finds `parler`. See [Guide §6.5](USER_GUIDE.md#65-books-in-other-languages).
+
+## In every book
 
 ### Manga, manhua and comics
 
-Read panel by panel, each scaled to fill the screen, and look up any word right in the speech bubble. Lookup works offline.
-
-**To convert a book, open [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) in your browser**, drop in the CBZ, ZIP or PDF and copy the `.matcha` file it gives you to the card. Nothing to install. A `.matcha` is one file, so it copies much faster than a folder, and it still unzips like a normal ZIP. Older folder books keep working. See [Guide §6.6](USER_GUIDE.md#66-manga-manhua-and-comics).
+Read panel by panel, each scaled to the screen, and look up words in the speech bubbles offline. Convert a CBZ, ZIP or PDF in the browser with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) and copy the `.matcha` file to the card. See [Guide §6.6](USER_GUIDE.md#66-manga-manhua-and-comics).
 
 <p align="center">
   <img src="docs/images/screenshots/manga-full-page.png" width="200" alt="Full page view">
@@ -106,7 +113,7 @@ Read panel by panel, each scaled to fill the screen, and look up any word right 
 
 ### Library and home
 
-Every book on the card as a cover grid, manga beside EPUBs, with a **Shelves** tab for folders. The **Cover Grid** theme adds a tab bar for Home, Library, File Transfer, Insights and Settings. Long-press a cover for insights, Mark as Read and Delete. With the CrossPoint sync server, the badges show your furthest position on any device, and opening a book that another device has read further offers to jump there. CrossPoint's own list view is still there. See [Guide §3.1](USER_GUIDE.md#31-home-screen) and [§3.4](USER_GUIDE.md#34-library-screen).
+A cover grid of every book on the card, with a **Shelves** tab for folders and a tab bar for Home, Library, File Transfer, Insights and Settings. Long-press a cover for insights, Mark as Read and Delete. With the CrossPoint sync server, badges show your furthest position on any device and offer to jump there. CrossPoint's list view is still there. See [Guide §3.1](USER_GUIDE.md#31-home-screen) and [§3.4](USER_GUIDE.md#34-library-screen).
 
 <p align="center">
   <img src="docs/images/screenshots/tab-home.png" width="150" alt="Home tab: the cover grid">
@@ -118,7 +125,7 @@ Every book on the card as a cover grid, manga beside EPUBs, with a **Shelves** t
 
 ### Reading insights
 
-Streak, minutes this week, books finished and a calendar, split by language. Each book has its own insights, and finishing one opens a summary with the next books in its folder. The **Insights** sleep screen puts your hours read, streak and minutes this week on a split-flap board. With the CrossPoint sync server, **Sync Progress** also uploads these insights: your daily reading time, streak and finished books, and every book's time, sessions and finished status. The CrossPoint app shows them in full, and **Refresh Insights** in Insights brings them back to a new or reset device: streak, calendar, language tabs, books finished and each book's insights. With **Insights data** on All devices, Insights shows your whole account as the app counts it, every device and language. Dictionary lookups and saved sentences stay on the device that recorded them. See [Guide §7](USER_GUIDE.md#7-reading-insights), [§3.6.11](USER_GUIDE.md#syncing-while-reading) and [§3.7](USER_GUIDE.md#37-sleep-screen).
+Streak, minutes this week, books finished and a calendar, split by language. Each book has its own insights, and finishing one shows a summary. The **Insights** sleep screen shows them on a split-flap board. With the CrossPoint sync server they sync across devices and come back to a reset device. See [Guide §7](USER_GUIDE.md#7-reading-insights) and [§3.7](USER_GUIDE.md#37-sleep-screen).
 
 <p align="center">
   <img src="docs/images/screenshots/insights.png" width="240" alt="Insights with streak, insight cards and calendar">
@@ -129,23 +136,21 @@ Streak, minutes this week, books finished and a calendar, split by language. Eac
 
 ### Transparent sleep screen
 
-A wallpaper laid over the page you were reading, so the book shows through. See [Guide §3.7](USER_GUIDE.md#37-sleep-screen).
+A wallpaper over the page you were reading. The book shows through. See [Guide §3.7](USER_GUIDE.md#37-sleep-screen).
 
 <p align="center"><img src="docs/images/screenshots/sleep-screen-transparent.png" width="260" alt="Sleep wallpaper over the page text, which stays readable behind it"></p>
 
 ### Also in this fork
 
-- Clippings and highlights (from upstream) work in vertical text too, with the same buttons, handles and actions
-- The touch selection bar has a Translate action next to Define: it sends just the selected text to Gemini, in the same panel as page translation (same key and Wi-Fi setup)
-- Reader settings remembered per book
-- A Toolbar reader menu laid out as a dock: progress and chapter jumps, a bookmark toggle, and Contents / Text / Page / Translate / More, with the page settings as tap-to-choose page pictures (Settings → Reader → Reader Menu Style)
+- Clippings and highlights work in vertical text too
+- Translate the selected text from the touch selection bar
+- A Toolbar reader menu laid out as a dock (Settings → Reader → Reader Menu Style)
 - Optimize EPUB on upload: splits single-file novels into chapters and fits images to the screen
-- A Power + Up shortcut, and Sync Insights & Clock / Sync Clock on every button shortcut (Settings → Controls → Shortcuts); with a book open on screen and a KOReader sync account, Sync Insights & Clock also syncs the reading position
-- Japanese & Chinese localization
-
+- A Power + Up shortcut and Sync Insights & Clock on any button shortcut
+- Japanese and Chinese interface
 ## Setup
 
-You need a computer, a USB-C cable and the device's SD card. Files go onto the card either with a card reader or over Wi-Fi from the device's **File Transfer** screen.
+Files go onto the SD card with a card reader or over Wi-Fi from the device's **File Transfer** screen.
 
 **1. Flash the firmware.**
 
@@ -163,11 +168,23 @@ You need a computer, a USB-C cable and the device's SD card. Files go onto the c
 2. Connect the device by USB-C and wake it.
 3. Open the [CrossPoint flash tool](https://crosspointreader.com/#flash-tools), select your device, click **Custom .bin** and choose the file.
 
-Some units bought from third-party stores are USB-locked and must be unlocked first. See [USB-locked devices](https://github.com/crosspoint-reader/crosspoint-reader#usb-locked-devices-xteink-unlocker) upstream. After the first flash, **Settings → System → Check for updates** installs new Matcha releases over Wi-Fi.
+USB-locked units must be [unlocked first](https://github.com/crosspoint-reader/crosspoint-reader#usb-locked-devices-xteink-unlocker). After that, **Settings → System → Check for updates** installs new releases over Wi-Fi (the BOOX Picco is flashed over USB each time).
 
-The BOOX Picco has no Wi-Fi updates: flash each new release over USB, with the stock web flasher's **OTA update** mode or `pio run -e picco -t upload`. Both keep the stock bootloader and recovery partition.
+**2. Install a font.** Required for Chinese, optional for Japanese, not needed otherwise. Download the zip for your language from the [fonts release](https://github.com/eszter007/matcha-reader-assets/releases/tag/fonts-2.0) and copy the `fonts` folder inside it to the root of the card.
 
-**2. Install a dictionary** for each language you read. The book's language picks the folder by itself.
+| You read | Zip | Fonts |
+| --- | --- | --- |
+| Japanese | `japanese-fonts.zip` | Noto Sans JP, Noto Serif JP |
+| Mandarin, simplified | `chinese-fonts-simplified.zip` | Noto Sans SC, Noto Serif SC |
+| Mandarin, traditional, and Cantonese | `chinese-fonts-traditional.zip` | Noto Sans TC, Noto Serif TC |
+
+Install both Chinese zips so dictionary entries can show the other script. Other fonts can be converted with the [browser tool](https://eszter007.github.io/matcha-reader-tools/), see [docs/sd-card-fonts.md](docs/sd-card-fonts.md).
+
+**3. Copy your books** anywhere on the card. Manga and comics are converted first (see above).
+
+**That is all you need to read.** The next step is for word lookup.
+
+**4. Install a dictionary** for each language you want to look words up in. The book's language picks the folder by itself.
 
 | Language | What to do |
 | --- | --- |
@@ -176,25 +193,13 @@ The BOOX Picco has no Wi-Fi updates: flash each new release over USB, with the s
 | Cantonese | Download `dictionaries-yue.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card |
 | Any other | Copy a StarDict dictionary into `dictionaries/<lang>/<name>/`, for example `dictionaries/fr/larousse/` |
 
-To convert your own, use the [browser tool](https://eszter007.github.io/matcha-reader-tools/). Step by step: [docs/dictionary-setup.md](docs/dictionary-setup.md).
-
-**3. Install a font** (required for Chinese, optional for Japanese). Download the zip for your language from the [fonts release](https://github.com/eszter007/matcha-reader-assets/releases/tag/fonts-2.0) and copy the `fonts` folder inside it to the root of the card.
-
-| You read | Zip | Fonts |
-| --- | --- | --- |
-| Japanese | `japanese-fonts.zip` | Noto Sans JP, Noto Serif JP |
-| Mandarin, simplified | `chinese-fonts-simplified.zip` | Noto Sans SC, Noto Serif SC |
-| Mandarin, traditional, and Cantonese | `chinese-fonts-traditional.zip` | Noto Sans TC, Noto Serif TC |
-
-Fonts and dictionaries live in the separate [matcha-reader-assets](https://github.com/eszter007/matcha-reader-assets) repository, since they change much less often than the firmware. A dictionary entry also shows the other script's form of a word (說 next to 说); install both Chinese zips so it can be drawn. To convert another font, use the [browser tool](https://eszter007.github.io/matcha-reader-tools/); details in [docs/sd-card-fonts.md](docs/sd-card-fonts.md).
-
-**4. Copy your books** anywhere on the card and open them from the Library. Manga and comics are converted first, with the browser tool or as in [docs/manga-conversion.md](docs/manga-conversion.md).
+Your own dictionaries convert in the [browser tool](https://eszter007.github.io/matcha-reader-tools/). Details are in [docs/dictionary-setup.md](docs/dictionary-setup.md).
 
 **5. Optional extras.**
 
-- **Interface language:** Settings → System → Language. Languages marked *Download* fetch their pack over Wi-Fi when you select them; **Update language packs** at the top of the list refreshes them after a firmware update. See [Guide §3.9](USER_GUIDE.md#39-language-packs-sd-card).
-- **Page translation:** save a key from [Google AI Studio](https://aistudio.google.com/apikey) as `/.system/gemini.key` on the card.
-- **Your own logo:** put a `logo.bmp` (222x316 pixels, on white) in the card's `.system` (or `system`) folder to replace the cat on the boot and sleep screens. See [Guide §3.7](USER_GUIDE.md#custom-logo).
+- **Interface language:** Settings → System → Language. Packs download over Wi-Fi. See [Guide §3.9](USER_GUIDE.md#39-language-packs-sd-card).
+- **Page translation:** save a [Google AI Studio](https://aistudio.google.com/apikey) key as `/.system/gemini.key` on the card.
+- **Your own logo:** a `logo.bmp` (222x316, on white) in the card's `.system` folder. See [Guide §3.7](USER_GUIDE.md#custom-logo).
 
 ## Building from source
 
@@ -209,7 +214,7 @@ More, including running in the simulator: [docs/building.md](docs/building.md). 
 
 ## Compatibility with upstream
 
-This fork tracks upstream CrossPoint and merges new releases. Nearly everything is additive, so merges stay cheap.
+This fork tracks upstream CrossPoint and merges each release.
 
 ## Credits
 
