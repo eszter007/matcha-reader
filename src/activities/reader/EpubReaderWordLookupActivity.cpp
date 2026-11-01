@@ -1612,6 +1612,16 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   }
 
   WordLookupResult result;
+  // The character before the word, from the same paragraph: a particle there makes a verb stem of
+  // 乗り in バスに乗り、.
+  uint32_t precedingCp = 0;
+  if (digitPrefix.empty()) {
+    const size_t start = currentAllGlyphIndex();
+    if (start > 0 && start < scan.allGlyphs.size() &&
+        scan.allGlyphs[start - 1].paragraphIndex == scan.allGlyphs[start].paragraphIndex) {
+      precedingCp = scan.allGlyphs[start - 1].codepoint;
+    }
+  }
   // The dictionary is asked for the bare counter: 円 of 5万円 (not 万), 人 of 3人目 (not 人目
   // "public gaze"), 日 of 5日後 (not the name 日後).
   bool found = false;
@@ -1627,7 +1637,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     found = WordLookup::lookup(text.substr(0, baseEnd), baseStart, result);
     if (found) result.matchLength = counterBytes;
   } else {
-    found = WordLookup::lookup(text, 0, result);
+    found = WordLookup::lookup(text, 0, result, /*needDefinition=*/true, precedingCp);
   }
   if (found) {
     WordSelectionScan::stripTrailingParticle(text, result);

@@ -25,8 +25,10 @@ class WordLookup {
   // needDefinition=false skips fetching definition text from the .dat files (out.entry.definition
   // is left empty; headword and matchLength are still exact). Use it when only the segmentation is
   // needed (the page pre-scan) -- it saves 1-5 SD reads per match.
+  // precedingCp: the character before the word when paragraphText starts at it (0 = unknown);
+  // it tells a verb stem after a particle (に乗り、) from a noun.
   static bool lookup(const std::string& paragraphText, size_t byteOffset, WordLookupResult& out,
-                     bool needDefinition = true);
+                     bool needDefinition = true, uint32_t precedingCp = 0);
 
   // Maximum number of characters to consider in the scanning window.
   static constexpr int MAX_WINDOW_CHARS = 8;
