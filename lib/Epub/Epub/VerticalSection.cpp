@@ -513,12 +513,6 @@ struct TextExtractor {
 
   void flushParagraph() { emitRuns(true); }
 
-  // Text since the last paragraph end that a newline has not closed yet.
-  bool paragraphTextOpen() const {
-    if (!currentText.empty()) return currentText.back() != '\n';
-    return !currentRuns.empty() && !currentRuns.back().baseText.empty() && currentRuns.back().baseText.back() != '\n';
-  }
-
   static bool isBlockTag(const char* name) {
     static constexpr const char* blockTags[] = {"p",       "div",     "h1",    "h2",     "h3",
                                                 "h4",      "h5",      "h6",    "li",     "blockquote",
@@ -914,12 +908,11 @@ struct TextExtractor {
       if (self->blockDepth <= 0) {
         self->blockDepth = 0;
         self->flushParagraph();
-      } else if (self->paragraphTextOpen()) {
-        // A nested paragraph ends at the newline after </p> in the source, but that newline is dropped
-        // as leading whitespace when the paragraph's text already left in a run (it ended inside an
-        // inline element; Kobo books wrap every sentence in a span). End it here; a repeat is a no-op.
-        self->beginTextRunIfEmpty();
-        self->currentText.push_back('\n');
+      } else {
+        // A nested block ends its paragraph too. The source newline after </p> cannot be relied on: it
+        // is dropped as leading whitespace when the text ended inside an inline element (Kobo books
+        // wrap every sentence in a span). Also clears midParagraph after a streaming drain.
+        self->flushParagraph();
       }
     }
   }
