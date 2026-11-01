@@ -10,7 +10,6 @@
 #include <VectorFontSupport.h>
 
 #include <algorithm>
-#include <utility>
 
 #include "Activity.h"
 #include "CrossPointSettings.h"
@@ -160,8 +159,10 @@ void ActivityManager::loop() {
       return;
     }
 
-    // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed
-    if (!std::exchange(skipActivityLoop, false)) currentActivity->loop();
+    // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed.
+    // Not while leaving: a reader that let go of its book for a sync would close itself and drop
+    // the sync, and the page turner can hold a screen change over several passes.
+    if (pendingAction == PendingAction::None) currentActivity->loop();
   }
 
   while (pendingAction != PendingAction::None) {
@@ -632,10 +633,7 @@ bool ActivityManager::applyQueuedRemoteInput() {
 bool ActivityManager::handleForcedRefresh() { return currentActivity && currentActivity->handleForcedRefresh(); }
 
 bool ActivityManager::startShortcutSync() {
-  if (pendingAction != PendingAction::None || !currentActivity || !currentActivity->startShortcutSync()) return false;
-  // The screen may have let go of its book for the sync; its own loop must not run before the switch.
-  skipActivityLoop = true;
-  return true;
+  return pendingAction == PendingAction::None && currentActivity && currentActivity->startShortcutSync();
 }
 
 bool ActivityManager::skipLoopDelay() const { return currentActivity && currentActivity->skipLoopDelay(); }

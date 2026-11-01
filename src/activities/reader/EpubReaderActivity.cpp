@@ -2346,7 +2346,8 @@ unsigned long EpubReaderActivity::confirmLongPressThreshold() const {
 }
 
 bool EpubReaderActivity::startShortcutSync() {
-  return KOREADER_STORE.hasCredentials() && launchKOReaderSync(/*withClockAndInsights=*/true);
+  // No book after a failed load (its error dialog is up): the plain Insights sync runs instead.
+  return epub && KOREADER_STORE.hasCredentials() && launchKOReaderSync(/*withClockAndInsights=*/true);
 }
 
 bool EpubReaderActivity::launchKOReaderSync(const bool withClockAndInsights) {
