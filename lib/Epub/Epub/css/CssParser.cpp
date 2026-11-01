@@ -745,6 +745,11 @@ CssListStyleType CssParser::interpretListStyleType(std::string_view val) {
   return result;
 }
 
+CssLength CssParser::interpretMargin(std::string_view val) {
+  if (iequalsAscii(trimAsciiWhitespace(val), "auto")) return CssLength{0.0f, CssUnit::Auto};
+  return interpretLength(val);
+}
+
 CssLength CssParser::interpretLength(std::string_view val) {
   CssLength result;
   tryInterpretLength(val, result);
@@ -1036,25 +1041,25 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     uint8_t luma = 0;
     if (tryParseBackgroundShorthandLuma(value, luma)) ink.bgLuma = luma;
   } else if (iequalsAscii(name, "margin-top")) {
-    style.marginTop = interpretLength(value);
+    style.marginTop = interpretMargin(value);
     style.defined.marginTop = 1;
   } else if (iequalsAscii(name, "margin-bottom")) {
-    style.marginBottom = interpretLength(value);
+    style.marginBottom = interpretMargin(value);
     style.defined.marginBottom = 1;
   } else if (iequalsAscii(name, "margin-left")) {
-    style.marginLeft = interpretLength(value);
+    style.marginLeft = interpretMargin(value);
     style.defined.marginLeft = 1;
   } else if (iequalsAscii(name, "margin-right")) {
-    style.marginRight = interpretLength(value);
+    style.marginRight = interpretMargin(value);
     style.defined.marginRight = 1;
   } else if (iequalsAscii(name, "margin")) {
     std::string_view margins[4];
     const size_t count = collectEdgeValueTokens(value, margins);
     if (count > 0) {
-      style.marginTop = interpretLength(margins[0]);
-      style.marginRight = count >= 2 ? interpretLength(margins[1]) : style.marginTop;
-      style.marginBottom = count >= 3 ? interpretLength(margins[2]) : style.marginTop;
-      style.marginLeft = count >= 4 ? interpretLength(margins[3]) : style.marginRight;
+      style.marginTop = interpretMargin(margins[0]);
+      style.marginRight = count >= 2 ? interpretMargin(margins[1]) : style.marginTop;
+      style.marginBottom = count >= 3 ? interpretMargin(margins[2]) : style.marginTop;
+      style.marginLeft = count >= 4 ? interpretMargin(margins[3]) : style.marginRight;
       style.defined.marginTop = style.defined.marginRight = style.defined.marginBottom = style.defined.marginLeft = 1;
     }
   } else if (iequalsAscii(name, "border-style")) {
@@ -1924,15 +1929,19 @@ CssParser::VerticalBlockStyle CssParser::verticalBlockStyleOf(const CssStyle& cs
   // A negative indent is the hanging form above, not a first-line indent.
   if (css.defined.textIndent) vs.indentEm = std::max(0.0f, emOf(css.textIndent));
   if (css.defined.textAlign && css.textAlign == CssTextAlign::Center) vs.alignCenter = true;
+  // text-align: right/end is the foot of a vertical column.
+  if (css.defined.textAlign && css.textAlign == CssTextAlign::Right) vs.alignEnd = true;
   if (css.defined.border) vs.borderEdges = CssStyle::edgeMaskOf(css.borderEdges);
   return vs;
 }
 
 void CssParser::addVerticalRule(std::vector<VerticalBlockRule>& out, std::string_view selector, const CssStyle& css) {
   // Only unscoped and "v|"-scoped selectors feed the vertical engine.
+  bool verticalScope = false;
   if (selector.size() >= 2 && selector[1] == '|') {
     if (selector[0] != 'v') return;
     selector.remove_prefix(2);
+    verticalScope = true;
   }
   // Compound selectors (v16+) are skipped: the vertical engine matches a block by its own
   // tag/class alone and tracks no ancestor chain, so it could not honour one -- and keeping
@@ -1941,7 +1950,14 @@ void CssParser::addVerticalRule(std::vector<VerticalBlockRule>& out, std::string
       selector.find(CssSelector::CHILD_COMBINATOR) != std::string_view::npos) {
     return;
   }
-  const VerticalBlockStyle vs = verticalBlockStyleOf(css);
+  VerticalBlockStyle vs = verticalBlockStyleOf(css);
+  // Auto margins along the column place the whole block: both ends centre it, the head alone pushes it to
+  // the foot. Only a rule written for vertical text means that (EBPAJ .vrtl .block-align-center / -end);
+  // a plain `margin: auto` centres a wrapper horizontally and would otherwise centre whole pages here.
+  if (verticalScope && css.defined.marginTop && css.marginTop.unit == CssUnit::Auto) {
+    const bool autoFoot = css.defined.marginBottom && css.marginBottom.unit == CssUnit::Auto;
+    vs.blockAlign = autoFoot ? VERTICAL_BLOCK_CENTER : VERTICAL_BLOCK_END;
+  }
   if (!vs.any()) return;
 
   VerticalBlockRule rule;
@@ -1964,7 +1980,11 @@ void CssParser::addVerticalRule(std::vector<VerticalBlockRule>& out, std::string
     if (vs.beforeEm > 0) existing.beforeEm = vs.beforeEm;
     if (vs.afterEm > 0) existing.afterEm = vs.afterEm;
     if (vs.hangEm > 0) existing.hangEm = vs.hangEm;
-    existing.alignCenter = existing.alignCenter || vs.alignCenter;
+    if (vs.alignCenter || vs.alignEnd) {  // a later text-align replaces the earlier one
+      existing.alignCenter = vs.alignCenter;
+      existing.alignEnd = vs.alignEnd;
+    }
+    if (vs.blockAlign != 0) existing.blockAlign = vs.blockAlign;
     if (vs.borderEdges != 0) existing.borderEdges = vs.borderEdges;
     if (vs.indentEm >= 0) existing.indentEm = vs.indentEm;
     return;
@@ -2154,6 +2174,8 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
     css.defined.textIndent = (definedBits & (1u << 4)) != 0;
     css.marginTop = lengthOf(lens[1]);
     css.defined.marginTop = (definedBits & (1u << 5)) != 0;
+    css.marginBottom = lengthOf(lens[2]);
+    css.defined.marginBottom = (definedBits & (1u << 6)) != 0;
     css.marginLeft = lengthOf(lens[3]);
     css.defined.marginLeft = (definedBits & (1u << 7)) != 0;
     css.marginRight = lengthOf(lens[4]);

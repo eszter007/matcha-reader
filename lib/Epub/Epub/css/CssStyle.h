@@ -11,7 +11,9 @@ enum class CssTextAlign : uint8_t { Justify = 0, Left = 1, Center = 2, Right = 3
 // falls back to Pixels, which is right for every other property but would turn `line-height:
 // 1.4` into 1.4 PIXELS. It resolves exactly like Em in toPixels(); the distinction is kept
 // because only line-height produces it and a bare number is not a length.
-enum class CssUnit : uint8_t { Pixels = 0, Em = 1, Rem = 2, Points = 3, Percent = 4, Number = 5 };
+// Auto is a margin's `auto`: it resolves to 0 like any unknown unit, but the vertical engine reads it as
+// block alignment along the column (EBPAJ .block-align-center is `margin: auto 0` in vertical writing).
+enum class CssUnit : uint8_t { Pixels = 0, Em = 1, Rem = 2, Points = 3, Percent = 4, Number = 5, Auto = 6 };
 enum class CssTextDirection : uint8_t { Ltr = 0, Rtl = 1 };
 
 // Represents a CSS length value with its unit, allowing deferred resolution to pixels
