@@ -1,4 +1,4 @@
-// --- browser-side plugin host (Settings, File Manager, /plugins-run) ------
+// --- browser-side plugin host (Plugins, File Manager, /plugins-run) -------
 // Discovers plugins from the SD card (/api/plugins), loads each plugin.js,
 // and calls its registered render fn with a container + a small api. A plugin
 // is just JS on the SD; adding one needs no firmware change.
@@ -8,7 +8,7 @@ window.CrossPoint = window.CrossPoint || {
   // --- plugin job queue -------------------------------------------------
   // A plugin registers named actions; external systems enqueue jobs with
   // POST /api/plugin-jobs, and any open page hosting the plugin (File
-  // Manager, Settings, or the headless /plugins-run page) claims and
+  // Manager, Plugins, or the headless /plugins-run page) claims and
   // executes them here, then posts the result back for the caller to poll.
   _actions: {},
   _actionBusy: false,
@@ -134,12 +134,14 @@ window.CrossPoint = window.CrossPoint || {
 };
 
 // beforeLoad runs once, before the first matching plugin script; a failure
-// there does not stop the plugins from loading.
+// there does not stop the plugins from loading. Resolves to false when the
+// plugin list cannot be loaded.
 async function loadPlugins(mount, beforeLoad) {
   const host = document.getElementById('plugin-container');
-  if (!host) return;
+  if (!host) return false;
   let list;
-  try { list = await (await fetch('/api/plugins')).json(); } catch (e) { return; }
+  try { list = await (await fetch('/api/plugins')).json(); } catch (e) { return false; }
+  if (!Array.isArray(list)) return false;  // e.g. {"error":"out of memory"}
   for (const p of list) {
     // A null mount loads everything: the headless runner page hosts all
     // plugins so any registered action can execute there.
@@ -181,4 +183,5 @@ async function loadPlugins(mount, beforeLoad) {
       container.replaceChildren(h, msg);
     }
   }
+  return true;
 }
