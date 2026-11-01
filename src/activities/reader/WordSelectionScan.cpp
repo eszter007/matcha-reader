@@ -1,6 +1,7 @@
 #include "WordSelectionScan.h"
 
 #include <Arduino.h>
+#include <CounterReading.h>
 #include <DictIndex.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -17,6 +18,22 @@
 #include "util/CjkScript.h"
 
 namespace {
+
+size_t utf8Len(const unsigned char lead) {
+  return lead < 0x80 ? 1 : (lead & 0xE0) == 0xC0 ? 2 : (lead & 0xF0) == 0xE0 ? 3 : 4;
+}
+
+// First codepoint of a UTF-8 string (0 when empty or truncated).
+uint32_t decodeFirst(const std::string_view s) {
+  if (s.empty()) return 0;
+  const auto c0 = static_cast<unsigned char>(s[0]);
+  const size_t len = utf8Len(c0);
+  if (s.size() < len) return 0;
+  if (len == 1) return c0;
+  uint32_t cp = c0 & (len == 2 ? 0x1Fu : len == 3 ? 0x0Fu : 0x07u);
+  for (size_t k = 1; k < len; k++) cp = (cp << 6) | (static_cast<unsigned char>(s[k]) & 0x3Fu);
+  return cp;
+}
 // Bare vector growth (reserve()/push_back() past capacity) calls operator new, which aborts the
 // whole device on OOM under -fno-exceptions instead of returning nullptr (see CLAUDE.md). Word
 // Lookup can be opened right after a heap-starved chapter build (a furigana-dense CJK page can
@@ -244,12 +261,27 @@ void WordSelectionScan::initFromVerticalPage(const VerticalPage& page, const int
   verticalColumnXs(page, columnX);
   for (size_t i = 0; i < page.glyphs.size(); i++) {
     const auto& g = page.glyphs[i];
-    if (g.renderKind == VerticalGlyph::RotatedRun) continue;
+    const bool run = g.renderKind == VerticalGlyph::RotatedRun || g.renderKind == VerticalGlyph::UprightRun;
+    // A number set as one upright or sideways run (21, 1582, 5km) is split back into its characters,
+    // all in the run's cell, so it reads as digits plus counter. Other runs are not lookup text.
+    const std::string& runText = page.glyphTextStr(g);
+    const bool numberRun = run && !runText.empty() && isDigitCp(decodeFirst(runText));
+    if (g.renderKind == VerticalGlyph::RotatedRun && !numberRun) continue;
     if (VerticalParsedText::isImageMarker(g.codepoint)) continue;  // an inline image, not text
     const int x = g.column < columnX.size() && columnX[g.column] >= 0 ? columnX[g.column] : g.x;
     const int y = std::max(0, verticalCellTop(page, i, cellPx));
     GlyphRef ref{static_cast<uint16_t>(x), static_cast<uint16_t>(y), g.column, g.row, g.codepoint, g.paragraphIndex, 0};
-    if (!pushGlyphSafe(allGlyphs, ref)) {
+    bool pushed = true;
+    if (numberRun) {
+      for (size_t b = 0; b < runText.size() && pushed;) {
+        ref.codepoint = decodeFirst(std::string_view(runText).substr(b));
+        b += utf8Len(static_cast<unsigned char>(runText[b]));
+        pushed = pushGlyphSafe(allGlyphs, ref);
+      }
+    } else {
+      pushed = pushGlyphSafe(allGlyphs, ref);
+    }
+    if (!pushed) {
       scanTruncated = true;
       break;
     }
@@ -970,6 +1002,19 @@ void WordSelectionScan::scanOnePosition() {
   // っ-start positions accept exact entries only (see the small-kana skip above): a deinflected
   // hit there is a conjugation fragment (って→う), not the quotative って.
   if (sokuonTeStart && hasMatch && result.deinflected) hasMatch = false;
+  // After digits the counter is one unit with the number even where the dictionary stops short of
+  // it or lacks it: 3日目, 5万円, 5km.
+  if (digitGlyphs > 0) {
+    const size_t counterBytes = CounterReading::matchCounter(text);
+    // A name that runs past the counter (日後 of 5日後) gives way to it.
+    const bool nameRunsOn =
+        hasMatch && result.entry.sourceDict == DictIndex::DICT_NAMES && result.matchLength > counterBytes;
+    if (counterBytes > 0 && (!hasMatch || counterBytes > result.matchLength || nameRunsOn)) {
+      hasMatch = true;
+      result.matchLength = counterBytes;
+      result.deinflected = false;
+    }
+  }
   // Declared out here so the push below can record the match's cell span (see GlyphRef::matchLen).
   int matchChars = 0;
   if (hasMatch) {

@@ -329,6 +329,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   // typically annotate a name's reading only on first appearance -- this surfaces it
   // on every later occurrence too. No entry -> no line.
   void prependBookReading(const std::string& surface);
+  // After a number written in digits (６月): put the dictionary's counter sense first and give it
+  // the whole reading (ろくがつ) from CounterReading.
+  void readAsCounter(const std::string& digits, const std::string& counter);
 
   // Open on the page with a word cursor when the reader supplied a select context.
   void beginSelectMode();
