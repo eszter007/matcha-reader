@@ -1,0 +1,60 @@
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **One idea per discussion.** Feature ideas and requests for a new device both go here.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - New feature
+        - Change to an existing feature
+        - Support for a new device
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is missing or awkward when reading or studying? Be concrete.
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Why it matters
+      description: "How often you run into it and what it costs you: a book you cannot read, a step you repeat every day, a device you cannot use."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What would you like to happen? Focus on what you would see on the device. For a new device, give its model and a link to its specs.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority for you
+      options:
+        - Nice to have
+        - Would make a real difference
+        - Must have - I cannot read or study the way I want without it
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Screenshots, example books, links to similar features elsewhere.
+    validations:
+      required: false
