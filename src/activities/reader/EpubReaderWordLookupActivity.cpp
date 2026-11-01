@@ -1321,11 +1321,13 @@ void EpubReaderWordLookupActivity::promoteBookReading(const std::string& surface
     const size_t start = at + sizeof(kEntrySep) - 1;
     const size_t end = resultDefinition.find(kEntrySep, start);
     if (readsAsBook(start)) {
+      // Rotated in place: a definition can run to 16 KB, and a copy of it is an unguarded
+      // allocation on a fragmented heap. [0, at) sep entry -> entry [0, at) sep -> entry sep [0, at).
       const size_t stop = end == std::string::npos ? resultDefinition.size() : end;
-      std::string moved = resultDefinition.substr(start, stop - start);
-      resultDefinition.erase(at, stop - at);
-      moved += kEntrySep;
-      resultDefinition.insert(0, moved);
+      const size_t entryLen = stop - start;
+      const auto begin = resultDefinition.begin();
+      std::rotate(begin, begin + start, begin + stop);
+      std::rotate(begin + entryLen, begin + entryLen + at, begin + stop);
       return;
     }
     at = end;
