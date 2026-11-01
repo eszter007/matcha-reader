@@ -279,14 +279,21 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
       // Humble/honorific お/ご + stem + する is the verb (お出しする -> 出す), not a noun that happens
       // to start with お (お出し "dashi"). A real お-noun (お茶する) is still found below.
       const size_t prefix = honorificPrefixBytes(noun);
-      // An お-noun that is itself a suru noun (お願いする, おしゃべりする) stays that noun. The
-      // flags of older dictionaries do not say so, its tags do: one definition read, only here.
+      // An お-noun that is itself a suru noun (お願いする, おしゃべりする) stays that noun. Newer
+      // dictionaries flag it POS_VS; older ones only say so in its tags: one definition read, only here.
       bool suruNoun = false;
       if (prefix > 0) {
         DictEntry own;
-        if (DictIndex::lookupExact(noun, own, DictIndex::DICT_JMDICT, /*needDefinition=*/true)) {
+        if (DictIndex::lookupExact(noun, own, DictIndex::DICT_JMDICT, /*needDefinition=*/false,
+                                   DictIndexRecord::POS_VS)) {
+          suruNoun = true;
+        } else if (DictIndex::lookupExact(noun, own, DictIndex::DICT_JMDICT, /*needDefinition=*/true)) {
           const std::string_view head(own.definition.data(), std::min<size_t>(own.definition.size(), 96));
           suruNoun = head.find("[suru]") != std::string_view::npos;
+        } else if (DictIndex::lookupExact(noun, own, DictIndex::DICT_JMDICT, /*needDefinition=*/false)) {
+          // The noun exists but its definition did not load (low heap): leave the lookup unresolved
+          // so the heap-limited retry runs, rather than answering with the verb.
+          return false;
         }
       }
       if (prefix > 0 && !suruNoun &&

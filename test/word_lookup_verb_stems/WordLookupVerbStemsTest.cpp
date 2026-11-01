@@ -69,6 +69,8 @@ class WordLookupVerbStems : public ::testing::Test {
                             {"お茶", 255, OTHER, "tea"},
                             {"お願い", 255, OTHER, "【おねがい】\n\n[noun] [suru] \n• request"},
                             {"願う", 255, V5, "to wish"},
+                            {"お喋り", 255, VS, "chatter"},
+                            {"喋る", 255, V5, "to talk"},
                             {"通り", 255, OTHER, "as, in accordance with"},
                             {"通る", 255, V5, "to pass"},
                             {"茶", 255, OTHER, "tea plant"},
@@ -116,6 +118,7 @@ TEST_F(WordLookupVerbStems, ARealONounWithSuruStaysTheNoun) {
 
 TEST_F(WordLookupVerbStems, AnONounThatIsASuruNounStaysTheNoun) {
   EXPECT_EQ(lookupAt("お願いします", "お願い").first, "お願い");
+  EXPECT_EQ(lookupAt("お喋りします", "お喋り").first, "お喋り");  // POS_VS, no [suru] tag
 }
 
 TEST_F(WordLookupVerbStems, HonorificGoSuruNounIsTheNoun) {
