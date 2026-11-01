@@ -717,7 +717,7 @@ namespace {
 // the tate-chu-yoko NUL truncation, where a match claimed the cells of the word after an upright
 // "!?" run: the word stayed unselectable on that page for good, since nothing re-examined a
 // cache that looked valid. Rebuilding costs one rescan (~300 ms, once per page).
-constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x374D4C57;  // "WLM7": bumped whenever segmentation changes
+constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x384D4C57;  // "WLM8": bumped whenever segmentation changes
 constexpr uint16_t WLSCAN_MAX_PAGES = 8;
 constexpr size_t WLSCAN_MAX_CARRY_BYTES = 4096;  // bound on the older entries carried forward
 
@@ -787,7 +787,7 @@ void WordSelectionScan::setBookGlossary(const std::string& bookCachePath) {
   glossaryCount_ = RubyGlossary::loadSpanKeys(bookCachePath, glossaryKeys_);
 }
 
-int WordSelectionScan::glossarySpanAt(const std::string& text) const {
+int WordSelectionScan::glossarySpanAt(const std::string_view text) const {
   if (glossaryKeys_.empty()) return 0;
   int best = 0;
   int chars = 0;
@@ -1309,6 +1309,17 @@ void WordSelectionScan::scanOnePosition() {
   }
 }
 
+namespace {
+// Characters that usually stand alone as a preposition or marker: 把 被 在 给/給 对/對 从/從 向 让/讓 将/將 跟.
+bool isGrammarLead(const uint32_t cp) {
+  static constexpr uint16_t kLeads[] = {0x628A, 0x88AB, 0x5728, 0x7ED9, 0x7D66, 0x5BF9, 0x5C0D, 0x4ECE,
+                                        0x5F9E, 0x5411, 0x8BA9, 0x8B93, 0x5C06, 0x5C07, 0x8DDF};
+  return std::find(std::begin(kLeads), std::end(kLeads), cp) != std::end(kLeads);
+}
+// Four e-folds of word cost (see scanChineseRun): the word must be ~50x commoner than the split.
+constexpr int16_t kGrammarLeadPenalty = 48;
+}  // namespace
+
 bool WordSelectionScan::scanChineseRun(const size_t from) {
   const uint32_t paraIdx = allGlyphs[from].paragraphIndex;
   // The run: consecutive hanzi of one paragraph. Punctuation, digits, Latin and tate-chu-yoko
@@ -1335,6 +1346,13 @@ bool WordSelectionScan::scanChineseRun(const size_t from) {
   for (size_t p = 0; p < n; p++) {
     std::memset(runPriority_[p], 0, sizeof(runPriority_[p]));
     runFound_[p] = WordLookup::lookupAll(text, byteAt[p], runPriority_[p], kChineseMaxWindow);
+    // A name the book annotated as one ruby group (王小明) is a word, though the dictionary only
+    // knows its characters; it is scored as a common one.
+    const int gloss = glossarySpanAt(std::string_view(text).substr(byteAt[p]));
+    if (gloss >= 2 && gloss <= kMaxLookupChars) {
+      runFound_[p] |= static_cast<uint8_t>(1u << (gloss - 1));
+      runPriority_[p][gloss - 1] = std::max<uint8_t>(runPriority_[p][gloss - 1], 200);
+    }
   }
 
   // Best split of cells [p, n) by total word cost, the unigram model every Chinese segmenter
@@ -1356,7 +1374,12 @@ bool WordSelectionScan::scanChineseRun(const size_t from) {
       // A word may run past the run's end (into the tail or the next call's cells): it ends the
       // run and is scored as one word.
       const size_t next = std::min(n, p + static_cast<size_t>(len));
-      const int16_t score = static_cast<int16_t>(runBest_[next] + kWordCost + runPriority_[p][len - 1]);
+      int16_t score = static_cast<int16_t>(runBest_[next] + kWordCost + runPriority_[p][len - 1]);
+      // 把, 被, 在 and their like mostly stand alone before a noun (把门关上 is 把 + 门), so a
+      // word they start must be clearly commoner than the split to win.
+      if (len > 1 && runFound_[p] & 1u && isGrammarLead(allGlyphs[from + p].codepoint)) {
+        score = static_cast<int16_t>(score - kGrammarLeadPenalty);
+      }
       if (score > best || (score == best && len > bestLen)) {
         best = score;
         bestLen = static_cast<uint8_t>(len);

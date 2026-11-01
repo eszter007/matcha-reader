@@ -56,5 +56,38 @@ class ContextualReadings(unittest.TestCase):
         self.assertIn("<ruby>一<rt>x</rt></ruby>", out)
 
 
+class SpokenReadings(unittest.TestCase):
+    WORDS = {"一": ["yi1"], "个": ["ge4"], "不": ["bu4"], "是": ["shi4"], "天": ["tian1"], "第": ["di4"],
+             "哪儿": ["na3", "r5"], "慢": ["man4"], "地": ["di4"], "走": ["zou3"], "了": ["le5"]}
+
+    def rt(self, text, **kw):
+        import re
+        return re.findall(r"<ruby>(.*?)<rt>(.*?)</rt></ruby>", tool.annotate_xhtml(f"<p>{text}</p>", self.WORDS, set(), False, **kw))
+
+    def test_yi_and_bu_change_tone(self):
+        self.assertEqual(self.rt("一个")[0], ("一", "yí"))
+        self.assertEqual(self.rt("一天")[0], ("一", "yì"))
+        self.assertEqual(self.rt("不是")[0], ("不", "bú"))
+        self.assertEqual(self.rt("第一")[1], ("一", "yī"))
+        self.assertEqual(self.rt("一个", citation=True)[0], ("一", "yī"))
+
+    def test_erhua_joins_the_syllable_before(self):
+        self.assertEqual(self.rt("哪儿"), [("哪儿", "nǎr")])
+
+    def test_de_after_a_doubled_adjective(self):
+        self.assertEqual(self.rt("慢慢地走")[2], ("地", "de"))
+
+    def test_everyday_reading_and_particles(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("東西 东西 [dong1 xi1] /east and west/\n東西 东西 [dong1 xi5] /thing/stuff/person/\n"
+                        "著 着 [zhao1] /(chess) move/trick/\n著 着 [zhe5] /aspect particle/\n")
+            words = tool.load_cedict(path)
+        self.assertEqual(words["东西"], ["dong1", "xi5"])
+        self.assertEqual(words["着"], ["zhe5"])
+
+
 if __name__ == "__main__":
     unittest.main()

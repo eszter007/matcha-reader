@@ -3,6 +3,7 @@
 
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -23,7 +24,8 @@ class PinyinMarks(unittest.TestCase):
 
     def test_neutral_and_passthrough(self):
         self.assertEqual(conv.pinyin_to_marks("ma5"), "ma")
-        self.assertEqual(conv.pinyin_to_marks("hua1 r5"), "huā r")
+        self.assertEqual(conv.pinyin_to_marks("hua1 r5"), "huār")
+        self.assertEqual(conv.pinyin_to_marks("lv4"), "lǜ")
         self.assertEqual(conv.pinyin_to_marks("xx5"), "xx")
         self.assertEqual(conv.pinyin_to_marks("A B C"), "A B C")
         self.assertEqual(conv.pinyin_to_marks("m2"), "m")
@@ -42,7 +44,7 @@ class Zhuyin(unittest.TestCase):
             "ni3": "ㄋㄧˇ", "hao3": "ㄏㄠˇ", "zhong1": "ㄓㄨㄥ", "guo2": "ㄍㄨㄛˊ", "lu:4": "ㄌㄩˋ",
             "ju2": "ㄐㄩˊ", "xue2": "ㄒㄩㄝˊ", "quan2": "ㄑㄩㄢˊ", "jun1": "ㄐㄩㄣ", "shi4": "ㄕˋ",
             "zi3": "ㄗˇ", "yi1": "ㄧ", "wu3": "ㄨˇ", "yu2": "ㄩˊ", "you3": "ㄧㄡˇ", "wei4": "ㄨㄟˋ",
-            "ying1": "ㄧㄥ", "yong4": "ㄩㄥˋ", "er2": "ㄦˊ", "a1": "ㄚ", "ma5": "˙ㄇㄚ", "r5": "˙ㄦ",
+            "ying1": "ㄧㄥ", "yong4": "ㄩㄥˋ", "er2": "ㄦˊ", "a1": "ㄚ", "ma5": "˙ㄇㄚ", "r5": "ㄦ",
             "liu2": "ㄌㄧㄡˊ", "gui4": "ㄍㄨㄟˋ", "lun4": "ㄌㄨㄣˋ", "feng1": "ㄈㄥ", "weng1": "ㄨㄥ",
         }
         for pinyin, expected in cases.items():
@@ -179,6 +181,39 @@ class ListParsing(unittest.TestCase):
         records = [("說".encode(), b"", 100, 0), ("说".encode(), b"", 100, 0), ("貓".encode(), b"", 100, 0)]
         out = conv.apply_frequency(records, {"说": 219, "說": 102, "猫": 150}, {"說": "说", "说": "說", "貓": "猫"})
         self.assertEqual([p for _, _, p, _ in out], [219, 219, 150])
+
+
+    def test_a_shared_simplified_rank_is_split(self):
+        records = [("乾".encode(), b"", 100, 0), ("幹".encode(), b"", 100, 0)]
+        out = conv.apply_frequency(records, {"干": 219}, {"乾": "干", "幹": "干"}, {"乾": 3, "幹": 3})
+        self.assertEqual([p for _, _, p, _ in out], [206, 206])
+
+
+class CedictEntries(unittest.TestCase):
+    def _convert(self, text, **kw):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "cedict.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            return conv.convert_cedict(path, **kw)
+
+    def test_everyday_entry_before_the_surname(self):
+        records, _ = self._convert("周 周 [Zhou1] /surname Zhou/\n周 周 [zhou1] /week/cycle/\n")
+        defs = [d.decode() for h, d, *_ in records if h == "周".encode()]
+        self.assertEqual(len(defs), 2)
+        self.assertIn("week", defs[0])
+
+    def test_an_entry_repeated_by_a_later_input_is_dropped(self):
+        seen = set()
+        canto, _ = self._convert("你好 你好 [ni3 hao3] {nei5 hou2} /hello/ # adapted from cc-cedict\n", seen=seen)
+        cedict, _ = self._convert("你好 你好 [ni3 hao3] /hello/\n好 好 [hao3] /good/\n", seen=seen)
+        self.assertEqual(len(canto), 1)
+        self.assertEqual([h.decode() for h, *_ in cedict], ["好"])
+
+    def test_cross_references_with_middle_dot_and_comma(self):
+        self.assertEqual(conv.prettify_cedict_gloss("see 馬克·吐溫|马克·吐温[Ma3 ke4 · Tu3 wen1]"),
+                         "see 馬克·吐溫/马克·吐温 (Mǎ kè · Tǔ wēn)")
+        self.assertEqual(conv.prettify_cedict_gloss("also pr. [shi4, shi5]"), "also pr.  (shì, shi)")
 
 
 class ThirdPass(unittest.TestCase):

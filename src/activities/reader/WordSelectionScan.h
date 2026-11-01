@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 class GfxRenderer;
@@ -107,7 +108,7 @@ class WordSelectionScan {
   void setBookGlossary(const std::string& bookCachePath);
   // Characters of the longest glossary base `text` starts with, or 0. RAM only; a hash hit is
   // confirmed against the file by RubyGlossary::longestPrefix when the word is looked up.
-  int glossarySpanAt(const std::string& text) const;
+  int glossarySpanAt(std::string_view text) const;
   static constexpr int kLookupContextChars = 8;  // == kMaxLookupChars, asserted below
 
   // Run scan/filter work for up to maxMillis (pass UINT32_MAX to run to completion).

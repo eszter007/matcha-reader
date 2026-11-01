@@ -95,6 +95,8 @@ Optional extras, for either set:
     --frequency dict.txt --skip-top 1500 book.epub book-pinyin.epub   # --zhuyin for bopomofo
   ```
 
+  Readings are written as spoken: 一 and 不 change tone before the next syllable (一个 yí gè, 不是 bú shì), particles such as 了, 着 and 得 take the neutral tone, and 儿 joins the syllable before it (哪儿 nǎr). Add `--citation-tones` to keep each character's dictionary tone instead.
+
   Add `--ai --gemini-key-file gemini.key` to have each character's reading picked in context. The book's text is sent to Gemini under your own key, sentence by sentence; a reading is used only when CC-CEDICT lists it for that character, and the dictionary's is kept otherwise.
 
 ## Chinese: Cantonese
