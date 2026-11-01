@@ -2309,6 +2309,7 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
     // what the page is about, so it becomes the panel's headword and leaves the body.
     std::string head;
     static constexpr char kGrammarHead[] = "\xe2\x80\x94 Grammar: ";
+    static constexpr char kArrow[] = "\xe2\x86\x92 ";  // opens an alternative headword's entry
     if (piece.compare(0, sizeof(kGrammarHead) - 1, kGrammarHead) == 0) {
       const size_t lineEnd = piece.find('\n');
       const size_t headEnd = lineEnd == std::string::npos ? piece.size() : lineEnd;
@@ -2320,6 +2321,12 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
       head.erase(tailSpace == std::string::npos ? 0 : tailSpace + 1);
       piece.erase(0, lineEnd == std::string::npos ? piece.size() : lineEnd + 1);
       grammarHead = head;
+    } else if (kind != StrId::STR_DICT_KIND_GRAMMAR && piece.compare(0, sizeof(kArrow) - 1, kArrow) == 0) {
+      // Another headword the same text can be (see kAlternativeSeparator): it names its own page.
+      const size_t lineEnd = piece.find('\n');
+      head = piece.substr(sizeof(kArrow) - 1,
+                          (lineEnd == std::string::npos ? piece.size() : lineEnd) - (sizeof(kArrow) - 1));
+      piece.erase(0, lineEnd == std::string::npos ? piece.size() : lineEnd + 1);
     } else if (kind != StrId::STR_DICT_KIND_GRAMMAR && !sectionText.empty() && !retainedPrefixHead.empty()) {
       // Every page after the book's reading is a dictionary entry for the retained prefix.
       head = retainedPrefixHead;

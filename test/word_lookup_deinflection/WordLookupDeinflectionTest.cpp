@@ -80,7 +80,9 @@ class WordLookupDeinflection : public ::testing::Test {
                             {"まず", 255, OTHER, "first of all"},
                             {"必ず", 255, OTHER, "certainly"},
                             {"かわいそう", 255, OTHER, "pitiful"},
-                            {"ありがとうございます", 255, OTHER, "thank you"}});
+                            {"ありがとうございます", 255, OTHER, "thank you"},
+                            {"分かつ", 255, V5, "【わかつ】\n• to divide"},
+                            {"分かる", 255, V5, "【わかる】\n• to understand\n• to comprehend\n• to grasp"}});
     testRoot() = root_.string();
     DictIndex::releaseCaches();
   }
@@ -169,6 +171,22 @@ TEST_F(WordLookupDeinflection, LongPassStopsAtANul) {
   if (WordLookup::lookup(text, 0, r)) {
     EXPECT_LE(r.matchLength, std::string("来").size());
   }
+}
+
+TEST_F(WordLookupDeinflection, EveryHeadwordTheTextCanBeMostCommonFirst) {
+  WordLookupResult r;
+  ASSERT_TRUE(WordLookup::lookup("分かって。", 0, r));
+  EXPECT_EQ(r.entry.headword, "分かる");
+  const std::string alternative = std::string(kAlternativeSeparator) + "分かつ\n【わかつ】";
+  EXPECT_NE(r.entry.definition.find(alternative), std::string::npos) << r.entry.definition;
+  EXPECT_LT(r.entry.definition.find("understand"), r.entry.definition.find("divide"));
+}
+
+TEST_F(WordLookupDeinflection, TheScanTakesTheFirstHitWithoutAlternatives) {
+  WordLookupResult r;
+  ASSERT_TRUE(WordLookup::lookup("分かって。", 0, r, /*needDefinition=*/false));
+  EXPECT_EQ(r.entry.definition.find(kAlternativeSeparator), std::string::npos);
+  EXPECT_EQ(r.matchLength, std::string("分かって").size());
 }
 
 }  // namespace

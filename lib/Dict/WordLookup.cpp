@@ -220,6 +220,71 @@ SuruNoun lookupSuruNoun(const std::vector<DeinflectionCandidate>& candidates, co
   }
   return SuruNoun::Missing;
 }
+
+uint8_t posMaskFor(const WordCondition condition) {
+  switch (condition) {
+    case WordCondition::V1:
+      return DictIndexRecord::POS_V1;
+    case WordCondition::V5:
+      return DictIndexRecord::POS_V5;
+    case WordCondition::VS:
+      return DictIndexRecord::POS_VS;
+    case WordCondition::VK:
+      return DictIndexRecord::POS_VK;
+    case WordCondition::ADJ_I:
+      return DictIndexRecord::POS_ADJ_I;
+    case WordCondition::DICT:
+      break;
+  }
+  return 0;
+}
+
+// The deinflection candidates of one window that name a headword of their word class. Without
+// definitions (the page scan) the first is enough: only the span matters. With them, every distinct
+// headword counts and the most common leads; up to kMaxAlternatives more follow it, each opened by
+// kAlternativeSeparator and its headword, so 分かって shows 分かる before 分かつ and 降りそう both verbs.
+// Common Japanese words all carry the top priority, so a tie goes to the longer entry: more senses
+// and example sentences mark the everyday word (分かる over 分かつ).
+bool resolveCandidates(const std::vector<DeinflectionCandidate>& candidates, const bool needDefinition,
+                       const bool classedOnly, DictEntry& out) {
+  constexpr size_t kMaxHits = 4;
+  constexpr size_t kMaxAlternativeBytes = 4096;  // a longer alternative is left out, not appended
+  // Heap, not stack: up to kMaxHits entries with their definitions, only while a word is being
+  // looked up for the panel, and freed on return.
+  std::vector<DictEntry> hits;
+  DictEntry entry;
+  for (size_t i = 1; i < candidates.size() && hits.size() < kMaxHits; i++) {
+    if (classedOnly && candidates[i].condition == WordCondition::DICT) continue;
+    // Deinflected forms are conjugated verbs/adjectives -> only ever in jmdict.
+    if (!DictIndex::lookupExact(candidates[i].text.c_str(), entry, DictIndex::DICT_JMDICT, needDefinition,
+                                posMaskFor(candidates[i].condition))) {
+      continue;
+    }
+    if (!needDefinition) {
+      out = std::move(entry);
+      return true;
+    }
+    bool seen = false;
+    for (const auto& hit : hits) seen = seen || hit.headword == entry.headword;
+    if (seen) continue;
+    if (hits.empty()) hits.reserve(kMaxHits);
+    hits.push_back(std::move(entry));
+  }
+  if (hits.empty()) return false;
+  std::stable_sort(hits.begin(), hits.end(), [](const DictEntry& a, const DictEntry& b) {
+    if (a.priority != b.priority) return a.priority > b.priority;
+    return a.definition.size() > b.definition.size();
+  });
+  out = std::move(hits[0]);
+  for (size_t h = 1; h < hits.size(); h++) {
+    if (hits[h].definition.size() > kMaxAlternativeBytes) continue;
+    out.definition += kAlternativeSeparator;
+    out.definition += hits[h].headword;
+    out.definition += '\n';
+    out.definition += hits[h].definition;
+  }
+  return true;
+}
 }  // namespace
 
 namespace {
@@ -273,33 +338,11 @@ bool lookupLongConjugation(const std::string& text, const size_t byteOffset, Wor
   for (int chars = longest; chars > WordLookup::MAX_WINDOW_CHARS; chars--) {
     const std::string window = windowOf(chars);
     const auto candidates = Deinflector::deinflect(window);
-    for (size_t i = 1; i < candidates.size(); i++) {
-      uint8_t posMask = 0;
-      switch (candidates[i].condition) {
-        case WordCondition::V1:
-          posMask = DictIndexRecord::POS_V1;
-          break;
-        case WordCondition::V5:
-          posMask = DictIndexRecord::POS_V5;
-          break;
-        case WordCondition::VS:
-          posMask = DictIndexRecord::POS_VS;
-          break;
-        case WordCondition::VK:
-          posMask = DictIndexRecord::POS_VK;
-          break;
-        case WordCondition::ADJ_I:
-          posMask = DictIndexRecord::POS_ADJ_I;
-          break;
-        case WordCondition::DICT:
-          continue;  // an unclassed candidate this long is a phrase guess, not a conjugation
-      }
-      if (DictIndex::lookupExact(candidates[i].text.c_str(), entry, DictIndex::DICT_JMDICT, needDefinition, posMask)) {
-        out.entry = std::move(entry);
-        out.matchLength = window.size();
-        out.deinflected = true;
-        return true;
-      }
+    if (resolveCandidates(candidates, needDefinition, /*classedOnly=*/true, entry)) {
+      out.entry = std::move(entry);
+      out.matchLength = window.size();
+      out.deinflected = true;
+      return true;
     }
     switch (lookupSuruNoun(candidates, window.size(), needDefinition, out)) {
       case SuruNoun::Found:
@@ -405,41 +448,16 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
 
     // Try deinflected candidates.
     auto candidates = Deinflector::deinflect(window);
-    // Skip index 0 — that's the raw surface form we already tried.
-    for (size_t i = 1; i < candidates.size(); i++) {
-      // Validate the candidate against the entry's actual word class: a godan-rule candidate must
-      // resolve to a godan verb, etc. Kills reading-record collisions like だとい→だとう (妥当, a
-      // noun) or って→う (鵜). Condition DICT (chained contractions) carries no class -> mask 0.
-      uint8_t posMask = 0;
-      switch (candidates[i].condition) {
-        case WordCondition::V1:
-          posMask = DictIndexRecord::POS_V1;
-          break;
-        case WordCondition::V5:
-          posMask = DictIndexRecord::POS_V5;
-          break;
-        case WordCondition::VS:
-          posMask = DictIndexRecord::POS_VS;
-          break;
-        case WordCondition::VK:
-          posMask = DictIndexRecord::POS_VK;
-          break;
-        case WordCondition::ADJ_I:
-          posMask = DictIndexRecord::POS_ADJ_I;
-          break;
-        case WordCondition::DICT:
-          posMask = 0;
-          break;
-      }
-      // Deinflected forms are conjugated verbs/adjectives -> only ever in jmdict.
-      if (DictIndex::lookupExact(candidates[i].text.c_str(), entry, DictIndex::DICT_JMDICT, needDefinition, posMask)) {
-        out.entry = std::move(entry);
-        // window.size(), not windowEnd - byteOffset: the deinflection path reads the same window,
-        // so a NUL trimmed above must shorten this match too.
-        out.matchLength = window.size();
-        out.deinflected = true;
-        return true;
-      }
+    // Index 0 is the raw surface form, already tried. Candidates are checked against the entry's
+    // word class: a godan-rule candidate must resolve to a godan verb, etc. That kills reading-record
+    // collisions like だとい→だとう (妥当, a noun) or って→う (鵜).
+    if (resolveCandidates(candidates, needDefinition, /*classedOnly=*/false, entry)) {
+      out.entry = std::move(entry);
+      // window.size(), not windowEnd - byteOffset: the deinflection path reads the same window,
+      // so a NUL trimmed above must shorten this match too.
+      out.matchLength = window.size();
+      out.deinflected = true;
+      return true;
     }
     switch (lookupSuruNoun(candidates, window.size(), needDefinition, out)) {
       case SuruNoun::Found:

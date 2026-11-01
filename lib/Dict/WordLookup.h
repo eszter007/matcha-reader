@@ -11,6 +11,10 @@ struct WordLookupResult {
   bool deinflected = false;  // true if the hit came from a deinflection candidate, not the raw window
 };
 
+// Opens a further entry in a definition: another headword the same text can be (分かつ after 分かる),
+// followed by that headword on the rest of the line. The panel shows each as a page of its own.
+inline constexpr char kAlternativeSeparator[] = "\n\n---\n\xe2\x86\x92 ";  // →
+
 // Given a paragraph's source text and a byte offset into it, tries
 // decreasing-length windows (8 characters down to 1) at that position,
 // looking up each window — both raw and deinflected — in the dictionary
