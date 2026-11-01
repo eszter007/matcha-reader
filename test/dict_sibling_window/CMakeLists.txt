@@ -7,7 +7,7 @@ add_executable(DictSiblingWindowTest
 # The stubs directory comes first so <HalStorage.h> and <Logging.h> resolve to the host
 # stand-ins rather than the firmware headers.
 target_include_directories(DictSiblingWindowTest BEFORE PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${REPO_ROOT}/test/common/dict_stubs
   ${REPO_ROOT}/lib/Dict
   ${REPO_ROOT}/lib/Memory
   ${REPO_ROOT}/lib/hal

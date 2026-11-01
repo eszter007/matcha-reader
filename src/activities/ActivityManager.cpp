@@ -535,6 +535,11 @@ bool ActivityManager::isForegroundHomeShown() const {
          paintedVisit.load(std::memory_order_acquire) == screenVisit;
 }
 
+bool ActivityManager::isOnlyHomeOrReader() const {
+  return pendingAction == PendingAction::None && stackActivities.empty() && currentActivity &&
+         (currentActivity->name == "Home" || currentActivity->isReaderActivity());
+}
+
 bool ActivityManager::remoteShortcut(const bool readerMenu) {
   auto* reader = foregroundReader();
   if (!reader) return false;

@@ -128,7 +128,11 @@ namespace {
 // an open has more room; chapters cached unstyled before this are rebuilt once.
 // v156: no format change. A column oidashi shortened spreads by at most an eighth of an em per gap
 // and otherwise ends short of the foot.
-constexpr uint8_t VSECTION_FILE_VERSION = 156;
+// v157: no format change. A paragraph nested in another block whose text ends inside an inline element starts
+// its own column again; it used to run on from the previous paragraph.
+// v158: no format change. text-align: right/end sets a column at the foot, and auto head/foot margins
+// (EBPAJ .block-align-center / -end) centre a block along the column or push it to the foot.
+constexpr uint8_t VSECTION_FILE_VERSION = 158;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -570,7 +574,12 @@ struct TextExtractor {
     if (vs.beforeEm > 0) params.beforeEm = vs.beforeEm;
     if (vs.afterEm > 0) params.afterEm = vs.afterEm;
     if (vs.hangEm > 0) params.hangEm = vs.hangEm;
-    params.alignCenter = params.alignCenter || vs.alignCenter;
+    if (vs.alignCenter || vs.alignEnd) {  // a later text-align replaces the earlier one
+      params.alignCenter = vs.alignCenter;
+      params.alignEnd = vs.alignEnd;
+    }
+    if (vs.blockAlign == CssParser::VERTICAL_BLOCK_CENTER) params.blockAlign = VerticalBlockParams::BlockAlign::Center;
+    if (vs.blockAlign == CssParser::VERTICAL_BLOCK_END) params.blockAlign = VerticalBlockParams::BlockAlign::End;
     if (vs.borderEdges != 0) params.borderEdges = vs.borderEdges;
   }
 
@@ -669,9 +678,7 @@ struct TextExtractor {
     }
     if (self->boxOpenedAtDepth >= 0 && !self->boxHasText) {
       VerticalBlockParams params;
-      if (self->resolveBlockStyle(name, atts, params) &&
-          (params.startEm > 0 || params.beforeEm > 0 || params.afterEm > 0 || params.hangEm > 0 || params.alignCenter ||
-           params.borderEdges != 0)) {
+      if (self->resolveBlockStyle(name, atts, params) && params.any()) {
         LOG_DBG("VSC", "styled block merge: <%s> start=%.1f hang=%.1f edges=0x%X", name, params.startEm, params.hangEm,
                 params.borderEdges);
         if (self->mergedAtDepth < 0) {
@@ -683,12 +690,13 @@ struct TextExtractor {
       }
     } else if (self->boxOpenedAtDepth < 0) {
       VerticalBlockParams params;
-      if (self->resolveBlockStyle(name, atts, params) &&
-          (params.startEm > 0 || params.beforeEm > 0 || params.afterEm > 0 || params.hangEm > 0 || params.alignCenter ||
-           params.borderEdges != 0)) {
+      if (self->resolveBlockStyle(name, atts, params) && params.any()) {
         self->flushParagraph();
-        LOG_DBG("VSC", "styled block open: <%s> start=%.1f hang=%.1f before=%.1f after=%.1f center=%d edges=0x%X", name,
-                params.startEm, params.hangEm, params.beforeEm, params.afterEm, params.alignCenter, params.borderEdges);
+        LOG_DBG(
+            "VSC",
+            "styled block open: <%s> start=%.1f hang=%.1f before=%.1f after=%.1f center=%d end=%d block=%d edges=0x%X",
+            name, params.startEm, params.hangEm, params.beforeEm, params.afterEm, params.alignCenter, params.alignEnd,
+            static_cast<int>(params.blockAlign), params.borderEdges);
         if (self->sink) self->sink->onBlockStyleStart(params);
         self->boxOpenedAtDepth = self->elementDepth;
         self->boxHasText = false;
@@ -905,6 +913,11 @@ struct TextExtractor {
       self->blockDepth--;
       if (self->blockDepth <= 0) {
         self->blockDepth = 0;
+        self->flushParagraph();
+      } else {
+        // A nested block ends its paragraph too. The source newline after </p> cannot be relied on: it
+        // is dropped as leading whitespace when the text ended inside an inline element (Kobo books
+        // wrap every sentence in a span). Also clears midParagraph after a streaming drain.
         self->flushParagraph();
       }
     }

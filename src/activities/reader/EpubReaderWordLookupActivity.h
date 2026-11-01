@@ -293,6 +293,8 @@ class EpubReaderWordLookupActivity final : public Activity {
   // answers with a pattern of its own (なんて for a lookup of なんて言う), and naming it in the
   // panel header is clearer than repeating the surface word above an entry about the pattern.
   std::vector<std::string> sectionHead;
+  // Headword of the dictionary entries kept under a book-annotated name (東京 of 東京太郎).
+  std::string retainedPrefixHead;
   int currentSection = 0;
   void splitDefinitionIntoSections();
   void moveSection(int delta);

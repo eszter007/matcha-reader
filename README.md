@@ -32,7 +32,7 @@ Comics, sentence mining and page translation work in every column.
 
 ### Word lookup
 
-Look up any word on the page, in vertical or horizontal text. In Japanese and Chinese the page is scanned first, so the cursor only lands on words that have an entry. The definition opens in a panel floating over the page. On a touch device, long-press a word to open it directly (or tap it, when page turns use swipes only), then drag one of the handles beside the word to turn the lookup into a clipping selection. See [Guide §6.1](USER_GUIDE.md#61-word-lookup).
+Look up any word on the page, in vertical or horizontal text. In Japanese and Chinese the page is scanned first, so the cursor only lands on words that have an entry. In Japanese, a name the book gives furigana for, such as 緋倉美津子, is picked whole even when the dictionary only knows its parts. The definition opens in a panel floating over the page. On a touch device, long-press a word to open it directly (or tap it, when page turns use swipes only), then drag one of the handles beside the word to turn the lookup into a clipping selection. See [Guide §6.1](USER_GUIDE.md#61-word-lookup).
 
 <p align="center">
   <img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence">
@@ -49,7 +49,7 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
 ### For Japanese learners
 
 - **Vertical text**, detected from the book: right-to-left columns, kinsoku line breaking, emphasis marks and furigana. Both the layout and the furigana can be switched per book, and **Tategaki** in the Japanese text settings opens every Japanese book vertically or horizontally.
-- **Conjugations resolve to the dictionary form**: 読んで becomes 読む, 食べませんでした becomes 食べる.
+- **Conjugations resolve to the dictionary form**: 読んで becomes 読む, 食べませんでした becomes 食べる, and a する verb such as 嘲笑されている finds its noun 嘲笑.
 - **Vocabulary, names and grammar** each come from their own dictionary.
 - **Furigana for books that have none**: a script adds it to the EPUB on your computer.
 - **A font is built in.** An SD font looks better and adds rare kanji.

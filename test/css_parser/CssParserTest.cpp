@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -567,3 +568,35 @@ TEST_F(CssParserTest, InitialLetterSizesTheInitialUnlessFontSizeIsSet) {
 }
 
 }  // namespace
+
+TEST_F(CssParserTest, AutoMarginsAndEndAlignReachTheVerticalEngine) {
+  {
+    CssParser writer(cachePath());
+    ASSERT_TRUE(loadCss(writer,
+                        ".vrtl .block-align-center { margin: auto 0; }\n"
+                        ".vrtl .block-align-end { margin: auto 0 0 0; }\n"
+                        ".align-end { text-align: right; }\n"
+                        ".wrapper { margin: auto; }\n"));
+    ASSERT_TRUE(writer.saveToCache());
+  }
+  CssParser reader(cachePath());
+  ASSERT_TRUE(reader.loadFromCache());
+  // A horizontal layout still reads an auto margin as 0.
+  const CssStyle centered = reader.resolveStyle("div", "block-align-center");
+  EXPECT_FLOAT_EQ(centered.marginTop.toPixels(16.0f), 0.0f);
+
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  reader.collectVerticalStyles(vertical);
+  const auto styleOf = [&](const char* cls) {
+    const uint32_t hash = CssParser::blockSelectorHash(cls, strlen(cls));
+    for (const auto& rule : vertical) {
+      if (rule.classHash == hash) return rule.style;
+    }
+    return CssParser::VerticalBlockStyle{};
+  };
+  EXPECT_EQ(styleOf("block-align-center").blockAlign, CssParser::VERTICAL_BLOCK_CENTER);
+  EXPECT_EQ(styleOf("block-align-end").blockAlign, CssParser::VERTICAL_BLOCK_END);
+  EXPECT_TRUE(styleOf("align-end").alignEnd);
+  EXPECT_FALSE(styleOf("align-end").alignCenter);
+  EXPECT_EQ(styleOf("wrapper").blockAlign, 0) << "a plain auto margin centres a wrapper horizontally, not a block";
+}

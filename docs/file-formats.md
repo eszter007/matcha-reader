@@ -586,7 +586,7 @@ if (parsedSize != fileSize) {
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
 
-### Versions 144 to 156
+### Versions 144 to 158
 
 No format change; each rebuilds the cached pages once for a layout fix. In 148, a chapter applies
 the stylesheets its linked ones `@import` (EBPAJ boxes, rules and indents), a block holding only an
@@ -601,7 +601,11 @@ not after a blank one. In 154, an opening bracket moves with the ruby group afte
 moves to the next column. In 155, a chapter cached without block styling on low heap is rebuilt styled
 once an open has more room, and chapters cached unstyled before are rebuilt once. In 156, a column
 shortened by oidashi spreads by at most an eighth of an em between characters and otherwise ends short
-of the foot.
+of the foot. In 157, a paragraph nested in another block whose text ends inside an inline element (a
+`<span>`, `<em>`, `<ruby>`) starts its own column again instead of running on from the previous paragraph.
+In 158, `text-align: right`/`end` sets a column at the foot, and auto margins at the head and foot of a block (EBPAJ `.block-align-center` / `-end`) centre the block along the column or push it
+to the foot. CSS cache version 28 stores a margin's `auto` as its own unit (resolving to 0 everywhere
+else), so CSS caches are rebuilt too.
 
 ### Version 143
 

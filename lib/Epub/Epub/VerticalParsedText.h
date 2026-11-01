@@ -129,12 +129,19 @@ struct VerticalBoxRect {
 // Distilled block-level layout parameters for the vertical engine (from CSS via
 // CssParser::collectVerticalStyles; plain floats here to avoid a CssParser include).
 struct VerticalBlockParams {
-  float startEm = 0;   // every column of the block starts this many cells down
-  float beforeEm = 0;  // extra gap before the block's first column
-  float afterEm = 0;   // extra gap after the block's last column
-  float hangEm = 0;    // hanging indent: wrapped (non-paragraph-start) columns start this much lower
-  bool alignCenter = false;
-  uint8_t borderEdges = 0;  // CSS physical TOP/RIGHT/BOTTOM/LEFT bits (match DRAW_* order)
+  float startEm = 0;         // every column of the block starts this many cells down
+  float beforeEm = 0;        // extra gap before the block's first column
+  float afterEm = 0;         // extra gap after the block's last column
+  float hangEm = 0;          // hanging indent: wrapped (non-paragraph-start) columns start this much lower
+  bool alignCenter = false;  // each column centred along its length
+  bool alignEnd = false;     // each column ends at the foot
+  enum class BlockAlign : uint8_t { None, Center, End };
+  BlockAlign blockAlign = BlockAlign::None;  // the block as a whole, its columns starting together
+  uint8_t borderEdges = 0;                   // CSS physical TOP/RIGHT/BOTTOM/LEFT bits (match DRAW_* order)
+  [[nodiscard]] bool aligns() const { return alignCenter || alignEnd || blockAlign != BlockAlign::None; }
+  [[nodiscard]] bool any() const {
+    return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || aligns() || borderEdges != 0;
+  }
 };
 
 // Joins a nested styled element's params to its block's: indents add up as nested margins do, and
@@ -144,7 +151,11 @@ inline void mergeBlockParams(VerticalBlockParams& into, const VerticalBlockParam
   into.beforeEm = std::max(into.beforeEm, nested.beforeEm);
   into.afterEm = std::max(into.afterEm, nested.afterEm);
   if (nested.hangEm > 0) into.hangEm = nested.hangEm;
-  into.alignCenter = into.alignCenter || nested.alignCenter;
+  if (nested.alignCenter || nested.alignEnd) {  // the inner text-align wins, as in CSS
+    into.alignCenter = nested.alignCenter;
+    into.alignEnd = nested.alignEnd;
+  }
+  if (nested.blockAlign != VerticalBlockParams::BlockAlign::None) into.blockAlign = nested.blockAlign;
   into.borderEdges = static_cast<uint8_t>(into.borderEdges | nested.borderEdges);
 }
 
@@ -495,13 +506,15 @@ class VerticalParsedText {
   // Rows a column INSIDE a box may use: short of a full column by boxFootReservePx_, so the
   // bottom rule has its inset below the last character without crossing the text area's foot.
   uint16_t boxGeomRowsInBox_ = 0;
+  uint16_t boxGeomRowsFull_ = 0;  // rows of a column with no foot reserve
   int boxFootReservePx_ = 0;
   // 0.25em: the inset between the text and the rule, the same on all four sides (1px floor).
   // Open-coded rather than std::max so this header needs no <algorithm>.
   [[nodiscard]] int boxPadPx() const { return boxGeomCellPx_ / 4 > 1 ? boxGeomCellPx_ / 4 : 1; }
   bool boxContinuedFromPrevPage_ = false;
   void appendBoxRectToPage(VerticalPage& p, uint16_t startCol, uint16_t endCol, bool openLeft, bool openRight) const;
-  void centerBlockColumns(VerticalPage& p, uint16_t startCol, uint16_t endCol) const;
+  void alignBlockColumns(VerticalPage& p, uint16_t startCol, uint16_t endCol) const;
+  static uint16_t lastBlockColumn(const VerticalPage& p, uint16_t startCol);
 
   // The page currently being filled by layoutPages(), plus its fill position -- persists ACROSS
   // layoutPages() calls (when isFinalFlush=false) so a batch boundary landing mid-page continues
