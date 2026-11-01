@@ -1236,13 +1236,14 @@ void WordSelectionScan::scanOnePosition() {
         // >= matchChars keeps the original 2-char behavior (nmc>=2) and extends it to longer
         // particle-led mis-segmentations without disturbing real particle-initial words.
         // A は right after に/で/と is the second half of には/では/とは, so a word one char shorter
-        // still wins: 笑わずには いられない, not はいられ (入る).
+        // still wins over a conjugation: 笑わずには いられない, not はいられ (入る). An exact
+        // headword (友達にはなす, 話す) stays.
         const uint32_t prevCp = scanStart > 0 && allGlyphs[scanStart - 1].paragraphIndex == paraIdx
                                     ? allGlyphs[scanStart - 1].codepoint
                                     : 0;
         const bool compoundParticle =
             allGlyphs[scanStart].codepoint == 0x306F && (prevCp == 0x306B || prevCp == 0x3067 || prevCp == 0x3068);
-        if (nmc >= matchChars || (compoundParticle && nmc >= 2 && nmc + 1 >= matchChars)) {
+        if (nmc >= matchChars || (compoundParticle && result.deinflected && nmc >= 2 && nmc + 1 >= matchChars)) {
           hasMatch = false;  // let the next char start the longer word
         }
       }

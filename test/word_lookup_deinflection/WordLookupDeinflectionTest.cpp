@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "HalStorage.h"
 #include "Deinflector.h"
+#include "HalStorage.h"
 #include "WordLookup.h"
 
 namespace {
@@ -103,6 +103,9 @@ TEST_F(WordLookupDeinflection, KanjiKuruForms) {
   EXPECT_EQ(lookup("来ない。"), both("来る", "来ない"));
   EXPECT_EQ(lookup("来ます。"), both("来る", "来ます"));
   EXPECT_EQ(lookup("出来ない。"), both("出来る", "出来ない"));
+  EXPECT_EQ(lookup("来てる。"), both("来る", "来てる"));
+  EXPECT_EQ(lookup("来てた。"), both("来る", "来てた"));
+  EXPECT_EQ(lookup("来そう。"), both("来る", "来そう"));
 }
 
 TEST_F(WordLookupDeinflection, GozaimashitaIsGozaimasuButOtherPolitePastsAreTheVerb) {
@@ -130,12 +133,12 @@ TEST_F(WordLookupDeinflection, AppearanceSou) {
 TEST_F(WordLookupDeinflection, SameTextFromTwoRulesKeepsBothClasses) {
   const auto c = Deinflector::deinflect("来ない");
   const auto has = [&c](WordCondition w) {
-    return std::any_of(c.begin(), c.end(), [w](const DeinflectionCandidate& d) { return d.text == "来る" && d.condition == w; });
+    return std::any_of(c.begin(), c.end(),
+                       [w](const DeinflectionCandidate& d) { return d.text == "来る" && d.condition == w; });
   };
   EXPECT_TRUE(has(WordCondition::V1));
   EXPECT_TRUE(has(WordCondition::VK));
 }
-
 
 TEST_F(WordLookupDeinflection, WordsEndingLikeASuffixStayThemselves) {
   EXPECT_EQ(lookup("まず、"), both("まず", "まず"));
