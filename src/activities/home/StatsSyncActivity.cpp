@@ -32,8 +32,6 @@ void StatsSyncActivity::onEnter() {
   }
   state = SYNCING;
   if (WiFi.status() == WL_CONNECTED) {
-    // A shortcut can start this over any screen; the restart clears what Wi-Fi and TLS fragmented.
-    if (fromShortcut()) restartOnExit = true;
     requestUpdate();
     return;
   }
@@ -44,7 +42,7 @@ void StatsSyncActivity::onEnter() {
   {
     RenderLock lock(*this);
     sdFontSystem.releaseAllResidentFonts(renderer);
-    // The book's glyph caches outlive the reader this replaced; they are the largest thing Wi-Fi can have back.
+    // A book left underneath keeps its glyph caches; they are the largest thing Wi-Fi can have back.
     if (origin == Origin::ShortcutInReader) {
       if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
     }

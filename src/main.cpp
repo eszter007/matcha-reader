@@ -174,9 +174,18 @@ enum class BootResume : uint8_t {
 // startDeepSleep() does not return, so a set latch only ends at the wakeup reset.
 static bool deepSleepInProgress = false;
 
+// False on boards that end a Wi-Fi session in place instead of rebooting (silentRestartTo).
+static bool wifiSessionEndsInRestart() {
+#if FREEINK_CAP_TOUCH
+  return !BoardConfig::hasTouch();
+#else
+  return true;
+#endif
+}
+
 #if FREEINK_CAP_TOUCH
 static bool finishWifiSessionWithoutRestart() {
-  if (!BoardConfig::hasTouch()) return false;
+  if (wifiSessionEndsInRestart()) return false;
 
   // A software reset does not cycle externally powered touch/frontlight rails.
   // Shut down the network stack in place so those peripherals retain state.
@@ -1032,9 +1041,10 @@ static void startClockSyncFromCombo() {
   activityManager.pushActivity(std::move(sync));
 }
 
-// Sync Insights & Clock from a button shortcut on any screen. The screen underneath is replaced,
-// not stacked: Wi-Fi plus TLS need the heap that Home or an open book holds, and this sync always
-// ends in a restart back to where it started.
+// Sync Insights & Clock from a button shortcut on any screen. Wi-Fi plus TLS need the heap that Home
+// or an open book holds, so the screen is replaced when the sync's restart will bring it back. It
+// is kept underneath when it owns a live Wi-Fi session (its exit would reboot first), or when the
+// board ends Wi-Fi in place and the sync must return to it.
 static void startStatsSyncFromShortcut() {
   if (StatsSyncActivity::isRunning() || ClockSyncActivity::isRunning()) return;
   const auto origin = activityManager.isReaderActivity() ? StatsSyncActivity::Origin::ShortcutInReader
@@ -1044,7 +1054,11 @@ static void startStatsSyncFromShortcut() {
     LOG_ERR("MAIN", "OOM: StatsSyncActivity");
     return;
   }
-  activityManager.replaceActivity(std::move(sync));
+  if (wifiSessionEndsInRestart() && WiFi.getMode() == WIFI_MODE_NULL) {
+    activityManager.replaceActivity(std::move(sync));
+  } else {
+    activityManager.pushActivity(std::move(sync));
+  }
 }
 
 static void forceScreenRefresh() {
