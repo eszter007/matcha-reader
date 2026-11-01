@@ -5914,6 +5914,7 @@ void EpubReaderActivity::stepLookupPrescan() {
     if (!tail.empty()) scan->appendLookupContext(tail, tailParagraph);
     prescanSpine_ = currentSpineIndex;
     prescanPage_ = page;
+    scan->setBookGlossary(epub->getCachePath());
     if (scan->tryLoadCache(cachePath, static_cast<uint16_t>(currentSpineIndex), static_cast<uint16_t>(page))) return;
     prescan_ = std::move(scan);
     prescanStartMs_ = millis();

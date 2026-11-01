@@ -86,6 +86,14 @@ bool openAndReadHeader(const std::string& path, HalFile& f, uint16_t& count) {
 }
 }  // namespace
 
+size_t charCount(std::string_view s) {
+  size_t n = 0;
+  for (const char c : s) {
+    if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) n++;
+  }
+  return n;
+}
+
 void collect(std::vector<Pair>& pairs, const std::string& base, const std::string& ruby) {
   if (pairs.size() >= MAX_PAIRS_PER_SECTION) return;
   if (base.empty() || ruby.empty() || base == ruby) return;
@@ -205,6 +213,73 @@ bool lookup(const std::string& bookCachePath, const std::string& base, std::stri
     outReadings += r;
   }
   return !outReadings.empty();
+}
+
+bool longestPrefix(const std::string& bookCachePath, const std::string& text, std::string& outBase,
+                   std::string& outReadings) {
+  outBase.clear();
+  outReadings.clear();
+  if (bookCachePath.empty() || text.empty()) return false;
+  HalFile f;
+  uint16_t count = 0;
+  if (!openAndReadHeader(glossaryPath(bookCachePath), f, count)) return false;
+  const std::string_view view(text);
+  // One pass: readings restart whenever a longer base is found, as lookup() would collect them.
+  std::vector<std::string> readings;
+  const bool ok = forEachRecord(f, count, [&](std::string_view base, std::string_view ruby) {
+    if (base.size() < outBase.size() || view.substr(0, base.size()) != base || charCount(base) < 2) return;
+    if (base.size() > outBase.size()) {
+      outBase.assign(base);
+      readings.clear();
+    }
+    if (std::none_of(readings.begin(), readings.end(), [&](const std::string& r) { return r == ruby; })) {
+      readings.emplace_back(ruby);
+    }
+  });
+  if (!ok || outBase.empty()) {
+    outBase.clear();
+    return false;
+  }
+  for (const auto& r : readings) {
+    if (!outReadings.empty()) outReadings += "\xE3\x83\xBB";  // '・'
+    outReadings += r;
+  }
+  return true;
+}
+
+uint32_t hashText(const char* data, const size_t len) {
+  uint32_t h = 2166136261u;
+  for (size_t i = 0; i < len; i++) {
+    h ^= static_cast<unsigned char>(data[i]);
+    h *= 16777619u;
+  }
+  return h;
+}
+
+uint16_t loadSpanKeys(const std::string& bookCachePath, std::vector<SpanKey>& out) {
+  out.clear();
+  if (bookCachePath.empty()) return 0;
+  HalFile f;
+  uint16_t count = 0;
+  if (!openAndReadHeader(glossaryPath(bookCachePath), f, count) || count == 0) return 0;
+  // One block of at most MAX_FILE_RECORDS * sizeof(SpanKey) bytes, held for the lookup session.
+  const size_t requestBytes = static_cast<size_t>(count) * sizeof(SpanKey);
+  if (ESP.getMaxAllocHeap() < requestBytes + COLLECT_HEAP_HEADROOM) {
+    LOG_ERR("RUBY", "Skipping name spans (%u bytes, maxAlloc=%u)", static_cast<unsigned>(requestBytes),
+            ESP.getMaxAllocHeap());
+    return 0;  // the scan cache must not record names as checked
+  }
+  out.reserve(count);
+  const bool ok = forEachRecord(f, count, [&](std::string_view base, std::string_view) {
+    const size_t chars = charCount(base);
+    if (chars >= 2) out.push_back({hashText(base.data(), base.size()), static_cast<uint8_t>(chars)});
+  });
+  if (!ok) {
+    out.clear();
+    return 0;
+  }
+  std::sort(out.begin(), out.end(), [](const SpanKey& a, const SpanKey& b) { return a.hash < b.hash; });
+  return count;
 }
 
 }  // namespace RubyGlossary

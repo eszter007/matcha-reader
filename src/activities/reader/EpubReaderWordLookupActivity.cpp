@@ -134,6 +134,7 @@ void EpubReaderWordLookupActivity::reclaimFontHeap() {
 
 // A persisted scan for this exact page skips all scanning; otherwise start progressively.
 void EpubReaderWordLookupActivity::initScanFromCacheOrBurst(const char* label) {
+  scan.setBookGlossary(bookCachePath);
   if (!scanCachePath.empty() && scan.tryLoadCache(scanCachePath, scanSpine, scanPage)) {
     return;
   }
@@ -1522,6 +1523,41 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
           grammarDefinition = std::move(gramEntry.definition);
         }
       }
+    }
+  }
+
+  // A name the book annotated whose whole the dictionary lacks (緋倉美津子, known only as 緋 and
+  // 美津子): the book's furigana is the only source for it. A dictionary match of two or more
+  // characters (東京 of 東京駅) stays below the reading; a single kanji is dropped.
+  if (digitPrefix.empty() && scan.glossarySpanAt(text) > resultMatchLen) {
+    std::string base;
+    std::string readings;
+    if (RubyGlossary::longestPrefix(bookCachePath, text, base, readings) &&
+        static_cast<int>(RubyGlossary::charCount(base)) > resultMatchLen) {
+      std::string definition = tr(STR_IN_THIS_BOOK);
+      definition += ' ';
+      definition += readings;
+      definition += "\n\n";
+      if (hasResult && resultMatchLen >= 2) {
+        definition += resultHeadword;
+        definition += '\n';
+        definition += resultDefinition;
+      } else {
+        // Shown as a name, but credited to no dictionary: the reading is the book's.
+        definition += tr(STR_LOOKUP_NAME);
+        resultDict = DictIndex::DICT_NAMES;
+        resultSource = nullptr;
+        resultDictionaryLabel.clear();
+      }
+      hasResult = true;
+      hasGrammar = false;
+      grammarFirst = false;
+      promotedGrammarLen = 0;
+      resultMatchLen = static_cast<int>(RubyGlossary::charCount(base));
+      resultHeadword = std::move(base);
+      resultDefinition = std::move(definition);
+      resultReading.clear();
+      resultGrammar.clear();
     }
   }
 
