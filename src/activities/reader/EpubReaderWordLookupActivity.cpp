@@ -1355,10 +1355,20 @@ bool isGlossaryWord(const std::string& surface) {
   }
   return chars >= 2;
 }
+
+// Before an honorific the word is a name (満さん), and the book's reading of even a single kanji
+// is that name's reading (みつる), not a fragment of a compound.
+bool followedByHonorific(const std::string& text, const size_t at) {
+  static constexpr const char* kHonorifics[] = {"さん", "くん", "ちゃん", "さま", "様", "氏", "君"};
+  for (const char* h : kHonorifics) {
+    if (text.compare(at, std::strlen(h), h) == 0) return true;
+  }
+  return false;
+}
 }  // namespace
 
-void EpubReaderWordLookupActivity::prependBookReading(const std::string& surface) {
-  if (bookCachePath.empty() || !isGlossaryWord(surface)) return;
+void EpubReaderWordLookupActivity::prependBookReading(const std::string& surface, const bool name) {
+  if (bookCachePath.empty() || (!name && !isGlossaryWord(surface))) return;
   std::string readings;
   if (!RubyGlossary::lookup(bookCachePath, surface, readings)) return;
   std::string line = tr(STR_IN_THIS_BOOK);
@@ -1370,12 +1380,12 @@ void EpubReaderWordLookupActivity::prependBookReading(const std::string& surface
   resultDefinition = line + resultDefinition;
 }
 
-void EpubReaderWordLookupActivity::promoteBookReading(const std::string& surface) {
+void EpubReaderWordLookupActivity::promoteBookReading(const std::string& surface, const bool name) {
   static constexpr char kEntrySep[] = "\n\n---\n";
   static constexpr char kOpen[] = "\xe3\x80\x90";  // 【
   if (bookCachePath.empty() || resultDefinition.find(kEntrySep) == std::string::npos) return;
   std::string reading;
-  if (!isGlossaryWord(surface) || !RubyGlossary::lookup(bookCachePath, surface, reading)) {
+  if ((!name && !isGlossaryWord(surface)) || !RubyGlossary::lookup(bookCachePath, surface, reading)) {
     // Verbs and adjectives carry ruby on the kanji only (見舞 of 見舞う): try the leading kanji.
     size_t kanjiEnd = 0;
     while (kanjiEnd + 3 <= surface.size()) {
@@ -1624,13 +1634,15 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     hasResult = true;
     resultHeadword = digitPrefix + (counterBytes > 0 ? text.substr(0, counterBytes) : result.entry.headword);
     resultDefinition = std::move(result.entry.definition);
+    const size_t matchEnd = std::min(result.matchLength, text.size());
+    const bool name = followedByHonorific(text, matchEnd);
     if (counterBytes > 0) {
       readAsCounter(digitPrefix, text.substr(0, counterBytes));
     } else if (japanese && !digitPrefix.empty()) {
       // A counter outside the table (3体): still put its counter sense first.
       readAsCounter(digitPrefix, text.substr(0, std::min(result.matchLength, text.size())));
     } else {
-      promoteBookReading(text.substr(0, std::min(result.matchLength, text.size())));
+      promoteBookReading(text.substr(0, matchEnd), name);
     }
     DefinitionText::EntryMetadata metadata;
     DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
@@ -1639,7 +1651,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     resultDict = result.entry.sourceDict;
     resultSource = dictsource::name(resultDict);
     resultDictionaryLabel = std::move(metadata.source);
-    prependBookReading(text.substr(0, std::min(result.matchLength, text.size())));
+    prependBookReading(text.substr(0, matchEnd), name);
     int chars = 0;
     size_t pos = 0;
     while (pos < result.matchLength && pos < text.size()) {

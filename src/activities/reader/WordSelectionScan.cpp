@@ -688,7 +688,7 @@ namespace {
 // the tate-chu-yoko NUL truncation, where a match claimed the cells of the word after an upright
 // "!?" run: the word stayed unselectable on that page for good, since nothing re-examined a
 // cache that looked valid. Rebuilding costs one rescan (~300 ms, once per page).
-constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x354D4C57;  // "WLM5": bumped whenever segmentation changes
+constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x364D4C57;  // "WLM6": bumped whenever segmentation changes
 constexpr uint16_t WLSCAN_MAX_PAGES = 8;
 constexpr size_t WLSCAN_MAX_CARRY_BYTES = 4096;  // bound on the older entries carried forward
 
@@ -1126,8 +1126,16 @@ void WordSelectionScan::scanOnePosition() {
         // both are simply never suppressed. Priority scales: Jitendex = score+128 (128 = no
         // frequency data); jmdict-simplified = 200 common / 100 rest.
         constexpr uint8_t kMinKanaExactPriority = 200;
+        // A long phrase that ends at a word boundary is the phrase itself written in kana
+        // (「おかまいなく」), not a fragment that happens to spell a reading.
+        const size_t afterMatch = scanStart + static_cast<size_t>(matchChars);
+        const bool endsAtBoundary =
+            afterMatch >= allGlyphs.size() || allGlyphs[afterMatch].paragraphIndex != paraIdx ||
+            (!isCJK(allGlyphs[afterMatch].codepoint) && !isKatakana(allGlyphs[afterMatch].codepoint) &&
+             !(allGlyphs[afterMatch].codepoint >= 0x3041 && allGlyphs[afterMatch].codepoint <= 0x309F));
+        const bool kanaPhrase = matchChars >= 5 && endsAtBoundary;
         if (hasMatch && !result.deinflected && matchChars >= 2 &&
-            (result.entry.posFlags & DictIndexRecord::POS_READING) != 0 && !usuallyKana &&
+            (result.entry.posFlags & DictIndexRecord::POS_READING) != 0 && !usuallyKana && !kanaPhrase &&
             result.entry.priority < kMinKanaExactPriority) {
           hasMatch = false;
         }
@@ -1160,9 +1168,11 @@ void WordSelectionScan::scanOnePosition() {
     // is what keeps genuine words that merely begin with a particle-kana intact: とても (3) has
     // remainder ても (2) < 3 so it stays, ところ/における likewise, while 羽蟻's remainder
     // ありません (5) >= 3 correctly loses to the split.
+    // The explanatory ん counts too: んだろう must split as ん だろう, not んだ ろう (労).
     auto isCaseParticle = [](uint32_t cp) {
       return cp == 0x306B || cp == 0x306E || cp == 0x3068 || cp == 0x304C || cp == 0x306F || cp == 0x3092 ||
-             cp == 0x3082 || cp == 0x3067 || cp == 0x3078 || cp == 0x3084 || cp == 0x304B || cp == 0x306A;
+             cp == 0x3082 || cp == 0x3067 || cp == 0x3078 || cp == 0x3084 || cp == 0x304B || cp == 0x306A ||
+             cp == 0x3093;
     };
     if (hasMatch && matchChars >= 2 && isCaseParticle(allGlyphs[scanStart].codepoint) &&
         scanStart + 1 < allGlyphs.size() && allGlyphs[scanStart + 1].paragraphIndex == paraIdx) {
