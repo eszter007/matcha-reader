@@ -1042,9 +1042,9 @@ static void startClockSyncFromCombo() {
 }
 
 // Sync Insights & Clock from a button shortcut on any screen. Wi-Fi plus TLS need the heap that Home
-// or an open book holds, so the screen is replaced when the sync's restart will bring it back. It
-// is kept underneath when it owns a live Wi-Fi session (its exit would reboot first), or when the
-// board ends Wi-Fi in place and the sync must return to it.
+// or an open book holds, so that screen is replaced when the sync's restart will bring it back. Any
+// other screen stays underneath: it may reboot on exit (File Transfer, OPDS, KOReader sync, even after
+// its Wi-Fi stopped), and a board that ends Wi-Fi in place must return to it.
 static void startStatsSyncFromShortcut() {
   if (StatsSyncActivity::isRunning() || ClockSyncActivity::isRunning()) return;
   const auto origin = activityManager.isReaderActivity() ? StatsSyncActivity::Origin::ShortcutInReader
@@ -1054,7 +1054,7 @@ static void startStatsSyncFromShortcut() {
     LOG_ERR("MAIN", "OOM: StatsSyncActivity");
     return;
   }
-  if (wifiSessionEndsInRestart() && WiFi.getMode() == WIFI_MODE_NULL) {
+  if (wifiSessionEndsInRestart() && activityManager.isOnlyHomeOrReader()) {
     activityManager.replaceActivity(std::move(sync));
   } else {
     activityManager.pushActivity(std::move(sync));
