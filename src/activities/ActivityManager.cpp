@@ -3,6 +3,7 @@
 #include <BlePageTurner.h>
 #include <BoardConfig.h>
 #include <FontCacheManager.h>
+#include <FontDecompressor.h>
 #include <HalDisplay.h>
 #include <HalFrontlight.h>
 #include <HalPowerManager.h>
@@ -89,6 +90,12 @@ void ActivityManager::renderTaskLoop() {
       // Night mode is a global output polarity applied to every activity.
       // The sleep screen forces normal polarity itself (SleepActivity).
       display.setInverted(SETTINGS.screenInverted != 0);
+      // Here, under the lock and before the draw: suspending the slab frees it.
+      if (auto* fcm = renderer.getFontCacheManager()) {
+        if (auto* fd = fcm->getDecompressor(); fd && fd->slabEnabled() != currentActivity->wantsGlyphSlab()) {
+          fd->setSlabEnabled(!fd->slabEnabled());
+        }
+      }
       const uint32_t renderingVisit = screenVisit;
       currentActivity->render(std::move(lock));
       paintedVisit.store(renderingVisit, std::memory_order_release);
