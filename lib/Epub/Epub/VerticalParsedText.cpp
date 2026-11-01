@@ -1036,9 +1036,9 @@ struct VerticalParsedText::LayoutCursor {
   // correctly yields fewer rows.
   uint16_t rowsAvailable() const {
     const int shift = (column == shiftColumn) ? columnYShift : 0;
-    // Inside a box the column stops short of the foot, leaving room for the bottom rule's inset
-    // (boxFootReservePx_). Columns outside a box are unaffected.
-    const int reserve = o.inBox_ ? o.boxFootReservePx_ : 0;
+    // Inside a framed block the column stops short of the foot, leaving room for the bottom rule's
+    // inset (boxFootReservePx_). Unframed blocks and columns outside a block run to the foot.
+    const int reserve = o.inBox_ && o.activeBlock_.borderEdges != 0 ? o.boxFootReservePx_ : 0;
     const int rows = (static_cast<int>(o.viewportHeight_) - reserve + shift + geom.rowGapPx()) / geom.rowPitchPx;
     return static_cast<uint16_t>(std::clamp(rows, 1, static_cast<int>(UINT16_MAX)));
   }
@@ -2585,8 +2585,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     // A block still open here ends with the chapter: its end marker sits at the stream's end, which the
     // loop never visits. Close it as finalizePendingPage() does, or it loses its rect and alignment.
     if (inBox_) {
-      appendBoxRectToPage(page, boxStartCol_, column, /*openLeft=*/false, /*openRight=*/boxContinuedFromPrevPage_);
-      if (activeBlock_.aligns()) alignBlockColumns(page, boxStartCol_, column);
+      const uint16_t lastCol = lastBlockColumn(page, boxStartCol_);
+      appendBoxRectToPage(page, boxStartCol_, lastCol, /*openLeft=*/false, /*openRight=*/boxContinuedFromPrevPage_);
+      if (activeBlock_.aligns()) alignBlockColumns(page, boxStartCol_, lastCol);
       inBox_ = false;
       boxContinuedFromPrevPage_ = false;
     }
@@ -2650,47 +2651,57 @@ void VerticalParsedText::appendBoxRectToPage(VerticalPage& p, const uint16_t sta
 
 // Place the glyphs of columns [startCol..endCol] along the column height once their block closes on a
 // page: text-align center / end moves each column on its own; auto head/foot margins move the block as
-// a whole, so its columns keep starting together (a title page centred as one block).
+// a whole, so its columns keep starting together (a title page centred as one block). Text only moves
+// down, by whole rows (rows stay true for selection), into the space below its own last glyph.
 void VerticalParsedText::alignBlockColumns(VerticalPage& p, const uint16_t startCol, const uint16_t endCol) const {
   // A framed block's columns stop short of the foot for its bottom rule: align within THAT height. A
   // block without a frame aligns to the real foot, like the text around it.
-  if (boxGeomCellPx_ <= 0 || boxGeomRowsInBox_ == 0) return;
+  if (boxGeomCellPx_ <= 0 || boxGeomRowsInBox_ == 0 || boxGeomRowPitchPx_ <= 0) return;
   const int rows = activeBlock_.borderEdges != 0 ? boxGeomRowsInBox_ : boxGeomRowsFull_;
-  const auto shiftColumns = [&](const uint16_t from, const uint16_t to, const int shiftPx) {
-    if (shiftPx == 0) return;
-    for (auto& g : p.glyphs) {
-      if (g.column < from || g.column > to) continue;
-      g.y = static_cast<uint16_t>(std::max(0, static_cast<int>(g.y) + shiftPx));
-    }
-  };
-  const auto rowsOf = [&](const uint16_t from, const uint16_t to, int& minRow, int& maxRow) {
-    minRow = rows;
-    maxRow = -1;
+  const int footPx = (rows - 1) * boxGeomRowPitchPx_ + boxGeomCellPx_;
+  // Lowest ink edge of the columns, -1 when empty or holding an image (which is never moved). A
+  // sideways Latin word or number is one glyph at its first row but runs down for its whole length.
+  const auto bottomOf = [&](const uint16_t from, const uint16_t to) {
+    int bottom = -1;
     for (const auto& g : p.glyphs) {
       if (g.column < from || g.column > to) continue;
-      minRow = std::min(minRow, static_cast<int>(g.row));
-      maxRow = std::max(maxRow, static_cast<int>(g.row));
+      if (isImageMarker(g.codepoint)) return -1;
+      int height = boxGeomCellPx_;
+      if (g.renderKind == VerticalGlyph::RotatedRun && g.textId != VerticalGlyph::NO_TEXT) {
+        height = renderer_.getRenderAdvanceX(fontId_, p.glyphText(g), static_cast<EpdFontFamily::Style>(g.style));
+      }
+      bottom = std::max(bottom, static_cast<int>(g.y) + height);
     }
-    return maxRow >= 0;
+    return bottom;
   };
-  // Free rows a column (or block) of rows [minRow..maxRow] leaves, moved to the head, the middle or the foot.
-  const auto shiftFor = [&](const int minRow, const int maxRow, const bool toFoot) {
-    // A full column whose last mark hangs below the foot (burasage) has no free row, not a negative one.
-    const int free = std::max(0, rows - (maxRow - minRow + 1));
-    return ((toFoot ? free : free / 2) - minRow) * boxGeomRowPitchPx_;
+  const auto shift = [&](const uint16_t from, const uint16_t to, const bool toFoot) {
+    const int bottom = bottomOf(from, to);
+    if (bottom < 0) return;
+    // A column whose last mark hangs below the foot (burasage) has no free row.
+    const int freeRows = std::max(0, footPx - bottom) / boxGeomRowPitchPx_;
+    const int rowsDown = toFoot ? freeRows : freeRows / 2;
+    if (rowsDown == 0) return;
+    for (auto& g : p.glyphs) {
+      if (g.column < from || g.column > to) continue;
+      g.y = static_cast<uint16_t>(g.y + rowsDown * boxGeomRowPitchPx_);
+      g.row = static_cast<uint8_t>(std::min(255, g.row + rowsDown));
+    }
   };
-  int minRow = 0;
-  int maxRow = 0;
   if (activeBlock_.blockAlign != VerticalBlockParams::BlockAlign::None) {
-    if (rowsOf(startCol, endCol, minRow, maxRow)) {
-      shiftColumns(startCol, endCol,
-                   shiftFor(minRow, maxRow, activeBlock_.blockAlign == VerticalBlockParams::BlockAlign::End));
-    }
+    shift(startCol, endCol, activeBlock_.blockAlign == VerticalBlockParams::BlockAlign::End);
     return;
   }
-  for (uint16_t c = startCol; c <= endCol; c++) {
-    if (rowsOf(c, c, minRow, maxRow)) shiftColumns(c, c, shiftFor(minRow, maxRow, activeBlock_.alignEnd));
+  for (uint16_t c = startCol; c <= endCol; c++) shift(c, c, activeBlock_.alignEnd);
+}
+
+// The leftmost column [startCol..] that holds a glyph on page p (an image's glyph sits on the last column it
+// covers), or startCol when none does. A block's closing frame ends there, not at a cursor already moved on.
+uint16_t VerticalParsedText::lastBlockColumn(const VerticalPage& p, const uint16_t startCol) {
+  uint16_t last = startCol;
+  for (const auto& g : p.glyphs) {
+    if (g.column >= startCol) last = std::max<uint16_t>(last, g.column);
   }
+  return last;
 }
 
 bool VerticalParsedText::finalizePendingPage(VerticalPage& out) {
@@ -2700,9 +2711,10 @@ bool VerticalParsedText::finalizePendingPage(VerticalPage& out) {
   // Chapter ended while inside a box (end marker carried past the last batch, or a truncated
   // chapter): close the rect on this final page so the border isn't silently dropped.
   if (inBox_) {
-    appendBoxRectToPage(pendingPage_, boxStartCol_, pendingColumn_, /*openLeft=*/false,
+    const uint16_t lastCol = lastBlockColumn(pendingPage_, boxStartCol_);
+    appendBoxRectToPage(pendingPage_, boxStartCol_, lastCol, /*openLeft=*/false,
                         /*openRight=*/boxContinuedFromPrevPage_);
-    if (activeBlock_.aligns()) alignBlockColumns(pendingPage_, boxStartCol_, pendingColumn_);
+    if (activeBlock_.aligns()) alignBlockColumns(pendingPage_, boxStartCol_, lastCol);
     inBox_ = false;
     boxContinuedFromPrevPage_ = false;
   }

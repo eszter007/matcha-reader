@@ -514,6 +514,7 @@ class VerticalParsedText {
   bool boxContinuedFromPrevPage_ = false;
   void appendBoxRectToPage(VerticalPage& p, uint16_t startCol, uint16_t endCol, bool openLeft, bool openRight) const;
   void alignBlockColumns(VerticalPage& p, uint16_t startCol, uint16_t endCol) const;
+  static uint16_t lastBlockColumn(const VerticalPage& p, uint16_t startCol);
 
   // The page currently being filled by layoutPages(), plus its fill position -- persists ACROSS
   // layoutPages() calls (when isFinalFlush=false) so a batch boundary landing mid-page continues
