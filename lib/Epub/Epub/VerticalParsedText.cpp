@@ -1265,8 +1265,8 @@ struct VerticalParsedText::LayoutCursor {
       if (o.inBox_) {
         o.appendBoxRectToPage(page, o.boxStartCol_, static_cast<uint16_t>(geom.columnsPerPage - 1),
                               /*openLeft=*/true, /*openRight=*/o.boxContinuedFromPrevPage_);
-        if (o.activeBlock_.alignCenter) {
-          o.centerBlockColumns(page, o.boxStartCol_, static_cast<uint16_t>(geom.columnsPerPage - 1));
+        if (o.activeBlock_.aligns()) {
+          o.alignBlockColumns(page, o.boxStartCol_, static_cast<uint16_t>(geom.columnsPerPage - 1));
         }
         o.boxStartCol_ = 0;
         o.boxContinuedFromPrevPage_ = true;
@@ -1621,6 +1621,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   boxFootReservePx_ = boxPadPx();
   boxGeomRowsInBox_ = static_cast<uint16_t>(
       std::max(1, (static_cast<int>(viewportHeight_) - boxFootReservePx_ + geom.rowGapPx()) / rowPitchPx));
+  boxGeomRowsFull_ =
+      static_cast<uint16_t>(std::max(1, (static_cast<int>(viewportHeight_) + geom.rowGapPx()) / rowPitchPx));
 
   // Re-record box markers carried across a batch boundary (see reset()) at index 0.
   if (boxEndCarry_) {
@@ -1796,7 +1798,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       if (inBox_) {
         appendBoxRectToPage(page, boxStartCol_, column, /*openLeft=*/false,
                             /*openRight=*/boxContinuedFromPrevPage_);
-        if (activeBlock_.alignCenter) centerBlockColumns(page, boxStartCol_, column);
+        if (activeBlock_.aligns()) alignBlockColumns(page, boxStartCol_, column);
         // A BORDERED block always takes the gap, whatever margin-after the CSS asks for: its
         // LEFT rule sits in the column gap that the next column's furigana occupies (furigana is
         // set to the left of its own column in tategaki), so anything placed immediately after
@@ -2580,6 +2582,14 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   }
 
   if (isFinalFlush) {
+    // A block still open here ends with the chapter: its end marker sits at the stream's end, which the
+    // loop never visits. Close it as finalizePendingPage() does, or it loses its rect and alignment.
+    if (inBox_) {
+      appendBoxRectToPage(page, boxStartCol_, column, /*openLeft=*/false, /*openRight=*/boxContinuedFromPrevPage_);
+      if (activeBlock_.aligns()) alignBlockColumns(page, boxStartCol_, column);
+      inBox_ = false;
+      boxContinuedFromPrevPage_ = false;
+    }
     for (uint16_t c = 0; c < columnsPerPage; c++) cur.spreadColumnToFoot(page, c);
     oidashiColumns_ = 0;
     if (!page.glyphs.empty() || !anyPageEverProduced_) {
@@ -2638,28 +2648,48 @@ void VerticalParsedText::appendBoxRectToPage(VerticalPage& p, const uint16_t sta
   p.boxes.push_back(r);
 }
 
-// Vertically center the glyphs of columns [startCol..endCol] within the column height
-// (text-align: center in vertical writing). Runs once when a centered block closes on a page.
-void VerticalParsedText::centerBlockColumns(VerticalPage& p, const uint16_t startCol, const uint16_t endCol) const {
-  // Boxed columns are laid out short of the foot, so centre within THAT height, not the full one.
+// Place the glyphs of columns [startCol..endCol] along the column height once their block closes on a
+// page: text-align center / end moves each column on its own; auto head/foot margins move the block as
+// a whole, so its columns keep starting together (a title page centred as one block).
+void VerticalParsedText::alignBlockColumns(VerticalPage& p, const uint16_t startCol, const uint16_t endCol) const {
+  // A framed block's columns stop short of the foot for its bottom rule: align within THAT height. A
+  // block without a frame aligns to the real foot, like the text around it.
   if (boxGeomCellPx_ <= 0 || boxGeomRowsInBox_ == 0) return;
-  for (uint16_t c = startCol; c <= endCol; c++) {
-    int maxRow = -1;
-    int minRow = boxGeomRowsInBox_;
-    for (const auto& g : p.glyphs) {
-      if (g.column != c) continue;
-      maxRow = std::max(maxRow, static_cast<int>(g.row));
-      minRow = std::min(minRow, static_cast<int>(g.row));
-    }
-    if (maxRow < 0) continue;
-    const int usedRows = maxRow - minRow + 1;
-    const int shiftPx =
-        ((static_cast<int>(boxGeomRowsInBox_) - usedRows) * boxGeomRowPitchPx_) / 2 - minRow * boxGeomRowPitchPx_;
-    if (shiftPx == 0) continue;
+  const int rows = activeBlock_.borderEdges != 0 ? boxGeomRowsInBox_ : boxGeomRowsFull_;
+  const auto shiftColumns = [&](const uint16_t from, const uint16_t to, const int shiftPx) {
+    if (shiftPx == 0) return;
     for (auto& g : p.glyphs) {
-      if (g.column != c) continue;
+      if (g.column < from || g.column > to) continue;
       g.y = static_cast<uint16_t>(std::max(0, static_cast<int>(g.y) + shiftPx));
     }
+  };
+  const auto rowsOf = [&](const uint16_t from, const uint16_t to, int& minRow, int& maxRow) {
+    minRow = rows;
+    maxRow = -1;
+    for (const auto& g : p.glyphs) {
+      if (g.column < from || g.column > to) continue;
+      minRow = std::min(minRow, static_cast<int>(g.row));
+      maxRow = std::max(maxRow, static_cast<int>(g.row));
+    }
+    return maxRow >= 0;
+  };
+  // Free rows a column (or block) of rows [minRow..maxRow] leaves, moved to the head, the middle or the foot.
+  const auto shiftFor = [&](const int minRow, const int maxRow, const bool toFoot) {
+    // A full column whose last mark hangs below the foot (burasage) has no free row, not a negative one.
+    const int free = std::max(0, rows - (maxRow - minRow + 1));
+    return ((toFoot ? free : free / 2) - minRow) * boxGeomRowPitchPx_;
+  };
+  int minRow = 0;
+  int maxRow = 0;
+  if (activeBlock_.blockAlign != VerticalBlockParams::BlockAlign::None) {
+    if (rowsOf(startCol, endCol, minRow, maxRow)) {
+      shiftColumns(startCol, endCol,
+                   shiftFor(minRow, maxRow, activeBlock_.blockAlign == VerticalBlockParams::BlockAlign::End));
+    }
+    return;
+  }
+  for (uint16_t c = startCol; c <= endCol; c++) {
+    if (rowsOf(c, c, minRow, maxRow)) shiftColumns(c, c, shiftFor(minRow, maxRow, activeBlock_.alignEnd));
   }
 }
 
@@ -2672,7 +2702,7 @@ bool VerticalParsedText::finalizePendingPage(VerticalPage& out) {
   if (inBox_) {
     appendBoxRectToPage(pendingPage_, boxStartCol_, pendingColumn_, /*openLeft=*/false,
                         /*openRight=*/boxContinuedFromPrevPage_);
-    if (activeBlock_.alignCenter) centerBlockColumns(pendingPage_, boxStartCol_, pendingColumn_);
+    if (activeBlock_.aligns()) alignBlockColumns(pendingPage_, boxStartCol_, pendingColumn_);
     inBox_ = false;
     boxContinuedFromPrevPage_ = false;
   }
