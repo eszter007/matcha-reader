@@ -44,7 +44,7 @@ void StatsSyncActivity::onEnter() {
   {
     RenderLock lock(*this);
     sdFontSystem.releaseAllResidentFonts(renderer);
-    // A book underneath stays loaded; its glyph caches are the largest thing Wi-Fi can have back.
+    // The book's glyph caches outlive the reader this replaced; they are the largest thing Wi-Fi can have back.
     if (origin == Origin::ShortcutInReader) {
       if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
     }

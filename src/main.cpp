@@ -1032,7 +1032,9 @@ static void startClockSyncFromCombo() {
   activityManager.pushActivity(std::move(sync));
 }
 
-// Sync Insights & Clock from a button shortcut on any screen.
+// Sync Insights & Clock from a button shortcut on any screen. The screen underneath is replaced,
+// not stacked: Wi-Fi plus TLS need the heap that Home or an open book holds, and this sync always
+// ends in a restart back to where it started.
 static void startStatsSyncFromShortcut() {
   if (StatsSyncActivity::isRunning() || ClockSyncActivity::isRunning()) return;
   const auto origin = activityManager.isReaderActivity() ? StatsSyncActivity::Origin::ShortcutInReader
@@ -1042,7 +1044,7 @@ static void startStatsSyncFromShortcut() {
     LOG_ERR("MAIN", "OOM: StatsSyncActivity");
     return;
   }
-  activityManager.pushActivity(std::move(sync));
+  activityManager.replaceActivity(std::move(sync));
 }
 
 static void forceScreenRefresh() {

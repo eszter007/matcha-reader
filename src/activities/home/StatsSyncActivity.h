@@ -6,8 +6,9 @@
 // minutes and uploads the device's own stats. The download is merged at the next boot
 // (ReadingStatsStore::compact()), and the restart that ends the WiFi session lands back on Insights, so the screen
 // shows the merged numbers. From Insights it is opened with replaceActivity(), so the stats tables are freed first;
-// from Settings it returns there instead. A button shortcut can start it anywhere, optionally syncing the clock in
-// the same Wi-Fi session; its restart lands back in the book when started from one, else on Home.
+// from Settings it returns there instead. A button shortcut can start it anywhere, replacing the screen it was
+// started on and syncing the clock in the same Wi-Fi session; its restart lands back in the book when started from
+// one, else on Home.
 class StatsSyncActivity final : public Activity {
  public:
   enum class Origin : uint8_t { Insights, Settings, Shortcut, ShortcutInReader };
