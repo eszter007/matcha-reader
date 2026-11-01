@@ -34,6 +34,8 @@ static constexpr Rule kRules[] = {
     // Polite
     {"\xe3\x81\xbe\xe3\x81\x99", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // ます→る
     {"\xe3\x81\xbe\xe3\x81\x9b\xe3\x82\x93", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // ません→る
+    // Polite volitional: rewritten to ます so the ます rules above and below finish it.
+    {"\xe3\x81\xbe\xe3\x81\x97\xe3\x82\x87\xe3\x81\x86", "\xe3\x81\xbe\xe3\x81\x99", WordCondition::DICT, WordCondition::DICT},  // ましょう→ます
     // Passive/potential
     {"\xe3\x82\x89\xe3\x82\x8c\xe3\x82\x8b", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // られる→る
     // Causative

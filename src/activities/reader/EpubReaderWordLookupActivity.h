@@ -331,6 +331,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   // typically annotate a name's reading only on first appearance -- this surfaces it
   // on every later occurrence too. No entry -> no line.
   void prependBookReading(const std::string& surface);
+  // Moves the dictionary entry whose reading starts with the book's furigana for `surface` (or
+  // for its leading kanji) to the front, so 謀反 shows むほん, not the higher-ranked むへん.
+  void promoteBookReading(const std::string& surface);
 
   // Open on the page with a word cursor when the reader supplied a select context.
   void beginSelectMode();

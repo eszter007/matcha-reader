@@ -10,6 +10,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -803,9 +804,9 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       struct Entry {
         std::string def;
         uint8_t priority;
+        uint8_t posFlags;
       };
       std::vector<Entry> entries;
-      uint8_t bestFlags = 0;  // posFlags of the first (highest-priority) entry actually read
       constexpr int kMaxEntries = 5;
       for (size_t s = 0; s < sibs.size() && static_cast<int>(entries.size()) < kMaxEntries; s++) {
         // def.resize() is a bare allocation that abort()s on OOM under -fno-exceptions -- confirmed
@@ -828,15 +829,26 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
           g_lookupIncomplete = true;
           continue;
         }
-        if (entries.empty()) bestFlags = sibs[s].posFlags;
-        entries.push_back({std::move(def), sibs[s].priority});
+        entries.push_back({std::move(def), sibs[s].priority, sibs[s].posFlags});
       }
 
       if (entries.empty()) return false;
+      // Equal priority keeps index order, which put the suffix 中 (じゅう) and prefix 前 (ぜん)
+      // ahead of the nouns なか and まえ. A standalone match is rarely an affix, so on a tie the
+      // affix goes last.
+      const auto isAffix = [](const std::string& def) {
+        const size_t tagEnd = std::min<size_t>(def.size(), 96);
+        const std::string_view head(def.data(), tagEnd);
+        return head.find("[suffix]") != std::string_view::npos || head.find("[prefix]") != std::string_view::npos;
+      };
+      std::stable_sort(entries.begin(), entries.end(), [&](const Entry& a, const Entry& b) {
+        if (a.priority != b.priority) return a.priority > b.priority;
+        return !isAffix(a.def) && isAffix(b.def);
+      });
 
       out.headword = headword;
       out.priority = entries[0].priority;
-      out.posFlags = bestFlags;
+      out.posFlags = entries[0].posFlags;
       if (entries.size() == 1) {
         out.definition = std::move(entries[0].def);
       } else {

@@ -17,6 +17,7 @@
 #include "util/CjkScript.h"
 
 namespace {
+
 // Bare vector growth (reserve()/push_back() past capacity) calls operator new, which aborts the
 // whole device on OOM under -fno-exceptions instead of returning nullptr (see CLAUDE.md). Word
 // Lookup can be opened right after a heap-starved chapter build (a furigana-dense CJK page can
@@ -642,7 +643,7 @@ namespace {
 // the tate-chu-yoko NUL truncation, where a match claimed the cells of the word after an upright
 // "!?" run: the word stayed unselectable on that page for good, since nothing re-examined a
 // cache that looked valid. Rebuilding costs one rescan (~300 ms, once per page).
-constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x334D4C57;  // "WLM3" -- WLM2 predates suru-noun lookup
+constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x344D4C57;  // "WLM4": bumped whenever segmentation changes
 constexpr uint16_t WLSCAN_MAX_PAGES = 8;
 constexpr size_t WLSCAN_MAX_CARRY_BYTES = 4096;  // bound on the older entries carried forward
 
@@ -1072,7 +1073,24 @@ void WordSelectionScan::scanOnePosition() {
             result.entry.priority < kMinKanaExactPriority) {
           hasMatch = false;
         }
+        // A reading record that opens with the copula な or the nominaliser の straight after
+        // other text is grammar on the page, not the word: なのか in 誰なのか matched 七日 even
+        // though that record is common. Other particle kana stay, so でんわ and はな still match.
+        const uint32_t lead = allGlyphs[scanStart].codepoint;
+        const bool afterText = scanStart > 0 && allGlyphs[scanStart - 1].paragraphIndex == paraIdx;
+        if (hasMatch && !result.deinflected && (lead == 0x306A || lead == 0x306E) && afterText && !usuallyKana &&
+            (result.entry.posFlags & DictIndexRecord::POS_READING) != 0) {
+          hasMatch = false;
+        }
       }
+    }
+
+    // A name that opens with the copula な right after hiragana: な子 in 哀れな子 is な plus 子,
+    // not a name. の is left alone: before a name it is the possessive (妹ののり子).
+    if (hasMatch && result.entry.sourceDict == DictIndex::DICT_NAMES && scanStart > 0 &&
+        allGlyphs[scanStart - 1].paragraphIndex == paraIdx) {
+      const uint32_t prev = allGlyphs[scanStart - 1].codepoint;
+      if (allGlyphs[scanStart].codepoint == 0x306A && prev >= 0x3041 && prev <= 0x309F) hasMatch = false;
     }
 
     // A match that STARTS with a case/topic particle usually mis-segments: the particle should
