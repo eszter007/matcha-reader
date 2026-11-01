@@ -2295,7 +2295,8 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
   // Vocab until the grammar separator is crossed; a name lookup has no separators at all, so its
   // single piece takes the kind the lookup itself resolved.
   StrId kind = resultDict == DictIndex::DICT_NAMES ? StrId::STR_DICT_KIND_NAME : StrId::STR_DICT_KIND_VOCAB;
-  std::string grammarHead;  // the pattern named by the grammar heading, once it is seen
+  std::string grammarHead;      // the pattern named by the grammar heading, once it is seen
+  std::string alternativeHead;  // another headword the text can be, from its arrow line on
   // Cut at whichever separator comes first, repeatedly.
   size_t pos = 0;
   while (pos <= resultDefinition.size()) {
@@ -2321,12 +2322,17 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
       head.erase(tailSpace == std::string::npos ? 0 : tailSpace + 1);
       piece.erase(0, lineEnd == std::string::npos ? piece.size() : lineEnd + 1);
       grammarHead = head;
+      alternativeHead.clear();
     } else if (kind != StrId::STR_DICT_KIND_GRAMMAR && piece.compare(0, sizeof(kArrow) - 1, kArrow) == 0) {
       // Another headword the same text can be (see kAlternativeSeparator): it names its own page.
       const size_t lineEnd = piece.find('\n');
       head = piece.substr(sizeof(kArrow) - 1,
                           (lineEnd == std::string::npos ? piece.size() : lineEnd) - (sizeof(kArrow) - 1));
       piece.erase(0, lineEnd == std::string::npos ? piece.size() : lineEnd + 1);
+      alternativeHead = head;
+    } else if (kind != StrId::STR_DICT_KIND_GRAMMAR && !alternativeHead.empty()) {
+      // A further record of that headword: it keeps the name until the next one or the grammar.
+      head = alternativeHead;
     } else if (kind != StrId::STR_DICT_KIND_GRAMMAR && !sectionText.empty() && !retainedPrefixHead.empty()) {
       // Every page after the book's reading is a dictionary entry for the retained prefix.
       head = retainedPrefixHead;
@@ -2369,7 +2375,9 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
       size_t replaceAt = sectionText.size();
       for (size_t i = 0; i < sectionText.size(); i++) {
         // The header grammar left the body, so siblings that differ only in their tags differ here.
-        if ((sectionText[i] == piece && sectionGrammar[i] == metadata.grammar) ||
+        // The same senses under another headword (足りる, 足る) are a page of their own.
+        if ((sectionText[i] == piece && sectionGrammar[i] == metadata.grammar && sectionHead[i] == head &&
+             sectionReading[i] == metadata.reading) ||
             (kind == StrId::STR_DICT_KIND_NAME && sectionKind[i] == kind && coveredBy(piece, sectionText[i]))) {
           duplicate = true;
           break;

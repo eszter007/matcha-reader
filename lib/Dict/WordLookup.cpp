@@ -276,6 +276,15 @@ bool resolveCandidates(const std::vector<DeinflectionCandidate>& candidates, con
     return a.definition.size() > b.definition.size();
   });
   out = std::move(hits[0]);
+  // One guarded reserve for the merged text, as DictIndex merges senses: a growing append that
+  // cannot get its block aborts under -fno-exceptions. Without room the primary entry stands alone.
+  size_t merged = out.definition.size();
+  for (size_t h = 1; h < hits.size(); h++) {
+    if (hits[h].definition.size() > kMaxAlternativeBytes) continue;
+    merged += sizeof(kAlternativeSeparator) + hits[h].headword.size() + hits[h].definition.size();
+  }
+  if (merged == out.definition.size() || !DictIndex::fitsInHeap(merged)) return true;
+  out.definition.reserve(merged);
   for (size_t h = 1; h < hits.size(); h++) {
     if (hits[h].definition.size() > kMaxAlternativeBytes) continue;
     out.definition += kAlternativeSeparator;
