@@ -87,7 +87,9 @@ class WordLookupDeinflection : public ::testing::Test {
                             {"見える", 255, V1, "to be visible"},
                             {"小さい", 255, DictIndexRecord::POS_ADJ_I, "small"},
                             {"帰る", 255, V5, "to return"},
-                            {"て", 255, OTHER, "particle"}});
+                            {"て", 255, OTHER, "particle"},
+                            {"出る", 255, V1, "to leave"},
+                            {"でる", 255, V1, "to leave (kana)"}});
     testRoot() = root_.string();
     DictIndex::releaseCaches();
   }
@@ -215,6 +217,11 @@ TEST_F(WordLookupDeinflection, TheBareTeFormIsNeverAWordOfItsOwn) {
       EXPECT_EQ(c.condition, WordCondition::STEM);
     }
   }
+}
+
+TEST_F(WordLookupDeinflection, AnAuxiliaryNeedsAWordBeforeIt) {
+  for (const auto& c : Deinflector::deinflect("できた")) EXPECT_NE(c.text, "でる");
+  EXPECT_EQ(lookup("読んできた。"), both("読む", "読んできた"));
 }
 
 }  // namespace

@@ -629,6 +629,8 @@ std::vector<DeinflectionCandidate> Deinflector::deinflect(const std::string& sur
       if (!endsWith(text, rule.from, fromLen)) continue;
 
       if (text.size() < fromLen) continue;
+      // A bare stem needs a word before its て/で/く: できた is できる, not で + きた (でる).
+      if (rule.condOut == WordCondition::STEM && text.size() <= fromLen) continue;
 
       std::string newText = text.substr(0, text.size() - fromLen) + rule.to;
 
