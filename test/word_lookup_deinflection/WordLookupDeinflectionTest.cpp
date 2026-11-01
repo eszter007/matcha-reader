@@ -157,4 +157,32 @@ TEST_F(WordLookupDeinflection, WindowStaysAtEightWithoutAHiraganaTail) {
   EXPECT_EQ(lookup("食べさせられ勉強勉強").second, "食べさせられ");
 }
 
+TEST_F(WordLookupDeinflection, LongSuruConjugationFindsItsNoun) {
+  EXPECT_EQ(lookup("勉強させられなかった。"), both("勉強", "勉強させられなかった"));
+}
+
+TEST_F(WordLookupDeinflection, LongPassStopsAtANul) {
+  std::string text = "来";
+  text.push_back('\0');
+  text += "ああああああああ";
+  WordLookupResult r;
+  if (WordLookup::lookup(text, 0, r)) {
+    EXPECT_LE(r.matchLength, std::string("来").size());
+  }
+}
+
+TEST_F(WordLookupDeinflection, LongSuruConjugationFindsItsNoun) {
+  EXPECT_EQ(lookup("勉強させられなかった。"), both("勉強", "勉強させられなかった"));
+}
+
+TEST_F(WordLookupDeinflection, LongPassStopsAtANul) {
+  std::string text = "来";
+  text.push_back('\0');
+  text += "ああああああああ";
+  WordLookupResult r;
+  if (WordLookup::lookup(text, 0, r)) {
+    EXPECT_LE(r.matchLength, std::string("来").size());
+  }
+}
+
 }  // namespace
