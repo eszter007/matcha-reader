@@ -1,6 +1,7 @@
 #include "EpubReaderWordLookupActivity.h"
 
 #include <Arduino.h>
+#include <CounterReading.h>
 #include <DictIndex.h>
 #include <Epub/RubyGlossary.h>
 #include <FontCacheManager.h>
@@ -1257,13 +1258,91 @@ std::string EpubReaderWordLookupActivity::buildLookupText() const {
                         ? WordSelectionScan::kMaxLookupChars
                         : scan.lookupCharLimit(static_cast<size_t>(cursorIndex));
 
+  // Leading digits have a budget of their own, so a long number (12345678年) still brings its
+  // counter into the window. Run segmentation (Chinese) sizes its window by the span instead.
+  static constexpr int kMaxDigits = 16;
+  int digits = 0;
+  bool inDigits = !scan.usesRunSegmentation();
   for (size_t i = allStart; i < scan.allGlyphs.size() && charCount < limit; i++) {
     const auto& g = scan.allGlyphs[i];
     if (g.paragraphIndex != paraIdx) break;
+    const bool digit = (g.codepoint >= '0' && g.codepoint <= '9') || (g.codepoint >= 0xFF10 && g.codepoint <= 0xFF19);
+    inDigits = inDigits && digit && digits < kMaxDigits;
     WordSelectionScan::encodeUtf8(g.codepoint, text);
-    charCount++;
+    if (inDigits) {
+      digits++;
+    } else {
+      charCount++;
+    }
   }
   return text;
+}
+
+void EpubReaderWordLookupActivity::readAsCounter(const std::string& digits, const std::string& counter) {
+  // After a number the counter sense is meant (月 がつ, not the noun つき): move the best entry to
+  // the front -- one read as the counter (本 ほん, not もと; 年 ねん, not the poetic とせ), else
+  // one tagged as a counter, else one tagged as a suffix.
+  static constexpr char kEntrySep[] = "\n\n---\n";
+  static constexpr char kOpenBracket[] = "\xe3\x80\x90";  // 【
+  const char* plain = CounterReading::plainReading(counter);
+  const auto rank = [&](const size_t start, const size_t stop) {
+    const size_t head = std::min(stop, start + 96);
+    const std::string_view tags(resultDefinition.data() + start, head - start);
+    if (plain && resultDefinition.compare(start, sizeof(kOpenBracket) - 1, kOpenBracket) == 0) {
+      const size_t len = std::strlen(plain);
+      const size_t at = start + sizeof(kOpenBracket) - 1;
+      if (resultDefinition.compare(at, len, plain) == 0 && resultDefinition.compare(at + len, 3, "\xe3\x80\x91") == 0) {
+        return 3;
+      }
+    }
+    if (tags.find("[counter]") != std::string_view::npos) return 2;
+    if (tags.find("[suffix]") != std::string_view::npos) return 1;
+    return 0;
+  };
+  size_t bestAt = std::string::npos, bestStart = 0, bestStop = 0;
+  int bestRank = rank(0, std::min(resultDefinition.find(kEntrySep), resultDefinition.size()));
+  for (size_t at = resultDefinition.find(kEntrySep); at != std::string::npos;) {
+    const size_t start = at + sizeof(kEntrySep) - 1;
+    const size_t end = resultDefinition.find(kEntrySep, start);
+    const size_t stop = end == std::string::npos ? resultDefinition.size() : end;
+    const int r = rank(start, stop);
+    if (r > bestRank) {
+      bestRank = r;
+      bestAt = at;
+      bestStart = start;
+      bestStop = stop;
+    }
+    at = end;
+  }
+  if (bestAt != std::string::npos) {
+    // Rotated in place: an entry can run to 16 KB, and a copy is an unguarded allocation.
+    // [0, at) sep entry -> entry [0, at) sep -> entry sep [0, at).
+    const size_t entryLen = bestStop - bestStart;
+    const auto begin = resultDefinition.begin();
+    std::rotate(begin, begin + bestStart, begin + bestStop);
+    std::rotate(begin + entryLen, begin + entryLen + bestAt, begin + bestStop);
+  }
+
+  // A counter outside CounterReading's table keeps the dictionary's reading.
+  uint64_t number = 0;
+  std::string reading;
+  if (!CounterReading::parseNumber(digits, number) || !CounterReading::read(number, counter, reading)) return;
+
+  // The entry's own reading is the counter alone (がつ); show the whole number's (ろくがつ).
+  static constexpr char kOpen[] = "\xe3\x80\x90";   // 【
+  static constexpr char kClose[] = "\xe3\x80\x91";  // 】
+  std::string line = kOpen;
+  line += reading;
+  line += kClose;
+  if (resultDefinition.compare(0, sizeof(kOpen) - 1, kOpen) == 0) {
+    const size_t close = resultDefinition.find(kClose);
+    if (close != std::string::npos) {
+      resultDefinition.replace(0, close + sizeof(kClose) - 1, line);
+      return;
+    }
+  }
+  line += "\n\n";
+  resultDefinition.insert(0, line);
 }
 
 namespace {
@@ -1502,13 +1581,57 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     }
   }
 
+  // A number's counter is read from CounterReading's table, also where the dictionary stops short
+  // of it (3日目, 5万円). A Latin-script unit is looked up by its katakana word (km -> キロメートル).
+  const auto charCount = [](const std::string& s) {
+    int n = 0;
+    for (const char c : s) n += (static_cast<unsigned char>(c) & 0xC0) != 0x80;
+    return n;
+  };
+  // Japanese only: Chinese and Cantonese read 3名 by their own dictionaries.
+  const bool japanese = std::strcmp(DictIndex::languageFolder(), "jp") == 0;
+  size_t counterBytes = digitPrefix.empty() || !japanese ? 0 : CounterReading::matchCounter(text);
+  // The cells the number and counter cover on the page, taken before km becomes キロメートル:
+  // the saved card bolds these.
+  const int sourceSpan = charCount(digitPrefix) + charCount(text.substr(0, counterBytes));
+  if (counterBytes > 0) {
+    if (const char* word = CounterReading::unitWord(std::string_view(text).substr(0, counterBytes))) {
+      text = word + text.substr(counterBytes);
+      counterBytes = std::strlen(word);
+    }
+  }
+
   WordLookupResult result;
-  if (WordLookup::lookup(text, 0, result)) {
+  // The dictionary is asked for the bare counter: 円 of 5万円 (not 万), 人 of 3人目 (not 人目
+  // "public gaze"), 日 of 5日後 (not the name 日後).
+  bool found = false;
+  if (counterBytes > 0) {
+    size_t baseStart = CounterReading::multiplierLength(text);
+    if (baseStart >= counterBytes) baseStart = 0;
+    static constexpr char kMe[] = "\xe7\x9b\xae";  // 目
+    size_t baseEnd = counterBytes;
+    if (baseEnd >= baseStart + 2 * (sizeof(kMe) - 1) &&
+        text.compare(baseEnd - (sizeof(kMe) - 1), sizeof(kMe) - 1, kMe) == 0) {
+      baseEnd -= sizeof(kMe) - 1;
+    }
+    found = WordLookup::lookup(text.substr(0, baseEnd), baseStart, result);
+    if (found) result.matchLength = counterBytes;
+  } else {
+    found = WordLookup::lookup(text, 0, result);
+  }
+  if (found) {
     WordSelectionScan::stripTrailingParticle(text, result);
     hasResult = true;
-    resultHeadword = digitPrefix + result.entry.headword;
+    resultHeadword = digitPrefix + (counterBytes > 0 ? text.substr(0, counterBytes) : result.entry.headword);
     resultDefinition = std::move(result.entry.definition);
-    promoteBookReading(text.substr(0, std::min(result.matchLength, text.size())));
+    if (counterBytes > 0) {
+      readAsCounter(digitPrefix, text.substr(0, counterBytes));
+    } else if (japanese && !digitPrefix.empty()) {
+      // A counter outside the table (3体): still put its counter sense first.
+      readAsCounter(digitPrefix, text.substr(0, std::min(result.matchLength, text.size())));
+    } else {
+      promoteBookReading(text.substr(0, std::min(result.matchLength, text.size())));
+    }
     DefinitionText::EntryMetadata metadata;
     DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
     resultReading = std::move(metadata.reading);
@@ -1531,7 +1654,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
         pos += 4;
       chars++;
     }
-    resultMatchLen = chars;
+    resultMatchLen = counterBytes > 0 ? sourceSpan : charCount(digitPrefix) + chars;
     // For short hiragana-only matches (≤3 chars), check if the grammar dict
     // has a better entry and promote it to the main result. Functional words
     // like こと, もの, よう get unhelpful JMdict hits ("ancient capital").
@@ -1581,6 +1704,19 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
           grammarDefinition = std::move(gramEntry.definition);
         }
       }
+    }
+  }
+
+  if (!hasResult && counterBytes > 0) {
+    // No dictionary entry for the counter: the reading alone is still the answer.
+    uint64_t number = 0;
+    std::string reading;
+    if (CounterReading::parseNumber(digitPrefix, number) &&
+        CounterReading::read(number, text.substr(0, counterBytes), reading)) {
+      hasResult = true;
+      resultHeadword = digitPrefix + text.substr(0, counterBytes);
+      resultReading = std::move(reading);
+      resultMatchLen = sourceSpan;
     }
   }
 
