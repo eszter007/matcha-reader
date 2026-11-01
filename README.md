@@ -20,13 +20,36 @@ This page is the short version. How to use everything is in the [User Guide](USE
 - **Just reading.** Flash it, copy your books. Everything from CrossPoint, plus a cover-grid library, reading insights, manga, vertical Japanese text and new sleep screens. Chinese needs a font on the card; nothing else does.
 - **Learning.** Add a dictionary and every word on the page can be looked up, saved for Anki, or translated. Japanese and Chinese go deepest; other languages use any StarDict dictionary.
 
-## Reading
+## Word lookup, sentence mining and page translation
 
-### Books in any language
+Look up any word on the page, vertical or horizontal; in Japanese and Chinese the page is split into words first, so the cursor only lands on words with an entry. The definition opens in a panel over the page. On touch devices, long-press a word to open it. See [Guide §6.1](USER_GUIDE.md#61-word-lookup).
 
-EPUBs open as in CrossPoint, with reader settings remembered per book. Two languages get their own layout:
+<p align="center">
+  <img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence">
+  <img src="docs/images/screenshots/chinese-text.png" width="260" alt="A page of 紅樓夢 (Project Gutenberg) in traditional Chinese">
+  <img src="docs/images/screenshots/word-lookup-chinese.png" width="260" alt="Word lookup panel over a page of 紅樓夢: 繁華 with pinyin and zhuyin, both scripts and two senses">
+</p>
 
-#### Japanese
+**Sentence mining.** Save a word with its sentence to a CSV per language that Anki imports as is. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
+
+**Page translation.** Translates the page to English with Gemini, in the same panel. Needs Wi-Fi and your own API key. See [Guide §6.2](USER_GUIDE.md#62-page-translation).
+
+<p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
+
+Install a dictionary and that language's books get word lookup:
+
+| | Japanese | Mandarin, simplified | Mandarin, traditional | Cantonese | Other languages |
+| --- | --- | --- | --- | --- | --- |
+| Word lookup | Page split into words, conjugations undone | Page split into words | Same | Same | Word by word, with word-form rules |
+| Reading shown | Kana | Pinyin, HSK level | Pinyin, zhuyin, TOCFL level | Pinyin, jyutping | none |
+| Dictionary | Jitendex / JMdict, names, grammar | CC-CEDICT | CC-CEDICT + MoE 重編國語辭典 | CC-Canto + CC-CEDICT | Any StarDict |
+| Text layout | Vertical for right-to-left books | Horizontal | Vertical for right-to-left books | As traditional | Horizontal |
+| Readings above the text | Furigana | Pinyin | Pinyin or zhuyin | none | none |
+| Font | Built in | SD font required | SD font required | SD font required | Built in |
+
+Comics, sentence mining and page translation work in every column.
+
+## Japanese
 
 - **Vertical text**, detected from the book: right-to-left columns, kinsoku, emphasis marks and furigana. Layout and furigana switch per book or for all books.
 - **A font is built in**; an SD font looks better and adds rare kanji.
@@ -38,7 +61,17 @@ EPUBs open as in CrossPoint, with reader settings remembered per book. Two langu
 </p>
 <p align="center"><em>The same passage, Vertical Text on and off</em></p>
 
-#### Chinese
+### Learning Japanese
+
+With the Japanese dictionaries installed:
+
+- **Conjugations resolve to the dictionary form**: 食べませんでした finds 食べる.
+- **Names the book gives furigana for** are picked whole.
+- **Vocabulary, names and grammar** each have their own dictionary (Jitendex / JMdict).
+
+See [Guide §6.3](USER_GUIDE.md#63-japanese-books).
+
+## Chinese: Mandarin and Cantonese
 
 - **Simplified** books open horizontally, **traditional** ones vertically when right-to-left.
 - **An SD font is required**; the built-in glyphs are the Japanese set.
@@ -51,6 +84,22 @@ EPUBs open as in CrossPoint, with reader settings remembered per book. Two langu
 |:---:|:---:|:---:|:---:|
 | <img src="docs/images/screenshots/chinese-simplified.png" width="180" alt="西游记 chapter 1 in simplified Chinese, horizontal"> | <img src="docs/images/screenshots/chinese-traditional.png" width="180" alt="紅樓夢 chapter 1 in traditional Chinese, horizontal"> | <img src="docs/images/screenshots/chinese-traditional-vertical.png" width="180" alt="西遊記 chapter 1 in traditional Chinese, set vertically right to left"> | <img src="docs/images/screenshots/cantonese.png" width="180" alt="A short story in written Cantonese"> |
 | 西游记 | 紅樓夢 | 西遊記 | 落雨天 |
+
+### Learning Chinese
+
+With a Chinese dictionary installed:
+
+- **Words are split by frequency**, not longest match, so 结婚的和尚未结婚的 reads 和 + 尚未, not 和尚.
+- **Simplified** shows pinyin and HSK level; **traditional** adds zhuyin, TOCFL level and a monolingual MoE entry; **Cantonese** has its own dictionary with jyutping.
+- **One dictionary serves both scripts** and shows the other form of each word (說 next to 说).
+
+See [Guide §6.4](USER_GUIDE.md#64-chinese-books).
+
+## French, English and other languages
+
+Any StarDict dictionary, picked by the book's language. A miss is retried with word-form rules, fullest for French (`parlaient` → `parler`). See [Guide §6.5](USER_GUIDE.md#65-books-in-other-languages).
+
+## In every book
 
 ### Manga, manhua and comics
 
@@ -107,58 +156,6 @@ A wallpaper over the page you were reading, so the book shows through. See [Guid
 - Optimize EPUB on upload: splits single-file novels into chapters and fits images to the screen
 - A Power + Up shortcut and Sync Insights & Clock on any button shortcut
 - Japanese and Chinese interface
-
-## Learning
-
-Install a dictionary and that language's books get word lookup:
-
-| | Japanese | Mandarin, simplified | Mandarin, traditional | Cantonese | Other languages |
-| --- | --- | --- | --- | --- | --- |
-| Word lookup | Page split into words, conjugations undone | Page split into words | Same | Same | Word by word, with word-form rules |
-| Reading shown | Kana | Pinyin, HSK level | Pinyin, zhuyin, TOCFL level | Pinyin, jyutping | none |
-| Dictionary | Jitendex / JMdict, names, grammar | CC-CEDICT | CC-CEDICT + MoE 重編國語辭典 | CC-Canto + CC-CEDICT | Any StarDict |
-| Text layout | Vertical for right-to-left books | Horizontal | Vertical for right-to-left books | As traditional | Horizontal |
-| Readings above the text | Furigana | Pinyin | Pinyin or zhuyin | none | none |
-| Font | Built in | SD font required | SD font required | SD font required | Built in |
-
-Comics, sentence mining and page translation work in every column.
-
-### Word lookup, sentence mining and page translation
-
-Look up any word on the page, vertical or horizontal; in Japanese and Chinese the page is split into words first, so the cursor only lands on words with an entry. The definition opens in a panel over the page. On touch devices, long-press a word to open it. See [Guide §6.1](USER_GUIDE.md#61-word-lookup).
-
-<p align="center">
-  <img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence">
-  <img src="docs/images/screenshots/chinese-text.png" width="260" alt="A page of 紅樓夢 (Project Gutenberg) in traditional Chinese">
-  <img src="docs/images/screenshots/word-lookup-chinese.png" width="260" alt="Word lookup panel over a page of 紅樓夢: 繁華 with pinyin and zhuyin, both scripts and two senses">
-</p>
-
-**Sentence mining.** Save a word with its sentence to a CSV per language that Anki imports as is. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
-
-**Page translation.** Translates the page to English with Gemini, in the same panel. Needs Wi-Fi and your own API key. See [Guide §6.2](USER_GUIDE.md#62-page-translation).
-
-<p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
-
-### Japanese
-
-- **Conjugations resolve to the dictionary form**: 食べませんでした finds 食べる.
-- **Names the book gives furigana for** are picked whole.
-- **Vocabulary, names and grammar** each have their own dictionary (Jitendex / JMdict).
-
-See [Guide §6.3](USER_GUIDE.md#63-japanese-books).
-
-### Chinese: Mandarin and Cantonese
-
-- **Words are split by frequency**, not longest match, so 结婚的和尚未结婚的 reads 和 + 尚未, not 和尚.
-- **Simplified** shows pinyin and HSK level; **traditional** adds zhuyin, TOCFL level and a monolingual MoE entry; **Cantonese** has its own dictionary with jyutping.
-- **One dictionary serves both scripts** and shows the other form of each word (說 next to 说).
-
-See [Guide §6.4](USER_GUIDE.md#64-chinese-books).
-
-### French, English and other languages
-
-Any StarDict dictionary, picked by the book's language. A miss is retried with word-form rules, fullest for French (`parlaient` → `parler`). See [Guide §6.5](USER_GUIDE.md#65-books-in-other-languages).
-
 ## Setup
 
 Files go onto the SD card with a card reader or over Wi-Fi from the device's **File Transfer** screen.
