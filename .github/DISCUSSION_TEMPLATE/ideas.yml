@@ -41,9 +41,10 @@ body:
       required: true
 
   - type: dropdown
-    id: priority
+    id: impact
     attributes:
-      label: Priority for you
+      label: Impact
+      description: How much would this change your reading or studying?
       options:
         - Nice to have
         - Would make a real difference
