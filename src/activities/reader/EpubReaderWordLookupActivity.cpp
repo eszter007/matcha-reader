@@ -1400,17 +1400,68 @@ void EpubReaderWordLookupActivity::promoteBookReading(const std::string& surface
     if (!RubyGlossary::lookup(bookCachePath, surface.substr(0, kanjiEnd), reading)) return;
   }
   if (reading.find("\xE3\x83\xBB") != std::string::npos) return;  // several readings: nothing to prefer
+  promoteEntryReading(reading);
+}
 
-  const size_t firstEnd = resultDefinition.find(kEntrySep);
-  const auto readsAsBook = [&](const size_t at) {
+namespace {
+// Kana compared as a reader hears it: katakana as hiragana, small kana as full-size. Books often
+// print furigana with full-size small kana (きようべん for きょうべん).
+uint32_t foldKana(uint32_t cp) {
+  if (cp >= 0x30A1 && cp <= 0x30F6) cp -= 0x60;  // katakana -> hiragana
+  switch (cp) {
+    case 0x3041:
+    case 0x3043:
+    case 0x3045:
+    case 0x3047:
+    case 0x3049:  // ぁぃぅぇぉ
+    case 0x3063:  // っ
+    case 0x3083:
+    case 0x3085:
+    case 0x3087:  // ゃゅょ
+    case 0x308E:  // ゎ
+      return cp + 1;
+    default:
+      return cp;
+  }
+}
+
+uint32_t nextCp(const std::string& s, size_t& at) {
+  const auto c0 = static_cast<unsigned char>(s[at]);
+  const size_t len = c0 < 0x80 ? 1 : (c0 & 0xE0) == 0xC0 ? 2 : (c0 & 0xF0) == 0xE0 ? 3 : 4;
+  if (at + len > s.size()) {
+    at = s.size();
+    return 0;
+  }
+  uint32_t cp = len == 1 ? c0 : c0 & (len == 2 ? 0x1Fu : len == 3 ? 0x0Fu : 0x07u);
+  for (size_t k = 1; k < len; k++) cp = (cp << 6) | (static_cast<unsigned char>(s[at + k]) & 0x3Fu);
+  at += len;
+  return cp;
+}
+
+// True when the text at `at` in `s` begins with `prefix`, kana folded.
+bool startsWithKana(const std::string& s, size_t at, const std::string& prefix) {
+  size_t p = 0;
+  while (p < prefix.size()) {
+    if (at >= s.size()) return false;
+    if (foldKana(nextCp(s, at)) != foldKana(nextCp(prefix, p))) return false;
+  }
+  return true;
+}
+}  // namespace
+
+bool EpubReaderWordLookupActivity::promoteEntryReading(const std::string& reading) {
+  static constexpr char kEntrySep[] = "\n\n---\n";
+  static constexpr char kOpen[] = "\xe3\x80\x90";  // 【
+  if (reading.empty()) return false;
+  const auto readsAs = [&](const size_t at) {
     return resultDefinition.compare(at, sizeof(kOpen) - 1, kOpen) == 0 &&
-           resultDefinition.compare(at + sizeof(kOpen) - 1, reading.size(), reading) == 0;
+           startsWithKana(resultDefinition, at + sizeof(kOpen) - 1, reading);
   };
-  if (readsAsBook(0)) return;
-  for (size_t at = firstEnd; at != std::string::npos;) {
+  if (readsAs(0)) return true;
+  for (size_t at = resultDefinition.find(kEntrySep); at != std::string::npos;) {
     const size_t start = at + sizeof(kEntrySep) - 1;
     const size_t end = resultDefinition.find(kEntrySep, start);
-    if (readsAsBook(start)) {
+    if (readsAs(start)) {
       // Rotated in place: a definition can run to 16 KB, and a copy of it is an unguarded
       // allocation on a fragmented heap. [0, at) sep entry -> entry [0, at) sep -> entry sep [0, at).
       const size_t stop = end == std::string::npos ? resultDefinition.size() : end;
@@ -1418,10 +1469,35 @@ void EpubReaderWordLookupActivity::promoteBookReading(const std::string& surface
       const auto begin = resultDefinition.begin();
       std::rotate(begin, begin + start, begin + stop);
       std::rotate(begin + entryLen, begin + entryLen + at, begin + stop);
-      return;
+      return true;
     }
     at = end;
   }
+  return false;
+}
+
+bool EpubReaderWordLookupActivity::promotePageReading(const size_t start, const size_t chars) {
+  // The furigana printed over the matched glyphs, up to the last annotated one: や for 止めて,
+  // みなも for 水面 (one group reading on its first kanji). A kanji with none before any
+  // furigana means the page does not annotate this word.
+  std::string reading;
+  size_t readingEnd = 0;
+  bool annotated = false;
+  for (size_t i = start; i < start + chars && i < scan.onPageGlyphCount(); i++) {
+    const uint32_t cp = scan.allGlyphs[i].codepoint;
+    if (const std::string* ruby = scan.rubyAt(i)) {
+      reading += *ruby;
+      readingEnd = reading.size();
+      annotated = true;
+    } else if (WordSelectionScan::isCJK(cp)) {
+      if (!annotated) return false;  // inside a group reading otherwise
+    } else {
+      WordSelectionScan::encodeUtf8(cp, reading);  // okurigana between annotated kanji
+    }
+  }
+  if (!annotated) return false;
+  reading.resize(readingEnd);
+  return promoteEntryReading(reading);
 }
 
 void EpubReaderWordLookupActivity::performLookup() {
@@ -1642,7 +1718,10 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       // A counter outside the table (3体): still put its counter sense first.
       readAsCounter(digitPrefix, text.substr(0, std::min(result.matchLength, text.size())));
     } else {
-      promoteBookReading(text.substr(0, matchEnd), name);
+      // The furigana printed on this word decides first; the book's glossary is the fallback.
+      size_t matchChars = 0;
+      for (size_t b = 0; b < matchEnd; b++) matchChars += (static_cast<unsigned char>(text[b]) & 0xC0) != 0x80;
+      if (!promotePageReading(currentAllGlyphIndex(), matchChars)) promoteBookReading(text.substr(0, matchEnd), name);
     }
     DefinitionText::EntryMetadata metadata;
     DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
