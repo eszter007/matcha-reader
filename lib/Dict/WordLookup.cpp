@@ -8,6 +8,9 @@
 
 namespace {
 
+constexpr char kSuru[] = "\xe3\x81\x99\xe3\x82\x8b";  // する
+constexpr size_t kSuruBytes = sizeof(kSuru) - 1;
+
 size_t utf8CharBytes(unsigned char c) {
   if (c < 0x80) return 1;
   if ((c & 0xE0) == 0xC0) return 2;
@@ -161,6 +164,29 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
         out.entry = std::move(entry);
         // window.size(), not windowEnd - byteOffset: the deinflection path reads the same window,
         // so a NUL trimmed above must shorten this match too.
+        out.matchLength = window.size();
+        out.deinflected = true;
+        return true;
+      }
+    }
+    // JMdict files a suru verb under its noun (嘲笑, not 嘲笑する). Tried after every candidate, so a
+    // verb headword of its own (対する) wins over its single-kanji noun (対).
+    for (const auto& candidate : candidates) {
+      const auto& text = candidate.text;
+      if (text.size() <= kSuruBytes || text.compare(text.size() - kSuruBytes, kSuruBytes, kSuru) != 0) continue;
+      if (candidate.condition != WordCondition::VS && candidate.condition != WordCondition::DICT) continue;
+      // lookupExact rejects keys of HEADWORD_SIZE bytes or more, so a stack key covers every stem it accepts.
+      const size_t nounBytes = text.size() - kSuruBytes;
+      char noun[DictIndexRecord::HEADWORD_SIZE];
+      if (nounBytes >= sizeof(noun)) continue;
+      std::memcpy(noun, text.data(), nounBytes);
+      noun[nounBytes] = '\0';
+      // Dictionaries converted before suru tags became POS_VS flag these nouns POS_OTHER. A kanji
+      // or katakana stem keeps particles (にする) from matching that way; the する suffix is
+      // hiragana, so testing the whole text tests the stem.
+      if (hasNameChar(text) && DictIndex::lookupExact(noun, entry, DictIndex::DICT_JMDICT, needDefinition,
+                                                      DictIndexRecord::POS_VS | DictIndexRecord::POS_OTHER)) {
+        out.entry = std::move(entry);
         out.matchLength = window.size();
         out.deinflected = true;
         return true;

@@ -146,6 +146,8 @@ class ActivityManager {
   bool remoteClick(RemoteButton button);
   // Home is in front and has painted a frame of its own (not one left from the screen before).
   bool isForegroundHomeShown() const;
+  // Home or a book is the only screen: nothing underneath has exit work (such as a reboot) pending.
+  bool isOnlyHomeOrReader() const;
   uint32_t visit() const { return screenVisit; }
   bool remoteTurn(bool forward, bool chapter);
   // Replays what a remote sent while a page was still drawing: a click, a shortcut, or page turns.

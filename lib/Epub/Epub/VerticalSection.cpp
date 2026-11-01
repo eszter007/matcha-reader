@@ -128,6 +128,8 @@ namespace {
 // an open has more room; chapters cached unstyled before this are rebuilt once.
 // v156: no format change. A column oidashi shortened spreads by at most an eighth of an em per gap
 // and otherwise ends short of the foot.
+// v157: no format change. A paragraph nested in another block whose text ends inside an inline element starts
+// its own column again; it used to run on from the previous paragraph.
 // v158: no format change. text-align: right/end sets a column at the foot, and auto head/foot margins
 // (EBPAJ .block-align-center / -end) centre a block along the column or push it to the foot.
 constexpr uint8_t VSECTION_FILE_VERSION = 158;
@@ -911,6 +913,11 @@ struct TextExtractor {
       self->blockDepth--;
       if (self->blockDepth <= 0) {
         self->blockDepth = 0;
+        self->flushParagraph();
+      } else {
+        // A nested block ends its paragraph too. The source newline after </p> cannot be relied on: it
+        // is dropped as leading whitespace when the text ended inside an inline element (Kobo books
+        // wrap every sentence in a span). Also clears midParagraph after a streaming drain.
         self->flushParagraph();
       }
     }
