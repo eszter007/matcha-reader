@@ -170,8 +170,6 @@ TEST_F(WordLookupVerbStems, IchidanStemsAreLeftAlone) {
   EXPECT_EQ(lookupAt("それを考え、", "考え").first, "考え");
 }
 
-TEST_F(WordLookupVerbStems, AdjectivesAreNotStems) {
-  EXPECT_EQ(lookupAt("山が高い、", "高い").first, "高い");
-}
+TEST_F(WordLookupVerbStems, AdjectivesAreNotStems) { EXPECT_EQ(lookupAt("山が高い、", "高い").first, "高い"); }
 
 }  // namespace
