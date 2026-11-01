@@ -42,7 +42,20 @@ class WordSelectionScan {
     // Advance in pixels, for a page laid out in lines, where glyphs are not one cell wide. 0 in
     // a vertical page: its cells are the caller's cellPx.
     uint8_t width;
+    // Index into the scan's furigana list for the ruby printed on this glyph (a group reading sits
+    // on its first glyph), kRubyCovered for a glyph under another glyph's ruby, or kNoRuby.
+    uint16_t ruby = 0xFFFF;
   };
+  static constexpr uint16_t kNoRuby = 0xFFFF;
+  static constexpr uint16_t kRubyCovered = 0xFFFE;
+  // Longer furigana is not a word reading; it is not kept.
+  static constexpr size_t kMaxRubyBytes = 48;
+  // The furigana printed on allGlyphs[i], or nullptr.
+  const std::string* rubyAt(size_t i) const {
+    return i < allGlyphs.size() && allGlyphs[i].ruby < rubies_.size() && allGlyphs[i].ruby != kRubyCovered
+               ? &rubies_[allGlyphs[i].ruby]
+               : nullptr;
+  }
 
   // Where a horizontal page's characters are drawn, one entry per codepoint of every word in
   // page order. Measured by the reader while its fonts are still resident (measurePage): the
@@ -209,6 +222,9 @@ class WordSelectionScan {
   static bool pushGlyphSafe(std::vector<GlyphRef>& vec, const GlyphRef& g);
 
  private:
+  // Furigana strings of this page, indexed by GlyphRef::ruby. Small: one per annotated base.
+  std::vector<std::string> rubies_;
+  uint16_t keepRuby(const std::string& ruby);
   enum class Phase : uint8_t { Scan, Done };
   Phase phase = Phase::Scan;
   size_t scanPos = 0;  // next allGlyphs index the scan will examine

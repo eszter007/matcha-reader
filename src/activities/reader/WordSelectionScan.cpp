@@ -223,8 +223,22 @@ bool WordSelectionScan::pushGlyphSafe(std::vector<GlyphRef>& vec, const GlyphRef
   return false;
 }
 
+// The page's furigana is short and sparse (a few dozen strings on a dense page); past the index
+// space, or when the heap is tight, a glyph simply keeps no furigana and lookup ranks as before.
+uint16_t WordSelectionScan::keepRuby(const std::string& ruby) {
+  if (ruby.empty() || ruby.size() > kMaxRubyBytes || rubies_.size() >= kRubyCovered) return kNoRuby;
+  // The grown vector and the copy coexist: budget both, then grow before copying.
+  const size_t newCapacity = rubies_.size() < rubies_.capacity() ? rubies_.capacity() : rubies_.capacity() * 2 + 8;
+  const size_t growBytes = newCapacity == rubies_.capacity() ? 0 : newCapacity * sizeof(std::string);
+  if (!fitsWithMargin(growBytes + ruby.size() + 1)) return kNoRuby;
+  rubies_.reserve(newCapacity);
+  rubies_.push_back(ruby);
+  return static_cast<uint16_t>(rubies_.size() - 1);
+}
+
 void WordSelectionScan::reset() {
   allGlyphs.clear();
+  rubies_.clear();
   selectableGlyphs.clear();
   selectToAllIdx.clear();
   // Chinese and Cantonese both segment whole runs; Japanese keeps the deinflecting greedy scan.
@@ -273,6 +287,12 @@ void WordSelectionScan::initFromVerticalPage(const VerticalPage& page, const int
     const int x = g.column < columnX.size() && columnX[g.column] >= 0 ? columnX[g.column] : g.x;
     const int y = std::max(0, verticalCellTop(page, i, cellPx));
     GlyphRef ref{static_cast<uint16_t>(x), static_cast<uint16_t>(y), g.column, g.row, g.codepoint, g.paragraphIndex, 0};
+    if (!run && g.textId != VerticalGlyph::NO_TEXT) {
+      ref.ruby = keepRuby(page.glyphTextStr(g));
+    } else if (!run && ((g.style & EpdFontFamily::RUBY_CONTINUE) ||
+                        (i + 1 < page.glyphs.size() && (page.glyphs[i + 1].style & EpdFontFamily::RUBY_CONTINUE)))) {
+      ref.ruby = kRubyCovered;  // a group glyph whose share of the reading is empty (百 of 百舌鳥/もず)
+    }
     bool pushed = true;
     if (numberRun) {
       // A sideways run spans down to the next cell in its column; its characters are spread over
@@ -483,6 +503,13 @@ void WordSelectionScan::initFromPage(const Page& page, const LineGeometry* geome
         }
       }
       joinToPrevious = joinHyphen;
+      // A word's furigana goes on its first glyph; a group reading continues over later words.
+      const auto& rubyTexts = block.getRubyTexts();
+      uint16_t wordRuby = wi < rubyTexts.size() && !rubyTexts[wi].empty() ? keepRuby(rubyTexts[wi]) : kNoRuby;
+      // The rest of an annotated word, and every word continuing a group reading, sit under it.
+      uint16_t restRuby =
+          wordRuby != kNoRuby || (block.wordStyle(wi) & EpdFontFamily::RUBY_CONTINUE) ? kRubyCovered : kNoRuby;
+      if (block.wordStyle(wi) & EpdFontFamily::RUBY_CONTINUE) wordRuby = kRubyCovered;
       size_t b = 0;
       while (b < word.size()) {
         auto c0 = static_cast<unsigned char>(word[b]);
@@ -503,6 +530,8 @@ void WordSelectionScan::initFromPage(const Page& page, const LineGeometry* geome
           b += 4;
         }
         GlyphRef ref{0, 0, column, 0, cp, 0, 0, 0};
+        ref.ruby = wordRuby;
+        wordRuby = restRuby;
         if (geometry && boxAt < geometry->count) {
           const GlyphBox& box = geometry->boxes[boxAt];
           ref.x = box.x;
