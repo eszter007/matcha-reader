@@ -633,6 +633,12 @@ void formatEntryBody(std::string& text, const std::string& omitLeading, const st
 
     if (isNameDictionary) {
       flushGlosses();
+      // A labelled line ("In this book: くりはら") is a note, set like an example, not a reading
+      // to number: name readings never hold ": ".
+      if (line.find(": ") != std::string::npos) {
+        appendLine("  \xe2\x94\x82 " + line);
+        continue;
+      }
       if (isNumberedSense(line, 0, line.size())) {
         appendLine(line);
         size_t numberEnd = 0;
