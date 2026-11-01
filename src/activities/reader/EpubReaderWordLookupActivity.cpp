@@ -1967,7 +1967,8 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
       bool duplicate = false;
       size_t replaceAt = sectionText.size();
       for (size_t i = 0; i < sectionText.size(); i++) {
-        if (sectionText[i] == piece ||
+        // The header grammar left the body, so siblings that differ only in their tags differ here.
+        if ((sectionText[i] == piece && sectionGrammar[i] == metadata.grammar) ||
             (kind == StrId::STR_DICT_KIND_NAME && sectionKind[i] == kind && coveredBy(piece, sectionText[i]))) {
           duplicate = true;
           break;

@@ -792,6 +792,9 @@ int layoutScriptRuns(const GfxRenderer& renderer, const int fontId, std::string&
     if (len == 3) {
       cp = ((c0 & 0x0F) << 12) | ((static_cast<unsigned char>(buf[pos + 1]) & 0x3F) << 6) |
            (static_cast<unsigned char>(buf[pos + 2]) & 0x3F);
+    } else if (len == 4) {  // CJK Extension B and beyond (𠮟)
+      cp = ((c0 & 0x07) << 18) | ((static_cast<unsigned char>(buf[pos + 1]) & 0x3F) << 12) |
+           ((static_cast<unsigned char>(buf[pos + 2]) & 0x3F) << 6) | (static_cast<unsigned char>(buf[pos + 3]) & 0x3F);
     }
     if (cp != ' ') {
       const int cjk = utf8IsCjkCodepoint(cp) ? 1 : 0;
