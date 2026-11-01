@@ -128,7 +128,9 @@ namespace {
 // an open has more room; chapters cached unstyled before this are rebuilt once.
 // v156: no format change. A column oidashi shortened spreads by at most an eighth of an em per gap
 // and otherwise ends short of the foot.
-constexpr uint8_t VSECTION_FILE_VERSION = 156;
+// v157: no format change. A paragraph nested in another block whose text ends inside an inline element starts
+// its own column again; it used to run on from the previous paragraph.
+constexpr uint8_t VSECTION_FILE_VERSION = 157;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -905,6 +907,11 @@ struct TextExtractor {
       self->blockDepth--;
       if (self->blockDepth <= 0) {
         self->blockDepth = 0;
+        self->flushParagraph();
+      } else {
+        // A nested block ends its paragraph too. The source newline after </p> cannot be relied on: it
+        // is dropped as leading whitespace when the text ended inside an inline element (Kobo books
+        // wrap every sentence in a span). Also clears midParagraph after a streaming drain.
         self->flushParagraph();
       }
     }
