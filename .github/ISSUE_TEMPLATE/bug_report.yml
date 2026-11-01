@@ -2,6 +2,11 @@ name: Bug Report
 description: Report an issue or unexpected behavior
 labels: ["bug"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        **One bug per issue.** If you found several, open one issue for each. Feature ideas and device requests go to [Discussions](https://github.com/eszter007/matcha-reader/discussions/categories/ideas), not here.
+
   - type: dropdown
     id: device
     attributes:
