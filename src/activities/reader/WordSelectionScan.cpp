@@ -17,6 +17,12 @@
 #include "util/CjkScript.h"
 
 namespace {
+
+// な の に は を が で と も: kana that open grammar, not a word, when a match starts on them.
+bool isParticleKana(const uint32_t cp) {
+  return cp == 0x306A || cp == 0x306E || cp == 0x306B || cp == 0x306F || cp == 0x3092 || cp == 0x304C || cp == 0x3067 ||
+         cp == 0x3068 || cp == 0x3082;
+}
 // Bare vector growth (reserve()/push_back() past capacity) calls operator new, which aborts the
 // whole device on OOM under -fno-exceptions instead of returning nullptr (see CLAUDE.md). Word
 // Lookup can be opened right after a heap-starved chapter build (a furigana-dense CJK page can
@@ -1043,7 +1049,25 @@ void WordSelectionScan::scanOnePosition() {
             result.entry.priority < kMinKanaExactPriority) {
           hasMatch = false;
         }
+        // A reading record that opens with a particle or the copula is grammar on the page, not
+        // the word: なのか in 〜なのか matched 七日 even though that record is common.
+        const uint32_t lead = allGlyphs[scanStart].codepoint;
+        const bool particleLead = isParticleKana(lead);
+        if (hasMatch && !result.deinflected && particleLead && !usuallyKana &&
+            (result.entry.posFlags & DictIndexRecord::POS_READING) != 0) {
+          hasMatch = false;
+        }
       }
+    }
+
+    // A name that opens with a particle or the copula right after hiragana: な子 in 哀れな子 is
+    // な plus 子, not a name. Other kana names (姉のまり子) are left alone.
+    if (hasMatch && result.entry.sourceDict == DictIndex::DICT_NAMES && scanStart > 0 &&
+        allGlyphs[scanStart - 1].paragraphIndex == paraIdx) {
+      const uint32_t lead = allGlyphs[scanStart].codepoint;
+      const uint32_t prev = allGlyphs[scanStart - 1].codepoint;
+      const bool particleLead = isParticleKana(lead);
+      if (particleLead && prev >= 0x3041 && prev <= 0x309F) hasMatch = false;
     }
 
     // A match that STARTS with a case/topic particle usually mis-segments: the particle should

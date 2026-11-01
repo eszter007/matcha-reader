@@ -1265,8 +1265,20 @@ std::string EpubReaderWordLookupActivity::buildLookupText() const {
   return text;
 }
 
+namespace {
+// Books often put ruby on one kanji of a compound in its own element (罪 of 罪悪感 as ざい), so
+// a single-kanji glossary reading says nothing about that kanji on its own.
+bool isGlossaryWord(const std::string& surface) {
+  int chars = 0;
+  for (const char c : surface) {
+    if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) chars++;
+  }
+  return chars >= 2;
+}
+}  // namespace
+
 void EpubReaderWordLookupActivity::prependBookReading(const std::string& surface) {
-  if (bookCachePath.empty() || surface.empty()) return;
+  if (bookCachePath.empty() || !isGlossaryWord(surface)) return;
   std::string readings;
   if (!RubyGlossary::lookup(bookCachePath, surface, readings)) return;
   std::string line = tr(STR_IN_THIS_BOOK);
@@ -1276,6 +1288,48 @@ void EpubReaderWordLookupActivity::prependBookReading(const std::string& surface
   // visually separating the book reading from the dictionary entry below it.
   line += "\n\n";
   resultDefinition = line + resultDefinition;
+}
+
+void EpubReaderWordLookupActivity::promoteBookReading(const std::string& surface) {
+  static constexpr char kEntrySep[] = "\n\n---\n";
+  static constexpr char kOpen[] = "\xe3\x80\x90";  // 【
+  if (bookCachePath.empty() || resultDefinition.find(kEntrySep) == std::string::npos) return;
+  std::string reading;
+  if (!isGlossaryWord(surface) || !RubyGlossary::lookup(bookCachePath, surface, reading)) {
+    // Verbs and adjectives carry ruby on the kanji only (見舞 of 見舞う): try the leading kanji.
+    size_t kanjiEnd = 0;
+    while (kanjiEnd + 3 <= surface.size()) {
+      const auto c0 = static_cast<unsigned char>(surface[kanjiEnd]);
+      if ((c0 & 0xF0) != 0xE0) break;
+      const uint32_t cp = ((c0 & 0x0Fu) << 12) | ((static_cast<unsigned char>(surface[kanjiEnd + 1]) & 0x3Fu) << 6) |
+                          (static_cast<unsigned char>(surface[kanjiEnd + 2]) & 0x3Fu);
+      if (!WordSelectionScan::isCJK(cp)) break;
+      kanjiEnd += 3;
+    }
+    if (kanjiEnd < 6 || kanjiEnd >= surface.size()) return;  // two kanji at least
+    if (!RubyGlossary::lookup(bookCachePath, surface.substr(0, kanjiEnd), reading)) return;
+  }
+  if (reading.find("\xE3\x83\xBB") != std::string::npos) return;  // several readings: nothing to prefer
+
+  const size_t firstEnd = resultDefinition.find(kEntrySep);
+  const auto readsAsBook = [&](const size_t at) {
+    return resultDefinition.compare(at, sizeof(kOpen) - 1, kOpen) == 0 &&
+           resultDefinition.compare(at + sizeof(kOpen) - 1, reading.size(), reading) == 0;
+  };
+  if (readsAsBook(0)) return;
+  for (size_t at = firstEnd; at != std::string::npos;) {
+    const size_t start = at + sizeof(kEntrySep) - 1;
+    const size_t end = resultDefinition.find(kEntrySep, start);
+    if (readsAsBook(start)) {
+      const size_t stop = end == std::string::npos ? resultDefinition.size() : end;
+      std::string moved = resultDefinition.substr(start, stop - start);
+      resultDefinition.erase(at, stop - at);
+      moved += kEntrySep;
+      resultDefinition.insert(0, moved);
+      return;
+    }
+    at = end;
+  }
 }
 
 void EpubReaderWordLookupActivity::performLookup() {
@@ -1450,6 +1504,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     hasResult = true;
     resultHeadword = digitPrefix + result.entry.headword;
     resultDefinition = std::move(result.entry.definition);
+    promoteBookReading(text.substr(0, std::min(result.matchLength, text.size())));
     DefinitionText::EntryMetadata metadata;
     DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
     resultReading = std::move(metadata.reading);
