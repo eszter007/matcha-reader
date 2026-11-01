@@ -52,6 +52,7 @@ class ActivityManager {
   std::unique_ptr<Activity> pendingActivity;
   enum class PendingAction { None, Push, Pop, Replace, ReplaceForSleep };
   PendingAction pendingAction = PendingAction::None;
+  bool skipActivityLoop = false;  // set by startShortcutSync() for the rest of this pass
   // A reader asked for by goToReader() is built only once the current screen is gone, so its
   // objects take the space that screen frees instead of splitting the large free block a chapter
   // build needs. Empty when none is pending.
@@ -156,6 +157,7 @@ class ActivityManager {
   // A remote button mapped to the reader menu (true) or to a new clipping (false).
   bool remoteShortcut(bool readerMenu);
   bool handleForcedRefresh();
+  bool startShortcutSync();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;
   void prepareForSleep();

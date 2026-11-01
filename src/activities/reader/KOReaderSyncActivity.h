@@ -44,6 +44,8 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  // Also syncs the clock and downloads Insights on the same connection (the button shortcut).
+  void alsoSyncClockAndInsights() { withClockAndInsights = true; }
   bool preventAutoSleep() override { return state == CONNECTING || state == SYNCING || state == UPLOADING; }
 
  private:
@@ -97,6 +99,7 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   // Reuses the KOReader WiFi connect/drain/return flow without a server: flush
   // plugged-outbox events instead of syncing progress.
   bool pluginEventsOnly = false;
+  bool withClockAndInsights = false;
 
   void onWifiSelectionComplete(bool success);
   void performSync();

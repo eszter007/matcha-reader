@@ -10,6 +10,7 @@
 #include <VectorFontSupport.h>
 
 #include <algorithm>
+#include <utility>
 
 #include "Activity.h"
 #include "CrossPointSettings.h"
@@ -160,7 +161,7 @@ void ActivityManager::loop() {
     }
 
     // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed
-    currentActivity->loop();
+    if (!std::exchange(skipActivityLoop, false)) currentActivity->loop();
   }
 
   while (pendingAction != PendingAction::None) {
@@ -629,6 +630,13 @@ bool ActivityManager::applyQueuedRemoteInput() {
 }
 
 bool ActivityManager::handleForcedRefresh() { return currentActivity && currentActivity->handleForcedRefresh(); }
+
+bool ActivityManager::startShortcutSync() {
+  if (pendingAction != PendingAction::None || !currentActivity || !currentActivity->startShortcutSync()) return false;
+  // The screen may have let go of its book for the sync; its own loop must not run before the switch.
+  skipActivityLoop = true;
+  return true;
+}
 
 bool ActivityManager::skipLoopDelay() const { return currentActivity && currentActivity->skipLoopDelay(); }
 

@@ -20,6 +20,7 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "EpubReaderPercentSelectionActivity.h"
+#include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #include "MangaBookmarksActivity.h"
 #include "MappedInputManager.h"
@@ -257,21 +258,9 @@ void XtcReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction a
       pendingScreenshot = true;
       requestUpdate();
       break;
-    case EpubReaderMenuActivity::MenuAction::SYNC: {
-      if (!xtc) break;
-      PagedSyncBook paged;
-      paged.page = currentPage;
-      paged.pageCount = xtc->getPageCount();
-      paged.title = xtc->getTitle();
-      paged.author = xtc->getAuthor();
-      auto sync = makeUniqueNoThrow<KOReaderSyncActivity>(renderer, mappedInput, xtc->getPath(), std::move(paged));
-      if (!sync) {
-        LOG_ERR("SYNC", "OOM: sync activity");
-        break;
-      }
-      activityManager.replaceActivity(std::move(sync));
-      return;
-    }
+    case EpubReaderMenuActivity::MenuAction::SYNC:
+      if (launchSync(false)) return;
+      break;
     case EpubReaderMenuActivity::MenuAction::DELETE_CACHE: {
       if (xtc) {
         const std::string cachePath = xtc->getCachePath();
@@ -670,4 +659,23 @@ ScreenshotInfo XtcReaderActivity::getScreenshotInfo() const {
     info.currentPage = currentPage + 1;
   }
   return info;
+}
+
+bool XtcReaderActivity::startShortcutSync() { return KOREADER_STORE.hasCredentials() && launchSync(true); }
+
+bool XtcReaderActivity::launchSync(const bool withClockAndInsights) {
+  if (!xtc) return false;
+  PagedSyncBook paged;
+  paged.page = currentPage;
+  paged.pageCount = xtc->getPageCount();
+  paged.title = xtc->getTitle();
+  paged.author = xtc->getAuthor();
+  auto sync = makeUniqueNoThrow<KOReaderSyncActivity>(renderer, mappedInput, xtc->getPath(), std::move(paged));
+  if (!sync) {
+    LOG_ERR("SYNC", "OOM: sync activity");
+    return false;
+  }
+  if (withClockAndInsights) sync->alsoSyncClockAndInsights();
+  activityManager.replaceActivity(std::move(sync));
+  return true;
 }

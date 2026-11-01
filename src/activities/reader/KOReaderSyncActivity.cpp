@@ -23,6 +23,7 @@
 #include "SilentRestart.h"
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "activities/settings/ClockSyncActivity.h"
 #include "clippings/ClippingSync.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"  // list icons for the compare rows
@@ -192,6 +193,8 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
 
 void KOReaderSyncActivity::performSync() {
   WifiPowerSaveGuard psGuard;
+  // First: the clippings and stats that follow are dated by it.
+  if (withClockAndInsights && !ClockSyncActivity::syncAndRecord()) LOG_ERR("KOSync", "Clock sync failed");
   const DocumentMatchMethod primaryMethod = KOREADER_STORE.getMatchMethod();
   documentHash = calculateDocumentHashForMethod(epubPath, primaryMethod);
   // A manga folder has no file to hash by content; its title is its identity.
@@ -240,6 +243,8 @@ void KOReaderSyncActivity::performSync() {
       statusMessage = tr(STR_SYNCING_STATS);
     }
     requestUpdateAndWait();
+    // Saved for the boot that ends this session, as the Insights sync does.
+    if (withClockAndInsights && !statsSync::download()) LOG_ERR("KOSync", "Insights download saved nothing");
     statsSync::run(epubPath, documentHash);
   }
 
