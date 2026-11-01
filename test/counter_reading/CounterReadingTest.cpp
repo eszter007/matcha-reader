@@ -1,8 +1,8 @@
-#include "CounterReading.h"
-
 #include <gtest/gtest.h>
 
 #include <string>
+
+#include "CounterReading.h"
 
 namespace {
 
@@ -153,3 +153,20 @@ TEST(CounterReading, ParsesAsciiAndFullWidthDigits) {
 }
 
 }  // namespace
+
+TEST(CounterReading, OkuAndChoLeaveTheCounterAlone) {
+  EXPECT_EQ(reading(1, "億本"), "いちおくほん");
+  EXPECT_EQ(reading(1, "兆本"), "いっちょうほん");
+  EXPECT_EQ(reading(3, "億階"), "さんおくかい");
+  EXPECT_EQ(reading(1, "億匹"), "いちおくひき");
+  EXPECT_EQ(reading(3, "万本"), "さんまんぼん");
+}
+
+TEST(CounterReading, LatinUnitMustEndTheWord) {
+  EXPECT_EQ(counterChars("mg"), 0u);
+  EXPECT_EQ(counterChars("ms"), 0u);
+  EXPECT_EQ(counterChars("ｋｍｓ"), 0u);
+  EXPECT_EQ(counterChars("m"), 1u);
+  EXPECT_EQ(counterChars("km"), 2u);
+  EXPECT_EQ(counterChars("mを走った"), 1u);
+}

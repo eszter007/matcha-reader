@@ -9,8 +9,9 @@ namespace {
 
 // The last spoken element of a number decides how the counter after it sounds: 1本 いっぽん,
 // 3本 さんぼん, 100本 ひゃっぽん, 3000本 さんぜんぼん. Elements are the units digit, or 十, 百,
-// 千, 万 (億 and 兆 count as 万) when the number ends in a round one.
-enum Element : uint8_t { E1 = 1, E2, E3, E4, E5, E6, E7, E8, E9, E10, E100, E1000, E10000 };
+// 千 or 万 when the number ends in a round one; 億 and 兆 change nothing after them.
+// EBig: 億 and 兆, which neither geminate nor voice what follows (1億本 いちおくほん).
+enum Element : uint8_t { E1 = 1, E2, E3, E4, E5, E6, E7, E8, E9, E10, E100, E1000, E10000, EBig };
 
 // Elements after which the counter takes its geminated form (いっ + ぽん).
 constexpr uint8_t G1 = 1, G6 = 2, G8 = 4, G10 = 8, G100 = 16;
@@ -30,8 +31,8 @@ struct Exact {
 
 struct Counter {
   const char* text;
-  const char* plain;   // after any other element
-  const char* gem;     // after a geminating element, or nullptr
+  const char* plain;  // after any other element
+  const char* gem;    // after a geminating element, or nullptr
   uint8_t gemMask;
   const char* voiced;  // after a voicing element, or nullptr
   uint8_t voicedMask;
@@ -41,20 +42,18 @@ struct Counter {
 
 constexpr const char* kDigit[10] = {"", "いち", "に", "さん", "よん", "ご", "ろく", "なな", "はち", "きゅう"};
 
-constexpr Exact kNichi[] = {{2, "ふつか"},         {3, "みっか"},   {4, "よっか"},   {5, "いつか"},
-                            {6, "むいか"},         {7, "なのか"},   {8, "ようか"},   {9, "ここのか"},
-                            {10, "とおか"},        {14, "じゅうよっか"}, {20, "はつか"},
-                            {24, "にじゅうよっか"}, {0, nullptr}};
+constexpr Exact kNichi[] = {{2, "ふつか"},  {3, "みっか"},        {4, "よっか"},  {5, "いつか"},
+                            {6, "むいか"},  {7, "なのか"},        {8, "ようか"},  {9, "ここのか"},
+                            {10, "とおか"}, {14, "じゅうよっか"}, {20, "はつか"}, {24, "にじゅうよっか"},
+                            {0, nullptr}};
 constexpr Exact kNin[] = {{1, "ひとり"}, {2, "ふたり"}, {0, nullptr}};
 constexpr Exact kSai[] = {{20, "はたち"}, {0, nullptr}};
-constexpr Exact kTsu[] = {{1, "ひとつ"}, {2, "ふたつ"}, {3, "みっつ"}, {4, "よっつ"},   {5, "いつつ"},
-                          {6, "むっつ"}, {7, "ななつ"}, {8, "やっつ"}, {9, "ここのつ"}, {10, "とお"},
-                          {0, nullptr}};
+constexpr Exact kTsu[] = {{1, "ひとつ"}, {2, "ふたつ"}, {3, "みっつ"},   {4, "よっつ"}, {5, "いつつ"}, {6, "むっつ"},
+                          {7, "ななつ"}, {8, "やっつ"}, {9, "ここのつ"}, {10, "とお"},  {0, nullptr}};
 constexpr Exact kNinmae[] = {{1, "いちにんまえ"}, {2, "ににんまえ"}, {0, nullptr}};
 
 // Native counters count 1 and 2 with ひと and ふた.
-#define WAGO(name, r)                                               \
-  constexpr Exact name[] = {{1, "ひと" r}, {2, "ふた" r}, {0, nullptr}}
+#define WAGO(name, r) constexpr Exact name[] = {{1, "ひと" r}, {2, "ふた" r}, {0, nullptr}}
 WAGO(kHako, "はこ");
 WAGO(kTaba, "たば");
 WAGO(kKuchi, "くち");
@@ -191,9 +190,9 @@ struct Unit {
   const char* counter;
 };
 constexpr Unit kUnits[] = {
-    {"km", "キロメートル"}, {"kg", "キログラム"}, {"cm", "センチメートル"}, {"mm", "ミリメートル"},
-    {"ml", "ミリリットル"}, {"m", "メートル"},    {"g", "グラム"},          {"%", "パーセント"},
-    {"％", "パーセント"},   {"℃", "度"},          {"ｋｍ", "キロメートル"}, {"ｋｇ", "キログラム"},
+    {"km", "キロメートル"},     {"kg", "キログラム"}, {"cm", "センチメートル"}, {"mm", "ミリメートル"},
+    {"ml", "ミリリットル"},     {"m", "メートル"},    {"g", "グラム"},          {"%", "パーセント"},
+    {"％", "パーセント"},       {"℃", "度"},          {"ｋｍ", "キロメートル"}, {"ｋｇ", "キログラム"},
     {"ｃｍ", "センチメートル"},
 };
 
@@ -205,6 +204,16 @@ constexpr Multiplier kMultipliers[] = {{"兆", 1000000000000ull}, {"億", 100000
 
 constexpr char kMe[] = "目";
 constexpr uint64_t kMaxNumber = 9999999999999999ull;  // below 1京
+
+// An ASCII or full-width Latin letter opens `s`.
+bool latinLetterAt(const std::string_view s) {
+  if (s.empty()) return false;
+  const auto c = static_cast<unsigned char>(s[0]);
+  if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) return true;
+  if (c != 0xEF || s.size() < 3) return false;
+  const auto c1 = static_cast<unsigned char>(s[1]), c2 = static_cast<unsigned char>(s[2]);
+  return (c1 == 0xBC && c2 >= 0xA1 && c2 <= 0xBA) || (c1 == 0xBD && c2 >= 0x81 && c2 <= 0x9A);  // Ａ-Ｚ ａ-ｚ
+}
 
 bool startsWith(const std::string_view s, const char* p) {
   const size_t n = std::strlen(p);
@@ -248,7 +257,7 @@ void split(const uint64_t n, std::string& prefix, std::string& tail, Element& ke
       if (big.value == 1000000000000ull && (group % 10 == 1 || group % 10 == 8 || group % 100 == 10)) geminate(g);
       prefix += g;
       tail = big.reading;
-      key = E10000;
+      key = big.value == 10000 ? E10000 : EBig;
       return;
     }
   }
@@ -268,17 +277,28 @@ void split(const uint64_t n, std::string& prefix, std::string& tail, Element& ke
   // Everything in the low group above the deciding element, read plainly.
   const auto above = [&](const uint32_t keep) {
     const uint32_t thk = keep / 1000, hk = keep / 100 % 10, tk = keep / 10 % 10;
-    if (thk == 1) prefix += "せん";
-    else if (thk == 3) prefix += "さんぜん";
-    else if (thk == 8) prefix += "はっせん";
-    else if (thk) (prefix += kDigit[thk]) += "せん";
-    if (hk == 1) prefix += "ひゃく";
-    else if (hk == 3) prefix += "さんびゃく";
-    else if (hk == 6) prefix += "ろっぴゃく";
-    else if (hk == 8) prefix += "はっぴゃく";
-    else if (hk) (prefix += kDigit[hk]) += "ひゃく";
-    if (tk == 1) prefix += "じゅう";
-    else if (tk) (prefix += kDigit[tk]) += "じゅう";
+    if (thk == 1)
+      prefix += "せん";
+    else if (thk == 3)
+      prefix += "さんぜん";
+    else if (thk == 8)
+      prefix += "はっせん";
+    else if (thk)
+      (prefix += kDigit[thk]) += "せん";
+    if (hk == 1)
+      prefix += "ひゃく";
+    else if (hk == 3)
+      prefix += "さんびゃく";
+    else if (hk == 6)
+      prefix += "ろっぴゃく";
+    else if (hk == 8)
+      prefix += "はっぴゃく";
+    else if (hk)
+      (prefix += kDigit[hk]) += "ひゃく";
+    if (tk == 1)
+      prefix += "じゅう";
+    else if (tk)
+      (prefix += kDigit[tk]) += "じゅう";
   };
   if (u) {
     above(low - u);
@@ -433,7 +453,9 @@ size_t matchCounter(const std::string_view text) {
     if (startsWith(rest, c.text)) best = std::max(best, std::strlen(c.text));
   }
   for (const Unit& u : kUnits) {
-    if (startsWith(rest, u.text)) best = std::max(best, std::strlen(u.text));
+    const size_t len = std::strlen(u.text);
+    // An abbreviation must end the Latin word: the m of 5mg or 5ms is not metres.
+    if (startsWith(rest, u.text) && !latinLetterAt(rest.substr(len))) best = std::max(best, len);
   }
   if (best == 0) return at;  // a multiplier alone (3万) is still a number
   at += best;

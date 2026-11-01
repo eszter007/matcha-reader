@@ -273,8 +273,20 @@ void WordSelectionScan::initFromVerticalPage(const VerticalPage& page, const int
     GlyphRef ref{static_cast<uint16_t>(x), static_cast<uint16_t>(y), g.column, g.row, g.codepoint, g.paragraphIndex, 0};
     bool pushed = true;
     if (numberRun) {
-      for (size_t b = 0; b < runText.size() && pushed;) {
+      // A sideways run spans down to the next cell in its column; its characters are spread over
+      // that extent so the highlight and the touch targets cover the whole run. An upright run
+      // stays in one cell.
+      size_t chars = 0;
+      for (size_t b = 0; b < runText.size(); b += utf8Len(static_cast<unsigned char>(runText[b]))) chars++;
+      int spread = 0;
+      if (g.renderKind == VerticalGlyph::RotatedRun && chars > 1 && i + 1 < page.glyphs.size() &&
+          page.glyphs[i + 1].column == g.column) {
+        spread = std::max(0, verticalCellTop(page, i + 1, cellPx) - y - cellPx);
+      }
+      size_t k = 0;
+      for (size_t b = 0; b < runText.size() && pushed; k++) {
         ref.codepoint = decodeFirst(std::string_view(runText).substr(b));
+        ref.y = static_cast<uint16_t>(y + (chars > 1 ? spread * static_cast<int>(k) / static_cast<int>(chars - 1) : 0));
         b += utf8Len(static_cast<unsigned char>(runText[b]));
         pushed = pushGlyphSafe(allGlyphs, ref);
       }
@@ -674,7 +686,7 @@ namespace {
 // the tate-chu-yoko NUL truncation, where a match claimed the cells of the word after an upright
 // "!?" run: the word stayed unselectable on that page for good, since nothing re-examined a
 // cache that looked valid. Rebuilding costs one rescan (~300 ms, once per page).
-constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x344D4C57;  // "WLM4": bumped whenever segmentation changes
+constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x354D4C57;  // "WLM5": bumped whenever segmentation changes
 constexpr uint16_t WLSCAN_MAX_PAGES = 8;
 constexpr size_t WLSCAN_MAX_CARRY_BYTES = 4096;  // bound on the older entries carried forward
 
@@ -1032,8 +1044,8 @@ void WordSelectionScan::scanOnePosition() {
   // hit there is a conjugation fragment (って→う), not the quotative って.
   if (sokuonTeStart && hasMatch && result.deinflected) hasMatch = false;
   // After digits the counter is one unit with the number even where the dictionary stops short of
-  // it or lacks it: 3日目, 5万円, 5km.
-  if (digitGlyphs > 0) {
+  // it or lacks it: 3日目, 5万円, 5km. Japanese only: Chinese reads 3名 by its own dictionary.
+  if (digitGlyphs > 0 && std::strcmp(DictIndex::languageFolder(), "jp") == 0) {
     const size_t counterBytes = CounterReading::matchCounter(text);
     // A name that runs past the counter (日後 of 5日後) gives way to it.
     const bool nameRunsOn =
