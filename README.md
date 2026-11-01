@@ -1,6 +1,6 @@
-# Matcha Reader, a language-learning fork of CrossPoint
+# Matcha Reader, a CJK fork of CrossPoint
 
-A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware, built for reading books and comics in a language you are learning. It is set up first for **Japanese** and **Chinese** (simplified or traditional; both Mandarin & Cantonese), and gives learners of French, English and other languages the same lookup, sentence-mining and translation tools.
+A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware, built for reading books and comics in a language you are reading and/or learning. It is set up first for **Japanese** and **Chinese** (simplified or traditional; both Mandarin & Cantonese), and gives readers and learners of French, English and other languages the same lookup, sentence-mining and translation tools.
 
 It includes everything in upstream CrossPoint. You can try it in the [simulator](https://github.com/eszter007/crosspoint-simulator-ios) first, on a desktop or an iPhone, with no device.
 
