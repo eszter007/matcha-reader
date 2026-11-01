@@ -812,6 +812,17 @@ def load_frequency(path: str, kind: str = "auto") -> dict:
     return priorities
 
 
+def shared_simplified_counts(trads_of: dict) -> dict:
+    """{traditional form: how many traditional forms share its simplified form} from
+    {simplified: {traditional, ...}}, for apply_frequency. 干 stands for 乾, 幹 and 干 itself: 3."""
+    shares = {}
+    for trads in trads_of.values():
+        if len(trads) > 1:
+            for trad in trads:
+                shares[trad] = max(shares.get(trad, 1), len(trads))
+    return shares
+
+
 def apply_frequency(records: list, priorities: dict, twins: dict = None, shares: dict = None) -> list:
     """Replace each record's priority with its frequency rank, taken from either script's form of
     the word (twins, from CC-CEDICT): the lists are written in one script, and the device segments
@@ -1010,21 +1021,23 @@ def split_cedict_glosses(body: str) -> list:
 
 def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, levels: dict = None,
                    jyutping: dict = None, sentence_pairs: list = None, twins: dict = None,
-                   examples_script: str = "any", shares: dict = None, seen: set = None) -> tuple:
+                   examples_script: str = "any", trads_of: dict = None, seen: dict = None) -> tuple:
     """Convert a raw CC-CEDICT (or CC-Canto) file to index records, one per traditional and
     simplified form. Returns (vocab_records, name_records); the second list is empty unless
     split_names routes proper nouns (capitalised pinyin) into the names slot. twins, when given,
     is filled with each form's other-script form, so apply_frequency can rank a traditional
-    record from a simplified word list and the reverse; shares with how many traditional forms
-    share each one's simplified form. seen, shared across the inputs of one build, drops an entry
-    an earlier input already held (CC-Canto repeats CC-CEDICT entries it adapted).
+    record from a simplified word list and the reverse. trads_of, shared across the inputs of one
+    build, collects each simplified form's traditional forms (see shared_simplified_counts). seen,
+    shared likewise, drops an entry an earlier input already held (CC-Canto repeats CC-CEDICT
+    entries it adapted) unless only this copy carries a Cantonese reading.
     """
     print(f"Loading {path}...")
     levels = levels or {}
     jyutping = jyutping or {}
     parsed = []  # (trad, simp, pinyin, canto, glosses)
     forms = {}
-    trads_of = {}  # simplified form -> its traditional forms
+    if trads_of is None:
+        trads_of = {}
     skipped = 0
     opener = __import__("gzip").open if path.endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", errors="replace") as f:
@@ -1037,12 +1050,14 @@ def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, l
                 continue
             trad, simp, pinyin, canto, body = m.groups()
             glosses = split_cedict_glosses(body)
+            trads_of.setdefault(simp, set()).add(trad)
             if seen is not None:
                 key = (trad, simp, pinyin.lower(), tuple(glosses))
-                if key in seen:
+                has_canto = bool(canto or jyutping.get((trad, simp, pinyin)))
+                if key in seen and (seen[key] or not has_canto):
                     skipped += 1
                     continue
-                seen.add(key)
+                seen[key] = has_canto
             idx = len(parsed)
             parsed.append((trad, simp, pinyin, canto, glosses))
             # Examples go to the everyday entry of a form: 周 the week over the surname, and among
@@ -1060,14 +1075,6 @@ def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, l
             if twins is not None and trad != simp:
                 twins.setdefault(trad, simp)
                 twins.setdefault(simp, trad)
-                trads_of.setdefault(simp, set()).add(trad)
-    if shares is not None:
-        trad_forms = {t for t, *_ in parsed}
-        for simp, trads in trads_of.items():
-            # 干 is also a traditional character of its own, a third claim on the count.
-            claims = len(trads | ({simp} & trad_forms))
-            for trad in trads:
-                shares[trad] = max(shares.get(trad, 1), claims)
     if sentence_pairs and examples_script in ("simplified", "traditional"):
         # The characters CC-CEDICT itself uses in only one script decide a sentence's script far
         # more reliably than the short list the firmware's book sniff uses: a 10-character
@@ -1406,8 +1413,8 @@ def main():
     records = []
     name_records = []
     twins = {}  # trad <-> simp forms from CC-CEDICT, for apply_frequency
-    shares = {}  # traditional forms that share one simplified form, for apply_frequency
-    seen = set()  # CC-CEDICT entries already converted from an earlier input
+    trads_of = {}  # simplified form -> its traditional forms, over every input
+    seen = {}  # CC-CEDICT entries already converted from an earlier input -> has a Cantonese reading
     bilingual_headwords = set()  # what CC-CEDICT left in the vocabulary; see keep_names_together
     titles = []
     for path in args.input:
@@ -1422,7 +1429,7 @@ def main():
         elif fmt == "cedict":
             part, names = convert_cedict(path, zhuyin=args.zhuyin, split_names=args.split_names, levels=levels,
                                          jyutping=jyutping, sentence_pairs=sentence_pairs, twins=twins,
-                                         examples_script=args.examples_script, shares=shares, seen=seen)
+                                         examples_script=args.examples_script, trads_of=trads_of, seen=seen)
             name_records.extend(names)
             bilingual_headwords.update(r[0] for r in part)
             if "canto" in os.path.basename(path).lower():
@@ -1443,6 +1450,7 @@ def main():
 
     if args.frequency:
         priorities = load_frequency(args.frequency, args.frequency_kind)
+        shares = shared_simplified_counts(trads_of)
         records = apply_frequency(records, priorities, twins, shares)
         name_records = apply_frequency(name_records, priorities, twins, shares)
 

@@ -58,7 +58,9 @@ class ContextualReadings(unittest.TestCase):
 
 class SpokenReadings(unittest.TestCase):
     WORDS = {"一": ["yi1"], "个": ["ge4"], "不": ["bu4"], "是": ["shi4"], "天": ["tian1"], "第": ["di4"],
-             "哪儿": ["na3", "r5"], "慢": ["man4"], "地": ["di4"], "走": ["zou3"], "了": ["le5"]}
+             "哪儿": ["na3", "r5"], "慢": ["man4"], "地": ["di4"], "走": ["zou3"], "了": ["le5"],
+             "一月": ["yi1", "yue4"], "星期一": ["xing1", "qi1", "yi1"], "统一": ["tong3", "yi1"],
+             "行动": ["xing2", "dong4"], "人人": ["ren2", "ren2"], "地位": ["di4", "wei4"]}
 
     def rt(self, text, **kw):
         import re
@@ -76,6 +78,23 @@ class SpokenReadings(unittest.TestCase):
 
     def test_de_after_a_doubled_adjective(self):
         self.assertEqual(self.rt("慢慢地走")[2], ("地", "de"))
+
+    def test_yi_keeps_its_tone_in_fixed_words(self):
+        self.assertEqual(self.rt("一月")[0], ("一", "yī"))
+        self.assertEqual(self.rt("星期一是")[2], ("一", "yī"))
+        self.assertEqual(self.rt("统一行动")[1], ("一", "yī"))
+
+    def test_de_only_for_a_standalone_di(self):
+        self.assertEqual(self.rt("人人地位")[2], ("地", "dì"))
+
+    def test_context_crosses_inline_tags(self):
+        import re
+        def rt(doc):
+            return re.findall(r"<ruby>(.*?)<rt>(.*?)</rt></ruby>", tool.annotate_xhtml(doc, self.WORDS, set(), False))
+        self.assertEqual(rt("<p>不<em>是</em></p>")[0], ("不", "bú"))
+        self.assertEqual(rt("<p>第<em>一天</em></p>")[1], ("一", "yī"))
+        self.assertEqual(rt("<p>一<em>个</em></p>")[0], ("一", "yí"))
+        self.assertEqual(rt("<p>不</p><p>是</p>")[0], ("不", "bù"))
 
     def test_everyday_reading_and_particles(self):
         import tempfile

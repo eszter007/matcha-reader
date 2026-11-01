@@ -2024,17 +2024,25 @@ std::string EpubReaderActivity::effectiveLanguage() const {
   return tag;
 }
 
-// language.bin beside progress.bin: [0] the user's Book Language choice, [1] the sniff result.
-// Separate from progress.bin, whose layout other readers of it depend on.
+// language.bin beside progress.bin: [0] the user's Book Language choice, [1] the sniff result,
+// [2] the sniff's version. Separate from progress.bin, whose layout other readers of it depend on.
+// A sniff result from an older version is dropped so the book is judged again (it could not
+// tell Cantonese); the user's own choice is kept.
+namespace {
+constexpr uint8_t kLanguageSniffVersion = 1;
+}
+
 void EpubReaderActivity::loadLanguageChoice() {
   languageOverride = cjk::LANG_AUTO;
   detectedLanguage = 0;
   if (!epub) return;
   HalFile f;
   if (!Storage.openFileForRead("ERS", (epub->getCachePath() + "/language.bin").c_str(), f)) return;
-  uint8_t data[2] = {0, 0};
-  if (f.read(data, sizeof(data)) < 1) return;
+  uint8_t data[3] = {0, 0, 0};
+  const int n = f.read(data, sizeof(data));
+  if (n < 1) return;
   if (data[0] < cjk::LANGUAGE_CHOICE_COUNT) languageOverride = data[0];
+  if (n < 3 || data[2] != kLanguageSniffVersion) return;
   if (data[1] < cjk::LANGUAGE_CHOICE_COUNT || data[1] == LANGUAGE_SNIFFED_NONE) detectedLanguage = data[1];
 }
 
@@ -2045,7 +2053,7 @@ void EpubReaderActivity::saveLanguageChoice() const {
     LOG_ERR("ERS", "Cannot save language choice");
     return;
   }
-  const uint8_t data[2] = {languageOverride, detectedLanguage};
+  const uint8_t data[3] = {languageOverride, detectedLanguage, kLanguageSniffVersion};
   f.write(data, sizeof(data));
 }
 

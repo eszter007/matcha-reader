@@ -163,10 +163,11 @@ def _tone(syl: str) -> int:
     return int(syl[-1]) if syl and syl[-1].isdigit() else 5
 
 
-def spoken_tones(text: str, readings: list) -> list:
+def spoken_tones(text: str, readings: list, word_start: list = None) -> list:
     """readings: one syllable or None per character of text. 一 and 不 take the tone they are
     spoken with before the next syllable: 4th -> 2nd for both, else 一 -> 4th. 一 keeps its 1st
-    tone as a number (第一, 十一, 一 alone or last, before another numeral)."""
+    tone as a number (第一, 十一, 一月, 一 alone or last, before another numeral) and inside a word
+    it does not begin (统一, 星期一). word_start: True where a dictionary word begins."""
     out = list(readings)
     numerals = set("〇零一二三四五六七八九十百千万萬亿億两兩第")
     for i, syl in enumerate(readings):
@@ -175,7 +176,9 @@ def spoken_tones(text: str, readings: list) -> list:
         ch, after = text[i], readings[i + 1]
         if ch == "不" and syl.lower() == "bu4" and _tone(after) == 4:
             out[i] = "bu2"
-        elif ch == "一" and syl.lower() == "yi1" and text[i + 1] not in numerals and (i == 0 or text[i - 1] not in numerals):
+        elif (ch == "一" and syl.lower() == "yi1" and (word_start is None or word_start[i])
+              and text[i + 1] not in numerals and text[i + 1] not in "月号號日"
+              and (i == 0 or text[i - 1] not in numerals)):
             out[i] = "yi2" if _tone(after) == 4 else "yi4"
     return out
 
@@ -193,37 +196,76 @@ def ruby_for(chunk: str, syllables: list, zhuyin: bool) -> str:
     return "".join(f"<ruby>{html.escape(chars)}<rt>{html.escape(reading)}</rt></ruby>" for chars, reading in groups)
 
 
+# Tags that stay inside a phrase: the tone of 不 in 不<em>是</em> depends on the next word all the same.
+INLINE_TAGS = {"a", "abbr", "b", "bdi", "bdo", "big", "cite", "code", "dfn", "em", "font", "i", "kbd", "mark", "q",
+               "s", "samp", "small", "span", "strike", "strong", "sub", "sup", "tt", "u", "var"}
+_TAG_NAME = re.compile(r"<\s*/?\s*([A-Za-z][\w:.-]*)")
+
+
+def _is_inline_tag(piece: str) -> bool:
+    m = _TAG_NAME.match(piece)
+    return bool(m) and m.group(1).lower().split(":")[-1] in INLINE_TAGS
+
+
 def annotate_xhtml(doc: str, words: dict, skip: set, zhuyin: bool, contextual: dict = None,
                    citation: bool = False) -> str:
     """contextual: {text: {index: syllable}} from contextual_readings(), overriding the
     dictionary's reading character by character. citation keeps dictionary tones (no 一/不
-    sandhi)."""
-    out = []
-    for piece, is_text in text_pieces(doc):
-        if not is_text:
-            out.append(piece)
-            continue
-        text = html.unescape(piece)
-        if not HAN.search(text):
-            out.append(piece)
-            continue
-        override = (contextual or {}).get(text, {})
-        chunks = list(segment(text, words))
-        # One reading per character first, so a tone change can look at the next word.
-        readings = []
-        for chunk, syllables in chunks:
-            for k in range(len(chunk)):
-                pos = len(readings)
-                readings.append(override.get(pos, syllables[k] if syllables else None))
-        # 地 after a doubled adjective is the adverb marker: 慢慢地 mànmàn de, not dì.
+    sandhi). Readings are decided over a phrase: text joined across inline tags, up to a block
+    tag or existing ruby."""
+    pieces = list(text_pieces(doc))
+    plans = {}  # piece index -> [text, chunks, readings, word_start, word_len]
+    run = []
+
+    def finish_run():
+        if not run:
+            return
+        text = "".join(plans[k][0] for k in run)
+        readings = [r for k in run for r in plans[k][2]]
+        starts = [w for k in run for w in plans[k][3]]
+        lengths = [n for k in run for n in plans[k][4]]
+        # 地 standing alone after a doubled adjective is the adverb marker: 慢慢地 mànmàn de, not dì.
         for i in range(2, len(text)):
-            if text[i] == "地" and text[i - 1] == text[i - 2] and HAN.match(text[i - 1]) and readings[i] == "di4":
+            if (text[i] == "地" and lengths[i] == 1 and text[i - 1] == text[i - 2] and HAN.match(text[i - 1])
+                    and readings[i] == "di4"):
                 readings[i] = "de5"
         if not citation:
-            readings = spoken_tones(text, readings)
+            readings = spoken_tones(text, readings, starts)
+        offset = 0
+        for k in run:
+            n = len(plans[k][0])
+            plans[k][2] = readings[offset:offset + n]
+            offset += n
+        run.clear()
+
+    for k, (piece, is_text) in enumerate(pieces):
+        if not is_text:
+            if not _is_inline_tag(piece):
+                finish_run()
+            continue
+        text = html.unescape(piece)
+        override = (contextual or {}).get(text, {})
+        chunks = list(segment(text, words))
+        readings, starts, lengths = [], [], []
+        for chunk, syllables in chunks:
+            for c in range(len(chunk)):
+                pos = len(readings)
+                readings.append(override.get(pos, syllables[c] if syllables else None))
+                starts.append(c == 0)
+                lengths.append(len(chunk))
+        plans[k] = [text, chunks, readings, starts, lengths]
+        run.append(k)
+    finish_run()
+
+    out = []
+    for k, (piece, is_text) in enumerate(pieces):
+        if not is_text or not HAN.search(plans[k][0]):
+            out.append(piece)
+            continue
+        _, chunks, readings, _, _ = plans[k]
         built = []
         offset = 0
-        for chunk, syllables in chunks:
+        for chunk, _ in chunks:
             mine = readings[offset:offset + len(chunk)]
             if chunk in skip or any(r is None for r in mine):
                 built.append(html.escape(chunk, quote=False))

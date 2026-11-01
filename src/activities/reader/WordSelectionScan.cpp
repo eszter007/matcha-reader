@@ -787,11 +787,11 @@ void WordSelectionScan::setBookGlossary(const std::string& bookCachePath) {
   glossaryCount_ = RubyGlossary::loadSpanKeys(bookCachePath, glossaryKeys_);
 }
 
-int WordSelectionScan::glossarySpanAt(const std::string_view text) const {
+int WordSelectionScan::glossarySpanAt(const std::string_view text, const int maxChars) const {
   if (glossaryKeys_.empty()) return 0;
   int best = 0;
   int chars = 0;
-  for (size_t pos = 0; pos < text.size();) {
+  for (size_t pos = 0; pos < text.size() && chars < maxChars;) {
     pos++;
     while (pos < text.size() && (static_cast<unsigned char>(text[pos]) & 0xC0) == 0x80) pos++;
     chars++;
@@ -1348,8 +1348,8 @@ bool WordSelectionScan::scanChineseRun(const size_t from) {
     runFound_[p] = WordLookup::lookupAll(text, byteAt[p], runPriority_[p], kChineseMaxWindow);
     // A name the book annotated as one ruby group (王小明) is a word, though the dictionary only
     // knows its characters; it is scored as a common one.
-    const int gloss = glossarySpanAt(std::string_view(text).substr(byteAt[p]));
-    if (gloss >= 2 && gloss <= kMaxLookupChars) {
+    const int gloss = glossarySpanAt(std::string_view(text).substr(byteAt[p]), kMaxLookupChars);
+    if (gloss >= 2) {
       runFound_[p] |= static_cast<uint8_t>(1u << (gloss - 1));
       runPriority_[p][gloss - 1] = std::max<uint8_t>(runPriority_[p][gloss - 1], 200);
     }

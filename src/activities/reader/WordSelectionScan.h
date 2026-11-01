@@ -106,9 +106,9 @@ class WordSelectionScan {
   // Lets a name the book annotated (緋倉美津子) be selected whole when the dictionary only knows
   // its parts. Call before tryLoadCache: the glossary size is part of the cache fingerprint.
   void setBookGlossary(const std::string& bookCachePath);
-  // Characters of the longest glossary base `text` starts with, or 0. RAM only; a hash hit is
+  // Characters of the longest glossary base of at most maxChars that `text` starts with, or 0. RAM only; a hash hit is
   // confirmed against the file by RubyGlossary::longestPrefix when the word is looked up.
-  int glossarySpanAt(std::string_view text) const;
+  int glossarySpanAt(std::string_view text, int maxChars = 255) const;
   static constexpr int kLookupContextChars = 8;  // == kMaxLookupChars, asserted below
 
   // Run scan/filter work for up to maxMillis (pass UINT32_MAX to run to completion).

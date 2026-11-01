@@ -204,11 +204,24 @@ class CedictEntries(unittest.TestCase):
         self.assertIn("week", defs[0])
 
     def test_an_entry_repeated_by_a_later_input_is_dropped(self):
-        seen = set()
+        seen = {}
         canto, _ = self._convert("你好 你好 [ni3 hao3] {nei5 hou2} /hello/ # adapted from cc-cedict\n", seen=seen)
         cedict, _ = self._convert("你好 你好 [ni3 hao3] /hello/\n好 好 [hao3] /good/\n", seen=seen)
         self.assertEqual(len(canto), 1)
         self.assertEqual([h.decode() for h, *_ in cedict], ["好"])
+
+    def test_the_cantonese_copy_survives_either_order(self):
+        seen = {}
+        self._convert("你好 你好 [ni3 hao3] /hello/\n", seen=seen)
+        canto, _ = self._convert("你好 你好 [ni3 hao3] {nei5 hou2} /hello/\n", seen=seen)
+        self.assertEqual(len(canto), 1)
+        self.assertIn("nei5 hou2", canto[0][1].decode())
+
+    def test_shared_simplified_forms_count_across_inputs(self):
+        trads_of = {}
+        self._convert("乾 干 [gan1] /dry/\n", trads_of=trads_of, seen={})
+        self._convert("幹 干 [gan4] /to do/\n干 干 [gan1] /shield/\n", trads_of=trads_of, seen={})
+        self.assertEqual(conv.shared_simplified_counts(trads_of), {"乾": 3, "幹": 3, "干": 3})
 
     def test_cross_references_with_middle_dot_and_comma(self):
         self.assertEqual(conv.prettify_cedict_gloss("see 馬克·吐溫|马克·吐温[Ma3 ke4 · Tu3 wen1]"),
