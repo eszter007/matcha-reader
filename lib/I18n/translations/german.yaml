@@ -191,7 +191,7 @@ STR_PLUGIN_HUB_INSTALL_DESCRIPTION: "Offizielle und Community-Plugins durchsuche
 STR_PLUGIN_HUB_INSTALLED: "Plugin Hub installiert"
 STR_PLUGIN_HUB_INSTALLED_HINT: "Öffne Plugins, um loszulegen."
 STR_NO_PLUGINS_INSTALLED: "Keine Plugins mit Geräteansicht installiert"
-STR_PLUGIN_NOT_SIGNED_IN: "Nicht angemeldet. Öffne die Web-Einstellungen und melde dich zuerst über das Plugin an."
+STR_PLUGIN_NOT_SIGNED_IN: "Nicht angemeldet. Öffne die Web-Seite Plugins und melde dich zuerst über das Plugin an."
 STR_PLUGIN_MANIFEST_INVALID: "Plugin-Manifest fehlt oder ist ungültig"
 STR_PLUGIN_SIGN_IN: "Anmelden"
 STR_PLUGIN_SIGN_IN_HINT: "Noch nicht angemeldet"

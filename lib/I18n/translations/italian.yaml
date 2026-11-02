@@ -208,7 +208,7 @@ STR_PLUGIN_HUB_INSTALL_DESCRIPTION: "Sfoglia e installa plugin ufficiali e della
 STR_PLUGIN_HUB_INSTALLED: "Plugin Hub installato"
 STR_PLUGIN_HUB_INSTALLED_HINT: "Apri Plugin per iniziare."
 STR_NO_PLUGINS_INSTALLED: "Nessun plugin con schermate installato"
-STR_PLUGIN_NOT_SIGNED_IN: "Accesso non eseguito. Apri la pagina Impostazioni web e accedi prima tramite il plugin."
+STR_PLUGIN_NOT_SIGNED_IN: "Accesso non eseguito. Apri la pagina Plugin web e accedi prima tramite il plugin."
 STR_PLUGIN_MANIFEST_INVALID: "Manifest del plugin mancante o non valido"
 STR_PLUGIN_SIGN_IN: "Accedi"
 STR_PLUGIN_SIGN_IN_HINT: "Accesso non ancora eseguito"
