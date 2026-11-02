@@ -42,9 +42,8 @@
 #include "stats/StatsSync.h"
 
 namespace {
-// Metalio: sleep images and the B/W base under their gray passes use the full
-// 0xF7 waveform instead of HALF (two 0xFC partials, which leave the prior
-// screen showing through), matching the clean pass before absolute gray below.
+// Metalio: B/W sleep images use the full 0xF7 waveform instead of HALF (two
+// 0xFC partials), matching the clean pass before absolute gray below.
 #if FREEINK_DEVICE_METALIO_EINK4
 constexpr auto kSleepClean = HalDisplay::FULL_REFRESH;
 #else
@@ -439,7 +438,7 @@ AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& re
     cleanBeforeAbsoluteGray(renderer);
     if (!renderer.displayGrayscaleBase(sleepGrayscaleMode(renderer))) return AlphaOverlayResult::Error;
   } else {
-    renderer.displayGrayscaleBase(kSleepClean);
+    renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
   }
 
   // Absolute planes retain B/W background bits; each visible overlay pixel is rewritten in both passes.
@@ -837,8 +836,7 @@ void SleepActivity::renderCustomSleepScreen() const {
   renderDefaultSleepScreen();
 }
 
-// Sleep screens paint with a single HALF refresh (stock parity; kSleepClean is
-// FULL on Metalio, see above): the OEM X4
+// Sleep screens paint with a single HALF refresh (stock parity): the OEM X4
 // firmware's only clean refresh in normal operation is the single-pass 0xD7
 // sequence, used once for the sleep image. It never runs the multi-flash GC
 // waveform (0xF7) that FULL_REFRESH selects (#2471's blinking complaint).
@@ -856,7 +854,7 @@ void SleepActivity::renderDefaultSleepScreen() const {
   renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - GrayLogo::STATUS_FROM_BOTTOM, tr(STR_SLEEPING));
 
   if (inverted) renderer.invertScreen();
-  renderer.displayGrayscaleBase(kSleepClean);
+  renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
   GrayLogo::flushGrayPasses(renderer, logoX, logoY, inverted);
 }
 
@@ -918,11 +916,11 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
       return;
     }
   } else if (hasGreyscale) {
-    // OEM grayscale pipeline base. HALF elsewhere: the gray nudge LUT is
+    // OEM grayscale pipeline base. Must stay HALF: the gray nudge LUT is
     // calibrated against the pixel state the single-pass HALF waveform leaves
-    // behind; a FULL (GC) base can make the nudge land unevenly. Metalio only
-    // gets here with the panel inverted, where the base is a plain B/W refresh.
-    renderer.displayGrayscaleBase(kSleepClean);
+    // behind. A FULL (GC) base parks pixels in a different charge state and
+    // the differential nudge then lands unevenly (blotchy noise in gray areas).
+    renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
   } else {
     renderer.displayBuffer(kSleepClean);
   }
@@ -1037,7 +1035,7 @@ bool SleepActivity::renderTransparentOverlayPng(const std::string& path) const {
     if (overlayCover) cleanBeforeAbsoluteGray(renderer);
     if (!renderer.displayGrayscaleBase(sleepGrayscaleMode(renderer))) return false;
   } else {
-    renderer.displayGrayscaleBase(kSleepClean);
+    renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
   }
 
   // Absolute planes retain B/W background bits; each visible overlay pixel is rewritten in both passes.
@@ -1342,6 +1340,6 @@ void SleepActivity::renderDeparturesSleepScreen() const {
     renderer.displayBuffer(kSleepClean);
     return;
   }
-  renderer.displayGrayscaleBase(kSleepClean);
+  renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
   GrayLogo::flushGrayPasses(renderer, catX, catY, true, cat->size);
 }
