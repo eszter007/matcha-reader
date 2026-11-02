@@ -1,6 +1,7 @@
 #include "SyncedPositionPrompt.h"
 
 #include <I18n.h>
+#include <KOReaderCredentialStore.h>
 #include <Logging.h>
 #include <Memory.h>
 
@@ -14,6 +15,8 @@ namespace SyncedPositionPrompt {
 
 bool offer(Activity& host, GfxRenderer& renderer, MappedInputManager& input, const std::string& path,
            const int localPercent, const std::function<void(int percent)>& onJump) {
+  // Smart sync settles positions without asking; only "Ask every time" offers this.
+  if (KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART) return false;
   const int synced = remoteProgress::percent(path);
   // Only a clear lead: rounding between the two page counts must not ask on every open.
   if (synced < 0 || synced >= 100 || synced < localPercent + 2) return false;

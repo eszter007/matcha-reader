@@ -33,6 +33,7 @@
 #include "util/BookProgress.h"
 #include "util/PluginEvents.h"
 #include "util/PluginHttp.h"
+#include "util/RemoteProgress.h"
 
 namespace fui = freeink::ui;
 
@@ -113,6 +114,7 @@ void KOReaderSyncActivity::saveProgressAndReturn(int spineIndex, int page) {
       requestUpdate(true);
       return;
     }
+    positionSettled = true;
     returnToReader();
     return;
   }
@@ -132,10 +134,16 @@ void KOReaderSyncActivity::saveProgressAndReturn(int spineIndex, int page) {
     requestUpdate(true);
     return;
   }
+  positionSettled = true;
   returnToReader();
 }
 
-void KOReaderSyncActivity::returnToReader() { activityManager.goToReader(epubPath); }
+void KOReaderSyncActivity::returnToReader() {
+  // The server's percentage for this book is another device's page count: once this sync has
+  // matched the exact position, the reader must not offer that coarser one as a jump.
+  if (positionSettled) remoteProgress::forget(epubPath);
+  activityManager.goToReader(epubPath);
+}
 
 bool KOReaderSyncActivity::smartSyncEnabled() const {
   return KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART;
@@ -148,6 +156,7 @@ void KOReaderSyncActivity::completeAlreadySynced() {
     RenderLock lock(*this);
     state = SYNC_COMPLETE;
   }
+  positionSettled = true;
   markAutoReturn();
   requestUpdate(true);
 }
@@ -585,6 +594,7 @@ void KOReaderSyncActivity::performUpload() {
     RenderLock lock(*this);
     state = UPLOAD_COMPLETE;
   }
+  positionSettled = true;
   markAutoReturn();
   requestUpdate(true);
 }

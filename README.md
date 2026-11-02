@@ -113,7 +113,7 @@ Read panel by panel, each scaled to the screen, and look up words in the speech 
 
 ### Library and home
 
-A cover grid of every book on the card, with a **Shelves** tab for folders and a tab bar for Home, Library, File Transfer, Insights and Settings. Long-press a cover for insights, Mark as Read and Delete. With the CrossPoint sync server, badges show your furthest position on any device and offer to jump there. CrossPoint's list view is still there. See [Guide §3.1](USER_GUIDE.md#31-home-screen) and [§3.4](USER_GUIDE.md#34-library-screen).
+A cover grid of every book on the card, with a **Shelves** tab for folders and a tab bar for Home, Library, File Transfer, Insights and Settings. Long-press a cover for insights, Mark as Read and Delete. With the CrossPoint sync server, badges show your furthest position on any device. CrossPoint's list view is still there. See [Guide §3.1](USER_GUIDE.md#31-home-screen) and [§3.4](USER_GUIDE.md#34-library-screen).
 
 <p align="center">
   <img src="docs/images/screenshots/tab-home.png" width="150" alt="Home tab: the cover grid">

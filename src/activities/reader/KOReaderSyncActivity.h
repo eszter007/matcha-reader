@@ -100,6 +100,8 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   // plugged-outbox events instead of syncing progress.
   bool pluginEventsOnly = false;
   bool withClockAndInsights = false;
+  // This sync applied, confirmed or uploaded the book's position.
+  bool positionSettled = false;
 
   void onWifiSelectionComplete(bool success);
   void performSync();
