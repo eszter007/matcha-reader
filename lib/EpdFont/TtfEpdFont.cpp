@@ -125,6 +125,7 @@ bool TtfEpdFont::load(const uint16_t pointSize, const bool twoBit, const size_t 
     f.maxGlyphs = maxGlyphs;
     f.inited = false;
     f.ready = false;
+    f.initFailures = 0;
     // Flush the glyph/kern caches, not just the arena cursor: faultGlyph
     // consults the lookup tables before anything else, so entries rasterized
     // at a previous size would serve stale metrics — and their bitmaps get
@@ -141,16 +142,34 @@ bool TtfEpdFont::load(const uint16_t pointSize, const bool twoBit, const size_t 
 }
 
 void TtfEpdFont::initFace(Face& f) {
-  if (f.inited) return;
-  f.inited = true;
+  if (f.inited && f.ready) return;
+  if (f.initFailures >= 2) return;
   const Source& s = sources_[f.srcIndex];
   if (!s.present) {
     f.ready = false;
-  } else if (s.streamed) {
-    f.ready = f.ft.initStream(s.read, s.ctx, s.fileSize, f.sizePx, f.weight, f.wantItalic);
-  } else {
-    f.ready = f.ft.init(s.data, s.len, f.sizePx, f.weight, f.wantItalic);
+    f.inited = true;
+    return;
   }
+  const auto tryInit = [&]() {
+    return s.streamed ? f.ft.initStream(s.read, s.ctx, s.fileSize, f.sizePx, f.weight, f.wantItalic)
+                      : f.ft.init(s.data, s.len, f.sizePx, f.weight, f.wantItalic);
+  };
+  f.ready = tryInit();
+  if (!f.ready) {
+    evictionLocked_ = true;
+    freeink::MemoryManager::instance().ensureFree(16 * 1024);
+    evictionLocked_ = false;
+    f.ready = tryInit();
+  }
+  if (!f.ready) {
+    // Transient failure under heap pressure; leave f.inited false so a later fault can retry,
+    // but bound retries so a persistent failure doesn't thrash ensureFree on every glyph.
+    f.inited = false;
+    f.initFailures++;
+    return;
+  }
+  f.initFailures = 0;
+  f.inited = true;
   if (f.ready) {
     // Full auto-hinting + stem darkening pair with the BW-aware quantizer in
     // faultGlyph: the 50% ink threshold needs stems snapped to full-coverage
@@ -260,6 +279,8 @@ void TtfEpdFont::clearCache() {
 
 void TtfEpdFont::releaseResidentCaches() {
   if (evictionLocked_) return;  // mid-fault: this font's faces are live
+  // A release is the retry point for a face that failed to load, PSRAM or not.
+  for (Face& f : faces_) f.initFailures = 0;
   // With PSRAM every cache and FreeType face below lives there (fiFontMalloc), so releasing them
   // returns no internal heap, and the next draw re-reads the faces from SD.
   if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0) return;
@@ -463,15 +484,15 @@ EpdFontFamily TtfEpdFont::family() const {
   return EpdFontFamily(pointSize_, &faces_[0].font, &faces_[1].font, &faces_[2].font, &faces_[3].font);
 }
 
-bool TtfEpdFont::build(const char* utf8) {
-  if (!loaded_) return false;
-  flushFace(faces_[0]);
-  return addCoverage(utf8);
+bool TtfEpdFont::build(const char* utf8, const uint8_t style) {
+  if (!loaded_ || style >= 4) return false;
+  flushFace(faces_[style]);
+  return addCoverage(utf8, style);
 }
-bool TtfEpdFont::addCoverage(const char* utf8) {
-  if (!loaded_ || utf8 == nullptr) return false;
+bool TtfEpdFont::addCoverage(const char* utf8, const uint8_t style) {
+  if (!loaded_ || utf8 == nullptr || style >= 4) return false;
   const auto* p = reinterpret_cast<const unsigned char*>(utf8);
-  while (*p != '\0') faultGlyph(faces_[0], utf8NextCodepoint(&p));
+  while (*p != '\0') faultGlyph(faces_[style], utf8NextCodepoint(&p));
   return true;
 }
 
