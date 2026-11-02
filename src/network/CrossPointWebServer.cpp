@@ -210,24 +210,27 @@ bool pathHasProtectedComponent(const String& path) {
 // socket writes; hundreds of tiny writes fill lwIP's send queue (errno 11) and
 // stall the single-threaded server for seconds while other requests wait.
 // A Print, so serializeJson() writes straight into the chunk buffer.
+// The buffer is on the heap (1 KB is past the stack budget); without it every write is sent as is.
 class ChunkedReply final : public Print {
  public:
-  explicit ChunkedReply(WebServer& server) : server_(server) {}
+  explicit ChunkedReply(WebServer& server) : server_(server), buffer_(makeUniqueNoThrow<char[]>(BUFFER_SIZE)) {
+    if (!buffer_) LOG_ERR("WEB", "OOM: %u-byte reply buffer, sending unbuffered", static_cast<unsigned>(BUFFER_SIZE));
+  }
   using Print::write;
   size_t write(uint8_t c) override { return write(&c, 1); }
   size_t write(const uint8_t* data, size_t len) override {
-    if (used_ + len > sizeof(buffer_)) flush();
-    if (len >= sizeof(buffer_)) {
+    if (used_ + len > BUFFER_SIZE) flush();
+    if (!buffer_ || len >= BUFFER_SIZE) {
       server_.sendContent(reinterpret_cast<const char*>(data), len);
       return len;
     }
-    memcpy(buffer_ + used_, data, len);
+    memcpy(buffer_.get() + used_, data, len);
     used_ += len;
     return len;
   }
   void flush() override {
     if (used_ == 0) return;
-    server_.sendContent(buffer_, used_);
+    server_.sendContent(buffer_.get(), used_);
     used_ = 0;
   }
   // Ends the chunked stream after the buffered data.
@@ -237,8 +240,9 @@ class ChunkedReply final : public Print {
   }
 
  private:
+  static constexpr size_t BUFFER_SIZE = 1024;
   WebServer& server_;
-  char buffer_[1024];
+  std::unique_ptr<char[]> buffer_;
   size_t used_ = 0;
 };
 
@@ -449,7 +453,14 @@ void CrossPointWebServer::begin() {
 
   // Setup routes
   LOG_DBG("WEB", "Setting up routes...");
-  server->addHandler(new RouteHandler(*this));  // Deleted with the WebServer (stop() resets it)
+  // Owned and deleted by the WebServer (stop() resets it), so a raw nothrow new.
+  auto* routes = new (std::nothrow) RouteHandler(*this);
+  if (!routes) {
+    LOG_ERR("WEB", "OOM: route handler, server not started");
+    server.reset();
+    return;
+  }
+  server->addHandler(routes);
   server->onNotFound([this] { handleNotFound(); });
   LOG_DBG("WEB", "[MEM] Free heap after route setup: %d bytes", ESP.getFreeHeap());
 
@@ -3255,30 +3266,29 @@ void CrossPointWebServer::handleFontsPage() const {
 // walks the folders again for every file, which is slow with many families.
 // Unreadable files report size 0.
 static void addFontFiles(const SdCardFontFamilyInfo& family, JsonArray files) {
+  // One path buffer on the stack, reused for the entry names below; the folder is a short string.
   char path[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
-  char folder[sizeof(path)] = "";
+  std::string folder;
   for (const auto& file : family.files) {
     if (!family.filePath(file, path, sizeof(path))) continue;
     char* slash = strrchr(path, '/');
     JsonObject entry = files.add<JsonObject>();
     entry["name"] = slash ? slash + 1 : path;
     entry["size"] = 0;
-    if (slash && !folder[0]) {
-      *slash = '\0';
-      strcpy(folder, path);
-    }
+    if (slash && folder.empty()) folder.assign(path, slash - path);
   }
-  if (!folder[0]) return;
-  HalFile dir = Storage.open(folder);
+  if (folder.empty()) return;
+  HalFile dir = Storage.open(folder.c_str());
   if (!dir) return;
 
-  char entryName[128];
+  char* entryName = path;
+  constexpr size_t entryNameSize = sizeof(path);
   size_t found = 0;
   while (found < files.size()) {
     HalFile item = dir.openNextFile();
     if (!item) break;
     if (item.isDirectory()) continue;
-    item.getName(entryName, sizeof(entryName));
+    item.getName(entryName, entryNameSize);
     for (JsonObject entry : files) {
       if (strcmp(entry["name"] | "", entryName) == 0) {
         entry["size"] = static_cast<unsigned long>(item.size());
