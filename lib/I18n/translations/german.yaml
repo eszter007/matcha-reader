@@ -822,8 +822,6 @@ STR_CLIPPING_DELETE_FAILED: "Textstelle nicht entfernt"
 STR_CLIPPING_FAILED: "Textstelle konnte nicht gespeichert werden"
 STR_CLIPPING_LIMIT_REACHED: "Limit für Textstellen erreicht"
 STR_DELETE_CLIPPING_CONFIRM: "Diese Textstelle löschen?"
-STR_STATE_SWIPE: "Wischen"
-STR_STATE_INVERTED_TAP: "Invertiertes Tippen"
 
 STR_SYNCING_STATS: "Einblicke werden synchronisiert..."
 STR_IMAGES_DISPLAY_BW: "Schwarzweiß"
