@@ -958,19 +958,19 @@ bool ReadingStatsStore::record(const Change& change) {
   rec.reserve(JOURNAL_HEADER_BYTES + 2 * 13 + MAX_STORED_LANGUAGE + 4 +
               (change.bookPath ? strnlen(change.bookPath, MAX_STORED_PATH) : 0) +
               (finishedField ? strnlen(finishedField, MAX_STORED_PATH) : 0));
-  const auto header = [&rec, &change](const uint16_t minutes) {
+  const auto appendHeader = [&rec, &change](const uint16_t minutes) {
     rec.push_back(static_cast<char>(JOURNAL_RECORD_MAGIC));
     rec.append(reinterpret_cast<const char*>(&change.year), 2);
     rec.push_back(static_cast<char>(change.month));
     rec.push_back(static_cast<char>(change.day));
     rec.append(reinterpret_cast<const char*>(&minutes), 2);
   };
-  header(change.minutes);
+  appendHeader(change.minutes);
   appendString(rec, change.language, MAX_STORED_LANGUAGE);
   appendString(rec, change.bookPath, MAX_STORED_PATH);
   appendString(rec, finishedField, MAX_STORED_PATH);
   if (timed) {
-    header(0);
+    appendHeader(0);
     // Binary, so not through appendString: its bytes can be 0.
     const uint16_t len = 4;
     rec.append(reinterpret_cast<const char*>(&len), 2);
