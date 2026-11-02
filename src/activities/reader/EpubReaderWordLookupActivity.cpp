@@ -1596,7 +1596,11 @@ void EpubReaderWordLookupActivity::performLookup() {
   // clearing the previous result and the next lookup (~100-300ms) completing.
   lookupInFlight = true;
   // Another word is being looked up: the selection's pages belonged to the one before.
-  if (selectionWalk == SelectionWalk::Running) selectionWalk = SelectionWalk::Done;
+  if (selectionWalk != SelectionWalk::NotStarted) {
+    RenderLock lock;
+    selectionWalk = SelectionWalk::Done;
+    selectionSpans.clear();
+  }
   DictIndex::consumeHeapLimited();  // drop any stale flag from an earlier lookup
   performLookupImpl();
   // A definition that was FOUND and then dropped for want of heap is a transient failure, not an
@@ -2089,8 +2093,7 @@ void EpubReaderWordLookupActivity::stepSelectionWalk() {
 // Under the render lock: render() reads the result strings and sections.
 void EpubReaderWordLookupActivity::appendSelectionEntry(DictEntry&& entry, const size_t textOffset,
                                                         const size_t matchBytes) {
-  const SelectionSpan span{static_cast<uint16_t>(sectionText.size()), static_cast<uint16_t>(textOffset),
-                           static_cast<uint16_t>(matchBytes)};
+  SelectionSpan span{0, static_cast<uint16_t>(textOffset), static_cast<uint16_t>(matchBytes)};
   if (!hasResult) {
     // Nothing matched the opened word: the selection's first word takes page 1.
     resultHeadword = std::move(entry.headword);
@@ -2124,6 +2127,7 @@ void EpubReaderWordLookupActivity::appendSelectionEntry(DictEntry&& entry, const
   }
   if (onLoadingPage()) scrollOffset = 0;  // the new entry takes the Loading page's place
   const size_t before = sectionText.size();
+  span.firstSection = static_cast<uint16_t>(before);
   entry.headword.insert(0, kArrow);
   entry.headword += '\n';
   entry.definition.insert(0, entry.headword);

@@ -11,6 +11,7 @@
 #include <WordLookup.h>
 
 #include <algorithm>
+#include <iterator>
 #include <cstring>
 #include <numeric>
 
@@ -1512,10 +1513,8 @@ bool WordSelectionScan::startsWithConjugationNoise(const std::string_view text) 
       "\xe3\x81\xa7\xe3\x81\x99",              // です
       "\xe3\x81\xbe\xe3\x81\x99",              // ます
   };
-  for (const auto pattern : patterns) {
-    if (text.substr(0, pattern.size()) == pattern) return true;
-  }
-  return false;
+  return std::any_of(std::begin(patterns), std::end(patterns),
+                     [text](const std::string_view pattern) { return text.substr(0, pattern.size()) == pattern; });
 }
 
 // Exact-match colloquial/grammatical contractions that are never useful as standalone
@@ -1533,10 +1532,8 @@ bool WordSelectionScan::isExactNoise(const std::string_view match) {
       "\xe3\x81\x9d\xe3\x81\x86\xe3\x81\xaa",  // そうな
       "\xe3\x81\x9d\xe3\x81\x86\xe3\x81\xa0",  // そうだ
   };
-  for (const auto noise : exactNoise) {
-    if (match == noise) return true;
-  }
-  return false;
+  return std::any_of(std::begin(exactNoise), std::end(exactNoise),
+                     [match](const std::string_view noise) { return match == noise; });
 }
 
 bool WordSelectionScan::isNoiseMatch(const std::string_view text, const size_t matchBytes) {
