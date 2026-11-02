@@ -415,6 +415,16 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
     }
     totals.booksFinished = READING_STATS_STORE.getBooksFinished();
     totals.longestStreak = READING_STATS_STORE.getLongestStreak();
+    for (uint8_t i = 0; i < ReadingStatsStore::TIME_OF_DAY_BUCKETS; i++) {
+      totals.timeOfDay[i] = READING_STATS_STORE.getTimeOfDayMinutes(i) * 60u;
+    }
+    // A download not folded in yet (Sync Insights uploads right after it) already holds the account's totals.
+    uint32_t pending[ReadingStatsStore::TIME_OF_DAY_BUCKETS];
+    if (ReadingStatsStore::pendingDownloadTimeOfDay(pending)) {
+      for (uint8_t i = 0; i < ReadingStatsStore::TIME_OF_DAY_BUCKETS; i++) {
+        totals.timeOfDay[i] = std::max(totals.timeOfDay[i], pending[i] * 60u);
+      }
+    }
     // What is uploaded below: the overview fetched after it counts exactly this much of this reader.
     READING_STATS_STORE.accountBaselines(baselines);
     // Books read on or after the marker's day (it may have grown since) and the open book.
@@ -528,12 +538,14 @@ bool statsSync::download() {
   });
   const bool complete = status == 200 && http->responseComplete() && parser->complete();
   const uint32_t until = parser->until();
+  uint32_t timeOfDay[ReadingStatsStore::TIME_OF_DAY_BUCKETS];
+  const bool hasTimeOfDay = parser->timeOfDayMinutes(timeOfDay);
   parser.reset();
   if (!complete) {
     LOG_ERR("STATS", "Stats download failed: HTTP %d", status);
     return false;
   }
-  if (!ReadingStatsStore::saveDownload(days)) {
+  if (!ReadingStatsStore::saveDownload(days, hasTimeOfDay ? timeOfDay : nullptr)) {
     LOG_ERR("STATS", "Downloaded stats not saved");
     return false;
   }

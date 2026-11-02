@@ -91,6 +91,7 @@ inline bool flushReadingStats(unsigned long& sessionStartMs, const bool force = 
   update.month = static_cast<uint8_t>(t.tm_mon + 1);
   update.day = static_cast<uint8_t>(t.tm_mday);
   update.minutes = minutes;
+  if (update.year >= 2020) update.timeOfDay = ReadingStatsStore::timeOfDay(t.tm_hour);  // an unset clock has no hour
   update.bookPath = bookPath;
   update.language = language;
   // Not written: keep the minutes pending (sessionStartMs unchanged) for the next flush.

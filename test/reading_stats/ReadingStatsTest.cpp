@@ -1124,3 +1124,60 @@ TEST_F(StatsTest, UnreadWithoutClockStillUploads) {
   EXPECT_EQ(oldDay, newDay);
   s.release();
 }
+
+// Minutes recorded with a time of day add up per bucket through the journal, survive compact(), and old
+// records without one still count everywhere else.
+TEST_F(StatsTest, TimeOfDayAddsUpThroughJournalAndCompact) {
+  EXPECT_EQ(ReadingStatsStore::timeOfDay(5), 3);
+  EXPECT_EQ(ReadingStatsStore::timeOfDay(6), 0);
+  EXPECT_EQ(ReadingStatsStore::timeOfDay(12), 1);
+  EXPECT_EQ(ReadingStatsStore::timeOfDay(18), 2);
+  EXPECT_EQ(ReadingStatsStore::timeOfDay(23), 2);
+  EXPECT_EQ(ReadingStatsStore::timeOfDay(0), 3);
+
+  auto& s = READING_STATS_STORE;
+  ReadingStatsStore::Change morning{Y, M, 5, 10, "/a.epub", "ja", nullptr};
+  morning.timeOfDay = 0;
+  ReadingStatsStore::Change night{Y, M, 5, 7, "/a.epub", "ja", nullptr};
+  night.timeOfDay = 3;
+  ASSERT_TRUE(s.record(morning));
+  ASSERT_TRUE(s.record({Y, M, 6, 4, "/a.epub", "ja", nullptr}));  // no hour: counted, but in no bucket
+  ASSERT_TRUE(s.record(night));
+  ASSERT_TRUE(s.record(morning));
+
+  const auto check = [&s] {
+    EXPECT_EQ(s.getTotalMinutes(), 31u);
+    EXPECT_EQ(s.getTimeOfDayMinutes(0), 20u);
+    EXPECT_EQ(s.getTimeOfDayMinutes(1), 0u);
+    EXPECT_EQ(s.getTimeOfDayMinutes(2), 0u);
+    EXPECT_EQ(s.getTimeOfDayMinutes(3), 7u);
+  };
+  ASSERT_TRUE(s.loadFromFile());
+  check();
+  s.release();
+  ASSERT_TRUE(s.compact());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  check();
+}
+
+// Refresh Insights brings the account's time of day back: a reset card does not upload zeros over it.
+TEST_F(StatsTest, DownloadedTimeOfDayRaisesTheLocalTotals) {
+  auto& s = READING_STATS_STORE;
+  ReadingStatsStore::Change evening{Y, M, 5, 30, "/a.epub", "ja", nullptr};
+  evening.timeOfDay = 2;
+  ASSERT_TRUE(s.record(evening));
+  const uint32_t server[4] = {100, 0, 10, 5};
+  ASSERT_TRUE(ReadingStatsStore::saveDownload({{Y, M, 4, 20}}, server));
+  uint32_t pending[4] = {};
+  ASSERT_TRUE(ReadingStatsStore::pendingDownloadTimeOfDay(pending));  // what an upload before the fold sends
+  EXPECT_EQ(pending[0], 100u);
+  EXPECT_EQ(pending[3], 5u);
+  ASSERT_TRUE(s.compact());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTimeOfDayMinutes(0), 100u);
+  EXPECT_EQ(s.getTimeOfDayMinutes(2), 30u) << "the larger of the two, never the sum";
+  EXPECT_EQ(s.getTimeOfDayMinutes(3), 5u);
+  EXPECT_EQ(s.getTotalMinutes(), 50u);
+}

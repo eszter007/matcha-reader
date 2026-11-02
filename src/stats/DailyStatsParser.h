@@ -23,9 +23,11 @@ class DailyStatsParser {
   bool complete() const { return finished && !parser.hasError(); }
   // The server's time for this answer, to pass as `since` next time; 0 from a server without it.
   uint32_t until() const { return untilTime; }
+  // The device's time-of-day totals in minutes; false when its stats carried none.
+  bool timeOfDayMinutes(uint32_t (&out)[ReadingStatsStore::TIME_OF_DAY_BUCKETS]) const;
 
  private:
-  enum class Key : uint8_t { NONE, DEVICE_ID, DAILY, DATE, SECONDS, UNTIL };
+  enum class Key : uint8_t { NONE, DEVICE_ID, DAILY, DATE, SECONDS, UNTIL, TOD };
   static constexpr uint8_t ROOT_DEPTH = 1;
   // Depths of the containers this reads: root, devices, a device, its stats, daily, a day.
   static constexpr uint8_t DEVICE_DEPTH = 3;
@@ -52,6 +54,9 @@ class DailyStatsParser {
   Key key = Key::NONE;
   bool ownDevice = false;
   bool inDaily = false;
+  bool inTod = false;
+  uint8_t todCount = 0;  // entries read into todSeconds
+  uint32_t todSeconds[ReadingStatsStore::TIME_OF_DAY_BUCKETS] = {};
   bool finished = false;
   uint32_t untilTime = 0;
   DailyReading day{};
