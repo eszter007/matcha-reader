@@ -2068,11 +2068,15 @@ void EpubReaderWordLookupActivity::stepSelectionWalk() {
       }
     }
     const size_t hitStart = selectionPos;
+    // As the opening lookup does: 今日は is 今日 before は, not the greeting.
+    const std::string tail = text.substr(hitStart, WordSelectionScan::kMaxMatchChars * 4);
+    WordSelectionScan::stripTrailingParticle(tail, hit, /*needDefinition=*/false);
     selectionPos += hit.matchLength;
     if (WordSelectionScan::isNoiseMatch(std::string_view(text).substr(hitStart), hit.matchLength)) continue;
     if (std::find(selectionSeen.begin(), selectionSeen.end(), hit.entry.headword) != selectionSeen.end()) continue;
     selectionSeen.push_back(hit.entry.headword);
     if (!WordLookup::lookup(text, hitStart, hit, /*needDefinition=*/true)) continue;
+    WordSelectionScan::stripTrailingParticle(tail, hit);
     RenderLock lock;
     appendSelectionEntry(std::move(hit.entry), hitStart, hit.matchLength);
     changed = true;
@@ -2095,7 +2099,14 @@ void EpubReaderWordLookupActivity::appendSelectionEntry(DictEntry&& entry, const
                                                         const size_t matchBytes) {
   SelectionSpan span{0, static_cast<uint16_t>(textOffset), static_cast<uint16_t>(matchBytes)};
   if (!hasResult) {
-    // Nothing matched the opened word: the selection's first word takes page 1.
+    // Nothing matched the opened word: the selection's first word takes page 1. The split copies
+    // the definition into pages before freeing it, so twice its size must fit.
+    if (!DictIndex::fitsInHeap(2 * entry.definition.size())) {
+      LOG_ERR("WLA", "Selection walk stopped: no heap for %u bytes",
+              static_cast<unsigned>(2 * entry.definition.size()));
+      selectionWords = MAX_SELECTION_WORDS;
+      return;
+    }
     resultHeadword = std::move(entry.headword);
     resultDefinition = std::move(entry.definition);
     resultDict = entry.sourceDict;
@@ -2133,6 +2144,19 @@ void EpubReaderWordLookupActivity::appendSelectionEntry(DictEntry&& entry, const
   entry.definition.insert(0, entry.headword);
   resultDefinition = std::move(entry.definition);
   splitDefinitionIntoSections(entry.sourceDict);
+  // Past the text budget the word's pages go again, before the render task can show them.
+  size_t added = 0;
+  for (size_t i = before; i < sectionText.size(); i++) added += sectionText[i].size();
+  if (selectionHeldBytes + added > MAX_SELECTION_BYTES) {
+    sectionText.resize(before);
+    sectionLabel.resize(before);
+    sectionReading.resize(before);
+    sectionGrammar.resize(before);
+    sectionKind.resize(before);
+    sectionHead.resize(before);
+    selectionWords = MAX_SELECTION_WORDS;
+    return;
+  }
   if (sectionText.size() > before) selectionSpans.push_back(span);
   countSelectionWord(before);
 }

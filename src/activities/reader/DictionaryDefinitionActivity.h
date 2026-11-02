@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Epub/Page.h>
+#include <I18n.h>
 
 #include <cstdint>
 #include <memory>
@@ -38,6 +39,8 @@ class DictionaryDefinitionActivity final : public Activity {
   struct MoreEntries {
     void* ctx = nullptr;
     bool (*next)(void* ctx, const std::vector<Entry>& shown, std::vector<Entry>& fresh) = nullptr;
+    // What to say when every word has been looked up and nothing was found.
+    StrId (*failure)(void* ctx) = nullptr;
   };
 
   explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -59,6 +62,7 @@ class DictionaryDefinitionActivity final : public Activity {
   // Past the last entry while more are coming: a Loading page the reader can step onto, which the
   // next entry takes over. Also the only page while nothing has been found yet.
   bool onLoadingPage = false;
+  StrId emptyMessage = StrId::STR_NO_MATCH;
   void fetchMoreEntries();
   static void prepareDraft(Entry& entry);
   DictionaryPanel::MiningFeedback miningFeedback_;

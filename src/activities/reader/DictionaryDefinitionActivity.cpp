@@ -84,7 +84,10 @@ void DictionaryDefinitionActivity::fetchMoreEntries() {
   std::vector<Entry> fresh;
   const bool moreToCome = more.next(more.ctx, entries, fresh);
   RenderLock lock;
-  if (!moreToCome) more = MoreEntries{};
+  if (!moreToCome) {
+    if (more.failure) emptyMessage = more.failure(more.ctx);
+    more = MoreEntries{};
+  }
   if (!fresh.empty()) {
     if (entries.empty()) BookStats::addCounts(fresh.front().draft.bookPath.c_str(), 1, 0);
     entries.reserve(entries.size() + fresh.size());
@@ -310,7 +313,7 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   if (!showingEntry()) {
     // Loading while words are still being looked up; nothing found once they all have been.
     UITheme::drawCenteredText(renderer, layout.body, UI_12_FONT_ID, layout.body.y + layout.body.height / 2,
-                              more.next ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
+                              more.next ? tr(STR_LOADING) : I18N.get(emptyMessage), true);
   }
 
   // Body: two-pass draw inside a prewarm scope (same pattern as the reader's

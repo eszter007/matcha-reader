@@ -11,8 +11,8 @@
 #include <WordLookup.h>
 
 #include <algorithm>
-#include <iterator>
 #include <cstring>
+#include <iterator>
 #include <numeric>
 
 #include "Epub/Kinsoku.h"

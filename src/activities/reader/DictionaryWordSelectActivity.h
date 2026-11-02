@@ -140,9 +140,14 @@ class DictionaryWordSelectActivity final : public Activity {
     Dictionary::IndexResult indexResult = Dictionary::IndexResult::Ok;
     Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
   };
-  void lookUpInto(const char* text, const std::vector<DictionaryDefinitionActivity::Entry>& shown,
+  // The phrase's outcome, then the first real failure of a word: what an empty view names.
+  LookupStatus selectionStatus;
+  static StrId failureMessage(const LookupStatus& status);
+  static StrId selectionFailure(void* ctx);
+  void lookUpInto(const char* text, const std::string& sentence,
+                  const std::vector<DictionaryDefinitionActivity::Entry>& shown,
                   std::vector<DictionaryDefinitionActivity::Entry>& out, size_t byteLimit, LookupStatus& status);
-  bool nextSelectionWordText(std::string& word);
+  bool nextSelectionWordText(std::string& word, size_t& start);
   bool hasSeveralWords();
   static bool nextSelectionWord(void* ctx, const std::vector<DictionaryDefinitionActivity::Entry>& shown,
                                 std::vector<DictionaryDefinitionActivity::Entry>& fresh);
