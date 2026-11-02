@@ -24,6 +24,8 @@ bool markBookRead(const std::string& path);
 // Sets the saved page of an XTC/XTCH or manga book without opening it, in the record its reader
 // loads (progress sync). False for other books or on a write error.
 bool writePageProgress(const std::string& path, uint32_t page);
+// The saved page of an XTC/XTCH or manga book, from that same record. False when none is saved.
+bool readPageProgress(const std::string& path, uint32_t& page);
 bool markBookUnread(const std::string& path);
 
 // Manga progress from the two small cache reads it takes (current page, page count), with no

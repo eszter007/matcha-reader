@@ -86,6 +86,19 @@ bool writePageProgress(const std::string& path, const uint32_t page) {
   return ProgressFile::writeAtomic(cachePath, data, sizeof(data));
 }
 
+bool readPageProgress(const std::string& path, uint32_t& page) {
+  const std::string cachePath = bookCachePath(path);
+  if (cachePath.empty() || (!FsHelpers::hasXtcExtension(path) && !manga::MangaBook::isMangaFolder(path))) return false;
+  HalFile f;
+  uint8_t data[4];
+  if (!Storage.openFileForRead("PROG", cachePath + "/progress.bin", f) || f.read(data, sizeof(data)) != sizeof(data)) {
+    return false;
+  }
+  page = static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8) |
+         (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
+  return true;
+}
+
 namespace {
 // The progress record every reader and both grids read as 100%. False when the book's cache cannot say
 // where its end is: never opened, or laid out by an older firmware.

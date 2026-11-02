@@ -2547,14 +2547,15 @@ int MangaReaderActivity::syncedPositionPercent() {
   syncedPosition::Position position;
   const uint32_t count = book ? book->getPageCount() : 0;
   if (count == 0 || !syncedPosition::load(book->getFolder(), position)) return -1;
-  const int target = static_cast<int>(syncedPosition::pageOf(position, count) * 100 / count);
-  // Read past it here since it was fetched: going there would be going back.
-  const int own = loadOwnBookProgress(book->getFolder());
-  if (own >= 0 && target <= own) {
+  const uint32_t targetPage = syncedPosition::pageOf(position, count);
+  // Read past it here since it was fetched: going there would be going back. Pages, not the rounded
+  // percentages, which put neighbouring pages of a long book on the same whole number.
+  uint32_t ownPage = 0;
+  if (readPageProgress(book->getFolder(), ownPage) && targetPage <= ownPage) {
     syncedPosition::dismiss(book->getFolder());
     return -1;
   }
-  return target;
+  return static_cast<int>(targetPage * 100 / count);
 }
 
 bool MangaReaderActivity::startShortcutSync() { return KOREADER_STORE.hasCredentials() && launchSync(true); }

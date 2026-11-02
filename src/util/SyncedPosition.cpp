@@ -53,8 +53,9 @@ bool read(const std::string& path, Position& out, bool& handled) {
   handled = head[HANDLED_AT] != 0;
   memcpy(&account, head + 7, sizeof(account));
   memcpy(&length, head + 11, sizeof(length));
-  // Another account's position is not this one's: a switch of account leaves it unused.
-  if (account != statsSync::insightsAccountKey()) return false;
+  // Another account's position is not this one's: a switch of account leaves it unused. The sync
+  // account's own key, not Insights' (0 for every account with "This device"); 0 is no account.
+  if (account == 0 || account != statsSync::accountKey()) return false;
   if (length > MAX_PROGRESS_BYTES || !std::isfinite(out.percentage)) return false;
   out.progress.resize(length);
   return f.read(reinterpret_cast<uint8_t*>(&out.progress[0]), length) == length;
@@ -71,7 +72,8 @@ bool save(const std::string& path, const KOReaderProgress& progress, const bool 
   memcpy(head + 1, &progress.percentage, sizeof(float));
   head[5] = byShare ? 1 : 0;
   head[HANDLED_AT] = 0;
-  const uint32_t account = statsSync::insightsAccountKey();
+  const uint32_t account = statsSync::accountKey();
+  if (account == 0) return false;
   memcpy(head + 7, &account, sizeof(account));
   const auto length = static_cast<uint16_t>(progress.progress.size());
   memcpy(head + 11, &length, sizeof(length));
@@ -151,13 +153,22 @@ uint32_t pageOf(const Position& position, const uint32_t pageCount) {
 void fetchAhead(const remoteProgress::Feed& feed) {
   const uint32_t start = millis();
   int fetched = 0;
+  bool deferred = false;
+  // A changed book whose new position is not saved this sync loses its old record: the feed cursor has
+  // moved past the change, so a kept record would never be refreshed. Without one the next sync fetches.
+  const auto dropStale = [&feed](const std::string& path) {
+    const std::string file = filePath(path);
+    if (feed.changed(path) && !file.empty() && Storage.exists(file.c_str())) Storage.remove(file.c_str());
+  };
   // Every book on the card, manga folders included (the library index leaves those out).
   bookwalk::forEachBook("/", 0, [&](const std::string& path) {
-    if (fetched >= MAX_FETCHES_PER_SYNC || millis() - start > MAX_FETCH_MS) {
-      LOG_INF("SYNCPOS", "More books ahead elsewhere; the next sync fetches them");
-      return false;
-    }
     if (bookCachePath(path).empty()) return true;  // not a book
+    if (fetched >= MAX_FETCHES_PER_SYNC || millis() - start > MAX_FETCH_MS) {
+      // Past the budget: only the cheap clean-up above, the fetches come with the next sync.
+      deferred = true;
+      dropStale(path);
+      return true;
+    }
     const int remote = feed.percent(path);
     if (remote <= 0 || remote >= 100) return true;  // unknown, or finished there: a badge, not a position
     const int local = std::max(0, loadOwnBookProgress(path));
@@ -169,10 +180,17 @@ void fetchAhead(const remoteProgress::Feed& feed) {
     KOReaderProgress progress;
     bool byShare = false;
     fetched++;
-    if (!fetch(path, progress, byShare) || static_cast<int>(progress.percentage * 100.0f) <= local) return true;
-    if (!save(path, progress, byShare)) LOG_ERR("SYNCPOS", "Could not keep the position of %s", path.c_str());
+    if (!fetch(path, progress, byShare) || static_cast<int>(progress.percentage * 100.0f) <= local) {
+      dropStale(path);
+      return true;
+    }
+    if (!save(path, progress, byShare)) {
+      LOG_ERR("SYNCPOS", "Could not keep the position of %s", path.c_str());
+      dropStale(path);
+    }
     return true;
   });
+  if (deferred) LOG_INF("SYNCPOS", "More books ahead elsewhere; the next sync fetches them");
   LOG_INF("SYNCPOS", "Fetched %d positions from elsewhere", fetched);
 }
 
