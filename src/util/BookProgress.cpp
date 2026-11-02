@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "RemoteProgress.h"
+#include "SyncedPosition.h"
 #include "activities/home/EpubProgressUtil.h"
 #include "activities/reader/ProgressFile.h"
 
@@ -147,6 +148,7 @@ bool markBookRead(const std::string& path) {
   const std::string cachePath = bookCachePath(path);
   if (cachePath.empty()) return false;
   removeLinkStack(cachePath);
+  syncedPosition::dismiss(path);  // a position from elsewhere must not undo the choice on the next open
   // Without a record to write, the progress index holds it.
   return writeFinishedProgress(path, cachePath) || remoteProgress::markRead(path);
 }
@@ -155,6 +157,7 @@ bool markBookUnread(const std::string& path) {
   const std::string cachePath = bookCachePath(path);
   if (cachePath.empty()) return false;
   remoteProgress::forget(path);
+  syncedPosition::dismiss(path);
   removeLinkStack(cachePath);
   const std::string progressPath = cachePath + "/progress.bin";
   // Absent already counts as unread, so a book that was never opened is not an error.

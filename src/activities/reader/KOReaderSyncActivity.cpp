@@ -33,7 +33,6 @@
 #include "util/BookProgress.h"
 #include "util/PluginEvents.h"
 #include "util/PluginHttp.h"
-#include "util/RemoteProgress.h"
 #include "util/SyncedPosition.h"
 
 namespace fui = freeink::ui;
@@ -140,12 +139,8 @@ void KOReaderSyncActivity::saveProgressAndReturn(int spineIndex, int page) {
 }
 
 void KOReaderSyncActivity::returnToReader() {
-  // The server's percentage for this book is another device's page count: once this sync has
-  // matched the exact position, the reader must not offer that coarser one as a jump.
-  if (positionSettled) {
-    remoteProgress::forget(epubPath);
-    syncedPosition::clear(epubPath);
-  }
+  // This sync matched the exact position: one an earlier Insights sync fetched is not offered again.
+  if (positionSettled) syncedPosition::dismiss(epubPath);
   activityManager.goToReader(epubPath);
 }
 
@@ -160,7 +155,7 @@ void KOReaderSyncActivity::completeAlreadySynced() {
     RenderLock lock(*this);
     state = SYNC_COMPLETE;
   }
-  positionSettled = true;
+  positionSettled = !pluginEventsOnly;  // a plugin-events-only run synced no position
   markAutoReturn();
   requestUpdate(true);
 }

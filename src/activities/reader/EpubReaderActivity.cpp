@@ -2363,35 +2363,66 @@ unsigned long EpubReaderActivity::confirmLongPressThreshold() const {
   }
 }
 
-bool EpubReaderActivity::mapSyncedPosition(CrossPointPosition& out) {
+bool EpubReaderActivity::mapSyncedPosition(CrossPointPosition& out, int& percent) {
   syncedPosition::Position position;
-  if (!epub || !syncedPosition::load(epub->getPath(), position)) return false;
-  // The mapper may lay out a section to count its pages, as the progress sync does.
-  RenderLock lock(*this);
-  GfxRenderer::FrameBufferLoan loan(renderer);
-  out = ProgressMapper::toCrossPoint(epub, {position.progress, position.percentage}, renderer, -1, 0);
+  const size_t bookSize = epub ? epub->getBookSize() : 0;
+  if (bookSize == 0 || !syncedPosition::load(epub->getPath(), position)) return false;
+  {
+    // The mapper may lay out a section to count its pages, as the progress sync does.
+    RenderLock lock(*this);
+    GfxRenderer::FrameBufferLoan loan(renderer);
+    out = ProgressMapper::toCrossPoint(epub, {position.progress, position.percentage}, renderer, -1, 0);
+  }
+  if (out.totalPages <= 1 && out.hasVisibleTextOffset) {
+    // A chapter never laid out here: its pages are unknown, so the server's share is the closest.
+    percent = static_cast<int>(position.percentage * 100.0f);
+  } else {
+    const size_t before = out.spineIndex > 0 ? epub->getCumulativeSpineItemSize(out.spineIndex - 1) : 0;
+    const size_t spineSize = epub->getCumulativeSpineItemSize(out.spineIndex) - before;
+    const float inSpine =
+        out.totalPages > 0 ? static_cast<float>(out.pageNumber) / static_cast<float>(out.totalPages) : 0.0f;
+    percent = static_cast<int>((static_cast<float>(before) + inSpine * static_cast<float>(spineSize)) * 100.0f /
+                               static_cast<float>(bookSize));
+  }
+  // Read past it here since it was fetched: going there would be going back.
+  const int own = loadOwnBookProgress(epub->getPath());
+  if (own >= 0 && percent <= own) {
+    syncedPosition::dismiss(epub->getPath());
+    return false;
+  }
   return true;
 }
 
 bool EpubReaderActivity::writeSyncedPosition() {
   CrossPointPosition mapped;
-  if (!mapSyncedPosition(mapped)) return false;
-  syncedPosition::clear(epub->getPath());
+  int percent = -1;
+  if (!mapSyncedPosition(mapped, percent)) return false;
+  // Keep the book's own vertical-text and furigana choices, stored beside the position.
+  int8_t vertical = -1;
+  int8_t furigana = -1;
+  {
+    HalFile f;
+    uint8_t data[8];
+    if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f) &&
+        f.read(data, sizeof(data)) == sizeof(data)) {
+      vertical = static_cast<int8_t>(data[6]);
+      furigana = static_cast<int8_t>(data[7]);
+    }
+  }
   std::optional<uint32_t> offset;
   if (mapped.hasVisibleTextOffset) offset = mapped.visibleTextOffset;
-  return EpubReaderUtils::saveProgress(*epub, mapped.spineIndex, mapped.pageNumber, 0, -1, -1, 0xFF, offset);
+  if (!EpubReaderUtils::saveProgress(*epub, mapped.spineIndex, mapped.pageNumber, 0, vertical, furigana, 0xFF,
+                                     offset)) {
+    return false;
+  }
+  syncedPosition::dismiss(epub->getPath());
+  return true;
 }
 
 int EpubReaderActivity::syncedPositionPercent() {
   CrossPointPosition mapped;
-  const size_t bookSize = epub ? epub->getBookSize() : 0;
-  if (bookSize == 0 || !mapSyncedPosition(mapped)) return -1;
-  const size_t before = mapped.spineIndex > 0 ? epub->getCumulativeSpineItemSize(mapped.spineIndex - 1) : 0;
-  const size_t spineSize = epub->getCumulativeSpineItemSize(mapped.spineIndex) - before;
-  const float inSpine =
-      mapped.totalPages > 0 ? static_cast<float>(mapped.pageNumber) / static_cast<float>(mapped.totalPages) : 0.0f;
-  return static_cast<int>((static_cast<float>(before) + inSpine * static_cast<float>(spineSize)) * 100.0f /
-                          static_cast<float>(bookSize));
+  int percent = -1;
+  return mapSyncedPosition(mapped, percent) ? percent : -1;
 }
 
 bool EpubReaderActivity::startShortcutSync() {

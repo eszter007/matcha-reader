@@ -27,7 +27,7 @@ bool offer(Activity& host, GfxRenderer& renderer, MappedInputManager& input, con
   }
   host.startActivityForResult(std::move(confirmation), [onJump, path](const ActivityResult& result) {
     if (result.isCancelled) {
-      syncedPosition::clear(path);  // asked once; the next sync of the book decides again
+      syncedPosition::dismiss(path);  // asked once; a newer position from the server asks again
       return;
     }
     onJump();

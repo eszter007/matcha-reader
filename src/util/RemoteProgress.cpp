@@ -272,7 +272,35 @@ bool Feed::begin(const uint32_t accountKey) {
   return true;
 }
 
+int Feed::percent(const std::string& path) const {
+  return lookUp(path, [this](const uint32_t* wanted, const size_t n) {
+    for (size_t i = 0; i < n; i++) {
+      const int at = indexOf(keys, wanted[i]);
+      if (at >= 0) return static_cast<int>(percents[at]);
+    }
+    return -1;
+  });
+}
+
+bool Feed::changed(const std::string& path) const {
+  if (manyChanged) return true;
+  return lookUp(path, [this](const uint32_t* wanted, const size_t n) {
+           for (size_t i = 0; i < n; i++) {
+             if (std::find(changedKeys.begin(), changedKeys.end(), wanted[i]) != changedKeys.end()) return 0;
+           }
+           return -1;
+         }) >= 0;
+}
+
 bool Feed::set(const uint32_t key, const uint8_t percent) {
+  if (!manyChanged) {
+    if (changedKeys.capacity() == 0 && fits(MAX_CHANGED)) changedKeys.reserve(MAX_CHANGED);
+    if (changedKeys.size() < changedKeys.capacity()) {
+      changedKeys.push_back(key);
+    } else {
+      manyChanged = true;
+    }
+  }
   const auto pos = std::lower_bound(keys.begin(), keys.end(), key) - keys.begin();
   const bool present = pos < static_cast<std::ptrdiff_t>(keys.size()) && keys[pos] == key;
   if (present && percent == 0) {

@@ -84,8 +84,16 @@ class Feed {
   // Everything up to `next` is applied.
   void advance(const uint64_t next) { feedCursor = next; }
   bool save() const;
+  // The book's percent elsewhere after this sync, -1 when the index does not have it.
+  int percent(const std::string& path) const;
+  // Whether this sync's pages named the book: its position may have moved within the same percent.
+  bool changed(const std::string& path) const;
 
  private:
+  // Keys this sync's pages named, up to MAX_CHANGED; past that every book counts as changed.
+  static constexpr size_t MAX_CHANGED = 256;
+  std::vector<uint32_t> changedKeys;
+  bool manyChanged = false;
   uint32_t account = 0;
   uint64_t feedCursor = 0;
   bool full = false;

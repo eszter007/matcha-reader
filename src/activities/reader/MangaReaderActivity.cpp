@@ -2533,16 +2533,28 @@ bool MangaReaderActivity::updateOutlineInPlace() {
 
 bool MangaReaderActivity::writeSyncedPosition() {
   syncedPosition::Position position;
-  if (!book || !syncedPosition::load(book->getFolder(), position)) return false;
-  syncedPosition::clear(book->getFolder());
-  return writePageProgress(book->getFolder(), syncedPosition::pageOf(position, book->getPageCount()));
+  const uint32_t count = book ? book->getPageCount() : 0;
+  if (syncedPositionPercent() < 0 || !syncedPosition::load(book->getFolder(), position)) return false;
+  if (!writePageProgress(book->getFolder(), syncedPosition::pageOf(position, count))) return false;
+  syncedPosition::dismiss(book->getFolder());
+  // The page in memory too: leaving the reader saves it over the record otherwise.
+  RenderLock lock(*this);
+  loadProgress();
+  return true;
 }
 
 int MangaReaderActivity::syncedPositionPercent() {
   syncedPosition::Position position;
   const uint32_t count = book ? book->getPageCount() : 0;
   if (count == 0 || !syncedPosition::load(book->getFolder(), position)) return -1;
-  return static_cast<int>(syncedPosition::pageOf(position, count) * 100 / count);
+  const int target = static_cast<int>(syncedPosition::pageOf(position, count) * 100 / count);
+  // Read past it here since it was fetched: going there would be going back.
+  const int own = loadOwnBookProgress(book->getFolder());
+  if (own >= 0 && target <= own) {
+    syncedPosition::dismiss(book->getFolder());
+    return -1;
+  }
+  return target;
 }
 
 bool MangaReaderActivity::startShortcutSync() { return KOREADER_STORE.hasCredentials() && launchSync(true); }

@@ -667,16 +667,28 @@ ScreenshotInfo XtcReaderActivity::getScreenshotInfo() const {
 
 bool XtcReaderActivity::writeSyncedPosition() {
   syncedPosition::Position position;
-  if (!xtc || !syncedPosition::load(xtc->getPath(), position)) return false;
-  syncedPosition::clear(xtc->getPath());
-  return writePageProgress(xtc->getPath(), syncedPosition::pageOf(position, xtc->getPageCount()));
+  const uint32_t count = xtc ? xtc->getPageCount() : 0;
+  if (syncedPositionPercent() < 0 || !syncedPosition::load(xtc->getPath(), position)) return false;
+  if (!writePageProgress(xtc->getPath(), syncedPosition::pageOf(position, count))) return false;
+  syncedPosition::dismiss(xtc->getPath());
+  // The page in memory too: leaving the reader saves it over the record otherwise.
+  RenderLock lock(*this);
+  loadProgress();
+  return true;
 }
 
 int XtcReaderActivity::syncedPositionPercent() {
   syncedPosition::Position position;
   const uint32_t count = xtc ? xtc->getPageCount() : 0;
   if (count == 0 || !syncedPosition::load(xtc->getPath(), position)) return -1;
-  return static_cast<int>(syncedPosition::pageOf(position, count) * 100 / count);
+  const int target = static_cast<int>(syncedPosition::pageOf(position, count) * 100 / count);
+  // Read past it here since it was fetched: going there would be going back.
+  const int own = loadOwnBookProgress(xtc->getPath());
+  if (own >= 0 && target <= own) {
+    syncedPosition::dismiss(xtc->getPath());
+    return -1;
+  }
+  return target;
 }
 
 bool XtcReaderActivity::startShortcutSync() { return KOREADER_STORE.hasCredentials() && launchSync(true); }

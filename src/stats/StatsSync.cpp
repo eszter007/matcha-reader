@@ -502,7 +502,7 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
   http->end();
   http.reset();
   // Still online: the exact positions of the books the feed shows further ahead, for an offline open.
-  if (feedReady) syncedPosition::fetchAhead();
+  if (feedReady) syncedPosition::fetchAhead(feed);
   // One SD write: a day or book sent twice is harmless, the server keeps the larger value or the newest snapshot.
   if (from > start) KOREADER_STORE.setStatsUploadedDay(days[from - 1].day);
   if (booksDone) KOREADER_STORE.setStatsBooksDay(booksDay);
