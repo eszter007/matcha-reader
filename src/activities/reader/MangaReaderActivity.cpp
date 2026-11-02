@@ -50,6 +50,7 @@
 #include "util/CjkScript.h"
 #include "util/RemoteProgress.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SyncedPosition.h"
 
 namespace {
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
@@ -150,6 +151,8 @@ void MangaReaderActivity::onEnter() {
   // The first render streams page and panel .2bp caches into this folder, before anything else
   // has created it.
   Storage.mkdir(book->getCachePath().c_str());
+  // Smart sync moves to another device's position without asking, before the saved one is read.
+  if (KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART) writeSyncedPosition();
   loadProgress();
   loadCachedBookmarks();
   updateBookmarkFlag();
@@ -586,8 +589,9 @@ void MangaReaderActivity::loop() {
 
   if (!syncedPositionOffered && book && !isAtEndOfBook()) {
     syncedPositionOffered = true;
-    if (SyncedPositionPrompt::offer(*this, renderer, mappedInput, book->getFolder(), enterPercent,
-                                    [this](const int percent) { jumpToPercent(percent); })) {
+    if (SyncedPositionPrompt::offer(*this, renderer, mappedInput, book->getFolder(), syncedPositionPercent(), [this] {
+          if (writeSyncedPosition()) activityManager.goToReader(book->getFolder());  // reopens there
+        })) {
       return;
     }
   }
@@ -2525,6 +2529,20 @@ bool MangaReaderActivity::updateOutlineInPlace() {
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   if (displayedRotated_) renderer.setOrientation(saved);
   return true;
+}
+
+bool MangaReaderActivity::writeSyncedPosition() {
+  syncedPosition::Position position;
+  if (!book || !syncedPosition::load(book->getFolder(), position)) return false;
+  syncedPosition::clear(book->getFolder());
+  return writePageProgress(book->getFolder(), syncedPosition::pageOf(position, book->getPageCount()));
+}
+
+int MangaReaderActivity::syncedPositionPercent() {
+  syncedPosition::Position position;
+  const uint32_t count = book ? book->getPageCount() : 0;
+  if (count == 0 || !syncedPosition::load(book->getFolder(), position)) return -1;
+  return static_cast<int>(syncedPosition::pageOf(position, count) * 100 / count);
 }
 
 bool MangaReaderActivity::startShortcutSync() { return KOREADER_STORE.hasCredentials() && launchSync(true); }

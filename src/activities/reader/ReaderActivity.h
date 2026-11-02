@@ -50,6 +50,11 @@ class ReaderActivity : public Activity {
   virtual void readerLoop() = 0;
   // Moves to a whole-book percentage; used for the synced-position prompt.
   virtual void jumpToPercent(int percent) = 0;
+  // Writes the position an Insights sync fetched from another device (syncedPosition) as this book's
+  // saved progress and drops it. False when there is none.
+  virtual bool writeSyncedPosition() { return false; }
+  // Where that position falls in this book, in percent; -1 when there is none.
+  virtual int syncedPositionPercent() { return -1; }
   // Called when loadBook() failed. Return true to keep the activity alive
   // (e.g. showing a dialog); false finishes it (the default).
   virtual bool handleLoadFailure() { return false; }

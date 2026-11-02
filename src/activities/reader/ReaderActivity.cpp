@@ -192,9 +192,8 @@ void ReaderActivity::loop() {
   // Once per open, after the first page is up; enterPercent is this reader's own saved progress.
   if (!syncedPositionOffered && pageRendered.load(std::memory_order_acquire) && !isAtEndOfBook()) {
     syncedPositionOffered = true;
-    if (SyncedPositionPrompt::offer(*this, renderer, mappedInput, bookPath, enterPercent, [this](const int percent) {
-          jumpToPercent(percent);
-          requestUpdate();
+    if (SyncedPositionPrompt::offer(*this, renderer, mappedInput, bookPath, syncedPositionPercent(), [this] {
+          if (writeSyncedPosition()) activityManager.goToReader(bookPath);  // reopens there
         })) {
       return;
     }

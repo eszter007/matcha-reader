@@ -30,9 +30,11 @@
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookProgress.h"
 #include "util/BookmarkFile.h"
 #include "util/BookmarkUtil.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SyncedPosition.h"
 
 bool XtcReaderActivity::loadBook() {
   xtc = makeUniqueNoThrow<Xtc>(bookPath, "/.crosspoint");
@@ -54,6 +56,8 @@ void XtcReaderActivity::onReaderEnter() {
   ignoreNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
   xtc->setupCacheDir();
 
+  // Smart sync moves to another device's position without asking, before the saved one is read.
+  if (KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART) writeSyncedPosition();
   // Load saved progress
   loadProgress();
   loadCachedBookmarks();
@@ -659,6 +663,20 @@ ScreenshotInfo XtcReaderActivity::getScreenshotInfo() const {
     info.currentPage = currentPage + 1;
   }
   return info;
+}
+
+bool XtcReaderActivity::writeSyncedPosition() {
+  syncedPosition::Position position;
+  if (!xtc || !syncedPosition::load(xtc->getPath(), position)) return false;
+  syncedPosition::clear(xtc->getPath());
+  return writePageProgress(xtc->getPath(), syncedPosition::pageOf(position, xtc->getPageCount()));
+}
+
+int XtcReaderActivity::syncedPositionPercent() {
+  syncedPosition::Position position;
+  const uint32_t count = xtc ? xtc->getPageCount() : 0;
+  if (count == 0 || !syncedPosition::load(xtc->getPath(), position)) return -1;
+  return static_cast<int>(syncedPosition::pageOf(position, count) * 100 / count);
 }
 
 bool XtcReaderActivity::startShortcutSync() { return KOREADER_STORE.hasCredentials() && launchSync(true); }

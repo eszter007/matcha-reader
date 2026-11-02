@@ -85,6 +85,7 @@
 #include "util/PluginEvents.h"
 #include "util/RemoteProgress.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SyncedPosition.h"
 #include "util/TextProfiles.h"
 
 namespace {
@@ -533,6 +534,9 @@ void EpubReaderActivity::onReaderEnter() {
   // NOTE: This affects layout math and must be applied before any render calls.
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
   appliedOrientation = SETTINGS.orientation;
+
+  // Smart sync moves to another device's position without asking, before the saved one is read.
+  if (KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART) writeSyncedPosition();
 
   HalFile f;
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
@@ -2357,6 +2361,37 @@ unsigned long EpubReaderActivity::confirmLongPressThreshold() const {
     default:
       return 0;
   }
+}
+
+bool EpubReaderActivity::mapSyncedPosition(CrossPointPosition& out) {
+  syncedPosition::Position position;
+  if (!epub || !syncedPosition::load(epub->getPath(), position)) return false;
+  // The mapper may lay out a section to count its pages, as the progress sync does.
+  RenderLock lock(*this);
+  GfxRenderer::FrameBufferLoan loan(renderer);
+  out = ProgressMapper::toCrossPoint(epub, {position.progress, position.percentage}, renderer, -1, 0);
+  return true;
+}
+
+bool EpubReaderActivity::writeSyncedPosition() {
+  CrossPointPosition mapped;
+  if (!mapSyncedPosition(mapped)) return false;
+  syncedPosition::clear(epub->getPath());
+  std::optional<uint32_t> offset;
+  if (mapped.hasVisibleTextOffset) offset = mapped.visibleTextOffset;
+  return EpubReaderUtils::saveProgress(*epub, mapped.spineIndex, mapped.pageNumber, 0, -1, -1, 0xFF, offset);
+}
+
+int EpubReaderActivity::syncedPositionPercent() {
+  CrossPointPosition mapped;
+  const size_t bookSize = epub ? epub->getBookSize() : 0;
+  if (bookSize == 0 || !mapSyncedPosition(mapped)) return -1;
+  const size_t before = mapped.spineIndex > 0 ? epub->getCumulativeSpineItemSize(mapped.spineIndex - 1) : 0;
+  const size_t spineSize = epub->getCumulativeSpineItemSize(mapped.spineIndex) - before;
+  const float inSpine =
+      mapped.totalPages > 0 ? static_cast<float>(mapped.pageNumber) / static_cast<float>(mapped.totalPages) : 0.0f;
+  return static_cast<int>((static_cast<float>(before) + inSpine * static_cast<float>(spineSize)) * 100.0f /
+                          static_cast<float>(bookSize));
 }
 
 bool EpubReaderActivity::startShortcutSync() {

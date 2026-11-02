@@ -22,6 +22,7 @@
 #include "OverviewParser.h"
 #include "ProgressChangesParser.h"
 #include "util/RemoteProgress.h"
+#include "util/SyncedPosition.h"
 
 namespace {
 // Same floor as KOReaderSyncClient and clippingSync.
@@ -500,6 +501,8 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
   // Free the TLS session before the progress request that follows.
   http->end();
   http.reset();
+  // Still online: the exact positions of the books the feed shows further ahead, for an offline open.
+  if (feedReady) syncedPosition::fetchAhead();
   // One SD write: a day or book sent twice is harmless, the server keeps the larger value or the newest snapshot.
   if (from > start) KOREADER_STORE.setStatsUploadedDay(days[from - 1].day);
   if (booksDone) KOREADER_STORE.setStatsBooksDay(booksDay);
