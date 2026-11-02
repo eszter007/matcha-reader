@@ -24,6 +24,13 @@ class FontCacheManager {
   //     FreeType faces (TtfEpdFont::releaseResidentCaches).
   // Everything faults back in on demand. For heap-critical transitions (e.g.
   // web-server + WiFi startup, image decode, dictionary, sleep).
+  using ReleaseCallback = void (*)(void* ctx);
+  // Runs first in releaseAllFontMemory(), for caches this class does not own (SdCardFontSystem's
+  // TTF variants on vector-font boards).
+  void setReleaseCallback(ReleaseCallback cb, void* ctx) {
+    releaseCb_ = cb;
+    releaseCtx_ = ctx;
+  }
   void releaseAllFontMemory();
   // Release what rendering holds -- SD mini arenas (forced, see SdCardFont::releaseRenderCaches),
   // per-scope TTF caches, the decompressor's cache and glyph slab -- but keep every measurement
@@ -85,6 +92,8 @@ class FontCacheManager {
   SdCardFont* fallbackSdFont_ = nullptr;
   // fallbackSdFont_ when it is not also one of sdCardFonts_ (so a release does not run twice).
   SdCardFont* unregisteredFallback() const;
+  ReleaseCallback releaseCb_ = nullptr;
+  void* releaseCtx_ = nullptr;
   const std::map<int, EpdFontFamily>& fontMap_;
   const std::map<int, SdCardFont*>& sdCardFonts_;
   // Read only when CROSSPOINT_VECTOR_FONTS is on (PSRAM boards).
