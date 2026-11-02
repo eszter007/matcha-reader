@@ -632,6 +632,8 @@ bool ActivityManager::applyQueuedRemoteInput() {
   return turned;
 }
 
+bool ActivityManager::handleForcedRefresh() { return currentActivity && currentActivity->handleForcedRefresh(); }
+
 void ActivityManager::syncGlyphSlab() {
   if (!currentActivity) return;
   // Before a draw, under the render lock (re-entrant, so callers holding it are fine): suspending
@@ -643,8 +645,6 @@ void ActivityManager::syncGlyphSlab() {
     }
   }
 }
-
-bool ActivityManager::handleForcedRefresh() { return currentActivity && currentActivity->handleForcedRefresh(); }
 
 bool ActivityManager::startShortcutSync() {
   return pendingAction == PendingAction::None && currentActivity && currentActivity->startShortcutSync();
