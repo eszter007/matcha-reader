@@ -48,7 +48,7 @@ class DictionaryDefinitionActivity final : public Activity {
 
   // Handles on the looked-up word behind the panel; a drag on one finishes with ClipStartResult.
   void setClipHandles(const LookupClipHandles& handles) { clipHandles = handles; }
-  void setMoreEntries(MoreEntries source) { more = source; }
+  void setMoreEntries(const MoreEntries& source) { more = source; }
   bool skipLoopDelay() override { return more.next != nullptr; }
 
   void onEnter() override;
