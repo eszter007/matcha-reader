@@ -1161,23 +1161,64 @@ TEST_F(StatsTest, TimeOfDayAddsUpThroughJournalAndCompact) {
   check();
 }
 
-// Refresh Insights brings the account's time of day back: a reset card does not upload zeros over it.
-TEST_F(StatsTest, DownloadedTimeOfDayRaisesTheLocalTotals) {
+// Refresh Insights brings the account's time of day back as a base the card's own minutes add to, so a reset card
+// neither uploads zeros over the history nor loses what it read before the refresh, and refreshing again or
+// uploading before the fold never counts a minute twice.
+TEST_F(StatsTest, DownloadedTimeOfDayBecomesTheBase) {
   auto& s = READING_STATS_STORE;
-  ReadingStatsStore::Change evening{Y, M, 5, 30, "/a.epub", "ja", nullptr};
-  evening.timeOfDay = 2;
-  ASSERT_TRUE(s.record(evening));
-  const uint32_t server[4] = {100, 0, 10, 5};
-  ASSERT_TRUE(ReadingStatsStore::saveDownload({{Y, M, 4, 20}}, server));
-  uint32_t pending[4] = {};
-  ASSERT_TRUE(ReadingStatsStore::pendingDownloadTimeOfDay(pending));  // what an upload before the fold sends
-  EXPECT_EQ(pending[0], 100u);
-  EXPECT_EQ(pending[3], 5u);
+  ReadingStatsStore::Change morning{Y, M, 5, 10, "/a.epub", "ja", nullptr};
+  morning.timeOfDay = 0;
+  ASSERT_TRUE(s.record(morning));  // a reset card, nothing uploaded from it yet
+  const uint32_t server[4] = {100, 0, 0, 5};
+  const uint32_t nothing[4] = {};
+  ASSERT_TRUE(ReadingStatsStore::saveDownload({{Y, M, 4, 20}}, server, nothing));
+  const uint32_t own[4] = {10, 0, 0, 0};
+  uint32_t base[4] = {};
+  ASSERT_TRUE(ReadingStatsStore::pendingDownloadBase(own, base));  // what an upload before the fold uses
+  EXPECT_EQ(base[0] + own[0], 110u);
+  EXPECT_EQ(base[3], 5u);
   ASSERT_TRUE(s.compact());
   READING_STATS_STORE = ReadingStatsStore{};
   ASSERT_TRUE(s.loadFromFile());
-  EXPECT_EQ(s.getTimeOfDayMinutes(0), 100u);
-  EXPECT_EQ(s.getTimeOfDayMinutes(2), 30u) << "the larger of the two, never the sum";
-  EXPECT_EQ(s.getTimeOfDayMinutes(3), 5u);
-  EXPECT_EQ(s.getTotalMinutes(), 50u);
+  EXPECT_EQ(s.getTimeOfDayMinutes(0), 10u) << "own minutes stay this card's";
+  EXPECT_EQ(s.getTimeOfDayBase(0), 100u);
+  EXPECT_EQ(s.getTimeOfDayBase(3), 5u);
+  s.release();
+
+  // That 110 was uploaded (own 10 in it); a second download, before or after the fold, finds the same base.
+  const uint32_t uploaded[4] = {110, 0, 0, 5};
+  ASSERT_TRUE(ReadingStatsStore::saveDownload({}, uploaded, own));
+  ASSERT_TRUE(s.compact());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTimeOfDayBase(0) + s.getTimeOfDayMinutes(0), 110u);
+}
+
+TEST_F(StatsTest, TimeOfDayBaseCountsEachMinuteOnce) {
+  constexpr uint32_t UNKNOWN = ReadingStatsStore::NO_UPLOAD_MARKER;
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(100, 0, 10), 100u);       // nothing uploaded: all own minutes new
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(110, 10, 10), 100u);      // own 10 already on the server
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(110, 10, 25), 100u);      // read 15 since the upload
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(80, 50, 50), 30u);        // another reader added 30
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(110, 110, 10), 110u);     // stats reset after an upload
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(110, UNKNOWN, 30), 80u);  // unknown: assume all on the server
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(5, UNKNOWN, 30), 0u);
+}
+
+// A save cut off inside the time-of-day block is not adopted: the journal, still on the card, holds those minutes.
+TEST_F(StatsTest, TempFileWithoutItsTimeOfDayIsNotAdopted) {
+  auto& s = READING_STATS_STORE;
+  ReadingStatsStore::Change night{Y, M, 5, 7, "/a.epub", "ja", nullptr};
+  night.timeOfDay = 3;
+  ASSERT_TRUE(s.record(night));
+  ASSERT_TRUE(s.loadFromFile());
+  ASSERT_TRUE(s.saveToFile());
+  s.release();
+  const std::string bin = testRoot() + sdsystem::path("reading_stats.bin");
+  std::filesystem::rename(bin, bin + ".tmp");
+  std::filesystem::resize_file(bin + ".tmp", std::filesystem::file_size(bin + ".tmp") - 8);
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTimeOfDayMinutes(3), 7u) << "replayed from the journal, not lost to the cut-off file";
+  EXPECT_EQ(s.getTotalMinutes(), 7u);
 }

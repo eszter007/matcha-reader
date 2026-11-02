@@ -1786,6 +1786,8 @@ What comes back is what any CrossPoint reader on your account uploaded:
 - each book's own insights (days, sessions, finished), for the books on the card. A book takes them in the next time you
   open it or its insights.
 - how much you read in the morning, afternoon, evening and night, so the app's time-of-day chart keeps its history.
+  With two readers on one account, run **Sync Insights** on each from time to time: until then a reader's upload can
+  hide the other one's newest minutes in that chart.
 
 A day that already has more minutes on the device keeps them, so syncing twice never counts anything double. The
 numbers show after the restart that ends the sync. Dictionary lookups and saved sentences stay on the device that

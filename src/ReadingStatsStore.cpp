@@ -554,6 +554,7 @@ bool ReadingStatsStore::saveToFile() const {
   put(&foldedJournalBytes, 4);
   put(&foldedJournalHash, 4);
   put(timeOfDayMinutes, sizeof(timeOfDayMinutes));  // v5
+  put(timeOfDayBase, sizeof(timeOfDayBase));
   // SdFat writes the last sector on close: a failure there is a short file too.
   ok = f.close() && ok;
   if (!ok) {
@@ -699,9 +700,16 @@ bool ReadingStatsStore::loadMainFile(const size_t pendingRecords) {
           f.read(reinterpret_cast<uint8_t*>(&foldedJournalHash), 4) != 4) {
         foldedJournalBytes = 0;
         foldedJournalHash = 0;
-      } else if (version >= 5 && f.read(reinterpret_cast<uint8_t*>(timeOfDayMinutes), sizeof(timeOfDayMinutes)) !=
-                                     sizeof(timeOfDayMinutes)) {
-        memset(timeOfDayMinutes, 0, sizeof(timeOfDayMinutes));
+      } else if (version >= 5) {
+        const bool onCard = f.size() - f.position() >= sizeof(timeOfDayMinutes) + sizeof(timeOfDayBase);
+        if (f.read(reinterpret_cast<uint8_t*>(timeOfDayMinutes), sizeof(timeOfDayMinutes)) !=
+                sizeof(timeOfDayMinutes) ||
+            f.read(reinterpret_cast<uint8_t*>(timeOfDayBase), sizeof(timeOfDayBase)) != sizeof(timeOfDayBase)) {
+          // Bytes that are there but did not read are a card error: no load, so no save drops them.
+          if (onCard) return false;
+          memset(timeOfDayMinutes, 0, sizeof(timeOfDayMinutes));
+          memset(timeOfDayBase, 0, sizeof(timeOfDayBase));
+        }
       }
       // Same ordering guarantee as days, for the same passes.
       const auto byDate = [](const LanguageDaily& a, const LanguageDaily& b) {
@@ -847,7 +855,8 @@ bool readFoldMarker(const std::string& path, uint32_t& bytes, uint32_t& hash) {
   }
   uint32_t b = 0, h = 0;
   if (f.read(reinterpret_cast<uint8_t*>(&n), 2) != 2 || !skipBytes(f, n * 10u) ||
-      f.read(reinterpret_cast<uint8_t*>(&b), 4) != 4 || f.read(reinterpret_cast<uint8_t*>(&h), 4) != 4) {
+      f.read(reinterpret_cast<uint8_t*>(&b), 4) != 4 || f.read(reinterpret_cast<uint8_t*>(&h), 4) != 4 ||
+      (version >= 5 && !skipBytes(f, 2 * ReadingStatsStore::TIME_OF_DAY_BUCKETS * sizeof(uint32_t)))) {
     return false;
   }
   bytes = b;
@@ -929,6 +938,7 @@ void ReadingStatsStore::release() {
   std::vector<StatsDigest>().swap(account);
   booksFinished = 0;
   memset(timeOfDayMinutes, 0, sizeof(timeOfDayMinutes));
+  memset(timeOfDayBase, 0, sizeof(timeOfDayBase));
   foldedJournalBytes = 0;
   foldedJournalHash = 0;
   loaded = false;
@@ -1307,7 +1317,8 @@ bool ReadingStatsStore::isFinished(const std::string& bookPath) const {
 bool ReadingStatsStore::hasPendingDownload() { return Storage.exists(downloadPath().c_str()); }
 bool ReadingStatsStore::hasStatsFile() { return Storage.exists(statsPath().c_str()); }
 
-bool ReadingStatsStore::saveDownload(const std::vector<DailyReading>& downloaded, const uint32_t* timeOfDayMinutes) {
+bool ReadingStatsStore::saveDownload(const std::vector<DailyReading>& downloaded, const uint32_t* serverTimeOfDay,
+                                     const uint32_t* uploadedTimeOfDay) {
   const std::string tmpPath = downloadPath() + ".tmp";
   HalFile f;
   if (!Storage.openFileForWrite("STAT", tmpPath.c_str(), f)) return false;
@@ -1317,9 +1328,10 @@ bool ReadingStatsStore::saveDownload(const std::vector<DailyReading>& downloaded
     ok = f.write(reinterpret_cast<const uint8_t*>(&downloaded[i]), sizeof(DailyReading)) == sizeof(DailyReading);
   }
   // Optional, after the days: older readers stop before it.
-  if (ok && timeOfDayMinutes) {
+  if (ok && serverTimeOfDay && uploadedTimeOfDay) {
     const size_t n = TIME_OF_DAY_BUCKETS * sizeof(uint32_t);
-    ok = f.write(reinterpret_cast<const uint8_t*>(timeOfDayMinutes), n) == n;
+    ok = f.write(reinterpret_cast<const uint8_t*>(serverTimeOfDay), n) == n &&
+         f.write(reinterpret_cast<const uint8_t*>(uploadedTimeOfDay), n) == n;
   }
   ok = f.close() && ok;
   if (!ok) {
@@ -1653,11 +1665,16 @@ bool ReadingStatsStore::mergeBookDownload(const std::string& list) {
 }
 
 namespace {
-// Reads the saved download's days, calling `day` for each valid one, then its optional time-of-day minutes.
-// False when the days are damaged; `hasTimeOfDay` tells whether the tail was there.
+// What a saved download carries for the time of day (see saveDownload).
+struct DownloadTimeOfDay {
+  uint32_t server[ReadingStatsStore::TIME_OF_DAY_BUCKETS];
+  uint32_t uploaded[ReadingStatsStore::TIME_OF_DAY_BUCKETS];
+};
+
+// Reads the saved download's days, calling `day` for each valid one, then its optional time of day. False when
+// the days are damaged; `hasTimeOfDay` tells whether the time of day was there whole.
 template <typename F>
-bool readDownloadFile(const size_t maxDays, F&& day, uint32_t (&tod)[ReadingStatsStore::TIME_OF_DAY_BUCKETS],
-                      bool& hasTimeOfDay) {
+bool readDownloadFile(const size_t maxDays, F&& day, DownloadTimeOfDay& tod, bool& hasTimeOfDay) {
   hasTimeOfDay = false;
   HalFile f;
   uint16_t count = 0;
@@ -1671,28 +1688,33 @@ bool readDownloadFile(const size_t maxDays, F&& day, uint32_t (&tod)[ReadingStat
     memcpy(&d, rec, sizeof(d));
     if (intact && d.month >= 1 && d.month <= 12 && d.day >= 1 && d.day <= 31) day(d);
   }
-  hasTimeOfDay = intact && f.read(reinterpret_cast<uint8_t*>(tod), sizeof(tod)) == sizeof(tod);
+  hasTimeOfDay = intact && f.read(reinterpret_cast<uint8_t*>(tod.server), sizeof(tod.server)) == sizeof(tod.server) &&
+                 f.read(reinterpret_cast<uint8_t*>(tod.uploaded), sizeof(tod.uploaded)) == sizeof(tod.uploaded);
   return intact;
 }
 }  // namespace
 
-bool ReadingStatsStore::pendingDownloadTimeOfDay(uint32_t (&out)[TIME_OF_DAY_BUCKETS]) {
+bool ReadingStatsStore::pendingDownloadBase(const uint32_t (&cardMinutes)[TIME_OF_DAY_BUCKETS],
+                                            uint32_t (&out)[TIME_OF_DAY_BUCKETS]) {
+  DownloadTimeOfDay tod;
   bool hasTimeOfDay = false;
-  readDownloadFile(MAX_DAYS, [](const DailyReading&) {}, out, hasTimeOfDay);
+  readDownloadFile(MAX_DAYS, [](const DailyReading&) {}, tod, hasTimeOfDay);
+  for (uint8_t i = 0; hasTimeOfDay && i < TIME_OF_DAY_BUCKETS; i++) {
+    out[i] = timeOfDayBaseFrom(tod.server[i], tod.uploaded[i], cardMinutes[i]);
+  }
   return hasTimeOfDay;
 }
 
 // Merges the saved download into the loaded tables. False when the file is damaged; what it held
 // up to there is merged.
 bool ReadingStatsStore::mergeDownloadFile() {
-  uint32_t tod[TIME_OF_DAY_BUCKETS];
+  DownloadTimeOfDay tod;
   bool hasTimeOfDay = false;
   const bool intact = readDownloadFile(
       MAX_DAYS, [this](const DailyReading& d) { mergeMinutes(d.year, d.month, d.day, d.minutesRead); }, tod,
       hasTimeOfDay);
-  // The account's totals hold this card's own uploads, so the larger value never counts a minute twice.
   for (uint8_t i = 0; hasTimeOfDay && i < TIME_OF_DAY_BUCKETS; i++) {
-    timeOfDayMinutes[i] = std::max(timeOfDayMinutes[i], tod[i]);
+    timeOfDayBase[i] = timeOfDayBaseFrom(tod.server[i], tod.uploaded[i], timeOfDayMinutes[i]);
   }
   return intact;
 }

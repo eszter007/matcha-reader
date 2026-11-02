@@ -93,8 +93,11 @@ class ReadingStatsStore {
   // before raising this.
   static constexpr size_t MAX_LANG_DAYS = 2500;
   std::vector<LanguageDaily> languageDays;              // sorted ascending by date
-  uint32_t timeOfDayMinutes[TIME_OF_DAY_BUCKETS] = {};  // see TIME_OF_DAY_BUCKETS
-  bool loaded = false;                                  // set by loadFromFile(), cleared by release()
+  uint32_t timeOfDayMinutes[TIME_OF_DAY_BUCKETS] = {};  // read on this card (see TIME_OF_DAY_BUCKETS)
+  // The account's minutes that did not come from this card (another reader, before a reset), from the last
+  // download; what is uploaded is this plus timeOfDayMinutes.
+  uint32_t timeOfDayBase[TIME_OF_DAY_BUCKETS] = {};
+  bool loaded = false;  // set by loadFromFile(), cleared by release()
   // The account digests ([0] all languages), loaded only for display: with them the getters count
   // a day read on any device, plus this reader's own minutes since the server answered.
   std::vector<StatsDigest> account;
@@ -192,6 +195,7 @@ class ReadingStatsStore {
   bool isFinished(const std::string& bookPath) const;
   const std::vector<DailyReading>& getDays() const { return days; }
   uint32_t getTimeOfDayMinutes(const uint8_t bucket) const { return timeOfDayMinutes[bucket]; }
+  uint32_t getTimeOfDayBase(const uint8_t bucket) const { return timeOfDayBase[bucket]; }
   // The time-of-day bucket a local hour (0-23) falls in.
   static uint8_t timeOfDay(int hour) {
     return hour >= 6 && hour < 12 ? 0 : hour >= 12 && hour < 18 ? 1 : hour >= 18 ? 2 : 3;
@@ -239,12 +243,24 @@ class ReadingStatsStore {
   // Daily minutes downloaded from the sync server, kept on SD until the next compact() folds them in
   // with mergeMinutes(). Written with WiFi up, when the tables may not fit; a newer download replaces
   // an unmerged one, and one that cannot be folded in yet stays for the next boot.
-  // timeOfDayMinutes: this account's time-of-day totals from the server, raised to at the merge.
-  static bool saveDownload(const std::vector<DailyReading>& downloaded, const uint32_t* timeOfDayMinutes = nullptr);
+  // serverTimeOfDay: this reader's time-of-day minutes on the server; uploadedTimeOfDay: this card's own minutes
+  // in its last upload to that account, or NO_UPLOAD_MARKER when unknown. Both or neither.
+  static bool saveDownload(const std::vector<DailyReading>& downloaded, const uint32_t* serverTimeOfDay = nullptr,
+                           const uint32_t* uploadedTimeOfDay = nullptr);
   // A saved download the next compact() has not folded in yet.
   static bool hasPendingDownload();
-  // Its time-of-day minutes, for an upload made before that fold; false when it holds none.
-  static bool pendingDownloadTimeOfDay(uint32_t (&out)[TIME_OF_DAY_BUCKETS]);
+  // The time-of-day base the next fold sets from it (see timeOfDayBase), for an upload made before the fold, given
+  // this card's own minutes now; false when the download holds no time of day.
+  static bool pendingDownloadBase(const uint32_t (&cardMinutes)[TIME_OF_DAY_BUCKETS],
+                                  uint32_t (&out)[TIME_OF_DAY_BUCKETS]);
+  static constexpr uint32_t NO_UPLOAD_MARKER = UINT32_MAX;
+  // What of the server's minutes did not come from this card: `uploaded` of them did. Fewer own minutes than were
+  // uploaded means the stats were reset since, so none of the current ones are on the server. Not knowing what was
+  // uploaded, it takes the server to hold all of them: an undercount, never a minute counted twice.
+  static uint32_t timeOfDayBaseFrom(uint32_t server, uint32_t uploaded, uint32_t card) {
+    const uint32_t own = uploaded == NO_UPLOAD_MARKER ? card : (card >= uploaded ? uploaded : 0);
+    return server > own ? server - own : 0;
+  }
   // A stats file exists: what a download since the last one would add to.
   static bool hasStatsFile();
   // This card's own totals, all languages first, for the overview the same sync fetches after uploading

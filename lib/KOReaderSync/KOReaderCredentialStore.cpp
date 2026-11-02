@@ -4,6 +4,8 @@
 #include <MD5Builder.h>
 #include <ObfuscationUtils.h>
 
+#include <cstring>
+
 namespace {
 // Default sync server URL. crosspoint-sync speaks the full KOSync protocol, so
 // pointing at any other kosync server (e.g. https://sync.koreader.rocks:443)
@@ -33,6 +35,10 @@ void KOReaderCredentialStore::toJson(JsonDocument& doc) const {
   doc["statsBooksSince"] = statsBooksSince;
   doc["statsDaysSince"] = statsDaysSince;
   doc["statsAccount"] = statsAccount;
+  if (statsTimeOfDayKnown) {
+    JsonArray timeOfDay = doc["statsTimeOfDay"].to<JsonArray>();
+    for (const uint32_t m : statsTimeOfDay) timeOfDay.add(m);
+  }
   JsonArray headers = doc["headers"].to<JsonArray>();
   for (const auto& header : customHeaders) {
     JsonObject headerObj = headers.add<JsonObject>();
@@ -95,6 +101,9 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
   statsBooksSince = doc["statsBooksSince"] | 0u;
   statsDaysSince = doc["statsDaysSince"] | 0u;
   statsAccount = doc["statsAccount"] | "";
+  JsonArrayConst timeOfDayValue = doc["statsTimeOfDay"].as<JsonArrayConst>();
+  statsTimeOfDayKnown = timeOfDayValue.size() == 4;
+  for (size_t i = 0; i < 4; i++) statsTimeOfDay[i] = timeOfDayValue[i] | 0u;
 
   size_t headerIndex = 0;
   for (JsonObjectConst headerObj : doc["headers"].as<JsonArrayConst>()) {
@@ -171,6 +180,8 @@ void KOReaderCredentialStore::stampStatsAccount() {
   statsBooksDay = 0;
   statsBooksSince = 0;
   statsDaysSince = 0;
+  memset(statsTimeOfDay, 0, sizeof(statsTimeOfDay));
+  statsTimeOfDayKnown = false;
 }
 
 void KOReaderCredentialStore::setStatsUploadedDay(const int32_t day) {
@@ -199,6 +210,19 @@ uint32_t KOReaderCredentialStore::getStatsDaysSince() const {
 void KOReaderCredentialStore::setStatsDaysSince(const uint32_t until) {
   stampStatsAccount();
   statsDaysSince = until;
+}
+
+bool KOReaderCredentialStore::getStatsTimeOfDay(uint32_t (&out)[4]) const {
+  // No stats account yet: nothing from this card went anywhere, so none of it is on the server.
+  const bool known = statsAccount.empty() || (statsTimeOfDayKnown && statsAccount == username + "@" + getBaseUrl());
+  for (size_t i = 0; i < 4; i++) out[i] = known ? statsTimeOfDay[i] : 0;
+  return known;
+}
+
+void KOReaderCredentialStore::setStatsTimeOfDay(const uint32_t (&minutes)[4]) {
+  stampStatsAccount();
+  memcpy(statsTimeOfDay, minutes, sizeof(statsTimeOfDay));
+  statsTimeOfDayKnown = true;
 }
 
 void KOReaderCredentialStore::setServerUrl(const std::string& url) {
