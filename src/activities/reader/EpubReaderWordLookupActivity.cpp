@@ -2074,8 +2074,9 @@ void EpubReaderWordLookupActivity::stepSelectionWalk() {
     selectionPos += hit.matchLength;
     if (WordSelectionScan::isNoiseMatch(std::string_view(text).substr(hitStart), hit.matchLength)) continue;
     if (std::find(selectionSeen.begin(), selectionSeen.end(), hit.entry.headword) != selectionSeen.end()) continue;
-    selectionSeen.push_back(hit.entry.headword);
+    const std::string headword = hit.entry.headword;
     if (!WordLookup::lookup(text, hitStart, hit, /*needDefinition=*/true)) continue;
+    selectionSeen.push_back(headword);  // only once shown: a failed read leaves a later occurrence its chance
     WordSelectionScan::stripTrailingParticle(tail, hit);
     RenderLock lock;
     appendSelectionEntry(std::move(hit.entry), hitStart, hit.matchLength);

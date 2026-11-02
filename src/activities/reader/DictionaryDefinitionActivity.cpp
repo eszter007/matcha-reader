@@ -101,7 +101,8 @@ void DictionaryDefinitionActivity::fetchMoreEntries() {
     onLoadingPage = false;
     showEntry(fresh.empty() ? entries.size() - 1 : entries.size() - fresh.size(), fresh.empty());
   }
-  requestUpdate();
+  // A word with no entry changes nothing on screen: no e-ink refresh for it.
+  if (!fresh.empty() || !moreToCome) requestUpdate();
 }
 
 std::string DictionaryDefinitionActivity::footerLabel() const {
