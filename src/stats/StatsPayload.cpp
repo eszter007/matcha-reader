@@ -22,12 +22,12 @@ void base64(const uint8_t* data, size_t length, std::string& out) {
 // Index into the server's Monday-first `dow`; 2000-01-01 (day 0) was a Saturday.
 int weekday(const int32_t day) { return (day + 5) % 7; }
 
-void weekdays(JsonObject doc, const uint32_t (&dow)[7]) {
+// tod: seconds per time of day; nullptr sends zeros (a book's own history has no hour).
+void weekdays(JsonObject doc, const uint32_t (&dow)[7], const uint32_t* tod = nullptr) {
   JsonArray out = doc["dow"].to<JsonArray>();
   for (const uint32_t s : dow) out.add(s);
-  // Time of day is not recorded on the device.
-  JsonArray tod = doc["tod"].to<JsonArray>();
-  for (int i = 0; i < 4; i++) tod.add(0);
+  JsonArray times = doc["tod"].to<JsonArray>();
+  for (uint8_t i = 0; i < ReadingStatsStore::TIME_OF_DAY_BUCKETS; i++) times.add(tod ? tod[i] : 0);
 }
 
 // Unix seconds at UTC midnight of a day, the server's date unit.
@@ -76,7 +76,7 @@ void statsSync::buildGlobal(JsonDocument& doc, const std::vector<Day>& days, con
   doc["streak"] = totals.longestStreak;
   uint32_t dow[7] = {};
   for (const auto& d : days) dow[weekday(d.day)] += d.seconds;
-  weekdays(doc.as<JsonObject>(), dow);
+  weekdays(doc.as<JsonObject>(), dow, totals.timeOfDay);
   JsonArray daily = doc["daily"].to<JsonArray>();
   for (size_t i = from; i < from + count && i < days.size(); i++) {
     char date[11];

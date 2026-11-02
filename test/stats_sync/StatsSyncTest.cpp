@@ -34,6 +34,8 @@ void global() {
   totals.seconds = 2160;
   totals.booksFinished = 4;
   totals.longestStreak = 2;
+  totals.timeOfDay[0] = 1200;
+  totals.timeOfDay[3] = 60;
 
   JsonDocument doc;
   statsSync::buildGlobal(doc, days, totals, 1, 2);
@@ -63,7 +65,9 @@ void global() {
   assert(dow[4] == 1200);  // Friday
   assert(dow[2] == 600);   // Wednesday
   assert(dow[6] == 0);     // Sunday
-  assert(doc["tod"].as<JsonArrayConst>().size() == 4);
+  JsonArrayConst tod = doc["tod"].as<JsonArrayConst>();
+  assert(tod.size() == 4);
+  assert(tod[0] == 1200 && tod[1] == 0 && tod[2] == 0 && tod[3] == 60);
 }
 
 void book() {
@@ -107,9 +111,9 @@ void book() {
 void download() {
   const std::string body =
       R"({"devices":[)"
-      R"({"device_id":"kobo","device":"Kobo","stats":{"daily":[{"date":"2026-10-20","seconds":600}]}},)"
+      R"({"device_id":"kobo","device":"Kobo","stats":{"tod":[60,60,60,60],"daily":[{"date":"2026-10-20","seconds":600}]}},)"
       R"({"device_id":"crosspoint-reader","device":"CrossPoint","updated_at":1,)"
-      R"("stats":{"v":5,"dow":[0,0,0,0,0,0,0],"daily":[)"
+      R"("stats":{"v":5,"dow":[0,0,0,0,0,0,0],"tod":[6000,0,1200,59],"daily":[)"
       R"({"date":"2024-01-01","seconds":600},)"  // before the window
       R"({"date":"2026-10-23","seconds":2460},)"
       R"({"date":"2026-10-24","seconds":30},)"  // under a minute
@@ -124,6 +128,9 @@ void download() {
   assert(parser.until() == 1761300100u);
   assert(days.size() == 1);
   assert(days[0].year == 2026 && days[0].month == 10 && days[0].day == 23 && days[0].minutesRead == 41);
+  uint32_t tod[ReadingStatsStore::TIME_OF_DAY_BUCKETS];
+  assert(parser.timeOfDayMinutes(tod));  // this reader's, in minutes; the Kobo's is not taken
+  assert(tod[0] == 100 && tod[1] == 0 && tod[2] == 20 && tod[3] == 0);
 
   std::vector<DailyReading> cut;
   cut.reserve(1);

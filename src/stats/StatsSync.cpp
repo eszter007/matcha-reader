@@ -398,6 +398,7 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
   }
   books.reserve(ReadingStatsStore::MAX_BOOKS);
   std::vector<AccountBaseline> baselines;
+  uint32_t ownTimeOfDay[ReadingStatsStore::TIME_OF_DAY_BUCKETS] = {};
   const int32_t booksFrom = KOREADER_STORE.getStatsBooksDay();
   {
     ReadingStatsStore::Loaded stats;
@@ -415,6 +416,16 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
     }
     totals.booksFinished = READING_STATS_STORE.getBooksFinished();
     totals.longestStreak = READING_STATS_STORE.getLongestStreak();
+    uint32_t base[ReadingStatsStore::TIME_OF_DAY_BUCKETS] = {};
+    for (uint8_t i = 0; i < ReadingStatsStore::TIME_OF_DAY_BUCKETS; i++) {
+      ownTimeOfDay[i] = READING_STATS_STORE.getTimeOfDayMinutes(i);
+      base[i] = READING_STATS_STORE.getTimeOfDayBase(i);
+    }
+    // A download not folded in yet (Sync Insights uploads right after it) holds the base the fold will set.
+    ReadingStatsStore::pendingDownloadBase(ownTimeOfDay, base);
+    for (uint8_t i = 0; i < ReadingStatsStore::TIME_OF_DAY_BUCKETS; i++) {
+      totals.timeOfDay[i] = (base[i] + ownTimeOfDay[i]) * 60u;
+    }
     // What is uploaded below: the overview fetched after it counts exactly this much of this reader.
     READING_STATS_STORE.accountBaselines(baselines);
     // Books read on or after the marker's day (it may have grown since) and the open book.
@@ -466,6 +477,7 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
                                  [](const Day& d, const int32_t day) { return d.day < day; }) -
                 days.begin();
   const size_t start = from;
+  bool globalSent = false;
   for (int batch = 0; batch < MAX_BATCHES; batch++) {
     const size_t count = std::min(DAYS_PER_UPLOAD, days.size() - from);
     body.clear();
@@ -478,6 +490,7 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
       ok = false;
       break;
     }
+    globalSent = true;
     from += count;
     if (from >= days.size()) break;
   }
@@ -490,7 +503,9 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
   // One SD write: a day or book sent twice is harmless, the server keeps the larger value or the newest snapshot.
   if (from > start) KOREADER_STORE.setStatsUploadedDay(days[from - 1].day);
   if (booksDone) KOREADER_STORE.setStatsBooksDay(booksDay);
-  if (from > start || booksDone) KOREADER_STORE.saveToFile();
+  // The server now holds this card's own minutes up to here: the next download's base leaves them out.
+  if (globalSent) KOREADER_STORE.setStatsTimeOfDay(ownTimeOfDay);
+  if (from > start || booksDone || globalSent) KOREADER_STORE.saveToFile();
   if (ok) LOG_INF("STATS", "Reading stats uploaded");
   return ok;
 }
@@ -528,12 +543,18 @@ bool statsSync::download() {
   });
   const bool complete = status == 200 && http->responseComplete() && parser->complete();
   const uint32_t until = parser->until();
+  uint32_t serverTimeOfDay[ReadingStatsStore::TIME_OF_DAY_BUCKETS];
+  const bool hasTimeOfDay = parser->timeOfDayMinutes(serverTimeOfDay);
   parser.reset();
+  uint32_t uploadedTimeOfDay[ReadingStatsStore::TIME_OF_DAY_BUCKETS];
+  if (!KOREADER_STORE.getStatsTimeOfDay(uploadedTimeOfDay)) {
+    for (auto& m : uploadedTimeOfDay) m = ReadingStatsStore::NO_UPLOAD_MARKER;
+  }
   if (!complete) {
     LOG_ERR("STATS", "Stats download failed: HTTP %d", status);
     return false;
   }
-  if (!ReadingStatsStore::saveDownload(days)) {
+  if (!ReadingStatsStore::saveDownload(days, hasTimeOfDay ? serverTimeOfDay : nullptr, uploadedTimeOfDay)) {
     LOG_ERR("STATS", "Downloaded stats not saved");
     return false;
   }

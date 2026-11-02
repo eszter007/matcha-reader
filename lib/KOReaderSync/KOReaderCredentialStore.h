@@ -56,6 +56,10 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   uint32_t statsBooksSince = 0;
   // The same for the daily totals' download.
   uint32_t statsDaysSince = 0;
+  // This card's own time-of-day minutes (morning, afternoon, evening, night) in its last global upload that
+  // reached the server; statsTimeOfDayKnown is false before one.
+  uint32_t statsTimeOfDay[4] = {};
+  bool statsTimeOfDayKnown = false;
   std::string statsAccount;
   void stampStatsAccount();
 
@@ -123,6 +127,9 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   void setStatsBooksSince(uint32_t until);
   uint32_t getStatsDaysSince() const;
   void setStatsDaysSince(uint32_t until);
+  // False when unknown: stats went to another account since the last upload to this one.
+  bool getStatsTimeOfDay(uint32_t (&out)[4]) const;
+  void setStatsTimeOfDay(const uint32_t (&minutes)[4]);
 
   // Sync behavior
   void setSyncBehavior(KOReaderSyncBehavior behavior);

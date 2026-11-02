@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <BookStats.h>
+#include <ReadingStatsStore.h>
 
 #include <cstdint>
 #include <string>
@@ -22,7 +23,8 @@ struct Totals {
   int32_t today = 0;  // days since 2000-01-01; anchors the history bitmap
   uint32_t seconds = 0;
   uint16_t booksFinished = 0;
-  int longestStreak = 0;  // the server's `streak` is the all-time longest
+  int longestStreak = 0;                                            // the server's `streak` is the all-time longest
+  uint32_t timeOfDay[ReadingStatsStore::TIME_OF_DAY_BUCKETS] = {};  // seconds: morning, afternoon, evening, night
 };
 
 // The id every CrossPoint reader uploads under, so the server sees one device per account.

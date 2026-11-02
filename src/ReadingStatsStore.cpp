@@ -26,6 +26,9 @@ static constexpr uint8_t ACCOUNT_VERSION = 2;
 static constexpr uint8_t MAX_DIGESTS = 21;  // all languages plus the server's 20 groups
 // Journal records start with this byte, so a torn or foreign tail is recognised and ignored.
 static constexpr uint8_t JOURNAL_RECORD_MAGIC = 0xA5;
+// Leads the language field of a record that carries only the time of day of the minutes before it: the bucket,
+// then the minutes as two bytes. Its minutes are 0 and its paths empty, so a reader that does not know it skips it.
+static constexpr char TIME_OF_DAY_MARK = '\x02';
 // A journal opens with this byte and a random nonce, so no two journals share a prefix: the fold
 // marker (see compact()) recognises a journal by its leading bytes.
 static constexpr uint8_t JOURNAL_HEADER_MAGIC = 0x5A;
@@ -46,8 +49,9 @@ static constexpr uint32_t TABLE_RESERVE_MARGIN = 4 * 1024;
 static bool tableFits(const size_t bytes) { return ESP.getMaxAllocHeap() >= bytes + TABLE_RESERVE_MARGIN; }
 // v3 appends the per-book block after the finished-book paths; v4 appends the per-day-per-language
 // block after that. Each older reader stops where its own format ends and ignores what follows,
-// rather than rejecting the file -- it will, however, drop the newer blocks the next time it saves.
-static constexpr uint8_t STATS_VERSION = 4;
+// rather than rejecting the file -- it will, however, drop the newer blocks the next time it saves. v5 appends
+// the time-of-day totals after the fold marker.
+static constexpr uint8_t STATS_VERSION = 5;
 // A byte no stats format could carry: 0, or a version far past any written so far. Such a file is
 // not read, folded or rewritten -- one filled with text (cross-linked clusters; '{' is 123) would
 // otherwise parse as stats. A newer real format still reads, as above.
@@ -549,6 +553,8 @@ bool ReadingStatsStore::saveToFile() const {
   }
   put(&foldedJournalBytes, 4);
   put(&foldedJournalHash, 4);
+  put(timeOfDayMinutes, sizeof(timeOfDayMinutes));  // v5
+  put(timeOfDayBase, sizeof(timeOfDayBase));
   // SdFat writes the last sector on close: a failure there is a short file too.
   ok = f.close() && ok;
   if (!ok) {
@@ -694,6 +700,16 @@ bool ReadingStatsStore::loadMainFile(const size_t pendingRecords) {
           f.read(reinterpret_cast<uint8_t*>(&foldedJournalHash), 4) != 4) {
         foldedJournalBytes = 0;
         foldedJournalHash = 0;
+      } else if (version >= 5) {
+        const bool onCard = f.size() - f.position() >= sizeof(timeOfDayMinutes) + sizeof(timeOfDayBase);
+        if (f.read(reinterpret_cast<uint8_t*>(timeOfDayMinutes), sizeof(timeOfDayMinutes)) !=
+                sizeof(timeOfDayMinutes) ||
+            f.read(reinterpret_cast<uint8_t*>(timeOfDayBase), sizeof(timeOfDayBase)) != sizeof(timeOfDayBase)) {
+          // Bytes that are there but did not read are a card error: no load, so no save drops them.
+          if (onCard) return false;
+          memset(timeOfDayMinutes, 0, sizeof(timeOfDayMinutes));
+          memset(timeOfDayBase, 0, sizeof(timeOfDayBase));
+        }
       }
       // Same ordering guarantee as days, for the same passes.
       const auto byDate = [](const LanguageDaily& a, const LanguageDaily& b) {
@@ -747,13 +763,26 @@ struct JournalRecord {
   uint8_t day = 0;
   uint16_t minutes = 0;
   std::string language, bookPath, finishedPath;
+  // A time-of-day record (see TIME_OF_DAY_MARK), read as one that changes nothing else.
+  uint8_t timeOfDay = ReadingStatsStore::NO_TIME_OF_DAY;
+  uint16_t timeOfDayMinutes = 0;
 };
 bool readRecord(HalFile& f, JournalRecord& r) {
   uint8_t magic = 0;
-  return f.read(&magic, 1) == 1 && magic == JOURNAL_RECORD_MAGIC &&
-         f.read(reinterpret_cast<uint8_t*>(&r.year), 2) == 2 && f.read(&r.month, 1) == 1 && f.read(&r.day, 1) == 1 &&
-         f.read(reinterpret_cast<uint8_t*>(&r.minutes), 2) == 2 && readString(f, r.language, MAX_STORED_LANGUAGE) &&
-         readString(f, r.bookPath, MAX_STORED_PATH) && readString(f, r.finishedPath, MAX_STORED_PATH);
+  const bool ok = f.read(&magic, 1) == 1 && magic == JOURNAL_RECORD_MAGIC &&
+                  f.read(reinterpret_cast<uint8_t*>(&r.year), 2) == 2 && f.read(&r.month, 1) == 1 &&
+                  f.read(&r.day, 1) == 1 && f.read(reinterpret_cast<uint8_t*>(&r.minutes), 2) == 2 &&
+                  readString(f, r.language, MAX_STORED_LANGUAGE) && readString(f, r.bookPath, MAX_STORED_PATH) &&
+                  readString(f, r.finishedPath, MAX_STORED_PATH);
+  r.timeOfDay = ReadingStatsStore::NO_TIME_OF_DAY;
+  r.timeOfDayMinutes = 0;
+  if (ok && r.minutes == 0 && r.language.size() == 4 && r.language[0] == TIME_OF_DAY_MARK && r.bookPath.empty() &&
+      r.finishedPath.empty()) {
+    r.timeOfDay = static_cast<uint8_t>(r.language[1]);
+    memcpy(&r.timeOfDayMinutes, &r.language[2], 2);
+    r.language.clear();
+  }
+  return ok;
 }
 
 // Size and hash of the whole journal: what compact() records as folded into the stats file.
@@ -826,7 +855,8 @@ bool readFoldMarker(const std::string& path, uint32_t& bytes, uint32_t& hash) {
   }
   uint32_t b = 0, h = 0;
   if (f.read(reinterpret_cast<uint8_t*>(&n), 2) != 2 || !skipBytes(f, n * 10u) ||
-      f.read(reinterpret_cast<uint8_t*>(&b), 4) != 4 || f.read(reinterpret_cast<uint8_t*>(&h), 4) != 4) {
+      f.read(reinterpret_cast<uint8_t*>(&b), 4) != 4 || f.read(reinterpret_cast<uint8_t*>(&h), 4) != 4 ||
+      (version >= 5 && !skipBytes(f, 2 * ReadingStatsStore::TIME_OF_DAY_BUCKETS * sizeof(uint32_t)))) {
     return false;
   }
   bytes = b;
@@ -856,6 +886,7 @@ bool ReadingStatsStore::replayJournal() {
   // A record cut short by a power loss ends the replay; everything before it counts.
   JournalRecord r;
   while (readRecord(f, r)) {
+    if (r.timeOfDay < TIME_OF_DAY_BUCKETS) timeOfDayMinutes[r.timeOfDay] += r.timeOfDayMinutes;
     if (r.minutes > 0) {
       if (r.year >= 2020) {  // the loader drops unset-clock days; the per-book total keeps them
         addMinutes(r.year, r.month, r.day, r.minutes);
@@ -906,6 +937,8 @@ void ReadingStatsStore::release() {
   std::vector<LanguageDaily>().swap(languageDays);
   std::vector<StatsDigest>().swap(account);
   booksFinished = 0;
+  memset(timeOfDayMinutes, 0, sizeof(timeOfDayMinutes));
+  memset(timeOfDayBase, 0, sizeof(timeOfDayBase));
   foldedJournalBytes = 0;
   foldedJournalHash = 0;
   loaded = false;
@@ -921,17 +954,31 @@ bool ReadingStatsStore::record(const Change& change) {
     unfinished.append(change.finishedPath, strnlen(change.finishedPath, MAX_STORED_PATH - 1));
   }
   const char* finishedField = change.unfinished && change.finishedPath ? unfinished.c_str() : change.finishedPath;
-  rec.reserve(JOURNAL_HEADER_BYTES + 13 + MAX_STORED_LANGUAGE +
+  const bool timed = change.minutes > 0 && change.timeOfDay < TIME_OF_DAY_BUCKETS;
+  rec.reserve(JOURNAL_HEADER_BYTES + 2 * 13 + MAX_STORED_LANGUAGE + 4 +
               (change.bookPath ? strnlen(change.bookPath, MAX_STORED_PATH) : 0) +
               (finishedField ? strnlen(finishedField, MAX_STORED_PATH) : 0));
-  rec.push_back(static_cast<char>(JOURNAL_RECORD_MAGIC));
-  rec.append(reinterpret_cast<const char*>(&change.year), 2);
-  rec.push_back(static_cast<char>(change.month));
-  rec.push_back(static_cast<char>(change.day));
-  rec.append(reinterpret_cast<const char*>(&change.minutes), 2);
+  const auto appendHeader = [&rec, &change](const uint16_t minutes) {
+    rec.push_back(static_cast<char>(JOURNAL_RECORD_MAGIC));
+    rec.append(reinterpret_cast<const char*>(&change.year), 2);
+    rec.push_back(static_cast<char>(change.month));
+    rec.push_back(static_cast<char>(change.day));
+    rec.append(reinterpret_cast<const char*>(&minutes), 2);
+  };
+  appendHeader(change.minutes);
   appendString(rec, change.language, MAX_STORED_LANGUAGE);
   appendString(rec, change.bookPath, MAX_STORED_PATH);
   appendString(rec, finishedField, MAX_STORED_PATH);
+  if (timed) {
+    appendHeader(0);
+    // Binary, so not through appendString: its bytes can be 0.
+    const uint16_t len = 4;
+    rec.append(reinterpret_cast<const char*>(&len), 2);
+    rec.push_back(TIME_OF_DAY_MARK);
+    rec.push_back(static_cast<char>(change.timeOfDay));
+    rec.append(reinterpret_cast<const char*>(&change.minutes), 2);
+    rec.append(4, '\0');  // no book path, no finished path
+  }
 
   std::lock_guard<std::recursive_mutex> lock(journalMutex());
   HalFile f;
@@ -1270,7 +1317,8 @@ bool ReadingStatsStore::isFinished(const std::string& bookPath) const {
 bool ReadingStatsStore::hasPendingDownload() { return Storage.exists(downloadPath().c_str()); }
 bool ReadingStatsStore::hasStatsFile() { return Storage.exists(statsPath().c_str()); }
 
-bool ReadingStatsStore::saveDownload(const std::vector<DailyReading>& downloaded) {
+bool ReadingStatsStore::saveDownload(const std::vector<DailyReading>& downloaded, const uint32_t* serverTimeOfDay,
+                                     const uint32_t* uploadedTimeOfDay) {
   const std::string tmpPath = downloadPath() + ".tmp";
   HalFile f;
   if (!Storage.openFileForWrite("STAT", tmpPath.c_str(), f)) return false;
@@ -1278,6 +1326,12 @@ bool ReadingStatsStore::saveDownload(const std::vector<DailyReading>& downloaded
   bool ok = f.write(reinterpret_cast<const uint8_t*>(&count), 2) == 2;
   for (uint16_t i = 0; ok && i < count; i++) {
     ok = f.write(reinterpret_cast<const uint8_t*>(&downloaded[i]), sizeof(DailyReading)) == sizeof(DailyReading);
+  }
+  // Optional, after the days: older readers stop before it.
+  if (ok && serverTimeOfDay && uploadedTimeOfDay) {
+    const size_t n = TIME_OF_DAY_BUCKETS * sizeof(uint32_t);
+    ok = f.write(reinterpret_cast<const uint8_t*>(serverTimeOfDay), n) == n &&
+         f.write(reinterpret_cast<const uint8_t*>(uploadedTimeOfDay), n) == n;
   }
   ok = f.close() && ok;
   if (!ok) {
@@ -1610,22 +1664,57 @@ bool ReadingStatsStore::mergeBookDownload(const std::string& list) {
   return true;
 }
 
-// Merges the saved download into the loaded tables. False when the file is damaged; what it held
-// up to there is merged.
-bool ReadingStatsStore::mergeDownloadFile() {
+namespace {
+// What a saved download carries for the time of day (see saveDownload).
+struct DownloadTimeOfDay {
+  uint32_t server[ReadingStatsStore::TIME_OF_DAY_BUCKETS];
+  uint32_t uploaded[ReadingStatsStore::TIME_OF_DAY_BUCKETS];
+};
+
+// Reads the saved download's days, calling `day` for each valid one, then its optional time of day. False when
+// the days are damaged; `hasTimeOfDay` tells whether the time of day was there whole.
+template <typename F>
+bool readDownloadFile(const size_t maxDays, F&& day, DownloadTimeOfDay& tod, bool& hasTimeOfDay) {
+  hasTimeOfDay = false;
   HalFile f;
   uint16_t count = 0;
   bool intact = Storage.openFileForRead("STAT", downloadPath().c_str(), f) &&
-                f.read(reinterpret_cast<uint8_t*>(&count), 2) == 2 && count <= MAX_DAYS;
+                f.read(reinterpret_cast<uint8_t*>(&count), 2) == 2 && count <= maxDays;
   for (uint16_t i = 0; intact && i < count; i++) {
     // Through a buffer: a record at an odd offset has no alignment guarantee.
     uint8_t rec[sizeof(DailyReading)];
     intact = f.read(rec, sizeof(rec)) == sizeof(rec);
     DailyReading d;
     memcpy(&d, rec, sizeof(d));
-    if (intact && d.month >= 1 && d.month <= 12 && d.day >= 1 && d.day <= 31) {
-      mergeMinutes(d.year, d.month, d.day, d.minutesRead);
-    }
+    if (intact && d.month >= 1 && d.month <= 12 && d.day >= 1 && d.day <= 31) day(d);
+  }
+  hasTimeOfDay = intact && f.read(reinterpret_cast<uint8_t*>(tod.server), sizeof(tod.server)) == sizeof(tod.server) &&
+                 f.read(reinterpret_cast<uint8_t*>(tod.uploaded), sizeof(tod.uploaded)) == sizeof(tod.uploaded);
+  return intact;
+}
+}  // namespace
+
+bool ReadingStatsStore::pendingDownloadBase(const uint32_t (&cardMinutes)[TIME_OF_DAY_BUCKETS],
+                                            uint32_t (&out)[TIME_OF_DAY_BUCKETS]) {
+  DownloadTimeOfDay tod;
+  bool hasTimeOfDay = false;
+  readDownloadFile(MAX_DAYS, [](const DailyReading&) {}, tod, hasTimeOfDay);
+  for (uint8_t i = 0; hasTimeOfDay && i < TIME_OF_DAY_BUCKETS; i++) {
+    out[i] = timeOfDayBaseFrom(tod.server[i], tod.uploaded[i], cardMinutes[i]);
+  }
+  return hasTimeOfDay;
+}
+
+// Merges the saved download into the loaded tables. False when the file is damaged; what it held
+// up to there is merged.
+bool ReadingStatsStore::mergeDownloadFile() {
+  DownloadTimeOfDay tod;
+  bool hasTimeOfDay = false;
+  const bool intact = readDownloadFile(
+      MAX_DAYS, [this](const DailyReading& d) { mergeMinutes(d.year, d.month, d.day, d.minutesRead); }, tod,
+      hasTimeOfDay);
+  for (uint8_t i = 0; hasTimeOfDay && i < TIME_OF_DAY_BUCKETS; i++) {
+    timeOfDayBase[i] = timeOfDayBaseFrom(tod.server[i], tod.uploaded[i], timeOfDayMinutes[i]);
   }
   return intact;
 }
