@@ -3,11 +3,14 @@
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Memory.h>
+#include <Utf8.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <algorithm>
 #include <cctype>
 #include <climits>
+#include <cstdint>
 #include <cstdlib>
 
 #include "BookStats.h"
@@ -41,6 +44,15 @@ bool isSelectableToken(const char* text) {
 }
 
 void indexBuildYield(void*) { vTaskDelay(1); }
+
+// Separates the words of a selection: ASCII spaces and punctuation other than the apostrophe and
+// hyphen inside words (don't, well-known), and the typographic quotes, dashes and ellipsis.
+bool separatesWords(const uint32_t cp) {
+  if (cp < 0x80)
+    return cp != '\'' && cp != '-' && (std::isspace(static_cast<int>(cp)) || std::ispunct(static_cast<int>(cp)));
+  return cp == 0xA0 || cp == 0xAB || cp == 0xBB || cp == 0x2013 || cp == 0x2014 || (cp >= 0x2018 && cp <= 0x201F) ||
+         cp == 0x2026;
+}
 
 }  // namespace
 
@@ -373,40 +385,95 @@ void DictionaryWordSelectActivity::performLookup() {
   // failure reported when none does is the first dictionary's that could not answer.
   std::string joined;
   const char* word = !lookupText.empty() ? lookupText.c_str() : lookupTextFor(static_cast<size_t>(selected), joined);
+  // A touch selection of several words: each word follows the whole text as entries of its own.
+  // Capped in count and in definition text held, since every entry stays in RAM until closed, and
+  // in time, since nothing reads input until the lookup returns. Independent of the JP/ZH panel's
+  // caps, which bound pages added while the reader can already page and leave.
+  static constexpr size_t MAX_SELECTION_WORDS = 6;
+  static constexpr size_t MAX_SELECTION_BYTES = 16 * 1024;
+  static constexpr uint32_t MAX_SELECTION_MS = 1500;
+  const bool selection = !lookupText.empty() && mappedInput.hasTouch();
   std::vector<DictionaryDefinitionActivity::Entry> entries;
-  entries.reserve(dictCount);
+  entries.reserve(dictCount * (selection ? 1 + MAX_SELECTION_WORDS : 1));
   bool ok = false;
   Dictionary::IndexResult indexResult = Dictionary::IndexResult::Ok;
   Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
-  for (size_t d = 0; d < dictCount; d++) {
-    auto& slot = dicts[d];
-    if (!slot.openOk) continue;
-    if (slot.needsIndex) {
-      Dictionary::IndexResult built = Dictionary::IndexResult::Ok;
-      slot.needsIndex = !slot.dict.buildIndex(&indexBuildYield, nullptr, &built);
-      if (slot.needsIndex) {  // a failed build retries on the next word
-        if (!ok && indexResult == Dictionary::IndexResult::Ok) indexResult = built;
+  size_t heldBytes = 0;
+  size_t byteLimit = SIZE_MAX;  // the selection's words fit under MAX_SELECTION_BYTES
+  // Every dictionary's entry for one text, after those already found; a headword one of them
+  // already gave is not repeated.
+  const auto lookUp = [&](const char* text) {
+    for (size_t d = 0; d < dictCount; d++) {
+      auto& slot = dicts[d];
+      if (!slot.openOk) continue;
+      if (slot.needsIndex) {
+        Dictionary::IndexResult built = Dictionary::IndexResult::Ok;
+        slot.needsIndex = !slot.dict.buildIndex(&indexBuildYield, nullptr, &built);
+        if (slot.needsIndex) {  // a failed build retries on the next word
+          if (!ok && indexResult == Dictionary::IndexResult::Ok) indexResult = built;
+          continue;
+        }
+      }
+      ok = true;
+      DictionaryDefinitionActivity::Entry entry;
+      Dictionary::LookupResult lookupResult = Dictionary::LookupResult::NotFound;
+      if (!slot.dict.lookup(text, entry.definition, entry.headword, &lookupResult)) {
+        if (result == Dictionary::LookupResult::NotFound) result = lookupResult;
         continue;
       }
+      entry.dictName = slot.dict.getBookName();
+      bool repeated = false;
+      for (const auto& found : entries) {
+        repeated = repeated || (found.headword == entry.headword && found.dictName == entry.dictName);
+      }
+      if (repeated || heldBytes + entry.definition.size() > byteLimit) continue;
+      heldBytes += entry.definition.size();
+      entry.html = slot.dict.definitionsAreHtml();
+      auto& draft = entry.draft;
+      draft.card.word = entry.headword;
+      draft.card.sentence = miningSentence(text);
+      draft.card.book = mining_.bookTitle;
+      draft.card.author = mining_.bookAuthor;
+      draft.card.dictionary = entry.dictName;
+      draft.language = sentencemining::languageForDictionary(slot.folder, language);
+      draft.bookPath = mining_.bookPath;
+      entries.push_back(std::move(entry));
     }
-    ok = true;
-    DictionaryDefinitionActivity::Entry entry;
-    Dictionary::LookupResult lookupResult = Dictionary::LookupResult::NotFound;
-    if (!slot.dict.lookup(word, entry.definition, entry.headword, &lookupResult)) {
-      if (result == Dictionary::LookupResult::NotFound) result = lookupResult;
-      continue;
+  };
+  lookUp(word);
+  if (selection) {
+    byteLimit = std::max(heldBytes, MAX_SELECTION_BYTES);
+    const uint32_t started = millis();
+    std::string single;
+    size_t wordsLookedUp = 0;
+    size_t pos = 0;
+    while (pos < lookupText.size() && wordsLookedUp < MAX_SELECTION_WORDS && heldBytes < byteLimit &&
+           millis() - started < MAX_SELECTION_MS) {
+      // The next word: separators skipped, then everything up to the next one.
+      size_t start = pos;
+      size_t end = pos;
+      while (pos < lookupText.size()) {
+        const auto* at = reinterpret_cast<const unsigned char*>(lookupText.c_str() + pos);
+        const auto* next = at;
+        const uint32_t cp = utf8NextCodepoint(&next);
+        if (cp == 0 || next == at) {
+          pos = lookupText.size();
+          break;
+        }
+        const bool separator = separatesWords(cp);
+        if (separator && end > start) break;
+        pos += static_cast<size_t>(next - at);
+        if (separator) start = pos;
+        end = pos;
+      }
+      if (end == start) break;
+      // A single word was the whole text, already looked up.
+      if (wordsLookedUp == 0 && pos >= lookupText.size()) break;
+      single.assign(lookupText, start, end - start);
+      lookUp(single.c_str());
+      wordsLookedUp++;
+      vTaskDelay(1);  // let idle tasks and the watchdog run between words
     }
-    entry.html = slot.dict.definitionsAreHtml();
-    entry.dictName = slot.dict.getBookName();
-    auto& draft = entry.draft;
-    draft.card.word = entry.headword;
-    draft.card.sentence = miningSentence(word);
-    draft.card.book = mining_.bookTitle;
-    draft.card.author = mining_.bookAuthor;
-    draft.card.dictionary = entry.dictName;
-    draft.language = sentencemining::languageForDictionary(slot.folder, language);
-    draft.bookPath = mining_.bookPath;
-    entries.push_back(std::move(entry));
   }
 
   if (!entries.empty()) {

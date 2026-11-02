@@ -174,6 +174,11 @@ bool WordSelectionScan::stripTrailingParticle(const std::string& text, WordLooku
   return true;
 }
 
+bool WordSelectionScan::isCaseParticle(const uint32_t cp) {
+  return cp == 0x306B || cp == 0x306E || cp == 0x3068 || cp == 0x304C || cp == 0x306F || cp == 0x3092 || cp == 0x3082 ||
+         cp == 0x3067 || cp == 0x3078 || cp == 0x3084 || cp == 0x304B || cp == 0x306A || cp == 0x3093;
+}
+
 void WordSelectionScan::encodeUtf8(uint32_t cp, std::string& out) {
   if (cp < 0x80) {
     out.push_back(static_cast<char>(cp));
@@ -1212,11 +1217,6 @@ void WordSelectionScan::scanOnePosition() {
     // remainder ても (2) < 3 so it stays, ところ/における likewise, while 羽蟻's remainder
     // ありません (5) >= 3 correctly loses to the split.
     // The explanatory ん counts too: んだろう must split as ん だろう, not んだ ろう (労).
-    auto isCaseParticle = [](uint32_t cp) {
-      return cp == 0x306B || cp == 0x306E || cp == 0x3068 || cp == 0x304C || cp == 0x306F || cp == 0x3092 ||
-             cp == 0x3082 || cp == 0x3067 || cp == 0x3078 || cp == 0x3084 || cp == 0x304B || cp == 0x306A ||
-             cp == 0x3093;
-    };
     if (hasMatch && matchChars >= 2 && isCaseParticle(allGlyphs[scanStart].codepoint) &&
         scanStart + 1 < allGlyphs.size() && allGlyphs[scanStart + 1].paragraphIndex == paraIdx) {
       std::string nextText;
@@ -1450,11 +1450,10 @@ bool WordSelectionScan::scanChineseRun(const size_t from) {
   return true;
 }
 
-namespace {
 // Post-scan display filter: single-char entries that are common particles or conjugation
 // fragments. These are valid in the scan (so から, ところ etc. get found correctly) but useless
 // as standalone lookup results.
-bool isDisplayNoise(uint32_t cp) {
+bool WordSelectionScan::isDisplayNoise(const uint32_t cp) {
   switch (cp) {
     case 0x306F:  // は
     case 0x304C:  // が
@@ -1503,7 +1502,6 @@ bool isDisplayNoise(uint32_t cp) {
       return false;
   }
 }
-}  // namespace
 
 // Examine a matched position the way performLookup() would display it; false = display noise
 // (bare particles, conjugation fragments) that should not become a selectable entry.

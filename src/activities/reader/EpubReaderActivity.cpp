@@ -752,7 +752,7 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
   // Japanese always takes the scan-based panel. Chinese does too once its converted dictionary
   // is on the card; without one it still gets the StarDict picker below, character by character.
   if (isJapaneseBook() || (isChineseBook() && DictIndex::isAvailable())) {
-    openWordLookupPanel(pageOnScreen, lookupAtX, lookupAtY);
+    openWordLookupPanel(pageOnScreen, lookupAtX, lookupAtY, lookupText);
     return;
   }
   std::vector<std::string> dictionaryFolders;
@@ -6029,7 +6029,8 @@ uint32_t EpubReaderActivity::verticalLookupTail(std::string& lookupTail, std::st
   return paragraph;
 }
 
-void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int lookupAtX, const int lookupAtY) {
+void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int lookupAtX, const int lookupAtY,
+                                             const std::string& selectionText) {
   prescan_.reset();  // the panel scans (or loads the cache) itself; give it the heap
   requestVerticalBuildNotice();
   if (!epub) return;
@@ -6064,6 +6065,8 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
     // that word; -1 (the menu and key paths) leaves it to place its own cursor.
     selectCtx.lookupAtX = lookupAtX;
     selectCtx.lookupAtY = lookupAtY;
+    // Only a touch selection can span several words.
+    if (mappedInput.hasTouch()) selectCtx.selectionText = selectionText;
     // Only when the framebuffer really holds what the panel shows. It does not after a chapter
     // build: the early render put the page on the e-ink, then the build borrowed the buffer's
     // bytes as inflate scratch. Skipping the repaint there composites the cursor onto whatever
@@ -6166,6 +6169,8 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
     selectCtx.repaintCtx = this;
     selectCtx.lookupAtX = lookupAtX;
     selectCtx.lookupAtY = lookupAtY;
+    // Only a touch selection can span several words.
+    if (mappedInput.hasTouch()) selectCtx.selectionText = selectionText;
     WordSelectionScan::LineGeometry geometry;
     {
       RenderLock lock(*this);

@@ -206,6 +206,11 @@ class WordSelectionScan {
   // A word beginning on the last on-page character reaches at most kMaxMatchChars - 1 further.
   static_assert(kLookupContextChars >= kMaxMatchChars - 1, "context must cover the longest match");
   static void encodeUtf8(uint32_t cp, std::string& out);
+  // A kana that is usually a particle (に, は, を, the copula な, explanatory ん): a match it starts
+  // gives way when the word one character later is at least as long (に + どっさり, not にど).
+  static bool isCaseParticle(uint32_t cp);
+  // A single kana that is a particle or a conjugation fragment, never a word worth showing alone.
+  static bool isDisplayNoise(uint32_t cp);
   static bool isLookupableChar(uint32_t cp);
   static bool isKatakana(uint32_t cp);
   static bool isCJK(uint32_t cp);
