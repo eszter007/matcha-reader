@@ -232,16 +232,6 @@ void EpubReaderWordLookupActivity::onEnter() {
   // string allocation inside performLookupImpl -- heap exhausted, cause unknown). Logged at
   // enter AND exit so a leak per open/close cycle shows as a declining series.
   LOG_INF("WLA", "onEnter heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-  // Suspend the glyph slab for the session -- 24KB back, and it cannot creep in again while the
-  // panel is up. Restored in onExit(). Under the render lock: setSlabEnabled(false) FREES the
-  // slab, and the render task may be mid-render holding pointers into it -- the same cross-task
-  // use-after-free reclaimFontHeap() takes the lock for.
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    if (auto* fd = fcm->getDecompressor()) {
-      RenderLock lock;
-      fd->setSlabEnabled(false);
-    }
-  }
   // A scan-cache hit remembers the position the user was last at on this exact page -- resume
   // there instead of making them click back through every entry they've already seen.
   const bool restored = scan.restoredCursorIndex != WordSelectionScan::kNoRestoredCursor &&
@@ -296,15 +286,6 @@ void EpubReaderWordLookupActivity::onEnter() {
 void EpubReaderWordLookupActivity::onExit() {
   DictionaryPanel::setAvoid(Rect{});
   LOG_INF("WLA", "onExit heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-  // Hand the glyph slab back to the UI (see setSlabEnabled): it is suspended for the whole panel
-  // session, where it earns little and costs 24KB of exactly the contiguous heap the dictionary
-  // caches and the definition renderer are fighting over.
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    if (auto* fd = fcm->getDecompressor()) {
-      RenderLock lock;  // mutates decompressor state; see the matching call in onEnter()
-      fd->setSlabEnabled(true);
-    }
-  }
   // Persist the current cursor position (a no-op if the scan never finished, or the cache path
   // is unset) so the next open of this exact page resumes here instead of at word one.
   if (!scanCachePath.empty()) {

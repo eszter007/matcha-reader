@@ -92,6 +92,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   // Full CPU + fast main-loop ticks while the progressive scan is running, so the between-poll
   // scan slices stay short enough that button presses are never missed.
   bool skipLoopDelay() override { return !scan.isDone(); }
+  // No glyph slab while the panel is up: its 24KB is the contiguous heap the dictionary caches and
+  // the definition renderer compete for.
+  bool wantsGlyphSlab() const override { return false; }
 
  private:
   WordSelectionScan scan;

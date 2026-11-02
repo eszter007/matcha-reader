@@ -411,10 +411,31 @@ void HomeActivity::freeCoverBuffer() {
   coverBufferStored = false;
 }
 
+void HomeActivity::armScrub() {
+  // Once per visit: later full renders (a cover arriving) must not re-arm a pass input dropped.
+  if (!cleanInitialRefresh || scrubArmed) return;
+  scrubArmed = true;
+  scrubDueMs = millis() + SCRUB_IDLE_MS;
+  scrubPending = true;
+  // Re-check after setting: a press the loop saw while the first frame was being sent must win
+  // whichever task gets here first (the loop sets the latch before clearing pending).
+  if (scrubCancelled) scrubPending = false;
+}
+
 void HomeActivity::loop() {
   // A real key press must not wait for a conversion; the abandoned job is retried on a later tick
   // and the heights already written to disk are kept.
   if (mappedInput.anyButtonDownRaw()) coverWorker_.requestCancel();
+  // Any press or touch drops the owed clean pass: buttons, remote and injected presses alike, and
+  // a tap on touch boards. Edges from this frame's update(), so nothing is polled here.
+  if (mappedInput.wasAnyPressed() || mappedInput.wasTouchActivity()) {
+    scrubCancelled = true;
+    scrubPending = false;
+  } else if (scrubPending && static_cast<int32_t>(millis() - scrubDueMs.load()) >= 0 && !RenderLock::peek()) {
+    scrubPending = false;
+    scrubNow = true;
+    requestUpdate();
+  }
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) backPressSeen = true;
   applyCoverResult();
   // Only once a card has measured the slot it draws into: a job at any other height writes a
@@ -598,10 +619,12 @@ void HomeActivity::render(RenderLock&&) {
     if (coverGridUi) coverGridUi->invalidateFrame();
     return;
   }
+  // The owed clean pass repaints everything, so it skips both fast paths below.
+  const bool scrubbing = scrubNow.exchange(false);
   // Fast path: a cursor move between two covers over an intact frame moves the ring and nothing
   // else. A full render re-opens and re-decodes every cover thumb from SD, which is what made
   // stepping sluggish on the boards with no PSRAM to snapshot them into.
-  if (coverGridUi && firstRenderDone && coverGridUi->tryMoveSelection(lastSelectorIndex, selectorIndex)) {
+  if (!scrubbing && coverGridUi && firstRenderDone && coverGridUi->tryMoveSelection(lastSelectorIndex, selectorIndex)) {
     lastSelectorIndex = selectorIndex;
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     return;
@@ -641,7 +664,7 @@ void HomeActivity::render(RenderLock&&) {
   // book title) and the cover tile -- whose glyph/cover reloads dominate a full render -- stay
   // untouched in the framebuffer. Moves that involve the cover-tile selection fall through.
   const int menuStart = metrics.homeContinueReadingInMenu ? 0 : static_cast<int>(recentBooks.size());
-  if (lastRenderValid && selectorIndex != lastSelectorIndex && selectorIndex >= menuStart &&
+  if (!scrubbing && lastRenderValid && selectorIndex != lastSelectorIndex && selectorIndex >= menuStart &&
       lastSelectorIndex >= menuStart) {
     renderer.fillRect(menuRect.x, menuRect.y, menuRect.width, menuRect.height, false);
     GUI.drawButtonMenu(
@@ -658,8 +681,8 @@ void HomeActivity::render(RenderLock&&) {
     lastSelectorIndex = selectorIndex;
     coverGridUi->setSelection(selectorIndex);
     UITheme::getInstance().drawCoverGridHome(*coverGridUi);
-    renderer.displayBuffer(cleanInitialRefresh && !firstRenderDone ? HalDisplay::HALF_REFRESH
-                                                                   : HalDisplay::FAST_REFRESH);
+    renderer.displayBuffer(scrubbing ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+    armScrub();
     // Slot heights are recorded during the draw above; a change (first layout pass, orientation
     // switch) means the paths must point at those sizes, and the scan has to walk the list again
     // because thumbs at the old size are no longer the ones the cards ask for.
@@ -707,14 +730,12 @@ void HomeActivity::render(RenderLock&&) {
       mappedInput.mapLabels(backResumes() ? tr(STR_RESUME) : "", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  // Captured before lastRenderValid is set: it is this fork's firstRenderDone, and the
-  // clean-refresh test below needs the value from *before* this paint.
-  const bool firstPaint = !lastRenderValid;
   lastRenderValid = true;
   lastSelectorIndex = selectorIndex;
-  // Splashless wake with no retained Quick Resume frame leaves the sleep image on the glass;
-  // only a HALF pass scrubs it. FAST otherwise, which is what the bare call already defaulted to.
-  renderer.displayBuffer(cleanInitialRefresh && firstPaint ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+  // Splashless wake with no retained Quick Resume frame leaves the sleep image on the glass, and a
+  // reader leaves its page; only a HALF pass scrubs them, owed until Home is left alone (armScrub).
+  renderer.displayBuffer(scrubbing ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+  armScrub();
 }
 
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }

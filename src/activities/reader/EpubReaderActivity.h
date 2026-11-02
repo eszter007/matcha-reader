@@ -177,6 +177,9 @@ class EpubReaderActivity final : public ReaderActivity {
   static_assert(std::size(kToolPanels) == ReaderToolbarUi::kToolCount, "one panel entry per dock tool");
   // The Text and Page panels: control rows instead of a list.
   bool controlPanelOpen() const { return overlay == Overlay::Text || overlay == Overlay::Page; }
+  // The glyph slab only while a panel is up: page text is prewarmed and never uses it, and its
+  // 24KB split the heap the page and Word Lookup need; panels keep their fast redraws.
+  bool wantsGlyphSlab() const override { return overlay != Overlay::None; }
   Overlay overlay = Overlay::None;
   int focusedTool = 0;  // the open panel's tool: 0=Contents, 1=Text, 2=Page, 4=More
   // Dock button cursor, a ReaderToolbarUi::kFocus* value: chapter steps, bookmark, then the tools.

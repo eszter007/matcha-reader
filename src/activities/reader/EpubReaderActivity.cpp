@@ -6668,6 +6668,7 @@ void EpubReaderActivity::closeOverlayToPage() {
     // the differential to keep diffing against the last pushed frame.
     renderer.restoreBwBuffer(/*resyncPanelBaseline=*/false);
     overlayPageStored = false;
+    activityManager.syncGlyphSlab();  // back on the page, which renders nothing to apply it
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     return;
   }
@@ -6677,6 +6678,7 @@ void EpubReaderActivity::closeOverlayToPage() {
 
 void EpubReaderActivity::renderOverlay() {
   if (!epub || (!section && !verticalSection) || !toolbarUi) return;
+  activityManager.syncGlyphSlab();  // panels are drawn from the loop task too, not only render()
 
   ReaderToolbarUi::Model model;
   // The dock's button cursor is tap-first (same convention as the panel lists): it only

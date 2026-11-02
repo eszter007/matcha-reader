@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <functional>
 #include <vector>
 
@@ -25,8 +26,19 @@ class HomeActivity final : public Activity {
   // on the press) must not.
   bool backPressSeen = false;
   bool backResumes() const;
-  // Set after the cover grid's first paint: that pass uses a clean HALF refresh, later ones FAST.
+  // Set after the cover grid's first paint.
   bool firstRenderDone = false;
+  // The clean HALF pass a reader or a splashless wake leaves owed to the glass. Home paints FAST
+  // first, so it is on screen and takes input at once, and repaints with HALF once left alone for
+  // SCRUB_IDLE_MS; any button or touch before that drops it, as the next screen redraws anyway.
+  // Armed by the render task, fired or dropped by the loop.
+  static constexpr uint32_t SCRUB_IDLE_MS = 1500;
+  std::atomic<bool> scrubPending{false};
+  std::atomic<bool> scrubNow{false};
+  std::atomic<uint32_t> scrubDueMs{0};
+  std::atomic<bool> scrubCancelled{false};  // a press or touch this visit: the pass is never owed again
+  bool scrubArmed = false;                  // render task only
+  void armScrub();
   // Partial-redraw state: after a full render, a cursor move between two MENU rows only erases
   // and redraws the menu block over the intact frame, skipping the header, cover tile, and
   // button hints (the bulk of a render). Any other update (recents load completion, battery

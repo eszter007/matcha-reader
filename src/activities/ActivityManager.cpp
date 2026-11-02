@@ -3,6 +3,7 @@
 #include <BlePageTurner.h>
 #include <BoardConfig.h>
 #include <FontCacheManager.h>
+#include <FontDecompressor.h>
 #include <HalDisplay.h>
 #include <HalFrontlight.h>
 #include <HalPowerManager.h>
@@ -89,6 +90,7 @@ void ActivityManager::renderTaskLoop() {
       // Night mode is a global output polarity applied to every activity.
       // The sleep screen forces normal polarity itself (SleepActivity).
       display.setInverted(SETTINGS.screenInverted != 0);
+      syncGlyphSlab();
       const uint32_t renderingVisit = screenVisit;
       currentActivity->render(std::move(lock));
       paintedVisit.store(renderingVisit, std::memory_order_release);
@@ -631,6 +633,18 @@ bool ActivityManager::applyQueuedRemoteInput() {
 }
 
 bool ActivityManager::handleForcedRefresh() { return currentActivity && currentActivity->handleForcedRefresh(); }
+
+void ActivityManager::syncGlyphSlab() {
+  if (!currentActivity) return;
+  // Before a draw, under the render lock (re-entrant, so callers holding it are fine): suspending
+  // the slab frees it.
+  RenderLock lock;
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor(); fd && fd->slabEnabled() != currentActivity->wantsGlyphSlab()) {
+      fd->setSlabEnabled(!fd->slabEnabled());
+    }
+  }
+}
 
 bool ActivityManager::startShortcutSync() {
   return pendingAction == PendingAction::None && currentActivity && currentActivity->startShortcutSync();

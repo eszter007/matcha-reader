@@ -57,6 +57,8 @@ class CatalogActivity : public UiListActivity {
   // Only work in progress keeps the device awake: a connection, fetch,
   // transfer, sign-in poll, or child flow (Wi-Fi picker, search keyboard).
   // Settled screens (lists, pickers, errors, done, not signed in) may auto-sleep.
+  // The glyph slab stays off while a download holds it suspended (see beginDownload()).
+  bool wantsGlyphSlab() const override { return !slabSuspended; }
   bool preventAutoSleep() override {
     return state == State::CHECK_WIFI || state == State::WIFI_SELECTION || state == State::SEARCH_INPUT ||
            state == State::LOADING || state == State::DOWNLOADING || state == State::AUTH;
