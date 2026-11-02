@@ -68,12 +68,53 @@ void DictionaryDefinitionActivity::ensureGlyphFallback() const {
 DictionaryDefinitionActivity::DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                            std::vector<Entry> entries)
     : Activity("DictionaryDefinition", renderer, mappedInput), entries(std::move(entries)) {
-  // The card keeps the definition as it came from the dictionary; the layout frees its copy.
-  for (auto& entry : this->entries) {
-    if (!entry.draft.valid()) continue;
-    entry.draft.card.definition =
-        entry.html ? sentencemining::capHtml(entry.definition) : sentencemining::definitionHtml(entry.definition);
+  for (auto& entry : this->entries) prepareDraft(entry);
+}
+
+// The card keeps the definition as it came from the dictionary; the layout frees its copy.
+void DictionaryDefinitionActivity::prepareDraft(Entry& entry) {
+  if (!entry.draft.valid()) return;
+  entry.draft.card.definition =
+      entry.html ? sentencemining::capHtml(entry.definition) : sentencemining::definitionHtml(entry.definition);
+}
+
+// One more word's entries, between input polls. Under the render lock only for the append: the
+// render task reads the entry on screen.
+void DictionaryDefinitionActivity::fetchMoreEntries() {
+  std::vector<Entry> fresh;
+  const bool moreToCome = more.next(more.ctx, entries, fresh);
+  RenderLock lock;
+  if (!moreToCome) {
+    if (more.failure) emptyMessage = more.failure(more.ctx);
+    more = MoreEntries{};
   }
+  if (!fresh.empty()) {
+    if (entries.empty()) BookStats::addCounts(fresh.front().draft.bookPath.c_str(), 1, 0);
+    entries.reserve(entries.size() + fresh.size());
+    for (auto& entry : fresh) {
+      prepareDraft(entry);
+      entries.push_back(std::move(entry));
+    }
+  }
+  // A reader on the Loading page lands on the first new entry, or on the last one at the end.
+  if (onLoadingPage && !entries.empty() && (!fresh.empty() || !more.next)) {
+    onLoadingPage = false;
+    showEntry(fresh.empty() ? entries.size() - 1 : entries.size() - fresh.size(), fresh.empty());
+  }
+  // A word with no entry changes nothing on screen: no e-ink refresh for it.
+  if (!fresh.empty() || !moreToCome) requestUpdate();
+}
+
+std::string DictionaryDefinitionActivity::footerLabel() const {
+  if (!showingEntry()) return {};
+  std::string label = entries[currentEntry].dictName;
+  if (entries.size() > 1) {
+    char place[16];
+    snprintf(place, sizeof(place), " (%u/%u)", static_cast<unsigned>(currentEntry + 1),
+             static_cast<unsigned>(entries.size()));
+    label += place;
+  }
+  return label;
 }
 
 void DictionaryDefinitionActivity::onEnter() {
@@ -81,7 +122,12 @@ void DictionaryDefinitionActivity::onEnter() {
   ensureGlyphFallback();
   Activity::onEnter();
   if (entries.empty()) {
-    finish();
+    if (!more.next) {
+      finish();
+      return;
+    }
+    onLoadingPage = true;  // nothing yet for the whole text; its words are on their way
+    requestUpdate();
     return;
   }
   showEntry(0, false);
@@ -101,12 +147,6 @@ void DictionaryDefinitionActivity::showEntry(const size_t index, const bool atLa
     textPages.layout(renderer, definitionFontId(), definition, body.width, body.height);
     totalPages = textPages.pageCount();
   }
-  dictLabel = entry.dictName;
-  if (entries.size() > 1) {
-    char place[16];
-    snprintf(place, sizeof(place), " (%u/%u)", static_cast<unsigned>(index + 1), static_cast<unsigned>(entries.size()));
-    dictLabel += place;
-  }
   currentPage = atLastPage ? totalPages - 1 : 0;
   miningFeedback_.clear();
 }
@@ -118,11 +158,16 @@ bool DictionaryDefinitionActivity::stepPage(const int direction) {
     } else if (currentEntry + 1 < entries.size()) {
       RenderLock lock;  // the render task draws from the pages this replaces
       showEntry(currentEntry + 1, false);
+    } else if (more.next && !onLoadingPage) {
+      onLoadingPage = true;
     } else {
       return false;
     }
   } else {
-    if (currentPage > 0) {
+    if (onLoadingPage) {
+      if (entries.empty()) return false;
+      onLoadingPage = false;  // back onto the last entry's last page, still laid out
+    } else if (currentPage > 0) {
       currentPage--;
     } else if (currentEntry > 0) {
       RenderLock lock;
@@ -177,6 +222,7 @@ bool DictionaryDefinitionActivity::layoutHtmlPages() {
 }
 
 void DictionaryDefinitionActivity::saveSentence() {
+  if (!showingEntry()) return;
   auto& draft = entries[currentEntry].draft;
   if (!draft.valid()) return;
   draft.card.date = sentencemining::today();  // the day of the save, not of the lookup
@@ -189,6 +235,8 @@ void DictionaryDefinitionActivity::saveSentence() {
 
 void DictionaryDefinitionActivity::loop() {
   if (miningFeedback_.popupExpired(millis())) requestUpdate();
+  // One word per tick; input below still runs every tick, so Back closes the view at once.
+  if (more.next && !RenderLock::peek()) fetchMoreEntries();
   // Back steps up to the word selection. The power click leaves the dictionary outright: from
   // the selection it opened this view, so from here it closes the whole flow -- two clicks in
   // and back out, without the reading hand moving.
@@ -215,7 +263,7 @@ void DictionaryDefinitionActivity::loop() {
     return;
   }
 
-  switch (PanelTouch::read(renderer, mappedInput, miningDraft().valid())) {
+  switch (PanelTouch::read(renderer, mappedInput, miningAvailable())) {
     case PanelTouch::Action::Close:
       finish();
       return;
@@ -243,6 +291,7 @@ void DictionaryDefinitionActivity::loop() {
 // termination). Called twice per render: once in font-cache scan mode, once
 // for the real paint.
 void DictionaryDefinitionActivity::drawBody(const int fontId, const int x, const int startY) const {
+  if (!showingEntry()) return;
   if (!pages.empty()) {
     pages[currentPage]->render(renderer, fontId, x, startY);
     return;
@@ -254,13 +303,19 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   // No clearScreen: the panel floats over the page the word-select activity left in the
   // framebuffer, and its own fill is opaque, so a re-render overwrites the previous one.
   char counter[16] = "";
-  if (totalPages > 1) {
+  if (showingEntry() && totalPages > 1) {
     snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, totalPages);
   }
-  const auto& entry = entries[currentEntry];
+  const char* headword = showingEntry() ? entries[currentEntry].headword.c_str() : "";
+  const std::string label = footerLabel();
   clipHandles.draw(renderer);  // under the card, beside the word on the page
-  const auto layout = DictionaryPanel::draw(renderer, entry.headword.c_str(), dictLabel.c_str(), counter, nullptr,
-                                            miningDraft().valid() && mappedInput.hasTouch(), miningFeedback_.saved());
+  const auto layout = DictionaryPanel::draw(renderer, headword, label.c_str(), counter, nullptr,
+                                            miningAvailable() && mappedInput.hasTouch(), miningFeedback_.saved());
+  if (!showingEntry()) {
+    // Loading while words are still being looked up; nothing found once they all have been.
+    UITheme::drawCenteredText(renderer, layout.body, UI_12_FONT_ID, layout.body.y + layout.body.height / 2,
+                              more.next ? tr(STR_LOADING) : I18N.get(emptyMessage), true);
+  }
 
   // Body: two-pass draw inside a prewarm scope (same pattern as the reader's
   // renderContents) so SD-card font glyphs load from SD in one batch instead
@@ -273,10 +328,11 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   drawBody(fontId, layout.body.x, layout.body.y);
   DictionaryPanel::drawPopup(renderer, layout, miningFeedback_.popupText(millis()));
 
-  const bool hasPrev = currentPage > 0 || currentEntry > 0;
-  const bool hasNext = currentPage + 1 < totalPages || currentEntry + 1 < entries.size();
+  const bool hasPrev = onLoadingPage ? !entries.empty() : currentPage > 0 || currentEntry > 0;
+  const bool hasNext =
+      !onLoadingPage && (currentPage + 1 < totalPages || currentEntry + 1 < entries.size() || more.next);
   const auto labels = mappedInput.mapLabels(
-      tr(STR_BACK), miningDraft().valid() ? (miningFeedback_.saved() ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE)) : "",
+      tr(STR_BACK), miningAvailable() ? (miningFeedback_.saved() ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE)) : "",
       hasPrev ? "<" : "", hasNext ? ">" : "");
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

@@ -3,11 +3,14 @@
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Memory.h>
+#include <Utf8.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <algorithm>
 #include <cctype>
 #include <climits>
+#include <cstdint>
 #include <cstdlib>
 
 #include "BookStats.h"
@@ -41,6 +44,17 @@ bool isSelectableToken(const char* text) {
 }
 
 void indexBuildYield(void*) { vTaskDelay(1); }
+
+// Separates the words of a selection: ASCII spaces and punctuation other than the apostrophe and
+// hyphen inside words (don't, don’t, well-known), and the typographic quotes, dashes and ellipsis.
+bool separatesWords(const uint32_t cp) {
+  if (cp < 0x80)
+    return cp != '\'' && cp != '-' && (std::isspace(static_cast<int>(cp)) || std::ispunct(static_cast<int>(cp)));
+  // U+2019 is also the typographic apostrophe (don’t); a quote left at a word's edge is stripped
+  // by the dictionary's own word cleanup.
+  return cp == 0xA0 || cp == 0xAB || cp == 0xBB || cp == 0x2013 || cp == 0x2014 || cp == 0x2018 ||
+         (cp >= 0x201A && cp <= 0x201F) || cp == 0x2026;
+}
 
 }  // namespace
 
@@ -373,49 +387,35 @@ void DictionaryWordSelectActivity::performLookup() {
   // failure reported when none does is the first dictionary's that could not answer.
   std::string joined;
   const char* word = !lookupText.empty() ? lookupText.c_str() : lookupTextFor(static_cast<size_t>(selected), joined);
+  // A touch selection of several words: the other words follow as further entries, looked up
+  // one per tick by the definition view while it is already showing (nextSelectionWord).
+  const bool selection = !lookupText.empty() && mappedInput.hasTouch();
   std::vector<DictionaryDefinitionActivity::Entry> entries;
-  entries.reserve(dictCount);
-  bool ok = false;
-  Dictionary::IndexResult indexResult = Dictionary::IndexResult::Ok;
-  Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
-  for (size_t d = 0; d < dictCount; d++) {
-    auto& slot = dicts[d];
-    if (!slot.openOk) continue;
-    if (slot.needsIndex) {
-      Dictionary::IndexResult built = Dictionary::IndexResult::Ok;
-      slot.needsIndex = !slot.dict.buildIndex(&indexBuildYield, nullptr, &built);
-      if (slot.needsIndex) {  // a failed build retries on the next word
-        if (!ok && indexResult == Dictionary::IndexResult::Ok) indexResult = built;
-        continue;
-      }
-    }
-    ok = true;
-    DictionaryDefinitionActivity::Entry entry;
-    Dictionary::LookupResult lookupResult = Dictionary::LookupResult::NotFound;
-    if (!slot.dict.lookup(word, entry.definition, entry.headword, &lookupResult)) {
-      if (result == Dictionary::LookupResult::NotFound) result = lookupResult;
-      continue;
-    }
-    entry.html = slot.dict.definitionsAreHtml();
-    entry.dictName = slot.dict.getBookName();
-    auto& draft = entry.draft;
-    draft.card.word = entry.headword;
-    draft.card.sentence = miningSentence(word);
-    draft.card.book = mining_.bookTitle;
-    draft.card.author = mining_.bookAuthor;
-    draft.card.dictionary = entry.dictName;
-    draft.language = sentencemining::languageForDictionary(slot.folder, language);
-    draft.bookPath = mining_.bookPath;
-    entries.push_back(std::move(entry));
-  }
+  entries.reserve(dictCount * (selection ? 1 + MAX_SELECTION_WORDS : 1));
+  LookupStatus status;
+  selectionHeldBytes = 0;
+  // A selection is not on the page's word list: its card sentence is the selection itself.
+  const std::string sentence = lookupText.empty() ? miningSentence(word)
+                               : selection        ? sentencemining::sentenceHtml("", lookupText, "")
+                                                  : std::string();
+  lookUpInto(word, sentence, {}, entries, SIZE_MAX, status);
+  selectionStatus = status;
+  selectionWordPos = 0;
+  selectionWordsDone = 0;
+  selectionByteLimit = std::max(selectionHeldBytes, MAX_SELECTION_BYTES);
+  const bool moreWords = selection && hasSeveralWords();
 
-  if (!entries.empty()) {
+  if (!entries.empty() || moreWords) {
     popup = Popup::None;
-    BookStats::addCounts(mining_.bookPath.c_str(), 1, 0);
+    if (!entries.empty()) BookStats::addCounts(mining_.bookPath.c_str(), 1, 0);
     auto definitionView = makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(entries));
     if (!definitionView) {
       LOG_ERR("DICT", "OOM: definition view");
       return;
+    }
+    if (moreWords) {
+      definitionView->setMoreEntries(
+          {this, &DictionaryWordSelectActivity::nextSelectionWord, &DictionaryWordSelectActivity::selectionFailure});
     }
     // A lookup of selected text (lookupText) never extracts the page's words, so it has no box.
     if (mappedInput.hasTouch() && selected >= 0 && static_cast<size_t>(selected) < words.size()) {
@@ -451,46 +451,8 @@ void DictionaryWordSelectActivity::performLookup() {
     });
     return;
   }
-  // Name the failure: a genuine miss is "Not found"; a word that WAS found but
-  // couldn't be read is a real error — and we distinguish decompression from a
-  // low-memory allocation from a generic read error.
-  if (!ok) {
-    popup = Popup::Error;
-    // An index build allocates a scan buffer, so it fails the same way lookups
-    // do on a fragmented heap — name that rather than a generic error.
-    switch (indexResult) {
-      case Dictionary::IndexResult::LowMemory:
-        popupMsg = StrId::STR_DICT_LOW_MEMORY;
-        break;
-      case Dictionary::IndexResult::ReadError:
-        popupMsg = StrId::STR_DICT_READ_FAILED;
-        break;
-      case Dictionary::IndexResult::Ok:
-      default:
-        popupMsg = StrId::STR_DICT_ERROR;  // dict.open() failed, not the index
-        break;
-    }
-  } else {
-    switch (result) {
-      case Dictionary::LookupResult::Decompress:
-        popup = Popup::Error;
-        popupMsg = StrId::STR_DICT_DECOMPRESS_ERROR;
-        break;
-      case Dictionary::LookupResult::LowMemory:
-        popup = Popup::Error;
-        popupMsg = StrId::STR_DICT_LOW_MEMORY;
-        break;
-      case Dictionary::LookupResult::ReadError:
-        popup = Popup::Error;
-        popupMsg = StrId::STR_DICT_READ_FAILED;
-        break;
-      case Dictionary::LookupResult::NotFound:
-      default:
-        popup = Popup::NotFound;
-        popupMsg = StrId::STR_DICT_NOT_FOUND;
-        break;
-    }
-  }
+  popupMsg = failureMessage(status);
+  popup = popupMsg == StrId::STR_DICT_NOT_FOUND ? Popup::NotFound : Popup::Error;
   popupTime = millis();
   requestUpdate();
 }
@@ -741,4 +703,145 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
     return;
   }
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
+// Every dictionary's entry for `text`, appended to `out`. A headword the same dictionary already
+// gave (in `shown` or `out`) is not repeated, and an entry that would take the definition text
+// held past `byteLimit` is left out.
+void DictionaryWordSelectActivity::lookUpInto(const char* text, const std::string& sentence,
+                                              const std::vector<DictionaryDefinitionActivity::Entry>& shown,
+                                              std::vector<DictionaryDefinitionActivity::Entry>& out,
+                                              const size_t byteLimit, LookupStatus& status) {
+  const auto repeated = [](const std::vector<DictionaryDefinitionActivity::Entry>& list,
+                           const DictionaryDefinitionActivity::Entry& entry) {
+    for (const auto& found : list) {
+      if (found.dictSlot == entry.dictSlot && found.headword == entry.headword) return true;
+    }
+    return false;
+  };
+  for (size_t d = 0; d < dictCount; d++) {
+    auto& slot = dicts[d];
+    if (!slot.openOk) continue;
+    if (slot.needsIndex) {
+      Dictionary::IndexResult built = Dictionary::IndexResult::Ok;
+      slot.needsIndex = !slot.dict.buildIndex(&indexBuildYield, nullptr, &built);
+      if (slot.needsIndex) {  // a failed build retries on the next word
+        if (!status.ok && status.indexResult == Dictionary::IndexResult::Ok) status.indexResult = built;
+        continue;
+      }
+    }
+    status.ok = true;
+    DictionaryDefinitionActivity::Entry entry;
+    Dictionary::LookupResult lookupResult = Dictionary::LookupResult::NotFound;
+    if (!slot.dict.lookup(text, entry.definition, entry.headword, &lookupResult)) {
+      if (status.result == Dictionary::LookupResult::NotFound) status.result = lookupResult;
+      continue;
+    }
+    entry.dictSlot = static_cast<uint8_t>(d);
+    if (repeated(shown, entry) || repeated(out, entry)) continue;
+    if (selectionHeldBytes + entry.definition.size() > byteLimit) continue;
+    selectionHeldBytes += entry.definition.size();
+    entry.dictName = slot.dict.getBookName();
+    entry.html = slot.dict.definitionsAreHtml();
+    auto& draft = entry.draft;
+    draft.card.word = entry.headword;
+    draft.card.sentence = sentence;
+    draft.card.book = mining_.bookTitle;
+    draft.card.author = mining_.bookAuthor;
+    draft.card.dictionary = entry.dictName;
+    draft.language = sentencemining::languageForDictionary(slot.folder, language);
+    draft.bookPath = mining_.bookPath;
+    out.push_back(std::move(entry));
+  }
+}
+
+// The selection's next word from selectionWordPos on: separators skipped, then everything up to
+// the next one. False at the end of the text.
+bool DictionaryWordSelectActivity::nextSelectionWordText(std::string& word, size_t& start) {
+  start = selectionWordPos;
+  size_t end = selectionWordPos;
+  while (selectionWordPos < lookupText.size()) {
+    const auto* at = reinterpret_cast<const unsigned char*>(lookupText.c_str() + selectionWordPos);
+    const auto* next = at;
+    const uint32_t cp = utf8NextCodepoint(&next);
+    if (cp == 0 || next == at) {
+      selectionWordPos = lookupText.size();
+      break;
+    }
+    const bool separator = separatesWords(cp);
+    if (separator && end > start) break;
+    selectionWordPos += static_cast<size_t>(next - at);
+    if (separator) start = selectionWordPos;
+    end = selectionWordPos;
+  }
+  if (end == start) return false;
+  word.assign(lookupText, start, end - start);
+  return true;
+}
+
+// Whether the selection holds more than the one word already looked up as the whole text.
+bool DictionaryWordSelectActivity::hasSeveralWords() {
+  std::string word;
+  size_t start = 0;
+  const bool first = nextSelectionWordText(word, start);
+  const bool several = first && nextSelectionWordText(word, start);
+  selectionWordPos = 0;
+  return several;
+}
+
+bool DictionaryWordSelectActivity::nextSelectionWord(void* ctx,
+                                                     const std::vector<DictionaryDefinitionActivity::Entry>& shown,
+                                                     std::vector<DictionaryDefinitionActivity::Entry>& fresh) {
+  auto* self = static_cast<DictionaryWordSelectActivity*>(ctx);
+  std::string word;
+  size_t start = 0;
+  if (self->selectionWordsDone >= MAX_SELECTION_WORDS || self->selectionHeldBytes >= self->selectionByteLimit ||
+      !self->nextSelectionWordText(word, start)) {
+    return false;
+  }
+  self->selectionWordsDone++;
+  const std::string& text = self->lookupText;
+  const std::string sentence =
+      sentencemining::sentenceHtml(text.substr(0, start), word, text.substr(start + word.size()));
+  LookupStatus status;
+  self->lookUpInto(word.c_str(), sentence, shown, fresh, self->selectionByteLimit, status);
+  // The first failure that is not a plain miss is kept, for the view to name if nothing is found.
+  auto& kept = self->selectionStatus;
+  if (!status.ok && kept.ok) kept = status;
+  if (status.ok && kept.ok && kept.result == Dictionary::LookupResult::NotFound) kept.result = status.result;
+  return true;
+}
+
+StrId DictionaryWordSelectActivity::selectionFailure(void* ctx) {
+  return failureMessage(static_cast<DictionaryWordSelectActivity*>(ctx)->selectionStatus);
+}
+
+// What a lookup that found nothing should say: a genuine miss is "Not found"; a word that WAS
+// found but couldn't be read is a real error -- decompression, a low-memory allocation, or a
+// generic read error.
+StrId DictionaryWordSelectActivity::failureMessage(const LookupStatus& status) {
+  if (!status.ok) {
+    // An index build allocates a scan buffer, so it fails the same way lookups
+    // do on a fragmented heap -- name that rather than a generic error.
+    switch (status.indexResult) {
+      case Dictionary::IndexResult::LowMemory:
+        return StrId::STR_DICT_LOW_MEMORY;
+      case Dictionary::IndexResult::ReadError:
+        return StrId::STR_DICT_READ_FAILED;
+      case Dictionary::IndexResult::Ok:
+      default:
+        return StrId::STR_DICT_ERROR;  // dict.open() failed, not the index
+    }
+  }
+  switch (status.result) {
+    case Dictionary::LookupResult::Decompress:
+      return StrId::STR_DICT_DECOMPRESS_ERROR;
+    case Dictionary::LookupResult::LowMemory:
+      return StrId::STR_DICT_LOW_MEMORY;
+    case Dictionary::LookupResult::ReadError:
+      return StrId::STR_DICT_READ_FAILED;
+    case Dictionary::LookupResult::NotFound:
+    default:
+      return StrId::STR_DICT_NOT_FOUND;
+  }
 }

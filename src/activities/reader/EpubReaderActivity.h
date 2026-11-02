@@ -725,7 +725,8 @@ class EpubReaderActivity final : public ReaderActivity {
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
   void openFootnotesPanel();
-  void openWordLookupPanel(bool pageOnScreen, int lookupAtX = -1, int lookupAtY = -1);
+  void openWordLookupPanel(bool pageOnScreen, int lookupAtX = -1, int lookupAtY = -1,
+                           const std::string& selectionText = "");
   // The next page's opening characters as lookup context (and, when asked, the longer mining
   // tail); returns their paragraph. Callers hold the render lock (getPage() re-faults the slot).
   uint32_t verticalLookupTail(std::string& lookupTail, std::string* miningTail);

@@ -11,6 +11,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <SdCardFontSystem.h>
+#include <Utf8.h>
 #include <WordLookup.h>
 
 #include <algorithm>
@@ -770,7 +771,29 @@ void EpubReaderWordLookupActivity::enterDefinition() {
   // every lookup still paid the popup's full refresh for nothing.
   mode = Mode::Definition;
   performLookup();
-  if (!hasResult) {
+  // A selection's other words may still match: its walk shows Loading on page 1 until they do.
+  const bool selectionPending = !selectCtx.selectionText.empty() && selectionWalk == SelectionWalk::NotStarted;
+  if (selectionPending) {
+    // Started with the opening lookup, so any later lookup (another word) ends it.
+    selectionWalk = SelectionWalk::Running;
+    selectionSeen.reserve(MAX_SELECTION_WORDS + 1);
+    selectionSpans.reserve(MAX_SELECTION_WORDS);
+    // A selection that holds the whole opened word starts after it: page 1 already shows it.
+    // One that holds only part of it (バナ of バナナ) is walked from its start.
+    if (hasResult) {
+      const size_t from = currentAllGlyphIndex();
+      std::string surface;
+      for (size_t i = from; i < scan.allGlyphs.size() && i < from + static_cast<size_t>(std::max(1, resultMatchLen));
+           i++) {
+        WordSelectionScan::encodeUtf8(scan.allGlyphs[i].codepoint, surface);
+      }
+      if (!surface.empty() && selectCtx.selectionText.compare(0, surface.size(), surface) == 0) {
+        selectionPos = surface.size();
+      }
+    }
+    if (hasResult) selectionSeen.push_back(resultHeadword);
+  }
+  if (!hasResult && !selectionPending) {
     mode = Mode::Select;
     noMatchPopupPending.store(true, std::memory_order_release);
     selectPageDrawn = false;
@@ -780,7 +803,8 @@ void EpubReaderWordLookupActivity::enterDefinition() {
 
 void EpubReaderWordLookupActivity::returnToSelect() {
   mode = Mode::Select;
-  selectPageDrawn = false;  // the definition overdrew the page; it has to be painted again
+  selectionWalk = SelectionWalk::Done;  // Back or a tap outside ends a selection walk
+  selectPageDrawn = false;              // the definition overdrew the page; it has to be painted again
   portENTER_CRITICAL(&boxMux);
   clipHandles = LookupClipHandles{};  // the repaint takes them off the page
   portEXIT_CRITICAL(&boxMux);
@@ -1202,11 +1226,12 @@ std::string EpubReaderWordLookupActivity::miningSentence() const {
 }
 
 void EpubReaderWordLookupActivity::saveSentence() {
-  if (!hasResult) return;
+  if (!hasResult || onLoadingPage()) return;
   sentencemining::Card card;
   card.word = visibleHeadword();
   card.reading = visibleReading();
-  card.sentence = miningSentence();
+  card.sentence = selectionMiningSentence();
+  if (card.sentence.empty()) card.sentence = miningSentence();
   // The whole entry on screen, led by its grammar line ("5-dan verb · transitive") when it has one.
   const char* grammar = visibleGrammar();
   std::string definition = grammar[0] != '\0' ? std::string(grammar) + "\n" : std::string();
@@ -1570,6 +1595,12 @@ void EpubReaderWordLookupActivity::performLookup() {
   // runs -- fast navigation otherwise briefly flashes the no-match text in the window between
   // clearing the previous result and the next lookup (~100-300ms) completing.
   lookupInFlight = true;
+  // Another word is being looked up: the selection's pages belonged to the one before.
+  if (selectionWalk != SelectionWalk::NotStarted) {
+    RenderLock lock;
+    selectionWalk = SelectionWalk::Done;
+    selectionSpans.clear();
+  }
   DictIndex::consumeHeapLimited();  // drop any stale flag from an earlier lookup
   performLookupImpl();
   // A definition that was FOUND and then dropped for want of heap is a transient failure, not an
@@ -1998,6 +2029,159 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   requestUpdate();
 }
 
+// One slice of the walk over a touch selection: the longest entry at each position, whatever the
+// page's segmentation made of the text, appended as a page of its own. Input is read between
+// slices, so Back or a tap outside the panel ends it at once.
+void EpubReaderWordLookupActivity::stepSelectionWalk() {
+  const std::string& text = selectCtx.selectionText;
+  const uint32_t start = millis();
+  bool changed = false;
+  // A long selection is walked only so far: past that, mostly particles would mean SD reads for nothing.
+  const size_t end = std::min(text.size(), MAX_SELECTION_SCAN_BYTES);
+  while (selectionPos < end && !selectionFull() && millis() - start < SELECTION_STEP_MS) {
+    const auto* at = reinterpret_cast<const unsigned char*>(text.c_str() + selectionPos);
+    const auto* next = at;
+    const uint32_t cp = utf8NextCodepoint(&next);
+    const size_t charBytes = static_cast<size_t>(next - at);
+    if (cp == 0 || charBytes == 0) {  // an embedded NUL ends the text
+      selectionPos = text.size();
+      break;
+    }
+    if (!utf8IsCjkCodepoint(cp)) {  // spaces and Latin: no entry starts here
+      selectionPos += charBytes;
+      continue;
+    }
+    // Spans only: the definition is read once a hit is kept.
+    WordLookupResult hit;
+    if (!WordLookup::lookup(text, selectionPos, hit, /*needDefinition=*/false) || hit.matchLength == 0) {
+      selectionPos += charBytes;
+      continue;
+    }
+    // The page scan's rule: a particle glued to the next word (が + います read as がい) gives way
+    // when the word one character later is at least as long.
+    if (WordSelectionScan::isCaseParticle(cp) && hit.matchLength > charBytes) {
+      WordLookupResult after;
+      if (WordLookup::lookup(text, selectionPos + charBytes, after, /*needDefinition=*/false) &&
+          after.matchLength >= hit.matchLength) {
+        selectionPos += charBytes;
+        continue;
+      }
+    }
+    const size_t hitStart = selectionPos;
+    // As the opening lookup does: 今日は is 今日 before は, not the greeting.
+    const std::string tail = text.substr(hitStart, WordSelectionScan::kMaxMatchChars * 4);
+    WordSelectionScan::stripTrailingParticle(tail, hit, /*needDefinition=*/false);
+    selectionPos += hit.matchLength;
+    if (WordSelectionScan::isNoiseMatch(std::string_view(text).substr(hitStart), hit.matchLength)) continue;
+    if (std::find(selectionSeen.begin(), selectionSeen.end(), hit.entry.headword) != selectionSeen.end()) continue;
+    const std::string headword = hit.entry.headword;
+    if (!WordLookup::lookup(text, hitStart, hit, /*needDefinition=*/true)) continue;
+    selectionSeen.push_back(headword);  // only once shown: a failed read leaves a later occurrence its chance
+    WordSelectionScan::stripTrailingParticle(tail, hit);
+    RenderLock lock;
+    appendSelectionEntry(std::move(hit.entry), hitStart, hit.matchLength);
+    changed = true;
+  }
+  const bool done = selectionPos >= end || selectionFull();
+  if (done) {
+    RenderLock lock;  // render() must not see Done before the clamp below
+    selectionWalk = SelectionWalk::Done;
+    // A reader on the Loading page lands on the last entry.
+    if (!sectionText.empty() && currentSection >= static_cast<int>(sectionText.size())) {
+      currentSection = static_cast<int>(sectionText.size()) - 1;
+      scrollOffset = 0;
+    }
+  }
+  if (changed || done) requestUpdate();
+}
+
+// Under the render lock: render() reads the result strings and sections.
+void EpubReaderWordLookupActivity::appendSelectionEntry(DictEntry&& entry, const size_t textOffset,
+                                                        const size_t matchBytes) {
+  SelectionSpan span{0, static_cast<uint16_t>(textOffset), static_cast<uint16_t>(matchBytes)};
+  if (!hasResult) {
+    // Nothing matched the opened word: the selection's first word takes page 1. The split copies
+    // the definition into pages before freeing it, so twice its size must fit.
+    if (!DictIndex::fitsInHeap(2 * entry.definition.size())) {
+      LOG_ERR("WLA", "Selection walk stopped: no heap for %u bytes",
+              static_cast<unsigned>(2 * entry.definition.size()));
+      selectionWords = MAX_SELECTION_WORDS;
+      return;
+    }
+    resultHeadword = std::move(entry.headword);
+    resultDefinition = std::move(entry.definition);
+    resultDict = entry.sourceDict;
+    hasResult = true;
+    splitDefinitionIntoSections();
+    if (sectionText.empty()) {
+      DefinitionText::formatEntryBody(resultDefinition, std::string(), std::string());
+      selectionWords = MAX_SELECTION_WORDS;  // a single scrolling text cannot take further pages
+      return;
+    }
+    selectionSpans.push_back(span);
+    countSelectionWord(0);
+    return;
+  }
+  // An opening result that returned before it was split (a fictional name, ヘムレンさん).
+  if (sectionText.empty()) splitDefinitionIntoSections();
+  if (sectionText.empty()) {  // the opened word is one scrolling text: no pages to add to
+    selectionWords = MAX_SELECTION_WORDS;
+    return;
+  }
+  // Split as an alternative headword's entry: the arrow line names its pages. The split copies
+  // the text into pages before freeing it, so twice its size must fit.
+  static constexpr char kArrow[] = "\xe2\x86\x92 ";
+  const size_t length = sizeof(kArrow) - 1 + entry.headword.size() + 1 + entry.definition.size();
+  if (!DictIndex::fitsInHeap(2 * length)) {
+    LOG_ERR("WLA", "Selection walk stopped: no heap for %u bytes", static_cast<unsigned>(2 * length));
+    selectionWords = MAX_SELECTION_WORDS;
+    return;
+  }
+  if (onLoadingPage()) scrollOffset = 0;  // the new entry takes the Loading page's place
+  const size_t before = sectionText.size();
+  span.firstSection = static_cast<uint16_t>(before);
+  entry.headword.insert(0, kArrow);
+  entry.headword += '\n';
+  entry.definition.insert(0, entry.headword);
+  resultDefinition = std::move(entry.definition);
+  splitDefinitionIntoSections(entry.sourceDict);
+  // Past the text budget the word's pages go again, before the render task can show them.
+  size_t added = 0;
+  for (size_t i = before; i < sectionText.size(); i++) added += sectionText[i].size();
+  if (selectionHeldBytes + added > MAX_SELECTION_BYTES) {
+    sectionText.resize(before);
+    sectionLabel.resize(before);
+    sectionReading.resize(before);
+    sectionGrammar.resize(before);
+    sectionKind.resize(before);
+    sectionHead.resize(before);
+    selectionWords = MAX_SELECTION_WORDS;
+    return;
+  }
+  if (sectionText.size() > before) selectionSpans.push_back(span);
+  countSelectionWord(before);
+}
+
+// One more word of the selection, and the definition text its pages from `firstNew` on hold.
+void EpubReaderWordLookupActivity::countSelectionWord(const size_t firstNew) {
+  selectionWords++;
+  for (size_t i = firstNew; i < sectionText.size(); i++) selectionHeldBytes += sectionText[i].size();
+}
+
+// The selection's text around the word on the current page when the walk added that page, as card
+// HTML; empty for the opened word's own pages.
+std::string EpubReaderWordLookupActivity::selectionMiningSentence() const {
+  const SelectionSpan* span = nullptr;
+  for (const auto& candidate : selectionSpans) {
+    if (candidate.firstSection <= currentSection) span = &candidate;
+  }
+  if (!span) return {};
+  const std::string& text = selectCtx.selectionText;
+  if (span->offset + span->length > text.size()) return {};
+  return sentencemining::sentenceHtml(text.substr(0, span->offset), text.substr(span->offset, span->length),
+                                      text.substr(span->offset + span->length));
+}
+
 void EpubReaderWordLookupActivity::loop() {
   if (miningFeedback_.popupExpired(millis())) requestUpdate();
   // The word under the opening long press, as soon as the scan can name it. Before input, so a
@@ -2010,6 +2194,13 @@ void EpubReaderWordLookupActivity::loop() {
       refreshCursorBoxes();
       requestUpdate();
     }
+  }
+
+  // One slice of the selection walk per tick; the input below still runs every tick, so Back
+  // or a tap outside the panel ends it.
+  if (mode == Mode::Definition && !lookupInFlight && !selectCtx.selectionText.empty() &&
+      selectionWalk != SelectionWalk::Done && !RenderLock::peek()) {
+    stepSelectionWalk();
   }
 
   if (mode == Mode::Select) {
@@ -2032,7 +2223,8 @@ void EpubReaderWordLookupActivity::loop() {
     if (mode == Mode::Definition) {
       // The open can show "No match" if the initial burst found nothing yet -- promote the first
       // word as soon as the background scan discovers it.
-      if (!hasResult && !scan.selectableGlyphs.empty()) {
+      // A selection's walk fills page 1 itself; a lookup here would end it.
+      if (!hasResult && !scan.selectableGlyphs.empty() && selectionWalk != SelectionWalk::Running) {
         performLookup();
         requestUpdate();
       }
@@ -2203,7 +2395,7 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
 }
 
 void EpubReaderWordLookupActivity::moveSection(const int delta) {
-  const int count = static_cast<int>(sectionText.size());
+  const int count = pageCount();
   if (count <= 1) return;
   const int next = currentSection + delta;
   if (next < 0 || next >= count) return;  // ends are hard stops: the entry is a list, not a ring
@@ -2219,22 +2411,25 @@ void EpubReaderWordLookupActivity::moveSection(const int delta) {
 // lifted out of the body and shown in the panel footer instead. Only where the panel opened on
 // the page with a word cursor (a book, vertical or horizontal) -- manga keeps the single
 // scrolling blob, where Left/Right move the word cursor.
-void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
-  sectionText.clear();
-  sectionLabel.clear();
-  sectionReading.clear();
-  sectionGrammar.clear();
-  sectionKind.clear();
-  sectionHead.clear();
-  currentSection = 0;
+void EpubReaderWordLookupActivity::splitDefinitionIntoSections(const uint8_t appendDict) {
+  if (appendDict == 0) {
+    sectionText.clear();
+    sectionLabel.clear();
+    sectionReading.clear();
+    sectionGrammar.clear();
+    sectionKind.clear();
+    sectionHead.clear();
+    currentSection = 0;
+  }
   if (!pagedDefinition() || resultDefinition.empty()) return;
+  const size_t firstSection = sectionText.size();
 
   static constexpr char kEntrySep[] = "\n\n---\n";
   static constexpr char kGrammarSep[] = "\n\n— Grammar: ";
 
   // Upper bound on the pieces: one per separator, plus the first. Duplicates are dropped later,
   // so this over-reserves slightly rather than letting six vectors realloc in lockstep.
-  size_t pieceCount = 1;
+  size_t pieceCount = firstSection + 1;
   for (size_t at = resultDefinition.find(kEntrySep); at != std::string::npos;
        at = resultDefinition.find(kEntrySep, at + sizeof(kEntrySep) - 1)) {
     pieceCount++;
@@ -2275,7 +2470,8 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
 
   // Vocab until the grammar separator is crossed; a name lookup has no separators at all, so its
   // single piece takes the kind the lookup itself resolved.
-  StrId kind = resultDict == DictIndex::DICT_NAMES ? StrId::STR_DICT_KIND_NAME : StrId::STR_DICT_KIND_VOCAB;
+  const uint8_t dict = appendDict != 0 ? appendDict : resultDict;
+  StrId kind = dict == DictIndex::DICT_NAMES ? StrId::STR_DICT_KIND_NAME : StrId::STR_DICT_KIND_VOCAB;
   std::string grammarHead;      // the pattern named by the grammar heading, once it is seen
   std::string alternativeHead;  // another headword the text can be, from its arrow line on
   // Cut at whichever separator comes first, repeatedly.
@@ -2314,7 +2510,8 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
     } else if (kind != StrId::STR_DICT_KIND_GRAMMAR && !alternativeHead.empty()) {
       // A further record of that headword: it keeps the name until the next one or the grammar.
       head = alternativeHead;
-    } else if (kind != StrId::STR_DICT_KIND_GRAMMAR && !sectionText.empty() && !retainedPrefixHead.empty()) {
+    } else if (kind != StrId::STR_DICT_KIND_GRAMMAR && sectionText.size() > firstSection &&
+               !retainedPrefixHead.empty()) {
       // Every page after the book's reading is a dictionary entry for the retained prefix.
       head = retainedPrefixHead;
     } else if (kind == StrId::STR_DICT_KIND_GRAMMAR) {
@@ -2345,7 +2542,7 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
       DefinitionText::EntryMetadata metadata;
       DefinitionText::extractEntryMetadata(piece, head.empty() ? resultHeadword : head, metadata);
       if (!metadata.source.empty()) label = std::move(metadata.source);
-      if (sectionText.empty()) {
+      if (sectionText.size() == firstSection && appendDict == 0) {
         if (metadata.reading.empty()) metadata.reading = resultReading;
         if (metadata.grammar.empty()) metadata.grammar = resultGrammar;
       }
@@ -2354,7 +2551,8 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
 
       bool duplicate = false;
       size_t replaceAt = sectionText.size();
-      for (size_t i = 0; i < sectionText.size(); i++) {
+      // Only this entry's own pages: an appended word never merges into the ones before it.
+      for (size_t i = firstSection; i < sectionText.size(); i++) {
         // The header grammar left the body, so siblings that differ only in their tags differ here.
         // The same senses under another headword (足りる, 足る) are a page of their own.
         if ((sectionText[i] == piece && sectionGrammar[i] == metadata.grammar && sectionHead[i] == head &&
@@ -2402,7 +2600,7 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
     }
   }
   // Free the merged copy: the pieces own the text now.
-  if (!sectionText.empty()) {
+  if (sectionText.size() > firstSection) {
     resultDefinition.clear();
     resultDefinition.shrink_to_fit();
   }
@@ -2416,6 +2614,7 @@ const std::string& EpubReaderWordLookupActivity::visibleDefinition() const {
 }
 
 const char* EpubReaderWordLookupActivity::visibleHeadword() const {
+  if (onLoadingPage()) return "";
   if (!sectionHead.empty() && currentSection < static_cast<int>(sectionHead.size()) &&
       !sectionHead[currentSection].empty()) {
     return sectionHead[currentSection].c_str();
@@ -2424,6 +2623,7 @@ const char* EpubReaderWordLookupActivity::visibleHeadword() const {
 }
 
 const char* EpubReaderWordLookupActivity::visibleKind() const {
+  if (onLoadingPage()) return nullptr;
   if (!sectionKind.empty() && currentSection < static_cast<int>(sectionKind.size()))
     return I18N.get(sectionKind[currentSection]);
   if (resultSource == nullptr) return nullptr;
@@ -2443,6 +2643,7 @@ const char* EpubReaderWordLookupActivity::visibleGrammar() const {
 }
 
 const char* EpubReaderWordLookupActivity::visibleLabel() const {
+  if (onLoadingPage()) return nullptr;
   if (!sectionLabel.empty() && currentSection < static_cast<int>(sectionLabel.size()) &&
       !sectionLabel[currentSection].empty()) {
     return sectionLabel[currentSection].c_str();
@@ -2490,10 +2691,10 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
     }
   }
 
-  if (scan.selectableGlyphs.empty() || !hasResult) {
+  if (scan.selectableGlyphs.empty() || !hasResult || onLoadingPage()) {
     // "No match found" is only the truth once nothing is still in flight; during fast
     // navigation or while the progressive scan is still mapping the page, show Loading.
-    const bool stillWorking = lookupInFlight || !scan.isDone();
+    const bool stillWorking = lookupInFlight || !scan.isDone() || selectionWalk == SelectionWalk::Running;
     const char* message = tr(STR_NO_MATCH);
     if (stillWorking)
       message = tr(STR_LOADING);
@@ -2589,8 +2790,8 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
     if (pagedDefinition()) {
       // Which source you are on, not which word on the page -- the word count belongs to the
       // selection view, and 1/834 says nothing about the entry you are reading.
-      if (sectionText.size() > 1) {
-        counterText = std::to_string(currentSection + 1) + "/" + std::to_string(sectionText.size());
+      if (pageCount() > 1) {
+        counterText = std::to_string(currentSection + 1) + "/" + std::to_string(pageCount());
       }
     } else {
       counterText = std::to_string(cursorIndex + 1) + "/" +

@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 
+#include "DictionaryDefinitionActivity.h"
 #include "activities/Activity.h"
 #include "clippings/LookupClipHandles.h"
 #include "util/Dictionary.h"
@@ -125,6 +126,31 @@ class DictionaryWordSelectActivity final : public Activity {
   bool confirmPressSeen = false;
   unsigned long lastHorizontalMoveTime = 0;
   std::string lookupText;
+  // A touch selection's other words, looked up one per call while the definition view shows the
+  // first ones. Capped in count and in definition text held, since every entry stays in RAM until
+  // the view closes.
+  static constexpr size_t MAX_SELECTION_WORDS = 10;
+  static constexpr size_t MAX_SELECTION_BYTES = 16 * 1024;
+  size_t selectionWordPos = 0;
+  size_t selectionWordsDone = 0;
+  size_t selectionHeldBytes = 0;
+  size_t selectionByteLimit = MAX_SELECTION_BYTES;
+  struct LookupStatus {
+    bool ok = false;  // some dictionary could answer
+    Dictionary::IndexResult indexResult = Dictionary::IndexResult::Ok;
+    Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
+  };
+  // The phrase's outcome, then the first real failure of a word: what an empty view names.
+  LookupStatus selectionStatus;
+  static StrId failureMessage(const LookupStatus& status);
+  static StrId selectionFailure(void* ctx);
+  void lookUpInto(const char* text, const std::string& sentence,
+                  const std::vector<DictionaryDefinitionActivity::Entry>& shown,
+                  std::vector<DictionaryDefinitionActivity::Entry>& out, size_t byteLimit, LookupStatus& status);
+  bool nextSelectionWordText(std::string& word, size_t& start);
+  bool hasSeveralWords();
+  static bool nextSelectionWord(void* ctx, const std::vector<DictionaryDefinitionActivity::Entry>& shown,
+                                std::vector<DictionaryDefinitionActivity::Entry>& fresh);
 
   // One dictionary of the lookup, opened (and its index built) the first time a word is looked up.
   struct DictSlot {

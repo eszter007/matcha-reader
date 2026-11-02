@@ -51,6 +51,9 @@ struct WordSelectContext {
   // its line and its "row" its x, cellPx is the line's height, and each glyph brings its own
   // width; the cursor steps along the line and jumps between lines.
   bool lines = false;
+  // Text of a touch selection the panel was opened from. Its words follow the opened word as further
+  // pages, looked up on their own whatever the page's segmentation made of them.
+  std::string selectionText;
   bool valid() const { return repaintPage != nullptr && cellPx > 0; }
 };
 
@@ -91,7 +94,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   void render(RenderLock&&) override;
   // Full CPU + fast main-loop ticks while the progressive scan is running, so the between-poll
   // scan slices stay short enough that button presses are never missed.
-  bool skipLoopDelay() override { return !scan.isDone(); }
+  bool skipLoopDelay() override { return !scan.isDone() || selectionWalk == SelectionWalk::Running; }
   // No glyph slab while the panel is up: its 24KB is the contiguous heap the dictionary caches and
   // the definition renderer compete for.
   bool wantsGlyphSlab() const override { return false; }
@@ -299,7 +302,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   // Headword of the dictionary entries kept under a book-annotated name (東京 of 東京太郎).
   std::string retainedPrefixHead;
   int currentSection = 0;
-  void splitDefinitionIntoSections();
+  // appendDict != 0: resultDefinition holds one further entry from that dictionary; its pages go
+  // after the existing ones instead of replacing them.
+  void splitDefinitionIntoSections(uint8_t appendDict = 0);
   void moveSection(int delta);
   // Text and footer label for what is on screen: the current section in tategaki, the whole
   // merged definition otherwise.
@@ -376,6 +381,39 @@ class EpubReaderWordLookupActivity final : public Activity {
   // True while performLookup() is executing; render() shows "Loading..." instead of
   // "No match found" so fast navigation never flashes a false negative.
   bool lookupInFlight = false;
+  // Pages for the words of a touch selection (selectCtx.selectionText), found a few at a time from
+  // loop() so the panel stays responsive; a "Loading..." page ends the list until the walk is done.
+  // Same caps as the StarDict path: a sentence's worth of words, and the text their pages keep in
+  // RAM while the panel is open.
+  static constexpr uint8_t MAX_SELECTION_WORDS = 10;
+  static constexpr size_t MAX_SELECTION_BYTES = 16 * 1024;
+  static constexpr uint32_t SELECTION_STEP_MS = 30;
+  static constexpr size_t MAX_SELECTION_SCAN_BYTES = 240;  // 80 CJK characters
+  enum class SelectionWalk : uint8_t { NotStarted, Running, Done };
+  SelectionWalk selectionWalk = SelectionWalk::NotStarted;
+  size_t selectionPos = 0;
+  uint8_t selectionWords = 0;
+  size_t selectionHeldBytes = 0;
+  bool selectionFull() const {
+    return selectionWords >= MAX_SELECTION_WORDS || selectionHeldBytes >= MAX_SELECTION_BYTES;
+  }
+  std::vector<std::string> selectionSeen;  // headwords already shown
+  void stepSelectionWalk();
+  // Where in the selection text the word of the pages from firstSection on was found.
+  struct SelectionSpan {
+    uint16_t firstSection;
+    uint16_t offset;
+    uint16_t length;
+  };
+  std::vector<SelectionSpan> selectionSpans;
+  void appendSelectionEntry(DictEntry&& entry, size_t textOffset, size_t matchBytes);
+  void countSelectionWord(size_t firstNew);
+  std::string selectionMiningSentence() const;
+  // While the walk runs, one page past the last entry says more is coming. It holds no section:
+  // the section vectors only ever hold entries.
+  bool loadingPageShown() const { return selectionWalk == SelectionWalk::Running && !sectionText.empty(); }
+  bool onLoadingPage() const { return loadingPageShown() && currentSection >= static_cast<int>(sectionText.size()); }
+  int pageCount() const { return static_cast<int>(sectionText.size()) + (loadingPageShown() ? 1 : 0); }
   std::atomic<bool> noMatchPopupPending{false};
   size_t currentAllGlyphIndex() const;
   std::string buildLookupText() const;
