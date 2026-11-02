@@ -144,11 +144,9 @@ A wallpaper over the page you were reading. The book shows through. See [Guide �
 
 - Clippings and highlights work in vertical text too
 - Translate the selected text from the touch selection bar
-- Define on a multi-word touch selection shows the guessed word first, then the other words on the next pages
-- A Toolbar reader menu laid out as a dock (Settings → Reader → Reader Menu Style)
 - Optimize EPUB on upload: splits single-file novels into chapters and fits images to the screen
-- A Power + Up shortcut and Sync Insights & Clock on any button shortcut
-- Japanese and Chinese interface
+- Japanese and Chinese interface language support
+
 ## Setup
 
 Files go onto the SD card with a card reader or over Wi-Fi from the device's **File Transfer** screen.
