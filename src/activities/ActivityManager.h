@@ -156,6 +156,9 @@ class ActivityManager {
   // A remote button mapped to the reader menu (true) or to a new clipping (false).
   bool remoteShortcut(bool readerMenu);
   bool handleForcedRefresh();
+  // Applies the front screen's wantsGlyphSlab(). The render task does before each render; a screen
+  // that draws outside it (the reader's panels) calls it itself.
+  void syncGlyphSlab();
   bool startShortcutSync();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;

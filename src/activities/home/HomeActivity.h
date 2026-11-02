@@ -36,7 +36,8 @@ class HomeActivity final : public Activity {
   std::atomic<bool> scrubPending{false};
   std::atomic<bool> scrubNow{false};
   std::atomic<uint32_t> scrubDueMs{0};
-  bool scrubArmed = false;  // render task only
+  std::atomic<bool> scrubCancelled{false};  // a press or touch this visit: the pass is never owed again
+  bool scrubArmed = false;                  // render task only
   void armScrub();
   // Partial-redraw state: after a full render, a cursor move between two MENU rows only erases
   // and redraws the menu block over the intact frame, skipping the header, cover tile, and

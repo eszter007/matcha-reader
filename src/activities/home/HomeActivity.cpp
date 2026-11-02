@@ -417,6 +417,9 @@ void HomeActivity::armScrub() {
   scrubArmed = true;
   scrubDueMs = millis() + SCRUB_IDLE_MS;
   scrubPending = true;
+  // Re-check after setting: a press the loop saw while the first frame was being sent must win
+  // whichever task gets here first (the loop sets the latch before clearing pending).
+  if (scrubCancelled) scrubPending = false;
 }
 
 void HomeActivity::loop() {
@@ -426,6 +429,7 @@ void HomeActivity::loop() {
   // Any press or touch drops the owed clean pass: buttons, remote and injected presses alike, and
   // a tap on touch boards. Edges from this frame's update(), so nothing is polled here.
   if (mappedInput.wasAnyPressed() || mappedInput.wasTouchActivity()) {
+    scrubCancelled = true;
     scrubPending = false;
   } else if (scrubPending && static_cast<int32_t>(millis() - scrubDueMs.load()) >= 0 && !RenderLock::peek()) {
     scrubPending = false;
@@ -726,9 +730,6 @@ void HomeActivity::render(RenderLock&&) {
       mappedInput.mapLabels(backResumes() ? tr(STR_RESUME) : "", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  // Captured before lastRenderValid is set: it is this fork's firstRenderDone, and the
-  // clean-refresh test below needs the value from *before* this paint.
-  const bool firstPaint = !lastRenderValid;
   lastRenderValid = true;
   lastSelectorIndex = selectorIndex;
   // Splashless wake with no retained Quick Resume frame leaves the sleep image on the glass, and a
