@@ -2052,8 +2052,6 @@ void EpubReaderWordLookupActivity::stepSelectionWalk() {
     selectionPos += hit.matchLength;
     if (hit.matchLength == charBytes && WordSelectionScan::isDisplayNoise(cp)) continue;
     if (std::find(selectionSeen.begin(), selectionSeen.end(), hit.entry.headword) != selectionSeen.end()) continue;
-    // Part of the opened word, from a selection that starts inside it (園 of 動物園).
-    if (hitStart == 0 && hasResult && resultHeadword.find(hit.entry.headword) != std::string::npos) continue;
     selectionSeen.push_back(hit.entry.headword);
     if (!WordLookup::lookup(text, hitStart, hit, /*needDefinition=*/true)) continue;
     RenderLock lock;
