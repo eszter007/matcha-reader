@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "RemoteProgress.h"
+#include "SyncedPosition.h"
 #include "activities/home/EpubProgressUtil.h"
 #include "activities/reader/ProgressFile.h"
 
@@ -85,6 +86,19 @@ bool writePageProgress(const std::string& path, const uint32_t page) {
   return ProgressFile::writeAtomic(cachePath, data, sizeof(data));
 }
 
+bool readPageProgress(const std::string& path, uint32_t& page) {
+  const std::string cachePath = bookCachePath(path);
+  if (cachePath.empty() || (!FsHelpers::hasXtcExtension(path) && !manga::MangaBook::isMangaFolder(path))) return false;
+  HalFile f;
+  uint8_t data[4];
+  if (!Storage.openFileForRead("PROG", cachePath + "/progress.bin", f) || f.read(data, sizeof(data)) != sizeof(data)) {
+    return false;
+  }
+  page = static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8) |
+         (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
+  return true;
+}
+
 namespace {
 // The progress record every reader and both grids read as 100%. False when the book's cache cannot say
 // where its end is: never opened, or laid out by an older firmware.
@@ -147,6 +161,7 @@ bool markBookRead(const std::string& path) {
   const std::string cachePath = bookCachePath(path);
   if (cachePath.empty()) return false;
   removeLinkStack(cachePath);
+  syncedPosition::dismiss(path);  // a position from elsewhere must not undo the choice on the next open
   // Without a record to write, the progress index holds it.
   return writeFinishedProgress(path, cachePath) || remoteProgress::markRead(path);
 }
@@ -155,6 +170,7 @@ bool markBookUnread(const std::string& path) {
   const std::string cachePath = bookCachePath(path);
   if (cachePath.empty()) return false;
   remoteProgress::forget(path);
+  syncedPosition::dismiss(path);
   removeLinkStack(cachePath);
   const std::string progressPath = cachePath + "/progress.bin";
   // Absent already counts as unread, so a book that was never opened is not an error.

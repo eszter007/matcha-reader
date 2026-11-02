@@ -33,6 +33,7 @@
 #include "util/BookProgress.h"
 #include "util/PluginEvents.h"
 #include "util/PluginHttp.h"
+#include "util/SyncedPosition.h"
 
 namespace fui = freeink::ui;
 
@@ -113,6 +114,7 @@ void KOReaderSyncActivity::saveProgressAndReturn(int spineIndex, int page) {
       requestUpdate(true);
       return;
     }
+    positionSettled = true;
     returnToReader();
     return;
   }
@@ -132,10 +134,15 @@ void KOReaderSyncActivity::saveProgressAndReturn(int spineIndex, int page) {
     requestUpdate(true);
     return;
   }
+  positionSettled = true;
   returnToReader();
 }
 
-void KOReaderSyncActivity::returnToReader() { activityManager.goToReader(epubPath); }
+void KOReaderSyncActivity::returnToReader() {
+  // This sync matched the exact position: one an earlier Insights sync fetched is not offered again.
+  if (positionSettled) syncedPosition::dismiss(epubPath);
+  activityManager.goToReader(epubPath);
+}
 
 bool KOReaderSyncActivity::smartSyncEnabled() const {
   return KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART;
@@ -148,6 +155,7 @@ void KOReaderSyncActivity::completeAlreadySynced() {
     RenderLock lock(*this);
     state = SYNC_COMPLETE;
   }
+  positionSettled = !pluginEventsOnly;  // a plugin-events-only run synced no position
   markAutoReturn();
   requestUpdate(true);
 }
@@ -427,20 +435,7 @@ KOReaderSyncClient::Error KOReaderSyncActivity::fetchTwinProgress() {
 
 void KOReaderSyncActivity::decidePaged(const bool fromTwin) {
   const uint32_t count = paged->pageCount;
-  const std::string& text = remoteProgress.progress;
-  // A twin's page numbers belong to a different file; only the share of the book carries over.
-  const unsigned long number =
-      fromTwin || text.empty() || text.size() > 9 ||
-              !std::all_of(text.begin(), text.end(), [](const char c) { return c >= '0' && c <= '9'; })
-          ? 0
-          : strtoul(text.c_str(), nullptr, 10);
-  if (number >= 1) {
-    remotePage = static_cast<uint32_t>(number - 1);
-  } else {
-    const float pct = std::clamp(remoteProgress.percentage, 0.0f, 1.0f);
-    remotePage = static_cast<uint32_t>(pct * static_cast<float>(count));
-  }
-  if (count > 0 && remotePage >= count) remotePage = count - 1;
+  remotePage = syncedPosition::pageOf({remoteProgress.progress, remoteProgress.percentage, fromTwin}, count);
 
   const ProgressComparison comparison = remotePage == paged->page  ? ProgressComparison::Synchronized
                                         : remotePage > paged->page ? ProgressComparison::RemoteAhead
@@ -585,6 +580,7 @@ void KOReaderSyncActivity::performUpload() {
     RenderLock lock(*this);
     state = UPLOAD_COMPLETE;
   }
+  positionSettled = true;
   markAutoReturn();
   requestUpdate(true);
 }

@@ -60,6 +60,10 @@ class MangaReaderActivity final : public Activity {
   int enterPercent = -1;  // the book's saved progress when it was opened
   bool syncedPositionOffered = false;
   void jumpToPercent(int percent);
+  // Writes the position an Insights sync fetched from another device as this book's saved page and drops
+  // it (syncedPosition). False when there is none.
+  bool writeSyncedPosition();
+  int syncedPositionPercent();
 
   bool automaticPageTurnActive = false;
   unsigned long lastPageTurnTime = 0;

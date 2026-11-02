@@ -611,6 +611,11 @@ class EpubReaderActivity final : public ReaderActivity {
   void rememberCurrentContentOffset();
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent) override;
+  bool writeSyncedPosition() override;
+  int syncedPositionPercent() override;
+  // The book position an Insights-synced position maps to, and its percent here; false when the book has
+  // none, or has been read past it here (then it is dismissed).
+  bool mapSyncedPosition(CrossPointPosition& out, int& percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   // Live section position, or the values cached before a child screen
   // released the section.

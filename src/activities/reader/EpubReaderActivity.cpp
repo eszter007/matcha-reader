@@ -85,9 +85,70 @@
 #include "util/PluginEvents.h"
 #include "util/RemoteProgress.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SyncedPosition.h"
 #include "util/TextProfiles.h"
 
 namespace {
+// What progress.bin holds, in either layout (see ProgressFile): stock CrossPoint has the text offset at
+// [6-9] and no reader choices, the fork has vertical/furigana at [6-7] and the offset at [9-12].
+struct SavedSpot {
+  bool valid = false;
+  uint16_t spine = 0;
+  uint16_t page = 0;
+  uint16_t pageCount = 0;  // 0 when not recorded
+  bool hasOffset = false;
+  uint32_t offset = 0;
+  int8_t vertical = -1;  // -1: the book has no choice of its own
+  int8_t furigana = -1;
+};
+
+SavedSpot readSavedSpot(const std::string& cachePath) {
+  SavedSpot s;
+  HalFile f;
+  uint8_t data[13];
+  if (!Storage.openFileForRead("ERS", cachePath + "/progress.bin", f)) return s;
+  const int size = f.read(data, sizeof(data));
+  if (size < 4) return s;
+  const auto le32 = [&data](const int at) {
+    return static_cast<uint32_t>(data[at]) | (static_cast<uint32_t>(data[at + 1]) << 8) |
+           (static_cast<uint32_t>(data[at + 2]) << 16) | (static_cast<uint32_t>(data[at + 3]) << 24);
+  };
+  s.valid = true;
+  s.spine = static_cast<uint16_t>(data[0] | (data[1] << 8));
+  s.page = static_cast<uint16_t>(data[2] | (data[3] << 8));
+  if (size >= 6) s.pageCount = static_cast<uint16_t>(data[4] | (data[5] << 8));
+  if (ProgressFile::isStockLayout(size)) {
+    if (size >= 10) {
+      s.hasOffset = true;
+      s.offset = le32(6);
+    }
+  } else {
+    if (size >= 8) {
+      s.vertical = static_cast<int8_t>(data[6]);
+      s.furigana = static_cast<int8_t>(data[7]);
+    }
+    if (size >= 13) {
+      s.hasOffset = true;
+      s.offset = le32(9);
+    }
+  }
+  return s;
+}
+
+// Whether `remote` lies past the saved spot. Chapter, then the text offset, then the share of the chapter's
+// pages; percentages of the whole book are not compared, since one is weighted by bytes and the other by
+// pages. When the chapter matches and neither can be compared, it is not taken as ahead: Smart never moves
+// back on a guess.
+bool aheadOf(const CrossPointPosition& remote, const SavedSpot& saved) {
+  if (remote.spineIndex != saved.spine) return remote.spineIndex > saved.spine;
+  if (remote.hasVisibleTextOffset && saved.hasOffset) return remote.visibleTextOffset > saved.offset;
+  if (remote.totalPages > 1 && saved.pageCount > 0) {
+    return static_cast<uint32_t>(remote.pageNumber) * saved.pageCount >
+           static_cast<uint32_t>(saved.page) * static_cast<uint32_t>(remote.totalPages);
+  }
+  return false;
+}
+
 // The toolbar's page snapshot is a convenience (closing the toolbar redraws without re-rendering);
 // it is skipped rather than taken when it would leave the next render short.
 constexpr size_t OVERLAY_SNAPSHOT_HEADROOM = 16 * 1024;
@@ -533,6 +594,9 @@ void EpubReaderActivity::onReaderEnter() {
   // NOTE: This affects layout math and must be applied before any render calls.
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
   appliedOrientation = SETTINGS.orientation;
+
+  // Smart sync moves to another device's position without asking, before the saved one is read.
+  if (KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART) writeSyncedPosition();
 
   HalFile f;
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
@@ -2357,6 +2421,61 @@ unsigned long EpubReaderActivity::confirmLongPressThreshold() const {
     default:
       return 0;
   }
+}
+
+bool EpubReaderActivity::mapSyncedPosition(CrossPointPosition& out, int& percent) {
+  syncedPosition::Position position;
+  const size_t bookSize = epub ? epub->getBookSize() : 0;
+  if (bookSize == 0 || !syncedPosition::load(epub->getPath(), position)) return false;
+  {
+    // The mapper may lay out a section to count its pages, as the progress sync does.
+    RenderLock lock(*this);
+    GfxRenderer::FrameBufferLoan loan(renderer);
+    out = ProgressMapper::toCrossPoint(epub, {position.progress, position.percentage}, renderer, -1, 0);
+  }
+  if (out.totalPages <= 1 && out.hasVisibleTextOffset) {
+    // A chapter never laid out here: its pages are unknown, so the server's share is the closest.
+    percent = static_cast<int>(position.percentage * 100.0f);
+  } else {
+    const size_t before = out.spineIndex > 0 ? epub->getCumulativeSpineItemSize(out.spineIndex - 1) : 0;
+    const size_t spineSize = epub->getCumulativeSpineItemSize(out.spineIndex) - before;
+    const float inSpine =
+        out.totalPages > 0 ? static_cast<float>(out.pageNumber) / static_cast<float>(out.totalPages) : 0.0f;
+    percent = static_cast<int>((static_cast<float>(before) + inSpine * static_cast<float>(spineSize)) * 100.0f /
+                               static_cast<float>(bookSize));
+  }
+  // Read past it here since it was fetched: going there would be going back.
+  const SavedSpot saved = readSavedSpot(epub->getCachePath());
+  if (saved.valid && !aheadOf(out, saved)) {
+    syncedPosition::dismiss(epub->getPath());
+    return false;
+  }
+  return true;
+}
+
+bool EpubReaderActivity::writeSyncedPosition() {
+  CrossPointPosition mapped;
+  int percent = -1;
+  if (!mapSyncedPosition(mapped, percent)) return false;
+  // Keep the book's own vertical-text and furigana choices, stored beside the position (fork layout only:
+  // in a stock record those bytes are the text offset).
+  const SavedSpot saved = readSavedSpot(epub->getCachePath());
+  const int8_t vertical = saved.vertical;
+  const int8_t furigana = saved.furigana;
+  std::optional<uint32_t> offset;
+  if (mapped.hasVisibleTextOffset) offset = mapped.visibleTextOffset;
+  if (!EpubReaderUtils::saveProgress(*epub, mapped.spineIndex, mapped.pageNumber, 0, vertical, furigana, 0xFF,
+                                     offset)) {
+    return false;
+  }
+  syncedPosition::dismiss(epub->getPath());
+  return true;
+}
+
+int EpubReaderActivity::syncedPositionPercent() {
+  CrossPointPosition mapped;
+  int percent = -1;
+  return mapSyncedPosition(mapped, percent) ? percent : -1;
 }
 
 bool EpubReaderActivity::startShortcutSync() {
