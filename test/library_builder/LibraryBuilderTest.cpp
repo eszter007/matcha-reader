@@ -56,6 +56,7 @@ TEST(LibraryBookFileTest, AcceptsBookFilesTheWalkLists) {
   EXPECT_TRUE(isLibraryBookFile("/Comics/issue.xtc"));
   EXPECT_TRUE(isLibraryBookFile("/Comics/issue.xtch"));
   EXPECT_TRUE(isLibraryBookFile("/Books/./book.epub"));
+  EXPECT_TRUE(isLibraryBookFile("/Manga/volume.matcha"));
 }
 
 TEST(LibraryBookFileTest, RejectsOtherFilesAndHiddenNames) {
@@ -95,6 +96,36 @@ TEST_F(LibraryBuilderTest, SkipsSystemFolderContents) {
   EXPECT_EQ(fake::directoryEntriesByPath["/XTCache/fontPos.txt"], 0u);
   EXPECT_EQ(fake::directoryEntriesByPath["/XTCache/epub"], 0u);
   EXPECT_EQ(fake::directoryEntriesByPath["/System Volume Information/notes.txt"], 0u);
+}
+
+TEST_F(LibraryBuilderTest, MangaFolderIsOneBookTitledByItsName) {
+  fake::add("/Manga/Vol. 2/panels.idx", "index");
+  fake::add("/Manga/Vol. 2/page_0000.jpg", "image");
+  fake::add("/Manga/Vol. 2/Extras/notes.txt");  // inside a manga folder: not walked
+  fake::add("/Manga/packed.matcha", "volume");
+
+  initial();
+
+  LibraryIndexFile index;
+  ASSERT_TRUE(index.open(INDEX));
+  ASSERT_EQ(index.header().bookCount, 4u);
+  std::vector<std::string> paths;
+  for (uint16_t row = 0; row < index.bookCount(); row++) paths.push_back(pathAt(index, SortOrder::TitleAsc, row));
+  EXPECT_NE(std::find(paths.begin(), paths.end(), "/Manga/Vol. 2"), paths.end());
+  EXPECT_NE(std::find(paths.begin(), paths.end(), "/Manga/packed.matcha"), paths.end());
+
+  ClixRecord record{};
+  std::string title;
+  for (uint16_t ordinal = 0; ordinal < index.bookCount(); ordinal++) {
+    std::string path;
+    ASSERT_TRUE(index.readRecord(ordinal, record));
+    ASSERT_TRUE(index.readPath(record, path));
+    if (path != "/Manga/Vol. 2") continue;
+    ASSERT_TRUE(index.readName(record, title));
+    EXPECT_EQ(title, "Vol. 2");
+    EXPECT_EQ(record.fileSize, 5u);  // panels.idx stands in for the file
+  }
+  EXPECT_EQ(title, "Vol. 2");
 }
 
 TEST_F(LibraryBuilderTest, XtcTitleAndAuthorComeFromTheFile) {

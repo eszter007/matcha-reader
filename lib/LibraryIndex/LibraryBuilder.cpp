@@ -291,13 +291,14 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
 // nothing about a book's surroundings names its author any more.
 [[gnu::noinline]] bool stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize,
                                    const uint16_t folderId, const std::string& fullPath,
-                                   const uint32_t modificationTime) {
+                                   const uint32_t modificationTime, const bool folderBook) {
   StagedEntry& entry = *st.stagedEntry;
   memset(&entry, 0, sizeof(entry));
   // The filename is a fallback for the title and nothing else: no parsing, and
   // never an author. Per review on #2885 -- no other reader parses filenames,
   // and a name pulled out of one by pattern is a guess wearing a fact's clothes.
-  std::string title = stemOf(name);
+  // A manga folder's name has no extension to drop: "Vol. 2" stays whole.
+  std::string title = folderBook ? name : stemOf(name);
   std::string author;
   bool titleFromBook = false;
   bool authorFromBook = false;
@@ -336,7 +337,7 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
     if (hasBookTitle) {
       titleFromBook = true;
     } else {
-      title = stemOf(name);
+      title = folderBook ? name : stemOf(name);
     }
     st.stats->metadataReused++;
   }
@@ -479,14 +480,27 @@ void walk(WalkState& st, const std::string& path, const int depth) {
     st.nameBuf[0] = '\0';
     entry.getName(st.nameBuf, NAME_BUF_SIZE);
     const bool isDir = entry.isDirectory();
-    const uint32_t size = isDir ? 0 : static_cast<uint32_t>(entry.fileSize());
-    const uint32_t modificationTime = isDir ? 0 : entry.modificationTime();
+    uint32_t size = isDir ? 0 : static_cast<uint32_t>(entry.fileSize());
+    uint32_t modificationTime = isDir ? 0 : entry.modificationTime();
     entry.close();
 
     if (st.nameBuf[0] == '\0' || isHiddenOrSidecar(st.nameBuf)) continue;
     const std::string name(st.nameBuf);
 
+    // A manga folder (its pages and panels.idx) is one book, not a shelf to walk into. Its panels.idx
+    // stands in for the file: its size and time say when the volume changed.
+    bool mangaFolder = false;
     if (isDir) {
+      HalFile panels = Storage.open(joinLibraryPath(joinLibraryPath(path, name), "panels.idx").c_str());
+      if (panels && !panels.isDirectory()) {
+        mangaFolder = true;
+        size = static_cast<uint32_t>(panels.fileSize());
+        modificationTime = panels.modificationTime();
+      }
+      if (panels) panels.close();
+    }
+
+    if (isDir && !mangaFolder) {
       const size_t resumePosition = dir.position();
       dir.close();
       walk(st, joinLibraryPath(path, name), depth + 1);
@@ -501,7 +515,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
       }
       continue;
     }
-    if (!isLibraryBookFile(name)) continue;
+    if (!mangaFolder && !isLibraryBookFile(name)) continue;
 
     // A zero-length book is a dangling directory entry: the name enumerates but
     // the contents do not exist. Counted rather than silently dropped.
@@ -555,7 +569,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
       st.folderId++;
       folderEmitted = true;
     }
-    if (!stageRecord(st, name, size, myFolderId, joinLibraryPath(path, name), modificationTime)) break;
+    if (!stageRecord(st, name, size, myFolderId, joinLibraryPath(path, name), modificationTime, mangaFolder)) break;
   }
   dir.close();
 }
@@ -1068,7 +1082,8 @@ bool isLibraryBookFile(const std::string_view path) {
     start = slash + 1;
   }
   return FsHelpers::checkFileExtension(path, ".epub") || FsHelpers::checkFileExtension(path, ".txt") ||
-         FsHelpers::checkFileExtension(path, ".md") || FsHelpers::hasXtcExtension(path);
+         FsHelpers::checkFileExtension(path, ".md") || FsHelpers::hasXtcExtension(path) ||
+         FsHelpers::hasMatchaExtension(path);
 }
 
 bool markLibraryIndexDirty() {

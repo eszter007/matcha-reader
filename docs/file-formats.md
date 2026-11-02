@@ -734,6 +734,8 @@ build-assigned discovery counter — breaks ties and carries books whose
 filesystem reports no time. Fold version 3 introduced the timestamp key; a
 fold bump rebuilds ranks while preserving `firstSeen`.
 Fold version 4 preserves leading articles in title sort and search keys.
+Fold version 5 adds manga: a `.matcha` file, and a folder holding `panels.idx`, which is one
+book keyed by that file's size and time and titled by the folder name.
 
 Sections are 512-byte aligned so each starts on an SD block boundary.
 
