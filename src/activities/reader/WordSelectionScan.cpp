@@ -7,6 +7,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <Utf8.h>
 #include <WordLookup.h>
 
 #include <algorithm>
@@ -1503,6 +1504,59 @@ bool WordSelectionScan::isDisplayNoise(const uint32_t cp) {
   }
 }
 
+bool WordSelectionScan::startsWithConjugationNoise(const std::string_view text) {
+  static constexpr std::string_view patterns[] = {
+      "\xe3\x81\xbe\xe3\x81\x97\xe3\x81\x9f",  // ました
+      "\xe3\x81\xbe\xe3\x81\x9b\xe3\x82\x93",  // ません
+      "\xe3\x81\xa7\xe3\x81\x97\xe3\x81\x9f",  // でした
+      "\xe3\x81\xa7\xe3\x81\x99",              // です
+      "\xe3\x81\xbe\xe3\x81\x99",              // ます
+  };
+  for (const auto pattern : patterns) {
+    if (text.substr(0, pattern.size()) == pattern) return true;
+  }
+  return false;
+}
+
+// Exact-match colloquial/grammatical contractions that are never useful as standalone
+// vocabulary (なくちゃ→ちゃ, じゃ, etc.). Exact, so real words (茶碗/ちゃわん) are not filtered.
+// そうに/そうな/そうだ are the ～そう "seeming/appears" auxiliary (心配そうに); their only
+// dictionary hit is the rare homophone 僧尼 ("monks and nuns") and no grammar entry covers
+// them, so as standalone lookups they are just misleading -- filter them out.
+bool WordSelectionScan::isExactNoise(const std::string_view match) {
+  static constexpr std::string_view exactNoise[] = {
+      "\xe3\x81\xa1\xe3\x82\x83",              // ちゃ
+      "\xe3\x81\x98\xe3\x82\x83",              // じゃ
+      "\xe3\x81\xa1\xe3\x82\x83\xe3\x81\x86",  // ちゃう
+      "\xe3\x81\xa3\xe3\x81\xa6",              // って
+      "\xe3\x81\x9d\xe3\x81\x86\xe3\x81\xab",  // そうに
+      "\xe3\x81\x9d\xe3\x81\x86\xe3\x81\xaa",  // そうな
+      "\xe3\x81\x9d\xe3\x81\x86\xe3\x81\xa0",  // そうだ
+  };
+  for (const auto noise : exactNoise) {
+    if (match == noise) return true;
+  }
+  return false;
+}
+
+bool WordSelectionScan::isNoiseMatch(const std::string_view text, const size_t matchBytes) {
+  const std::string_view match = text.substr(0, matchBytes);
+  // A short match made only of noise kana (は, が, には, では); see passesDisplayFilter.
+  int chars = 0;
+  bool allNoise = true;
+  for (size_t pos = 0; pos < match.size() && allNoise;) {
+    const auto* at = reinterpret_cast<const unsigned char*>(match.data() + pos);
+    const auto* next = at;
+    const uint32_t cp = utf8NextCodepoint(&next);
+    if (next == at) break;
+    pos += static_cast<size_t>(next - at);
+    allNoise = isDisplayNoise(cp);
+    chars++;
+  }
+  if (allNoise && chars <= 2) return true;
+  return isExactNoise(match) || startsWithConjugationNoise(text);
+}
+
 // Examine a matched position the way performLookup() would display it; false = display noise
 // (bare particles, conjugation fragments) that should not become a selectable entry.
 bool WordSelectionScan::passesDisplayFilter(const size_t allIdx, const int matchChars, const std::string& lookupText,
@@ -1518,17 +1572,7 @@ bool WordSelectionScan::passesDisplayFilter(const size_t allIdx, const int match
       encodeUtf8(allGlyphs[j].codepoint, matched);
       mLen++;
     }
-    static const char* const patterns[] = {"\xe3\x81\xbe\xe3\x81\x97\xe3\x81\x9f",  // ました
-                                           "\xe3\x81\xbe\xe3\x81\x9b\xe3\x82\x93",  // ません
-                                           "\xe3\x81\xa7\xe3\x81\x97\xe3\x81\x9f",  // でした
-                                           "\xe3\x81\xa7\xe3\x81\x99",              // です
-                                           "\xe3\x81\xbe\xe3\x81\x99",              // ます
-                                           nullptr};
-    for (int p = 0; patterns[p]; p++) {
-      size_t plen = strlen(patterns[p]);
-      if (matched.size() >= plen && matched.substr(0, plen) == patterns[p]) return true;
-    }
-    return false;
+    return startsWithConjugationNoise(matched);
   };
 
   if (!lookupText.empty() && matchBytes > 0) {
@@ -1547,24 +1591,7 @@ bool WordSelectionScan::passesDisplayFilter(const size_t allIdx, const int match
     }
     if (allNoise) return false;
 
-    // Exact-match colloquial/grammatical contractions that are never useful as
-    // standalone vocabulary (なくちゃ→ちゃ, じゃ, etc.). Use the exact matched
-    // text so real words (茶碗/ちゃわん) are not filtered.
-    // そうに/そうな/そうだ are the ～そう "seeming/appears" auxiliary (心配そうに); their only
-    // dictionary hit is the rare homophone 僧尼 ("monks and nuns") and no grammar entry covers
-    // them, so as standalone lookups they are just misleading -- filter them out.
-    static const char* const exactNoise[] = {"\xe3\x81\xa1\xe3\x82\x83",              // ちゃ
-                                             "\xe3\x81\x98\xe3\x82\x83",              // じゃ
-                                             "\xe3\x81\xa1\xe3\x82\x83\xe3\x81\x86",  // ちゃう
-                                             "\xe3\x81\xa3\xe3\x81\xa6",              // って
-                                             "\xe3\x81\x9d\xe3\x81\x86\xe3\x81\xab",  // そうに
-                                             "\xe3\x81\x9d\xe3\x81\x86\xe3\x81\xaa",  // そうな
-                                             "\xe3\x81\x9d\xe3\x81\x86\xe3\x81\xa0",  // そうだ
-                                             nullptr};
-    for (int e = 0; exactNoise[e]; e++) {
-      const size_t noiseBytes = strlen(exactNoise[e]);
-      if (matchBytes == noiseBytes && lookupText.compare(0, matchBytes, exactNoise[e]) == 0) return false;
-    }
+    if (isExactNoise(std::string_view(lookupText).substr(0, matchBytes))) return false;
   }
   if (isConjugationNoise()) {
     return false;

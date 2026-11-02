@@ -94,9 +94,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   void render(RenderLock&&) override;
   // Full CPU + fast main-loop ticks while the progressive scan is running, so the between-poll
   // scan slices stay short enough that button presses are never missed.
-  bool skipLoopDelay() override {
-    return !scan.isDone() || (!selectCtx.selectionText.empty() && selectionWalk != SelectionWalk::Done);
-  }
+  bool skipLoopDelay() override { return !scan.isDone() || selectionWalk == SelectionWalk::Running; }
   // No glyph slab while the panel is up: its 24KB is the contiguous heap the dictionary caches and
   // the definition renderer compete for.
   bool wantsGlyphSlab() const override { return false; }
@@ -394,7 +392,16 @@ class EpubReaderWordLookupActivity final : public Activity {
   uint8_t selectionPages = 0;
   std::vector<std::string> selectionSeen;  // headwords already shown
   void stepSelectionWalk();
-  void appendSelectionEntry(DictEntry&& entry);
+  // Where in the selection text the word of the pages from firstSection on was found.
+  struct SelectionSpan {
+    uint16_t firstSection;
+    uint16_t offset;
+    uint16_t length;
+  };
+  std::vector<SelectionSpan> selectionSpans;
+  void appendSelectionEntry(DictEntry&& entry, size_t textOffset, size_t matchBytes);
+  void keepSelectionPageBudget(size_t firstNew);
+  std::string selectionMiningSentence() const;
   // While the walk runs, one page past the last entry says more is coming. It holds no section:
   // the section vectors only ever hold entries.
   bool loadingPageShown() const { return selectionWalk == SelectionWalk::Running && !sectionText.empty(); }

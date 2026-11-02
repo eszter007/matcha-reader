@@ -46,12 +46,14 @@ bool isSelectableToken(const char* text) {
 void indexBuildYield(void*) { vTaskDelay(1); }
 
 // Separates the words of a selection: ASCII spaces and punctuation other than the apostrophe and
-// hyphen inside words (don't, well-known), and the typographic quotes, dashes and ellipsis.
+// hyphen inside words (don't, don’t, well-known), and the typographic quotes, dashes and ellipsis.
 bool separatesWords(const uint32_t cp) {
   if (cp < 0x80)
     return cp != '\'' && cp != '-' && (std::isspace(static_cast<int>(cp)) || std::ispunct(static_cast<int>(cp)));
-  return cp == 0xA0 || cp == 0xAB || cp == 0xBB || cp == 0x2013 || cp == 0x2014 || (cp >= 0x2018 && cp <= 0x201F) ||
-         cp == 0x2026;
+  // U+2019 is also the typographic apostrophe (don’t); a quote left at a word's edge is stripped
+  // by the dictionary's own word cleanup.
+  return cp == 0xA0 || cp == 0xAB || cp == 0xBB || cp == 0x2013 || cp == 0x2014 || cp == 0x2018 ||
+         (cp >= 0x201A && cp <= 0x201F) || cp == 0x2026;
 }
 
 }  // namespace
@@ -400,8 +402,10 @@ void DictionaryWordSelectActivity::performLookup() {
   Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
   size_t heldBytes = 0;
   size_t byteLimit = SIZE_MAX;  // the selection's words fit under MAX_SELECTION_BYTES
-  // Every dictionary's entry for one text, after those already found; a headword one of them
-  // already gave is not repeated.
+  // The dictionary slot each entry came from: two dictionaries can share a title.
+  uint8_t entrySlots[MAX_DICTIONARIES * (1 + MAX_SELECTION_WORDS)];
+  // Every dictionary's entry for one text, after those already found; a headword the same
+  // dictionary already gave is not repeated.
   const auto lookUp = [&](const char* text) {
     for (size_t d = 0; d < dictCount; d++) {
       auto& slot = dicts[d];
@@ -423,8 +427,8 @@ void DictionaryWordSelectActivity::performLookup() {
       }
       entry.dictName = slot.dict.getBookName();
       bool repeated = false;
-      for (const auto& found : entries) {
-        repeated = repeated || (found.headword == entry.headword && found.dictName == entry.dictName);
+      for (size_t e = 0; e < entries.size(); e++) {
+        repeated = repeated || (entrySlots[e] == d && entries[e].headword == entry.headword);
       }
       if (repeated || heldBytes + entry.definition.size() > byteLimit) continue;
       heldBytes += entry.definition.size();
@@ -437,6 +441,7 @@ void DictionaryWordSelectActivity::performLookup() {
       draft.card.dictionary = entry.dictName;
       draft.language = sentencemining::languageForDictionary(slot.folder, language);
       draft.bookPath = mining_.bookPath;
+      entrySlots[entries.size()] = static_cast<uint8_t>(d);
       entries.push_back(std::move(entry));
     }
   };

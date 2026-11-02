@@ -211,6 +211,11 @@ class WordSelectionScan {
   static bool isCaseParticle(uint32_t cp);
   // A single kana that is a particle or a conjugation fragment, never a word worth showing alone.
   static bool isDisplayNoise(uint32_t cp);
+  // A match the page scan never offers as a word (particles, です/ました, そうに); `text` starts at
+  // the match and runs on past it.
+  static bool isNoiseMatch(std::string_view text, size_t matchBytes);
+  static bool isExactNoise(std::string_view match);
+  static bool startsWithConjugationNoise(std::string_view text);
   static bool isLookupableChar(uint32_t cp);
   static bool isKatakana(uint32_t cp);
   static bool isCJK(uint32_t cp);
