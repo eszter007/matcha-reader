@@ -383,13 +383,20 @@ class EpubReaderWordLookupActivity final : public Activity {
   bool lookupInFlight = false;
   // Pages for the words of a touch selection (selectCtx.selectionText), found a few at a time from
   // loop() so the panel stays responsive; a "Loading..." page ends the list until the walk is done.
-  static constexpr uint8_t MAX_SELECTION_PAGES = 6;
+  // Same caps as the StarDict path: a sentence's worth of words, and the text their pages keep in
+  // RAM while the panel is open.
+  static constexpr uint8_t MAX_SELECTION_WORDS = 10;
+  static constexpr size_t MAX_SELECTION_BYTES = 16 * 1024;
   static constexpr uint32_t SELECTION_STEP_MS = 30;
   static constexpr size_t MAX_SELECTION_SCAN_BYTES = 240;  // 80 CJK characters
   enum class SelectionWalk : uint8_t { NotStarted, Running, Done };
   SelectionWalk selectionWalk = SelectionWalk::NotStarted;
   size_t selectionPos = 0;
-  uint8_t selectionPages = 0;
+  uint8_t selectionWords = 0;
+  size_t selectionHeldBytes = 0;
+  bool selectionFull() const {
+    return selectionWords >= MAX_SELECTION_WORDS || selectionHeldBytes >= MAX_SELECTION_BYTES;
+  }
   std::vector<std::string> selectionSeen;  // headwords already shown
   void stepSelectionWalk();
   // Where in the selection text the word of the pages from firstSection on was found.
@@ -400,7 +407,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   };
   std::vector<SelectionSpan> selectionSpans;
   void appendSelectionEntry(DictEntry&& entry, size_t textOffset, size_t matchBytes);
-  void keepSelectionPageBudget(size_t firstNew);
+  void countSelectionWord(size_t firstNew);
   std::string selectionMiningSentence() const;
   // While the walk runs, one page past the last entry says more is coming. It holds no section:
   // the section vectors only ever hold entries.

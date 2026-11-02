@@ -776,8 +776,8 @@ void EpubReaderWordLookupActivity::enterDefinition() {
   if (selectionPending) {
     // Started with the opening lookup, so any later lookup (another word) ends it.
     selectionWalk = SelectionWalk::Running;
-    selectionSeen.reserve(MAX_SELECTION_PAGES + 1);
-    selectionSpans.reserve(MAX_SELECTION_PAGES);
+    selectionSeen.reserve(MAX_SELECTION_WORDS + 1);
+    selectionSpans.reserve(MAX_SELECTION_WORDS);
     // A selection that holds the whole opened word starts after it: page 1 already shows it.
     // One that holds only part of it (バナ of バナナ) is walked from its start.
     if (hasResult) {
@@ -2034,7 +2034,7 @@ void EpubReaderWordLookupActivity::stepSelectionWalk() {
   bool changed = false;
   // A long selection is walked only so far: past that, mostly particles would mean SD reads for nothing.
   const size_t end = std::min(text.size(), MAX_SELECTION_SCAN_BYTES);
-  while (selectionPos < end && selectionPages < MAX_SELECTION_PAGES && millis() - start < SELECTION_STEP_MS) {
+  while (selectionPos < end && !selectionFull() && millis() - start < SELECTION_STEP_MS) {
     const auto* at = reinterpret_cast<const unsigned char*>(text.c_str() + selectionPos);
     const auto* next = at;
     const uint32_t cp = utf8NextCodepoint(&next);
@@ -2073,7 +2073,7 @@ void EpubReaderWordLookupActivity::stepSelectionWalk() {
     appendSelectionEntry(std::move(hit.entry), hitStart, hit.matchLength);
     changed = true;
   }
-  const bool done = selectionPos >= end || selectionPages >= MAX_SELECTION_PAGES;
+  const bool done = selectionPos >= end || selectionFull();
   if (done) {
     RenderLock lock;  // render() must not see Done before the clamp below
     selectionWalk = SelectionWalk::Done;
@@ -2100,17 +2100,17 @@ void EpubReaderWordLookupActivity::appendSelectionEntry(DictEntry&& entry, const
     splitDefinitionIntoSections();
     if (sectionText.empty()) {
       DefinitionText::formatEntryBody(resultDefinition, std::string(), std::string());
-      selectionPages = MAX_SELECTION_PAGES;  // a single scrolling text cannot take further pages
+      selectionWords = MAX_SELECTION_WORDS;  // a single scrolling text cannot take further pages
       return;
     }
     selectionSpans.push_back(span);
-    keepSelectionPageBudget(0);
+    countSelectionWord(0);
     return;
   }
   // An opening result that returned before it was split (a fictional name, ヘムレンさん).
   if (sectionText.empty()) splitDefinitionIntoSections();
   if (sectionText.empty()) {  // the opened word is one scrolling text: no pages to add to
-    selectionPages = MAX_SELECTION_PAGES;
+    selectionWords = MAX_SELECTION_WORDS;
     return;
   }
   // Split as an alternative headword's entry: the arrow line names its pages. The split copies
@@ -2119,7 +2119,7 @@ void EpubReaderWordLookupActivity::appendSelectionEntry(DictEntry&& entry, const
   const size_t length = sizeof(kArrow) - 1 + entry.headword.size() + 1 + entry.definition.size();
   if (!DictIndex::fitsInHeap(2 * length)) {
     LOG_ERR("WLA", "Selection walk stopped: no heap for %u bytes", static_cast<unsigned>(2 * length));
-    selectionPages = MAX_SELECTION_PAGES;
+    selectionWords = MAX_SELECTION_WORDS;
     return;
   }
   if (onLoadingPage()) scrollOffset = 0;  // the new entry takes the Loading page's place
@@ -2130,21 +2130,13 @@ void EpubReaderWordLookupActivity::appendSelectionEntry(DictEntry&& entry, const
   resultDefinition = std::move(entry.definition);
   splitDefinitionIntoSections(entry.sourceDict);
   if (sectionText.size() > before) selectionSpans.push_back(span);
-  keepSelectionPageBudget(before);
+  countSelectionWord(before);
 }
 
-// Under the render lock. Counts the pages an entry added from `firstNew` on, and drops any past
-// MAX_SELECTION_PAGES: one word can bring several records.
-void EpubReaderWordLookupActivity::keepSelectionPageBudget(const size_t firstNew) {
-  const size_t room = MAX_SELECTION_PAGES - selectionPages;
-  const size_t keep = std::min(sectionText.size(), firstNew + room);
-  sectionText.resize(keep);
-  sectionLabel.resize(keep);
-  sectionReading.resize(keep);
-  sectionGrammar.resize(keep);
-  sectionKind.resize(keep);
-  sectionHead.resize(keep);
-  selectionPages = static_cast<uint8_t>(selectionPages + (keep - firstNew));
+// One more word of the selection, and the definition text its pages from `firstNew` on hold.
+void EpubReaderWordLookupActivity::countSelectionWord(const size_t firstNew) {
+  selectionWords++;
+  for (size_t i = firstNew; i < sectionText.size(); i++) selectionHeldBytes += sectionText[i].size();
 }
 
 // The selection's text around the word on the current page when the walk added that page, as card

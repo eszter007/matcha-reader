@@ -29,6 +29,15 @@ class DictionaryDefinitionActivity final : public Activity {
     // Enables sentence mining for this entry: Select (and the + button on touch boards) saves it
     // with this entry as its definition. Invalid = no saving.
     sentencemining::Draft draft;
+    uint8_t dictSlot = 0;  // which of the lookup's dictionaries gave it: two can share a title
+  };
+
+  // Supplies further entries while the view is up (a touch selection's other words). next() puts
+  // one more word's entries in `fresh`, reading `shown` to skip repeats, and returns false once
+  // nothing is left.
+  struct MoreEntries {
+    void* ctx = nullptr;
+    bool (*next)(void* ctx, const std::vector<Entry>& shown, std::vector<Entry>& fresh) = nullptr;
   };
 
   explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -36,6 +45,8 @@ class DictionaryDefinitionActivity final : public Activity {
 
   // Handles on the looked-up word behind the panel; a drag on one finishes with ClipStartResult.
   void setClipHandles(const LookupClipHandles& handles) { clipHandles = handles; }
+  void setMoreEntries(MoreEntries source) { more = source; }
+  bool skipLoopDelay() override { return more.next != nullptr; }
 
   void onEnter() override;
   void onExit() override;
@@ -44,9 +55,16 @@ class DictionaryDefinitionActivity final : public Activity {
 
  private:
   LookupClipHandles clipHandles;
+  MoreEntries more;
+  // Past the last entry while more are coming: a Loading page the reader can step onto, which the
+  // next entry takes over. Also the only page while nothing has been found yet.
+  bool onLoadingPage = false;
+  void fetchMoreEntries();
+  static void prepareDraft(Entry& entry);
   DictionaryPanel::MiningFeedback miningFeedback_;
   void saveSentence();
-  const sentencemining::Draft& miningDraft() const { return entries[currentEntry].draft; }
+  bool showingEntry() const { return !onLoadingPage && currentEntry < entries.size(); }
+  bool miningAvailable() const { return showingEntry() && entries[currentEntry].draft.valid(); }
 
   // Lays out entries[index] and shows its first page, or its last when stepping back into it.
   void showEntry(size_t index, bool atLastPage);
@@ -82,7 +100,7 @@ class DictionaryDefinitionActivity final : public Activity {
   // multi-type separators) normalized to newlines so C-string APIs see the whole text.
   std::string definition;
   // Footer title: the dictionary name, plus the entry's place when there are several.
-  std::string dictLabel;
+  std::string footerLabel() const;
   // Styled path: reader-identical Pages laid out from the HTML definition.
   // Empty means the plain-text span path below is active.
   std::vector<std::unique_ptr<Page>> pages;
