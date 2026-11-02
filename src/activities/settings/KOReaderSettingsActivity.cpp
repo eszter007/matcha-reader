@@ -37,7 +37,7 @@ constexpr StrId menuNames[KOReaderSettingsActivity::MENU_ITEMS] = {
     StrId::STR_SYNC_BEHAVIOR,   StrId::STR_SYNC_CLIPPINGS,  StrId::STR_SIGN_UP,           StrId::STR_AUTHENTICATE};
 
 constexpr int SERVER_TYPE_ITEMS = 3;
-constexpr StrId serverTypeNames[SERVER_TYPE_ITEMS] = {StrId::STR_CROSSPOINT, StrId::STR_KOSYNC_SERVER,
+constexpr StrId serverTypeNames[SERVER_TYPE_ITEMS] = {StrId::STR_SERVER_TYPE_CROSSPOINT, StrId::STR_KOSYNC_SERVER,
                                                       StrId::STR_OTHER};
 }  // namespace
 
@@ -184,7 +184,7 @@ void KOReaderSettingsActivity::buildScreen(UiScreen& screen) {
       }
     } else if (i == IDX_SERVER_TYPE) {
       const auto type = KOREADER_STORE.getServerType();
-      rowValues_[i] = type == KOReaderServerType::CROSSPOINT ? tr(STR_CROSSPOINT)
+      rowValues_[i] = type == KOReaderServerType::CROSSPOINT ? tr(STR_SERVER_TYPE_CROSSPOINT)
                       : type == KOReaderServerType::KOSYNC   ? tr(STR_KOSYNC_SERVER)
                                                              : tr(STR_OTHER);
     } else if (i == IDX_CUSTOM_HEADER_1 || i == IDX_CUSTOM_HEADER_2) {

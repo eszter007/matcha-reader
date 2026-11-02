@@ -710,7 +710,7 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
               "koHeader2Value", StrId::STR_KOREADER_SYNC)
               .withObfuscated(),
           SettingInfo::DynamicEnum(
-              StrId::STR_SERVER_TYPE, {StrId::STR_CROSSPOINT, StrId::STR_KOSYNC_SERVER, StrId::STR_OTHER},
+              StrId::STR_SERVER_TYPE, {StrId::STR_SERVER_TYPE_CROSSPOINT, StrId::STR_KOSYNC_SERVER, StrId::STR_OTHER},
               [] { return static_cast<uint8_t>(KOREADER_STORE.getServerType()); },
               [](uint8_t v) {
                 KOREADER_STORE.setServerType(static_cast<KOReaderServerType>(v));
