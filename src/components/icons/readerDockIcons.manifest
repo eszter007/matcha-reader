@@ -4,16 +4,12 @@
 # then ./bin/clang-format-fix -g. Needs cairosvg and Pillow. Upright: drawn as FreeInkUI bitmaps.
 #
 # Tabler icons (MIT), vendored in assets/icons/tabler/ from
-# https://github.com/tabler/tabler-icons. The toolbar reader menu: its four tools, the chapter
-# steps either side of the progress track, and the bookmark toggle beside the page number.
-DockContentsIcon = list-details
-DockTextIcon = typography
-DockTranslateIcon = language
-DockMoreIcon = dots
+# https://github.com/tabler/tabler-icons. The toolbar reader menu: the chapter steps either side of
+# the progress track, the bookmark toggle beside the page number and the size steps. Its tools are
+# larger, in readerDockToolIcons.manifest.
 DockPrevChapterIcon = chevron-left-pipe
 DockNextChapterIcon = chevron-right-pipe
 DockBookmarkIcon = bookmark
 DockBookmarkFilledIcon = bookmark-filled
 DockSmallerIcon = letter-a-small
 DockLargerIcon = letter-a
-DockPageIcon = file-text
