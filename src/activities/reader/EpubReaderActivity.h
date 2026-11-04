@@ -195,6 +195,8 @@ class EpubReaderActivity final : public ReaderActivity {
   // Whether the panel draws its cursor row. Button boards always do; touch
   // boards only once a button has moved it, so a tapped row is not left inverted.
   bool panelCursorShown = false;
+  // The panel's button cursor is on its tool row (toolbarControl names the tool), below the rows.
+  bool panelToolRowFocused = false;
   // FreeInkUI chrome + tap targets for the overlay; created when it opens,
   // released when it closes.
   std::unique_ptr<ReaderToolbarUi> toolbarUi;
@@ -657,9 +659,23 @@ class EpubReaderActivity final : public ReaderActivity {
   bool textSettingsDirty = false;
   void saveTextSettingsIfDirty();
   // option >= 0: the tapped option cell (a stepper's 0 = smaller, 1 = larger); otherwise step
-  // the value by `step` (buttons, which reach every value the pictures skip).
+  // the value by `step` (a tap on the row's label, or a button on a Text toggle).
   void changeTextControl(TextControl control, int option, int step);
+  // Page panel on button boards: Left/Right edit this draft and only the panel redraws. It is
+  // applied in one re-layout when the toolbar closes (Confirm on a Page row, Back, or leaving).
+  struct PageDraft {
+    bool active = false;
+    uint8_t lineSpacing = 0;
+    uint8_t screenMargin = 0;
+    uint8_t paragraphAlignment = 0;
+    uint8_t orientation = 0;
+    int8_t vertical = 0;
+  };
+  PageDraft pageDraft_;
+  void stepPageDraft(TextControl control, int step);
+  void applyPageDraft();
   void showSizePopup();
+  void showFontPopup();
   void openTextSettingsFromPanel();
   // The text on the page on screen, empty for an image-only page.
   std::string currentPageText();
