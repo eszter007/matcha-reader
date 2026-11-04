@@ -11,6 +11,7 @@
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 #include "components/icons/readerDockIcons.h"
+#include "components/icons/readerDockToolIcons.h"
 
 namespace fui = freeink::ui;
 
@@ -25,6 +26,7 @@ constexpr fui::ActionId ACTION_BOOKMARK = 7;  // bookmark toggle beside the page
 constexpr fui::ActionId ACTION_OPTION = 8;    // control row option, value = row * kOptionStride + option
 
 constexpr int16_t kIcon = 24;
+constexpr int16_t kToolIcon = 32;  // the tool row's icons
 // Scrub row: icon-only chapter steps flanking a thin progress track with a round knob.
 constexpr int16_t kScrubButton = 44;  // chapter step tap target (square)
 constexpr int16_t kScrubKnob = 16;    // round knob on the 2px progress track
@@ -213,8 +215,8 @@ void ReaderToolbarUi::screenFn(UiScreen& screen, void* user) {
 // panel's name is bold and underlined; on the dock a button cursor outlines its slot instead.
 void ReaderToolbarUi::buildToolRow(UiScreen& screen, const fui::LayoutAnchor anchor, const int16_t sideInset) {
   const auto& tokens = screen.theme();
-  static const uint8_t* const kIcons[kToolCount] = {DockContentsIcon, DockTextIcon, DockPageIcon, DockTranslateIcon,
-                                                    DockMoreIcon};
+  static const uint8_t* const kToolIcons[kToolCount] = {DockToolContentsIcon, DockToolTextIcon, DockToolPageIcon,
+                                                        DockToolTranslateIcon, DockToolMoreIcon};
   static constexpr StrId kNames[kToolCount] = {StrId::STR_TOOL_CONTENTS, StrId::STR_TOOL_TEXT, StrId::STR_TOOL_PAGE,
                                                StrId::STR_TRANSLATE, StrId::STR_TOOL_MORE};
   // sideInset absorbs the difference between the two hosts' content bands (the toolbar's is
@@ -222,52 +224,54 @@ void ReaderToolbarUi::buildToolRow(UiScreen& screen, const fui::LayoutAnchor anc
   // when a tap swaps the toolbar for a panel.
   const fui::Rect row = screen.take(anchor, kToolRowH).inset(fui::Insets{0, sideInset, 0, sideInset});
   auto& t = screen.target();
-  fui::TextStyle nameStyle = tokens.smallText;
-  nameStyle.align = fui::TextAlign::Center;
+  const fui::TextStyle nameStyle = tokens.bodyText;
   const int16_t nameH = t.lineHeight(nameStyle.font);
-  const int16_t blockH = static_cast<int16_t>(kIcon + tokens.spaceSm + nameH + kToolUnderline + 2);
-  // The first tool's ink starts and the last one's ends on the dock's ink edges, where the chapter
-  // steps, the chapter title and the bookmark sit.
+  // The selected tool (the button cursor's, else the open panel's) shows its name beside the icon;
+  // the others are icon only, which leaves room for long names.
+  const int labeled =
+      model_.toolbarFocus >= kFocusFirstTool ? model_.toolbarFocus - kFocusFirstTool : model_.activeTool;
   int16_t blockW[kToolCount];
+  int16_t used = 0;
   for (int i = 0; i < kToolCount; ++i) {
-    blockW[i] = std::max<int16_t>(kIcon, t.measureText(nameStyle.font, I18N.get(kNames[i]), nameStyle).width);
+    blockW[i] = kToolIcon;
+    if (i == labeled) {
+      blockW[i] = static_cast<int16_t>(kToolIcon + tokens.spaceSm +
+                                       t.measureText(nameStyle.font, I18N.get(kNames[i]), nameStyle).width);
+    }
+    used = static_cast<int16_t>(used + blockW[i]);
   }
+  // The first tool's ink starts and the last one's ends on the dock's ink edges, where the chapter
+  // steps, the chapter title and the bookmark sit; the gaps between the tools are equal.
   const int16_t inkLeft = static_cast<int16_t>(row.x + kEdgeInk);
   const int16_t inkRight = static_cast<int16_t>(row.right() - kEdgeInk);
-  // The end tools sit on the edges; the centres between are evenly spaced, so the icons fall on a
-  // regular beat whatever the names' widths.
-  int16_t centres[kToolCount];
-  centres[0] = static_cast<int16_t>(inkLeft + blockW[0] / 2);
-  centres[kToolCount - 1] = static_cast<int16_t>(inkRight - blockW[kToolCount - 1] / 2);
-  for (int i = 1; i < kToolCount - 1; ++i) {
-    centres[i] = static_cast<int16_t>(centres[0] + (centres[kToolCount - 1] - centres[0]) * i / (kToolCount - 1));
-  }
+  const int16_t gap = static_cast<int16_t>(std::max(0, (inkRight - inkLeft - used) / (kToolCount - 1)));
+  int16_t blockX[kToolCount];
+  int16_t x = inkLeft;
   for (int i = 0; i < kToolCount; ++i) {
-    // Tap target: halfway to each neighbour, the row's ends at the edges.
-    const int16_t from = i == 0 ? row.x : static_cast<int16_t>((centres[i - 1] + centres[i]) / 2);
-    const int16_t to = i == kToolCount - 1 ? row.right() : static_cast<int16_t>((centres[i] + centres[i + 1]) / 2);
+    blockX[i] = x;
+    x = static_cast<int16_t>(x + blockW[i] + gap);
+  }
+  const int16_t blockH = static_cast<int16_t>(std::max(kToolIcon, nameH));
+  const int16_t top = static_cast<int16_t>(row.y + (row.height - blockH - kToolUnderline - 4) / 2);
+  for (int i = 0; i < kToolCount; ++i) {
+    // Tap target: halfway into each gap, the row's ends at the edges.
+    const int16_t from = i == 0 ? row.x : static_cast<int16_t>(blockX[i] - gap / 2);
+    const int16_t to = i == kToolCount - 1 ? row.right() : static_cast<int16_t>(blockX[i] + blockW[i] + gap / 2);
     const fui::Rect slot{from, row.y, static_cast<int16_t>(to - from), row.height};
-    const int16_t blockX = static_cast<int16_t>(centres[i] - blockW[i] / 2);
     if (model_.toolbarFocus == kFocusFirstTool + i) {
-      cursor(t, fui::Rect{static_cast<int16_t>(blockX - 8), static_cast<int16_t>(row.y + 2),
+      cursor(t, fui::Rect{static_cast<int16_t>(blockX[i] - 8), static_cast<int16_t>(row.y + 2),
                           static_cast<int16_t>(blockW[i] + 16), static_cast<int16_t>(row.height - 4)});
     }
-    const int16_t top = static_cast<int16_t>(row.y + (row.height - blockH) / 2);
-    t.bitmap(fui::Rect{static_cast<int16_t>(centres[i] - kIcon / 2), top, kIcon, kIcon}, icon24(kIcons[i]),
-             fui::BitmapMode::Center);
-    const bool open = i == model_.activeTool;
-    nameStyle.bold = open;
-    const char* name = I18N.get(kNames[i]);
-    // Centred on the tool and as wide as its slot allows, so the bold open name has room to grow.
-    const int16_t half = static_cast<int16_t>(std::min(centres[i] - slot.x, slot.right() - centres[i]));
-    const fui::Rect nameRect{static_cast<int16_t>(centres[i] - half),
-                             static_cast<int16_t>(top + kIcon + tokens.spaceSm), static_cast<int16_t>(2 * half), nameH};
-    t.text(nameRect, name, nameStyle);
-    if (open) {
-      const int16_t w = t.measureText(nameStyle.font, name, nameStyle).width;
-      t.fill(fui::Rect{static_cast<int16_t>(centres[i] - w / 2), static_cast<int16_t>(nameRect.y + nameH + 2), w,
-                       kToolUnderline},
-             ink());
+    t.bitmap(fui::Rect{blockX[i], static_cast<int16_t>(top + (blockH - kToolIcon) / 2), kToolIcon, kToolIcon},
+             fui::BitmapRef{kToolIcons[i], kToolIcon, kToolIcon, fui::BitmapFormat::Mask1}, fui::BitmapMode::Center);
+    if (i == labeled) {
+      const int16_t nameX = static_cast<int16_t>(blockX[i] + kToolIcon + tokens.spaceSm);
+      t.text(fui::Rect{nameX, static_cast<int16_t>(top + (blockH - nameH) / 2),
+                       static_cast<int16_t>(blockX[i] + blockW[i] - nameX), nameH},
+             I18N.get(kNames[i]), nameStyle);
+    }
+    if (i == model_.activeTool) {
+      t.fill(fui::Rect{blockX[i], static_cast<int16_t>(top + blockH + 4), blockW[i], kToolUnderline}, ink());
     }
     screen.frame().hit(slot, ACTION_TOOL, static_cast<int16_t>(i), fui::InputTouch);
   }
