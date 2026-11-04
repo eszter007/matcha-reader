@@ -71,7 +71,7 @@ class ReaderToolbarUi : public UiAppHost {
     const char* chapterTitle = nullptr;
     const char* pageInfo = nullptr;  // "p. 12/40 · 51%"
     int progressPermille = 0;        // 0..1000 book progress (scrub handle)
-    int toolbarFocus = -1;           // button cursor (kFocus*), -1 = none shown
+    int toolbarFocus = -1;           // button cursor (kFocus*), -1 = none shown; on a panel, its tool row
     bool bookmarked = false;         // the page carries a bookmark
     // Panel
     int itemCount = 0;

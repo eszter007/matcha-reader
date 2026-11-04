@@ -80,7 +80,6 @@
 #include "fontIds.h"
 #include "util/BookProgress.h"
 #include "util/BookmarkUtil.h"
-#include "util/ButtonNavigator.h"
 #include "util/DictionaryRegistry.h"
 #include "util/PluginEvents.h"
 #include "util/RemoteProgress.h"
@@ -6608,6 +6607,8 @@ void EpubReaderActivity::changeTextControl(const TextControl control, const int 
       return;
     }
     case TextControl::Font:
+      showFontPopup();
+      return;
     case TextControl::MoreSettings:
       openTextSettingsFromPanel();
       return;
@@ -6644,9 +6645,114 @@ void EpubReaderActivity::showSizePopup() {
   paintOverlayPopup();
 }
 
+void EpubReaderActivity::stepPageDraft(const TextControl control, const int step) {
+  if (!pageDraft_.active) {
+    pageDraft_ = {true,
+                  SETTINGS.lineSpacing,
+                  SETTINGS.screenMargin,
+                  SETTINGS.paragraphAlignment,
+                  SETTINGS.orientation,
+                  static_cast<int8_t>(useVerticalText() ? 1 : 0)};
+  }
+  const auto cycle = [](const int value, const int delta, const int count) { return (value + delta + count) % count; };
+  PageDraft& d = pageDraft_;
+  switch (control) {
+    // Picture to picture, so each press moves the frame (More text settings has the values between).
+    case TextControl::LineSpacing:
+      d.lineSpacing = kSpacingPicks[std::clamp(nearestPick(kSpacingPicks, d.lineSpacing) + step, 0,
+                                               static_cast<int>(std::size(kSpacingPicks)) - 1)];
+      break;
+    case TextControl::Margins:
+      d.screenMargin = kMarginPicks[std::clamp(nearestPick(kMarginPicks, d.screenMargin) + step, 0,
+                                               static_cast<int>(std::size(kMarginPicks)) - 1)];
+      break;
+    case TextControl::Alignment:
+      d.paragraphAlignment =
+          static_cast<uint8_t>(cycle(d.paragraphAlignment < kAlignPicks ? d.paragraphAlignment : 0, step, kAlignPicks));
+      break;
+    case TextControl::Orientation:
+      d.orientation = static_cast<uint8_t>(cycle(d.orientation, step, CrossPointSettings::ORIENTATION_COUNT));
+      break;
+    case TextControl::Writing:
+      d.vertical = static_cast<int8_t>(1 - d.vertical);
+      break;
+    default:
+      break;
+  }
+}
+
+// One re-layout for every Page change the buttons drafted.
+void EpubReaderActivity::applyPageDraft() {
+  if (!pageDraft_.active) return;
+  const PageDraft d = pageDraft_;
+  pageDraft_.active = false;
+  if (d.lineSpacing != SETTINGS.lineSpacing || d.screenMargin != SETTINGS.screenMargin ||
+      d.paragraphAlignment != SETTINGS.paragraphAlignment) {
+    SETTINGS.lineSpacing = d.lineSpacing;
+    SETTINGS.screenMargin = d.screenMargin;
+    SETTINGS.paragraphAlignment = d.paragraphAlignment;
+    applyTextSettingLive();
+  }
+  if (d.orientation != SETTINGS.orientation) {
+    applyOrientation(d.orientation);
+    discardOverlayPage();
+    requestUpdate();
+  }
+  if (d.vertical != (useVerticalText() ? 1 : 0)) {
+    applyVerticalFuriganaOverride(d.vertical, -1);
+    discardOverlayPage();
+    requestUpdate();
+  }
+}
+
+// The installed font families, as a picker (Select on the Font row). Keep the rows and order in
+// step with TextSettingsActivity::rebuildFamilyList(), without Manage Fonts.
+void EpubReaderActivity::showFontPopup() {
+  struct Family {
+    std::string label;
+    std::string name;  // empty: the built-in Noto Serif
+  };
+  const auto& registry = sdFontSystem.registry();
+  const auto& families = registry.getFamilies();
+  std::vector<Family> fonts;  // a handful of families, freed when the popup is set up
+  fonts.reserve(families.size() + 1);
+  fonts.push_back({tr(STR_NOTO_SERIF), ""});
+  for (const auto& f : families) {
+    if (SdCardFontSystem::isHiddenCjkExtension(f.name, &registry)) continue;
+    if (SdCardFontSystem::isCoverageVariant(f.name, &registry)) continue;
+    fonts.push_back({SdCardFontSystem::pickerLabel(f.name, &registry), f.name});
+  }
+  std::sort(fonts.begin(), fonts.end(),
+            [](const Family& a, const Family& b) { return strcasecmp(a.label.c_str(), b.label.c_str()) < 0; });
+  std::vector<std::string> labels;
+  std::vector<std::string> names;
+  labels.reserve(fonts.size());
+  names.reserve(fonts.size());
+  int curIdx = 0;
+  for (auto& f : fonts) {
+    if (f.name == SETTINGS.sdFontFamilyName) curIdx = static_cast<int>(names.size());
+    labels.push_back(std::move(f.label));
+    names.push_back(std::move(f.name));
+  }
+  overlayPopup.show(StrId::STR_FONT, std::move(labels), curIdx, [this, names = std::move(names)](int idx) {
+    if (idx < 0 || idx >= static_cast<int>(names.size())) return;
+    if (names[idx] == SETTINGS.sdFontFamilyName) return;
+    if (names[idx].empty()) {
+      SETTINGS.fontFamily = CrossPointSettings::NOTOSERIF;
+      SETTINGS.sdFontFamilyName[0] = '\0';
+    } else {
+      strncpy(SETTINGS.sdFontFamilyName, names[idx].c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);
+      SETTINGS.sdFontFamilyName[sizeof(SETTINGS.sdFontFamilyName) - 1] = '\0';
+    }
+    applyTextSettingLive();  // loads the family; a failed load falls back to the built-in font
+  });
+  paintOverlayPopup();
+}
+
 // The full text settings (font picker with live preview, spacing, hyphenation, ...): the same
 // screen Settings uses. Back returns to the Text panel.
 void EpubReaderActivity::openTextSettingsFromPanel() {
+  applyPageDraft();  // first, or it would overwrite what the screen changes
   overlay = Overlay::None;
   overlayPopup.dismiss();
   discardOverlayPage();
@@ -6711,9 +6817,13 @@ void EpubReaderActivity::openOverlay(Overlay target) {
   }
   const Overlay previous = overlay;
   overlay = target;
-  if (previous == Overlay::None) toolbarUi->begin();
+  if (previous == Overlay::None) {
+    toolbarUi->begin();
+    pageDraft_.active = false;
+  }
   // Buttons show a cursor from the start; touch boards only once a button moves it.
   panelCursorShown = !mappedInput.hasTouch();
+  panelToolRowFocused = false;
   switch (target) {
     case Overlay::Toolbar:
       focusedTool = 0;
@@ -6779,6 +6889,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
 
 // Grayscale panels re-render to restore AA; other boards restore the B/W snapshot.
 void EpubReaderActivity::closeOverlayToPage() {
+  applyPageDraft();
   saveTextSettingsIfDirty();
   mappedInput.resetHomeButtonInput();
   overlay = Overlay::None;
@@ -6807,7 +6918,7 @@ void EpubReaderActivity::renderOverlay() {
   ReaderToolbarUi::Model model;
   // The dock's button cursor is tap-first (same convention as the panel lists): it only
   // shows once a button has moved it. On a panel the open tool is underlined instead.
-  model.toolbarFocus = overlay == Overlay::Toolbar && panelCursorShown ? toolbarControl : -1;
+  model.toolbarFocus = (overlay == Overlay::Toolbar || panelToolRowFocused) && panelCursorShown ? toolbarControl : -1;
   model.activeTool = overlay == Overlay::Toolbar ? -1 : focusedTool;
   // Strings the model points at live here until render() returns.
   std::string chapterTitle, pageInfo, fontName;
@@ -6837,7 +6948,7 @@ void EpubReaderActivity::renderOverlay() {
   }
   // Tap-first: the cursor is only drawn once a button has moved it, so a
   // tapped row does not stay inverted after its action.
-  model.selectedIndex = panelCursorShown ? panelIndex : -1;
+  model.selectedIndex = panelCursorShown && !panelToolRowFocused ? panelIndex : -1;
   if (overlay == Overlay::Contents) {
     model.itemCount = epub->getTocItemsCount();
     model.rowText = [this](int i) {
@@ -6854,6 +6965,13 @@ void EpubReaderActivity::renderOverlay() {
     panelIndex = std::min(panelIndex, count - 1);
     char sizeValue[8];
     snprintf(sizeValue, sizeof(sizeValue), "%u", static_cast<unsigned>(SETTINGS.fontPointSize));
+    // A button draft shows what Confirm will apply.
+    const bool draft = pageDraft_.active;
+    const uint8_t lineSpacing = draft ? pageDraft_.lineSpacing : SETTINGS.lineSpacing;
+    const uint8_t screenMargin = draft ? pageDraft_.screenMargin : SETTINGS.screenMargin;
+    const uint8_t alignment = draft ? pageDraft_.paragraphAlignment : SETTINGS.paragraphAlignment;
+    const uint8_t orientation = draft ? pageDraft_.orientation : SETTINGS.orientation;
+    const bool vertical = draft ? pageDraft_.vertical == 1 : useVerticalText();
     if (SETTINGS.sdFontFamilyName[0] != '\0') {
       fontName = SdCardFontSystem::pickerLabel(SETTINGS.sdFontFamilyName, &sdFontSystem.registry());
     } else {
@@ -6874,7 +6992,7 @@ void EpubReaderActivity::renderOverlay() {
                tr(STR_LINE_SPACING),
                nullptr,
                static_cast<uint8_t>(std::size(kSpacingPicks)),
-               static_cast<int8_t>(nearestPick(kSpacingPicks, SETTINGS.lineSpacing))};
+               static_cast<int8_t>(nearestPick(kSpacingPicks, lineSpacing))};
           break;
         case TextControl::Margins:
           r = {Row::Kind::Options,
@@ -6882,15 +7000,12 @@ void EpubReaderActivity::renderOverlay() {
                tr(STR_MARGINS),
                nullptr,
                static_cast<uint8_t>(std::size(kMarginPicks)),
-               static_cast<int8_t>(nearestPick(kMarginPicks, SETTINGS.screenMargin))};
+               static_cast<int8_t>(nearestPick(kMarginPicks, screenMargin))};
           break;
         case TextControl::Alignment:
-          r = {Row::Kind::Options,
-               Row::Picture::Alignment,
-               tr(STR_ALIGNMENT),
-               nullptr,
-               kAlignPicks,
-               static_cast<int8_t>(SETTINGS.paragraphAlignment < kAlignPicks ? SETTINGS.paragraphAlignment : -1)};
+          r = {Row::Kind::Options, Row::Picture::Alignment,
+               tr(STR_ALIGNMENT),  nullptr,
+               kAlignPicks,        static_cast<int8_t>(alignment < kAlignPicks ? alignment : -1)};
           break;
         case TextControl::Orientation:
           r = {Row::Kind::Options,
@@ -6898,7 +7013,7 @@ void EpubReaderActivity::renderOverlay() {
                tr(STR_ORIENTATION_SHORT),
                nullptr,
                CrossPointSettings::ORIENTATION_COUNT,
-               static_cast<int8_t>(SETTINGS.orientation)};
+               static_cast<int8_t>(orientation)};
           break;
         case TextControl::Writing:
           r = {Row::Kind::Options,
@@ -6906,7 +7021,7 @@ void EpubReaderActivity::renderOverlay() {
                tr(STR_VERTICAL_TEXT_LABEL),
                nullptr,
                2,
-               static_cast<int8_t>(useVerticalText() ? 1 : 0)};
+               static_cast<int8_t>(vertical ? 1 : 0)};
           break;
         case TextControl::Furigana:
           r = {Row::Kind::Toggle,
@@ -7087,14 +7202,21 @@ void EpubReaderActivity::handleOverlayInput() {
   const auto activateRow = [this, count, &textCtl] {
     if (panelIndex < 0 || panelIndex >= count) return;
     if (controlPanelOpen()) {
-      // Select: a picker for Size, Font and More; a toggle flips; an option row steps on.
+      // Select: a picker for Size and Font, More opens the text settings, a toggle flips. On the
+      // Page panel it applies what Left/Right drafted.
       const TextControl control = textCtl[panelIndex];
       if (control == TextControl::Size) {
         showSizePopup();
+      } else if (overlay == Overlay::Page && pageDraft_.active) {
+        // Applied on the way out: a vertical chapter re-lays out without the panel on top.
+        closeOverlayToPage();
+      } else if (overlay == Overlay::Page && panelCursorShown) {
+        // Buttons with nothing drafted: Left/Right choose, Confirm only applies.
       } else {
         changeTextControl(control, -1, 1);
       }
     } else if (overlay == Overlay::Contents) {
+      applyPageDraft();
       const auto item = epub->getTocItem(panelIndex);
       if (item.spineIndex != -1) {
         RenderLock lock;
@@ -7120,6 +7242,11 @@ void EpubReaderActivity::handleOverlayInput() {
   // Steps up to the toolbar -- the Back button and a tap on the page above
   // the sheet.
   const auto dismissPanel = [this, &fastRedraw] {
+    if (pageDraft_.active) {
+      closeOverlayToPage();  // applies the draft, see activateRow
+      return;
+    }
+    panelToolRowFocused = false;
     overlay = Overlay::Toolbar;
     toolbarControl = ReaderToolbarUi::kFocusFirstTool + focusedTool;
     // Restore the snapshotted page under the toolbar instead of re-rendering
@@ -7167,11 +7294,14 @@ void EpubReaderActivity::handleOverlayInput() {
       const int row = routed.value / ReaderToolbarUi::kOptionStride;
       if (controlPanelOpen() && row >= 0 && row < textCount) {
         panelIndex = row;
+        panelToolRowFocused = false;
+        applyPageDraft();  // a tap applies at once; buttons' pending edits go first
         changeTextControl(textCtl[row], routed.value % ReaderToolbarUi::kOptionStride, 0);
       }
       return;
     }
     case ReaderToolbarUi::Event::Row:
+      panelToolRowFocused = false;
       if (controlPanelOpen()) {
         panelIndex = routed.value;
         panelCursorShown = false;
@@ -7210,13 +7340,47 @@ void EpubReaderActivity::handleOverlayInput() {
 
   const bool previousPanel = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenLeft, 0);
   const bool nextPanel = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenRight, 0);
+  const bool pressedUp = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenUp, 0);
+  const bool pressedDown = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenDown, 0);
+  const bool confirm = mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, 0);
+
+  // The tool row below the rows: Left/Right pick a tool, Confirm opens it, Up/Down go back to the rows.
+  if (panelToolRowFocused) {
+    if (previousPanel || nextPanel) {
+      constexpr int kTools = ReaderToolbarUi::kToolCount;
+      const int tool = toolbarControl - ReaderToolbarUi::kFocusFirstTool;
+      toolbarControl = ReaderToolbarUi::kFocusFirstTool + (tool + (nextPanel ? 1 : kTools - 1)) % kTools;
+      fastRedraw();
+    } else if (confirm) {
+      const int tool = toolbarControl - ReaderToolbarUi::kFocusFirstTool;
+      if (tool == focusedTool) {
+        panelToolRowFocused = false;
+        fastRedraw();
+      } else {
+        openTool(tool);
+      }
+    } else if ((pressedUp || pressedDown) && count > 0) {
+      panelToolRowFocused = false;
+      panelIndex = pressedUp ? count - 1 : 0;
+      fastRedraw();
+    }
+    return;
+  }
+
   if (previousPanel || nextPanel) {
-    // On the Text panel Left/Right change the row under the cursor, in single steps.
     if (controlPanelOpen() && panelIndex >= 0 && panelIndex < textCount) {
       const TextControl control = textCtl[panelIndex];
-      if (control != TextControl::Font && control != TextControl::MoreSettings) {
+      // Page rows: Left/Right draft the value; only the panel redraws until it is applied.
+      if (overlay == Overlay::Page) {
         panelCursorShown = true;
-        changeTextControl(control, -1, nextPanel ? 1 : -1);
+        stepPageDraft(control, nextPanel ? 1 : -1);
+        fastRedraw();
+        return;
+      }
+      // Text toggles flip; Size and Font take Confirm and their picker.
+      if (control == TextControl::Furigana || control == TextControl::FocusReading) {
+        panelCursorShown = true;
+        changeTextControl(control, -1, 1);
         return;
       }
     }
@@ -7229,23 +7393,24 @@ void EpubReaderActivity::handleOverlayInput() {
     return;
   }
 
-  if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, 0)) {
+  if (confirm) {
     activateRow();
     return;
   }
 
-  // Up/Down (side) move the cursor; Left/Right switch panels above. A tap steps
-  // one row, holding past PANEL_HOLD_MS jumps PANEL_HOLD_STEP rows in one go, which
-  // is how you cross a hundreds-of-chapters contents list without a press per
-  // row. The jump fires once on the hold and swallows the release that ends it,
-  // so it never doubles up with the tap step.
+  // Up/Down (side) move the cursor; past either end it reaches the tool row. A tap steps one row,
+  // holding past PANEL_HOLD_MS jumps PANEL_HOLD_STEP rows in one go, which is how you cross a
+  // hundreds-of-chapters contents list without a press per row. The jump fires once on the hold
+  // and swallows the release that ends it, so it never doubles up with the tap step.
   if (count > 0) {
-    const bool pressedUp = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenUp, 0);
-    const bool pressedDown = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenDown, 0);
     if (pressedUp || pressedDown) {
-      panelIndex =
-          pressedUp ? ButtonNavigator::previousIndex(panelIndex, count) : ButtonNavigator::nextIndex(panelIndex, count);
       panelCursorShown = true;
+      if ((pressedDown && panelIndex >= count - 1) || (pressedUp && panelIndex <= 0)) {
+        panelToolRowFocused = true;
+        toolbarControl = ReaderToolbarUi::kFocusFirstTool + focusedTool;
+      } else {
+        panelIndex += pressedUp ? -1 : 1;
+      }
       fastRedraw();
       return;
     }
@@ -7417,6 +7582,7 @@ void EpubReaderActivity::openTool(const int tool) {
 
 void EpubReaderActivity::runOverlayLeafAction(const EpubReaderMenuActivity::MenuAction action) {
   using MA = EpubReaderMenuActivity::MenuAction;
+  applyPageDraft();
   saveTextSettingsIfDirty();
   {
     RenderLock lock;  // several actions launch screens that paint the framebuffer

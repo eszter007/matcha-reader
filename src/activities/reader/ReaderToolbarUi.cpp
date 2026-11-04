@@ -248,7 +248,7 @@ void ReaderToolbarUi::buildToolRow(UiScreen& screen, const fui::LayoutAnchor anc
     const int16_t to = i == kToolCount - 1 ? row.right() : static_cast<int16_t>((centres[i] + centres[i + 1]) / 2);
     const fui::Rect slot{from, row.y, static_cast<int16_t>(to - from), row.height};
     const int16_t blockX = static_cast<int16_t>(centres[i] - blockW[i] / 2);
-    if (!model_.panel && model_.toolbarFocus == kFocusFirstTool + i) {
+    if (model_.toolbarFocus == kFocusFirstTool + i) {
       cursor(t, fui::Rect{static_cast<int16_t>(blockX - 8), static_cast<int16_t>(row.y + 2),
                           static_cast<int16_t>(blockW[i] + 16), static_cast<int16_t>(row.height - 4)});
     }
@@ -430,6 +430,8 @@ void ReaderToolbarUi::buildTextRows(UiScreen& screen, const fui::Rect area) {
         t.bitmap(iconIn(minus), icon24(DockSmallerIcon), fui::BitmapMode::Center);
         centredText(t, number, r.value, num);
         t.bitmap(iconIn(plus), icon24(DockLargerIcon), fui::BitmapMode::Center);
+        // The row opens the size picker; the later-registered steps win over it.
+        screen.frame().hit(rowRect, ACTION_ROW, static_cast<int16_t>(i), fui::InputTouch);
         screen.frame().hit(minus, ACTION_OPTION, value, fui::InputTouch);
         screen.frame().hit(plus, ACTION_OPTION, static_cast<int16_t>(value + 1), fui::InputTouch);
         controlX = minus.x;
