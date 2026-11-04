@@ -1487,9 +1487,11 @@ void EpubReaderActivity::readerLoop() {
     if (mappedInput.wasScreenLongPress(pressX, pressY)) {
       // A long press on highlighted text removes that clipping; anywhere else it looks the word up,
       // or, when a tap already does that, starts a clipping with the finger still down.
+      // Buzzed while the finger is still down, so the reader feels when a hold took over from a tap.
       if (section && CLIPPINGS.hasClippings()) {
         auto page = section->loadPage(section->currentPage);
         if (page && clippingAtPoint(*page, pressX, pressY) >= 0) {
+          haptic_feedback::touchAction(/*longPress=*/true);
           startClipSelection(pressX, pressY);
           return;
         }
@@ -1502,13 +1504,18 @@ void EpubReaderActivity::readerLoop() {
           onClipping = vpage && verticalClippingAtPoint(*vpage, pressX, pressY) >= 0;
         }
         if (onClipping) {
+          haptic_feedback::touchAction(/*longPress=*/true);
           startClipSelection(pressX, pressY);
           return;
         }
       }
       if (tapLooksUp) {
-        if (textAtPoint(pressX, pressY)) startClipSelection(pressX, pressY, pressX, pressY);
+        if (textAtPoint(pressX, pressY)) {
+          haptic_feedback::touchAction(/*longPress=*/true);
+          startClipSelection(pressX, pressY, pressX, pressY);
+        }
       } else {
+        haptic_feedback::touchAction(/*longPress=*/true);
         openDictionaryWordSelect(/*pageOnScreen=*/true, pressX, pressY);
       }
       return;
