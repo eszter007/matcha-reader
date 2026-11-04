@@ -391,9 +391,6 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Thin wrappers over util/SideButtonActions.h -- that header holds the only copy of the logic
   // (and is what the unit tests exercise); duplicating it here once let the two drift.
   bool sideButtonsCustomized() const { return side_button::customized(upperSideButtonAction, lowerSideButtonAction); }
-  bool sideButtonsFullyCustomized() const {
-    return side_button::fullyCustomized(upperSideButtonAction, lowerSideButtonAction);
-  }
   uint8_t sideButtonActionForUp() const { return side_button::clampAction(upperSideButtonAction); }
   uint8_t sideButtonActionForDown() const { return side_button::clampAction(lowerSideButtonAction); }
 
@@ -550,8 +547,6 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // default was swipe, so both keep SWIPE_ONLY rather than upstream's tap-and-swipe.
   uint8_t pageTurnGesture = SWIPE_ONLY;
   uint8_t previousPageGesture = SWIPE_ONLY;
-  // Swap Word Lookup navigation to side buttons and scrolling to front buttons.
-  uint8_t wordLookupSideButtons = 0;
   // Word Lookup definition font: 8/12/14/16pt (Tiny/Small/Medium/Large; Small is the default).
   enum WORD_LOOKUP_FONT_SIZE {
     WORD_LOOKUP_FONT_TINY = 0,

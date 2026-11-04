@@ -263,6 +263,30 @@ inline PanelStep lookupPanelStep(const MappedInputManager& input) {
   return PanelStep::None;
 }
 
+// Every lookup screen reads a button the same way: a short press moves on, a hold skips. The hold
+// is the reader's own chapter-skip hold, and wasLongPressed() swallows the release that follows,
+// so a hold never also counts as a press.
+enum class LookupPress : uint8_t { None, Press, Hold };
+
+inline LookupPress lookupPress(const MappedInputManager& input, const MappedInputManager::Button button) {
+  if (input.wasLongPressed(button, SKIP_HOLD_MS)) return LookupPress::Hold;
+  return input.wasReleased(button) ? LookupPress::Press : LookupPress::None;
+}
+
+// The lookup screens where every pair does the same: the first button pressed or held, with
+// `delta` +1 for Down/Right and -1 for Up/Left.
+inline LookupPress lookupPressAny(const MappedInputManager& input, int& delta) {
+  using Button = MappedInputManager::Button;
+  for (const Button button : {Button::ScreenDown, Button::ScreenRight, Button::ScreenUp, Button::ScreenLeft}) {
+    const LookupPress press = lookupPress(input, button);
+    if (press != LookupPress::None) {
+      delta = button == Button::ScreenDown || button == Button::ScreenRight ? 1 : -1;
+      return press;
+    }
+  }
+  return LookupPress::None;
+}
+
 // A side button bound to Word Lookup: it opens the panel from the reader and closes it from
 // inside, so the one button toggles.
 inline bool wordLookupSideToggle(const MappedInputManager& input) {

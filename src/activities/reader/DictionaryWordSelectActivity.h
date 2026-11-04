@@ -98,6 +98,7 @@ class DictionaryWordSelectActivity final : public Activity {
   int wordAt(int x, int y) const;
   int nearestWord(int x, int y, int& outDistance) const;
   void moveVertical(int direction);
+  void stepWord(int delta);
   void performLookup();
   bool drawHighlightWithSnapshot();
   void drawHints() const;
@@ -124,7 +125,6 @@ class DictionaryWordSelectActivity final : public Activity {
   std::string miningSentence(std::string_view surface) const;
   uint16_t rowCount = 0;
   bool confirmPressSeen = false;
-  unsigned long lastHorizontalMoveTime = 0;
   std::string lookupText;
   // A touch selection's other words, looked up one per call while the definition view shows the
   // first ones. Capped in count and in definition text held, since every entry stays in RAM until

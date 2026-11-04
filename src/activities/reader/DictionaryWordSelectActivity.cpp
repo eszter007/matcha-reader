@@ -23,8 +23,6 @@
 namespace {
 
 constexpr unsigned long POPUP_DURATION_MS = 1500;
-constexpr unsigned long WORD_REPEAT_START_MS = 500;
-constexpr unsigned long WORD_REPEAT_INTERVAL_MS = 500;
 
 // A token is selectable when it has an ASCII alphanumeric or a non-ASCII
 // codepoint outside U+2000-U+206F (dashes, bullets and other General
@@ -434,8 +432,8 @@ void DictionaryWordSelectActivity::performLookup() {
         finish();
         return;
       }
-      // The definition view cancels when its power click asked to leave the dictionary
-      // entirely, rather than step back to this selection.
+      // The definition view cancels when its power click or a tap outside it asked to leave
+      // the dictionary entirely, rather than step back to this selection.
       if (result.isCancelled) {
         finish();
         return;
@@ -521,27 +519,32 @@ void DictionaryWordSelectActivity::loop() {
     return;
   }
 
-  const bool hasNextWord = selected + 1 < static_cast<int>(words.size());
-  const unsigned long now = millis();
-  const bool repeat =
-      mappedInput.getHeldTime() >= WORD_REPEAT_START_MS && now - lastHorizontalMoveTime >= WORD_REPEAT_INTERVAL_MS;
-  const bool moveLeft = mappedInput.wasPressed(MappedInputManager::Button::ScreenLeft) ||
-                        (repeat && mappedInput.isPressed(MappedInputManager::Button::ScreenLeft));
-  const bool moveRight = mappedInput.wasPressed(MappedInputManager::Button::ScreenRight) ||
-                         (repeat && mappedInput.isPressed(MappedInputManager::Button::ScreenRight));
-  if (moveLeft && selected > 0) {
-    selected--;
-    lastHorizontalMoveTime = now;
-    requestUpdate();
-  } else if (moveRight && hasNextWord) {
-    selected++;
-    lastHorizontalMoveTime = now;
-    requestUpdate();
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::ScreenUp)) {
-    moveVertical(-1);
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::ScreenDown)) {
-    moveVertical(1);
+  // Remapped page bindings (side actions, power-as-page) step the word, as in the Japanese panel.
+  const auto panelStep = ReaderUtils::lookupPanelStep(mappedInput);
+  if (panelStep != ReaderUtils::PanelStep::None) {
+    stepWord(panelStep == ReaderUtils::PanelStep::Next ? 1 : -1);
+    return;
   }
+  // Every pair reads the same way, so one pair alone (Picco, touch off) reaches every word: a
+  // press steps to the next word, onto the next line at the end of one; a hold jumps a line.
+  int delta = 0;
+  switch (ReaderUtils::lookupPressAny(mappedInput, delta)) {
+    case ReaderUtils::LookupPress::Press:
+      stepWord(delta);
+      break;
+    case ReaderUtils::LookupPress::Hold:
+      moveVertical(delta);
+      break;
+    case ReaderUtils::LookupPress::None:
+      break;
+  }
+}
+
+void DictionaryWordSelectActivity::stepWord(const int delta) {
+  const int target = selected + delta;
+  if (target < 0 || target >= static_cast<int>(words.size())) return;
+  selected = target;
+  requestUpdate();
 }
 
 // Saves the pixels under words[selected]'s highlight box, then draws the

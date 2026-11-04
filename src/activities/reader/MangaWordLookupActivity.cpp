@@ -496,27 +496,9 @@ void MangaWordLookupActivity::loop() {
     return;
   }
 
-  const bool sideButtonsForLookup = SETTINGS.wordLookupSideButtons != 0 && !SETTINGS.sideButtonsFullyCustomized();
-  // Both roles are named by SCREEN direction, never by a physical button. The rotation hands the
-  // horizontal pair to one set of buttons and the vertical pair to the other, so naming both this
-  // way guarantees the two roles land on different buttons in every orientation. Reaching for the
-  // physical side buttons (PageBack/PageForward) for entries collided in landscape, where
-  // ScreenLeft/Right resolve to those very buttons -- scrolling and entry navigation ended up on
-  // the same pair and the front buttons did nothing.
-  //
-  // The setting keeps its meaning: it swaps which AXIS carries which role, so in portrait it still
-  // moves entry navigation onto the side buttons and scrolling onto the front pair.
-  const auto nextEntryButton =
-      sideButtonsForLookup ? MappedInputManager::Button::ScreenDown : MappedInputManager::Button::ScreenRight;
-  const auto previousEntryButton =
-      sideButtonsForLookup ? MappedInputManager::Button::ScreenUp : MappedInputManager::Button::ScreenLeft;
-  const auto scrollDownButton =
-      sideButtonsForLookup ? MappedInputManager::Button::ScreenRight : MappedInputManager::Button::ScreenDown;
-  const auto scrollUpButton =
-      sideButtonsForLookup ? MappedInputManager::Button::ScreenLeft : MappedInputManager::Button::ScreenUp;
   // The gestures every floating panel answers, read in one place (PanelTouch): a tap outside the
-  // card puts it away, up/down swipes scroll a long definition a screenful at a time, and a page
-  // turn steps to the previous/next word, as this panel's own left/right buttons do.
+  // card puts it away, up/down swipes read on like a button press, and a page turn skips to the
+  // previous/next word like a hold.
   switch (const auto touch = PanelTouch::read(renderer, mappedInput, hasResult)) {
     case PanelTouch::Action::Close: {
       ActivityResult result;
@@ -529,15 +511,9 @@ void MangaWordLookupActivity::loop() {
       saveSentence();
       return;
     case PanelTouch::Action::ScrollDown:
-    case PanelTouch::Action::ScrollUp: {
-      const int scroll = touch == PanelTouch::Action::ScrollDown ? 1 : -1;
-      const int target = std::clamp(scrollOffset + scroll * std::max(1, visibleCapacity), 0, maxScroll);
-      if (hasResult && target != scrollOffset) {
-        scrollOffset = target;
-        requestUpdate();
-      }
+    case PanelTouch::Action::ScrollUp:
+      readOn(touch == PanelTouch::Action::ScrollDown ? 1 : -1);
       return;
-    }
     case PanelTouch::Action::Next:
     case PanelTouch::Action::Previous:
       moveCursor(touch == PanelTouch::Action::Next ? 1 : -1);
@@ -546,20 +522,19 @@ void MangaWordLookupActivity::loop() {
       break;
   }
 
-  buttonNavigator.onPressAndContinuous({nextEntryButton}, [this] { moveCursor(1); });
-  buttonNavigator.onPressAndContinuous({previousEntryButton}, [this] { moveCursor(-1); });
-  buttonNavigator.onPressAndContinuous({scrollDownButton}, [this] {
-    if (hasResult && scrollOffset < maxScroll) {
-      scrollOffset = std::min(maxScroll, scrollOffset + 5);
-      requestUpdate();
-    }
-  });
-  buttonNavigator.onPressAndContinuous({scrollUpButton}, [this] {
-    if (scrollOffset > 0) {
-      scrollOffset = std::max(0, scrollOffset - 5);
-      requestUpdate();
-    }
-  });
+  // Every pair reads the same way, as in the book's lookup panel: a press reads on through the
+  // definition and onto the next word at its end; a hold skips to the next word.
+  int delta = 0;
+  switch (ReaderUtils::lookupPressAny(mappedInput, delta)) {
+    case ReaderUtils::LookupPress::Press:
+      readOn(delta);
+      break;
+    case ReaderUtils::LookupPress::Hold:
+      moveCursor(delta);
+      break;
+    case ReaderUtils::LookupPress::None:
+      break;
+  }
 
   // Progressive background scan + one-time result persistence -- same structure as
   // EpubReaderWordLookupActivity::loop(), see there for the full rationale.
@@ -574,6 +549,16 @@ void MangaWordLookupActivity::loop() {
       requestUpdate();
     }
   }
+}
+
+void MangaWordLookupActivity::readOn(const int delta) {
+  const int target = std::clamp(scrollOffset + delta * std::max(1, visibleCapacity), 0, maxScroll);
+  if (hasResult && target != scrollOffset) {
+    scrollOffset = target;
+    requestUpdate();
+    return;
+  }
+  moveCursor(delta);
 }
 
 void MangaWordLookupActivity::renderContentArea(const Rect& body) {

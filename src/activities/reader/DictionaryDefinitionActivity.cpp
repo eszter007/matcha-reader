@@ -180,6 +180,36 @@ bool DictionaryDefinitionActivity::stepPage(const int direction) {
   return true;
 }
 
+bool DictionaryDefinitionActivity::skipEntry(const int direction) {
+  if (direction > 0) {
+    if (onLoadingPage) return false;
+    if (currentEntry + 1 < entries.size()) {
+      RenderLock lock;
+      showEntry(currentEntry + 1, false);
+    } else if (more.next) {
+      onLoadingPage = true;
+    } else {
+      return false;
+    }
+  } else {
+    if (onLoadingPage) {
+      if (entries.empty()) return false;
+      onLoadingPage = false;
+      RenderLock lock;
+      showEntry(currentEntry, false);
+    } else if (currentEntry > 0) {
+      RenderLock lock;
+      showEntry(currentEntry - 1, false);
+    } else if (currentPage > 0) {
+      currentPage = 0;
+    } else {
+      return false;
+    }
+  }
+  requestUpdate();
+  return true;
+}
+
 void DictionaryDefinitionActivity::onExit() {
   DictionaryPanel::setAvoid(Rect{});
   Activity::onExit();
@@ -262,28 +292,57 @@ void DictionaryDefinitionActivity::loop() {
     saveSentence();
     return;
   }
+  // A side button bound to Word Lookup closes the dictionary, as the power click does.
+  if (ReaderUtils::wordLookupSideToggle(mappedInput)) {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
+  const auto panelStep = ReaderUtils::lookupPanelStep(mappedInput);
+  if (panelStep != ReaderUtils::PanelStep::None) {
+    skipEntry(panelStep == ReaderUtils::PanelStep::Next ? 1 : -1);
+    return;
+  }
 
-  switch (PanelTouch::read(renderer, mappedInput, miningAvailable())) {
-    case PanelTouch::Action::Close:
+  switch (const auto touch = PanelTouch::read(renderer, mappedInput, miningAvailable())) {
+    case PanelTouch::Action::Close: {
+      // A tap outside the card means "back to the book", as in the Japanese panel.
+      ActivityResult result;
+      result.isCancelled = true;
+      setResult(std::move(result));
       finish();
       return;
+    }
     case PanelTouch::Action::AddButton:
       saveSentence();
       return;
-    case PanelTouch::Action::Next:
     case PanelTouch::Action::ScrollDown:
-      if (stepPage(1)) haptic_feedback::touchAction();
-      return;
-    case PanelTouch::Action::Previous:
     case PanelTouch::Action::ScrollUp:
-      if (stepPage(-1)) haptic_feedback::touchAction();
+      if (stepPage(touch == PanelTouch::Action::ScrollDown ? 1 : -1)) haptic_feedback::touchAction();
+      return;
+    case PanelTouch::Action::Next:
+    case PanelTouch::Action::Previous:
+      if (skipEntry(touch == PanelTouch::Action::Next ? 1 : -1)) haptic_feedback::touchAction();
       return;
     case PanelTouch::Action::None:
       break;
   }
 
-  buttonNavigator.onNext([this] { stepPage(1); });
-  buttonNavigator.onPrevious([this] { stepPage(-1); });
+  // Every pair reads the same way: a press reads on through the entry and onto the next word at
+  // its end, a hold skips to the next word.
+  int delta = 0;
+  switch (ReaderUtils::lookupPressAny(mappedInput, delta)) {
+    case ReaderUtils::LookupPress::Press:
+      stepPage(delta);
+      break;
+    case ReaderUtils::LookupPress::Hold:
+      skipEntry(delta);
+      break;
+    case ReaderUtils::LookupPress::None:
+      break;
+  }
 }
 
 // Draws the current page: a styled Page when the HTML layout succeeded,

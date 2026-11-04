@@ -522,8 +522,6 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
           SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION,
                               &CrossPointSettings::frontButtonFollowOrientation, "frontButtonFollowOrientation",
                               StrId::STR_CAT_CONTROLS),
-          SettingInfo::Toggle(StrId::STR_WORD_LOOKUP_SIDE_BUTTONS, &CrossPointSettings::wordLookupSideButtons,
-                              "wordLookupSideButtons", StrId::STR_CAT_CONTROLS),
           SettingInfo::Toggle(StrId::STR_REVERSED_PAGE_TURN, &CrossPointSettings::reversePageTurn, "reversePageTurn",
                               StrId::STR_CAT_CONTROLS),
           SettingInfo::Toggle(StrId::STR_HOME_BACK_RESUMES, &CrossPointSettings::homeBackResumes, "homeBackResumes",
