@@ -785,7 +785,6 @@ STR_WEEK_MINUTES_READ_FORMAT: "%d %s прочитано на этой недел
 STR_WIFI_NETWORKS: "Wi-Fi сети"
 STR_WORD_LOOKUP: "Поиск слова"
 STR_WORD_LOOKUP_FONT_SIZE: "Размер шрифта при поиске слов"
-STR_WORD_LOOKUP_SIDE_BUTTONS: "Боковые кнопки при поиске слов"
 STR_WORD_SPACING: "Межсловный интервал"
 STR_XTC_STATUS_BAR: "Строка состояния XTC"
 STR_EOB_NTH_BOOK: "Ваша %s-я книга"

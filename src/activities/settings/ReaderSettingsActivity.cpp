@@ -139,12 +139,6 @@ void ReaderSettingsActivity::rebuildSettingsLists() {
         SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
       continue;
     }
-    // Only this row is about arranging the SHARED side-button roles, so only it becomes
-    // meaningless -- and only once BOTH side buttons are remapped away. Reversed page turn and
-    // the long-press behaviour also govern the front pair, touch and tilt, so they stay.
-    if (SETTINGS.sideButtonsFullyCustomized() && setting.valuePtr == &CrossPointSettings::wordLookupSideButtons) {
-      continue;
-    }
     if (setting.category == StrId::STR_CAT_DISPLAY) {
       // The sunlight fading fix is a grayscale-waveform compensation that does
       // not apply on the X4 Pro / X4 Classic (plain OTP waveform, same panels).

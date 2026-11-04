@@ -409,11 +409,24 @@ void EpubReaderWordLookupActivity::moveSelection(const int delta) {
     const auto& current = scan.allGlyphs[provisionalGlyph];
     size_t target = SIZE_MAX;
     int bestDistance = INT_MAX;
+    // Off the end of the column the cursor reads on into the nearest column with text, at its
+    // start going forward or its end going back; only at the edge of the page does it cycle round.
+    size_t onward = SIZE_MAX;
+    int onwardGap = INT_MAX;
+    uint16_t onwardRow = delta > 0 ? UINT16_MAX : 0;
     size_t wrapped = SIZE_MAX;
     uint16_t wrappedRow = delta > 0 ? UINT16_MAX : 0;
     for (size_t i = 0; i < scan.onPageGlyphCount(); i++) {
       const auto& glyph = scan.allGlyphs[i];
-      if (glyph.column != current.column || !WordSelectionScan::isLookupableChar(glyph.codepoint)) continue;
+      if (!WordSelectionScan::isLookupableChar(glyph.codepoint)) continue;
+      const int gap = (static_cast<int>(glyph.column) - static_cast<int>(current.column)) * delta;
+      if (gap > 0 &&
+          (gap < onwardGap || (gap == onwardGap && (delta > 0 ? glyph.row < onwardRow : glyph.row > onwardRow)))) {
+        onward = i;
+        onwardGap = gap;
+        onwardRow = glyph.row;
+      }
+      if (glyph.column != current.column) continue;
       const int distance = static_cast<int>(glyph.row) - static_cast<int>(current.row);
       if ((delta > 0 ? distance > 0 : distance < 0) && std::abs(distance) < bestDistance) {
         target = i;
@@ -424,11 +437,11 @@ void EpubReaderWordLookupActivity::moveSelection(const int delta) {
         wrappedRow = glyph.row;
       }
     }
-    if (target == SIZE_MAX) target = wrapped;
+    if (target == SIZE_MAX) target = onward != SIZE_MAX ? onward : wrapped;
     if (target == SIZE_MAX || target == provisionalGlyph) return;
     provisionalGlyph = target;
     pending.kind = PendingMove::Kind::Column;
-    pending.targetColumn = current.column;
+    pending.targetColumn = scan.allGlyphs[target].column;
     pending.anchorRow = scan.allGlyphs[target].row;
     scan.aimAtGlyph(target);
     refreshCursorBoxes();
@@ -911,18 +924,36 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
     return true;
   }
 
-  // Stepping word by word follows the screen's down/up axis and jumping columns its left/right
-  // axis, so which PHYSICAL buttons those are changes with orientation: in portrait the side
-  // buttons step and the front pair jumps columns, in landscape they trade places. That is the
-  // point -- the gesture stays "down the column as you see it".
-  // A page set in lines turns the same two moves a quarter: along the line is left/right, the
-  // next line is down, and lines run top to bottom where columns run right to left.
+  // Down/Up read on word by word, into the next column (or line) at the end of one, and a hold
+  // jumps a whole column. Left/Right press-jump columns on a vertical page and step words on a
+  // horizontal one; a hold there jumps too. Every move is reachable from either pair alone, so a
+  // board with only side buttons and touch off (Picco) can still reach every word.
+  // Columns run right to left, so Left is the next column; lines run top to bottom.
   using Button = MappedInputManager::Button;
   const bool lines = selectCtx.lines;
-  buttonNavigator.onPressAndContinuous(lines ? Button::ScreenRight : Button::ScreenDown, [this] { moveSelection(1); });
-  buttonNavigator.onPressAndContinuous(lines ? Button::ScreenLeft : Button::ScreenUp, [this] { moveSelection(-1); });
-  buttonNavigator.onPressAndContinuous(lines ? Button::ScreenDown : Button::ScreenLeft, [this] { jumpColumn(1); });
-  buttonNavigator.onPressAndContinuous(lines ? Button::ScreenUp : Button::ScreenRight, [this] { jumpColumn(-1); });
+  const auto read = [this](const Button button, const int delta, const bool pressJumps) {
+    switch (ReaderUtils::lookupPress(mappedInput, button)) {
+      case ReaderUtils::LookupPress::Press:
+        if (pressJumps) {
+          jumpColumn(delta);
+        } else {
+          moveSelection(delta);
+        }
+        return true;
+      case ReaderUtils::LookupPress::Hold:
+        jumpColumn(delta);
+        return true;
+      case ReaderUtils::LookupPress::None:
+        break;
+    }
+    return false;
+  };
+  // One move per frame, as on the other lookup screens.
+  if (read(Button::ScreenDown, 1, false) || read(Button::ScreenUp, -1, false) ||
+      read(Button::ScreenLeft, lines ? -1 : 1, !lines)) {
+    return true;
+  }
+  read(Button::ScreenRight, lines ? 1 : -1, !lines);
   return true;
 }
 
@@ -2273,9 +2304,8 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
   }
   // The gestures every floating panel answers, read in one place (PanelTouch). A tap outside the
   // card closes the whole panel rather than stepping back to select mode: the gesture means "back
-  // to the book", and Back is still there for the page. Up/down swipes scroll within the entry and
-  // stop at its ends; a page turn goes to the neighbouring entry page -- the next source in the
-  // paged view, the next word otherwise. A turn never scrolls, and a scroll never turns.
+  // to the book", and Back is still there for the page. Up/down swipes read on like a button press;
+  // a page turn skips to the neighbouring entry page like a hold.
   switch (const auto touch = PanelTouch::read(renderer, mappedInput, hasResult)) {
     case PanelTouch::Action::Close: {
       ActivityResult result;
@@ -2288,25 +2318,13 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
       saveSentence();
       return false;
     case PanelTouch::Action::ScrollDown:
-    case PanelTouch::Action::ScrollUp: {
-      const int scroll = touch == PanelTouch::Action::ScrollDown ? 1 : -1;
-      const int target = std::clamp(scrollOffset + scroll * std::max(1, visibleCapacity), 0, maxScroll);
-      if (hasResult && target != scrollOffset) {
-        scrollOffset = target;
-        requestUpdate();
-      }
+    case PanelTouch::Action::ScrollUp:
+      readOn(touch == PanelTouch::Action::ScrollDown ? 1 : -1);
       return false;
-    }
     case PanelTouch::Action::Next:
-    case PanelTouch::Action::Previous: {
-      const int delta = touch == PanelTouch::Action::Next ? 1 : -1;
-      if (pagedDefinition()) {
-        moveSection(delta);
-      } else {
-        moveCursor(delta);
-      }
+    case PanelTouch::Action::Previous:
+      skipPage(touch == PanelTouch::Action::Next ? 1 : -1);
       return false;
-    }
     case PanelTouch::Action::None:
       break;
   }
@@ -2341,57 +2359,43 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
   // Remapped page bindings move through the entry: sections in the paged view, words otherwise.
   const auto panelStep = ReaderUtils::lookupPanelStep(mappedInput);
   if (panelStep != ReaderUtils::PanelStep::None) {
-    const int delta = panelStep == ReaderUtils::PanelStep::Next ? 1 : -1;
-    if (pagedDefinition()) {
-      moveSection(delta);
-    } else {
-      moveCursor(delta);
-    }
+    skipPage(panelStep == ReaderUtils::PanelStep::Next ? 1 : -1);
     return true;
   }
 
-  const bool sideButtonsForLookup = SETTINGS.wordLookupSideButtons != 0 && !SETTINGS.sideButtonsFullyCustomized();
-  // Both roles are named by SCREEN direction, never by a physical button. The rotation hands the
-  // horizontal pair to one set of buttons and the vertical pair to the other, so naming both this
-  // way guarantees the two roles land on different buttons in every orientation. Reaching for the
-  // physical side buttons (PageBack/PageForward) for entries collided in landscape, where
-  // ScreenLeft/Right resolve to those very buttons -- scrolling and entry navigation ended up on
-  // the same pair and the front buttons did nothing.
-  //
-  // The setting keeps its meaning: it swaps which AXIS carries which role, so in portrait it still
-  // moves entry navigation onto the side buttons and scrolling onto the front pair.
-  const auto nextEntryButton =
-      sideButtonsForLookup ? MappedInputManager::Button::ScreenDown : MappedInputManager::Button::ScreenRight;
-  const auto previousEntryButton =
-      sideButtonsForLookup ? MappedInputManager::Button::ScreenUp : MappedInputManager::Button::ScreenLeft;
-  const auto scrollDownButton =
-      sideButtonsForLookup ? MappedInputManager::Button::ScreenRight : MappedInputManager::Button::ScreenDown;
-  const auto scrollUpButton =
-      sideButtonsForLookup ? MappedInputManager::Button::ScreenLeft : MappedInputManager::Button::ScreenUp;
-  if (pagedDefinition()) {
-    // Tategaki reached this view from the page itself, with the word already chosen, so these
-    // buttons walk the entry's sources instead of jumping to another word.
-    buttonNavigator.onPressAndContinuous(nextEntryButton, [this] { moveSection(1); });
-    buttonNavigator.onPressAndContinuous(previousEntryButton, [this] { moveSection(-1); });
-  } else {
-    buttonNavigator.onPressAndContinuous(nextEntryButton, [this] { moveCursor(1); });
-    buttonNavigator.onPressAndContinuous(previousEntryButton, [this] { moveCursor(-1); });
+  // Every pair reads the same way, so one pair alone (Picco, touch off) reaches everything: a
+  // press reads on through the entry and onto the next page at its end; a hold skips the page.
+  int delta = 0;
+  switch (ReaderUtils::lookupPressAny(mappedInput, delta)) {
+    case ReaderUtils::LookupPress::Press:
+      readOn(delta);
+      break;
+    case ReaderUtils::LookupPress::Hold:
+      skipPage(delta);
+      break;
+    case ReaderUtils::LookupPress::None:
+      break;
   }
-  // Paged mode moves a whole screenful per press; free scrolling keeps its 5-line nudge.
-  const int step = pagedDefinition() ? std::max(1, visibleCapacity) : 5;
-  buttonNavigator.onPressAndContinuous(scrollDownButton, [this, step] {
-    if (hasResult && scrollOffset < maxScroll) {
-      scrollOffset = std::min(maxScroll, scrollOffset + step);
-      requestUpdate();
-    }
-  });
-  buttonNavigator.onPressAndContinuous(scrollUpButton, [this, step] {
-    if (scrollOffset > 0) {
-      scrollOffset = std::max(0, scrollOffset - step);
-      requestUpdate();
-    }
-  });
   return true;
+}
+
+void EpubReaderWordLookupActivity::readOn(const int delta) {
+  const int target = std::clamp(scrollOffset + delta * std::max(1, visibleCapacity), 0, maxScroll);
+  if (hasResult && target != scrollOffset) {
+    scrollOffset = target;
+    requestUpdate();
+    return;
+  }
+  skipPage(delta);
+}
+
+// The neighbouring entry page: the next source in the paged view, the next word otherwise.
+void EpubReaderWordLookupActivity::skipPage(const int delta) {
+  if (pagedDefinition()) {
+    moveSection(delta);
+  } else {
+    moveCursor(delta);
+  }
 }
 
 void EpubReaderWordLookupActivity::moveSection(const int delta) {

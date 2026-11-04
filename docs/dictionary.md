@@ -45,11 +45,11 @@ Three ways to start a lookup while reading:
 
 **On button-driven devices:**
 
-1. A selection cursor appears on a word. Use **Left/Right** to navigate between words in reading order, and the side **Up/Down** buttons to jump between lines or flip across nearby pages.
-2. Press **Confirm** (**Select**) to anchor the start of the selection.
-3. **Single word:** Press **Confirm** again immediately (**Look Up**) to look up the highlighted word.
-4. **Phrase / multiple words:** Use **Left/Right** or **Up/Down** to extend the highlighted selection across words, lines, or pages. Then press **Confirm** (**Look Up**).
-5. Press **Back** at any time to cancel and return to reading.
+1. A selection cursor appears on a word. **Press** any direction button to move to the next or previous word; at the end of a line it carries on into the next line. **Hold** a button (about 0.7 s) to jump a whole line.
+2. Press **Confirm** (**Look Up**) to look up the highlighted word.
+3. Press **Back** at any time to cancel and return to reading.
+
+In the definition, a press scrolls one screen and carries on to the next entry at the end; a hold skips straight to the next or previous entry.
 
 **On touchscreen devices:**
 

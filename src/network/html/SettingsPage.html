@@ -229,22 +229,11 @@
         pwrBtnFootnoteBackRow.style.display = 'none';
       }
     }
-    // Mirrors the on-device rule: only the shared side-button arrangement becomes meaningless,
-    // and only once BOTH side buttons are remapped away from Default.
-    const upperVal = getControlValue('upperSideButtonAction');
-    const lowerVal = getControlValue('lowerSideButtonAction');
-    // Menu slots again: Default is first (sideButtonOrder()).
-    const SIDE_DEFAULT_SLOT = 0;
-    const sideFullyCustomized = upperVal !== SIDE_DEFAULT_SLOT && lowerVal !== SIDE_DEFAULT_SLOT;
-    const lookupSideRow = document.getElementById('row-setting-wordLookupSideButtons');
-    if (lookupSideRow) {
-      lookupSideRow.style.display = sideFullyCustomized ? 'none' : '';
-    }
   }
 
   function handleSettingChanged(key) {
     syncQuickResumeTimeoutForSleepScreen(key === 'sleepScreen', key === 'quickResumeSleepScreen');
-    if (key === 'shortPwrBtn' || key === 'upperSideButtonAction' || key === 'lowerSideButtonAction') {
+    if (key === 'shortPwrBtn') {
       updateSettingsVisibility();
     }
     markChanged();

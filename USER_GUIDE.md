@@ -557,9 +557,6 @@ Which rows you see depends on your device. Touch devices hide the rows that only
   buttons move left and right. Switch it off to keep every button as it works in portrait. Touch devices always
   follow the screen.
 
-- **Navigate with Side Buttons in Word Lookup** (off by default): The side buttons move between words during Word
-  Lookup. See [Word Lookup](#61-word-lookup). It has no effect once both side buttons have their own action.
-
 - **Reversed page turn (Vertical & Manga)** (off by default): Swaps the page-turn direction for the two kinds of
   book read right to left.
   - In a **vertical (tategaki) Japanese book**, the button that normally goes back turns forward.
@@ -1205,12 +1202,18 @@ you can then tap any word to open its entry.
 
 **Moving between words**
 
+Every lookup screen, in every language, uses the same rule: **press** to move on a little, **hold** (about 0.7 s) to
+skip ahead. Holding a button no longer repeats the move.
+
 | Button | Vertical text | Horizontal text |
 | --- | --- | --- |
-| Side buttons (Up / Down) | Previous / next word in the column | Line above / below |
-| Left / Right | Next / previous column (Left moves forward, as the text runs) | Previous / next word on the line |
+| Up / Down (press) | Previous / next word. At the end of a column it carries on into the next column | Previous / next word. At the end of a line it carries on into the next line |
+| Up / Down (hold) | Jump to the previous / next column | Jump to the line above / below |
+| Left / Right (press) | Next / previous column (Left moves forward, as the text runs) | Previous / next word |
+| Left / Right (hold) | Next / previous column | Line above / below |
 
-These directions follow the screen, so in landscape the side and front buttons swap roles.
+These directions follow the screen, so in landscape the side and front buttons swap roles. A device with only two side
+buttons can reach every word with them alone.
 
 | Button | Action |
 | --- | --- |
@@ -1232,15 +1235,25 @@ picked.
 - On a touch device, a tap outside the entry closes the dictionary and returns to the book.
 
 Some words have more than one entry. A Japanese word may be in both the vocabulary and the grammar dictionary,
-and a Chinese word may have several readings. Each entry gets its own page. Use Left / Right to move between
-them and Up / Down to scroll a long entry.
+and a Chinese word may have several readings. Each entry gets its own page. Every button pair works the same way:
+
+| Action | What happens |
+| --- | --- |
+| Press Down / Right | Scroll one screen. At the end of a page it carries on to the next page |
+| Press Up / Left | Scroll back one screen. At the top of a page it goes back to the previous page |
+| Hold Down / Right | Skip straight to the next page |
+| Hold Up / Left | Skip straight to the previous page |
+| Swipe up / down (touch) | Same as a press |
+| Page-turn swipe (touch) | Same as a hold |
 
 **In manga**, lookup opens straight in the entry view:
 
 | Button | Action |
 | --- | --- |
-| Left / Right | Previous / next word on the page |
-| Up / Down | Scroll a long entry |
+| Press Down / Right | Scroll the entry. At its end it carries on to the next word on the page |
+| Press Up / Left | Scroll back. At the top it goes to the previous word |
+| Hold Down / Right | Skip to the next word |
+| Hold Up / Left | Skip to the previous word |
 | Select | Save the word and its sentence for sentence mining (see below) |
 | Back | Return to reading |
 | Power (short click) | Same as Back, when **Short Power Button Click** is set to **Word Lookup** |
@@ -1251,8 +1264,6 @@ shows one entry so stepping stays quick.
 
 **Settings**
 
-- **Settings → Controls → Navigate with Side Buttons in Word Lookup**: in the entry, the side buttons move between
-  words or entries and Left / Right scroll. This has no effect when both side buttons have their own custom action.
 - **Reader Settings → Word Lookup Font Size**: **Tiny**, **Small** (default), **Medium** or **Large**.
 
 #### Sentence mining
