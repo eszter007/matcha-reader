@@ -624,6 +624,23 @@ class EpubReaderActivity final : public ReaderActivity {
   // a background section build finishes.
   void clearDeferredReposition();
   void rememberCurrentContentOffset();
+  // Where the last explicit jump (chapter, percent, bookmark, clipping, chapter skip) started.
+  // Jump Back returns there and records the page it leaves, so a second Jump Back undoes it.
+  struct JumpOrigin {
+    int spineIndex = 0;
+    int page = 0;
+    int totalPages = 0;
+    int bookPercent = 0;
+    std::optional<uint32_t> visibleTextOffset;
+  };
+  std::optional<JumpOrigin> jumpOrigin;
+  void rememberJumpOrigin();
+  void jumpBack();
+  // Jump Back's menu value ("42%"); empty without an origin.
+  void formatJumpBackTarget(char* buf, size_t size) const;
+  // Kept in jump.bin across sleep and reopening, consumed on load like links.bin.
+  void saveJumpOrigin() const;
+  void loadJumpOrigin();
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent) override;
   bool writeSyncedPosition() override;

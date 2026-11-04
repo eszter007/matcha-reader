@@ -665,6 +665,7 @@ void EpubReaderActivity::onReaderEnter() {
   applyBookTextProfile();
 
   loadLinkStack();
+  loadJumpOrigin();
   loadCachedBookmarks();
   if (!CLIPPINGS.loadForBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), "epub")) {
     LOG_ERR("CLIP", "Failed to load clippings for %s", epub->getPath().c_str());
@@ -704,6 +705,7 @@ void EpubReaderActivity::onReaderExit() {
   // The per-page autosave already saved the page on screen. Keep the link back-stack too, so Back
   // still returns to the link when the book reopens (see loadLinkStack()).
   if (footnoteDepth > 0 && epub) saveLinkStack();
+  if (jumpOrigin && epub) saveJumpOrigin();
 
   section.reset();
   verticalSection.reset();
@@ -1694,6 +1696,10 @@ void EpubReaderActivity::readerLoop() {
   const bool longPress = !fromTilt && heldMs >= ReaderUtils::SKIP_HOLD_MS;
   if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP) {
     const int curPage = shownPage(0);
+    // Holding Prev on the book's first page goes nowhere and must not replace a useful origin.
+    if (nextTriggered || ((section || verticalSection) && curPage > 0) || currentSpineIndex > 0) {
+      rememberJumpOrigin();
+    }
     if (!nextTriggered && (section || verticalSection) && curPage > 0) {
       if (verticalSection)
         verticalSection->currentPage = 0;
@@ -1777,6 +1783,7 @@ void EpubReaderActivity::jumpToPercent(int percent) {
 
   // Normalize input to 0-100 to avoid invalid jumps.
   percent = clampPercent(percent);
+  rememberJumpOrigin();
 
   // Page-based jump matching the displayed page-based progress: percent -> absolute page
   // index -> containing spine + fraction within it.
@@ -1924,13 +1931,15 @@ void EpubReaderActivity::openReaderMenu() {
     hasPageText = !section->getTextFromSectionFile().empty();
   }
   refreshSectionFootnotesIfBuilt();
+  char jumpBackTarget[8];
+  formatJumpBackTarget(jumpBackTarget, sizeof(jumpBackTarget));
   startActivityForResult(
       std::make_unique<EpubReaderMenuActivity>(
           renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
           !sectionFootnotes.empty() || !currentPageFootnotes.empty(), !cachedBookmarks.empty(), hasWordLookup,
           useVerticalText(), useFurigana(), hasPageText, /*imageReaderMinimal=*/false, /*mangaMode=*/false,
           /*hideGenericLookup=*/hideGenericLookup(), /*showPanelsOnlyToggle=*/false, /*panelsOnlyEnabled=*/false,
-          /*scrubOnEnter=*/shownPageHasImages_, CLIPPINGS.hasClippings()),
+          /*scrubOnEnter=*/shownPageHasImages_, CLIPPINGS.hasClippings(), jumpOrigin ? jumpBackTarget : nullptr),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         applyOrientation(menu.orientation);
@@ -2158,6 +2167,7 @@ void EpubReaderActivity::saveLanguageChoice() const {
 }
 
 void EpubReaderActivity::applyProgressChange(const ProgressChangeResult& sync) {
+  rememberJumpOrigin();
   // Preferred path: a bookmark carrying an exact content offset. It is immune to
   // re-pagination, so resolve by content instead of trusting a page number saved under
   // possibly-different settings.
@@ -2206,10 +2216,13 @@ void EpubReaderActivity::applyProgressChange(const ProgressChangeResult& sync) {
     verticalSection.reset();
   } else if (verticalSection && verticalSection->currentPage != targetPage) {
     RenderLock lock(*this);
-    verticalSection->currentPage = std::max(0, targetPage);
+    // A page saved under another layout can be past this chapter's end. A still-building
+    // section lays out the rest on demand; a finished one must clamp.
+    const int lastPage = verticalSection->isBuilding() ? targetPage : verticalSection->pageCount - 1;
+    verticalSection->currentPage = std::max(0, std::min(targetPage, lastPage));
   } else if (section && section->currentPage != targetPage) {
-    const int clampedTargetPage = std::max(0, targetPage);
-    section->currentPage = clampedTargetPage;
+    const int lastPage = section->isBuilding() ? targetPage : section->pageCount - 1;
+    section->currentPage = std::max(0, std::min(targetPage, lastPage));
   } else if (!section && !verticalSection) {
     nextPageNumber = targetPage;
   }
@@ -2306,6 +2319,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                                  return;
                                }
                                const auto& chapterResult = std::get<ChapterResult>(result.data);
+                               rememberJumpOrigin();
                                RenderLock lock(*this);
 
                                clearDeferredReposition();
@@ -2442,6 +2456,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     }
     case EpubReaderMenuActivity::MenuAction::TOGGLE_BOOKMARK: {
       addBookmark();
+      break;
+    }
+    case EpubReaderMenuActivity::MenuAction::JUMP_BACK: {
+      jumpBack();
       break;
     }
   }
@@ -2594,6 +2612,7 @@ bool EpubReaderActivity::launchKOReaderSync(const bool withClockAndInsights) {
     }
     // onReaderExit() can no longer save the back-stack once epub is gone.
     if (footnoteDepth > 0) saveLinkStack();
+    if (jumpOrigin) saveJumpOrigin();
     // Exit skips this once epub is gone, which would leave this book's settings in place.
     restoreGlobalReaderSettings();
     epub.reset();
@@ -7292,6 +7311,7 @@ void EpubReaderActivity::handleOverlayInput() {
       applyPageDraft();
       const auto item = epub->getTocItem(panelIndex);
       if (item.spineIndex != -1) {
+        rememberJumpOrigin();
         RenderLock lock;
         clearDeferredReposition();
         currentSpineIndex = item.spineIndex;
@@ -7551,7 +7571,7 @@ void EpubReaderActivity::buildMoreActions() {
   moreItems = EpubReaderMenuActivity::buildMenuItems(
       !sectionFootnotes.empty() || !currentPageFootnotes.empty(), !cachedBookmarks.empty(), hasWordLookup,
       /*imageReaderMinimal=*/false, /*mangaMode=*/false, /*hideGenericLookup=*/hideGenericLookup(),
-      /*showPanelsOnlyToggle=*/false, CLIPPINGS.hasClippings());
+      /*showPanelsOnlyToggle=*/false, CLIPPINGS.hasClippings(), jumpOrigin.has_value());
   moreItems.erase(std::remove_if(moreItems.begin(), moreItems.end(),
                                  [](const auto& item) {
                                    return item.action == MA::SELECT_CHAPTER || item.action == MA::TEXT_SETTINGS ||
@@ -7582,6 +7602,11 @@ std::string EpubReaderActivity::moreRowValue(int row) const {
       return SETTINGS.screenInverted ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     case MA::FRONTLIGHT:
       return Frontlight.isOn() ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+    case MA::JUMP_BACK: {
+      char target[8];
+      formatJumpBackTarget(target, sizeof(target));
+      return target;
+    }
     default:
       return "";
   }
@@ -7807,6 +7832,95 @@ void EpubReaderActivity::restoreSavedPosition() {
     verticalSection.reset();
   }
   requestUpdate();
+}
+
+void EpubReaderActivity::rememberJumpOrigin() {
+  // Past the last spine item is the end-of-book screen, not a page to return to.
+  if (!epub || currentSpineIndex < 0 || currentSpineIndex >= epub->getSpineItemsCount()) return;
+  RenderLock lock(*this);  // the render task re-faults the section's page slot
+  const ChapterPosition position = chapterPosition();
+  JumpOrigin origin;
+  origin.spineIndex = currentSpineIndex;
+  origin.page = std::max(0, position.pageIndex);
+  origin.totalPages = position.totalPages;
+  origin.bookPercent = bookPercentFor(position);
+  // The content offset survives re-pagination; a child screen may have released the section,
+  // leaving the offset rememberCurrentContentOffset() cached. Vertical text returns by page.
+  if (section) {
+    if (origin.page < section->pageCount) {
+      origin.visibleTextOffset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(origin.page));
+    }
+  } else if (!verticalSection && cachedSpineIndex == currentSpineIndex) {
+    origin.visibleTextOffset = cachedVisibleTextOffset;
+  }
+  jumpOrigin = origin;
+}
+
+void EpubReaderActivity::formatJumpBackTarget(char* buf, const size_t size) const {
+  if (size == 0) return;
+  buf[0] = '\0';
+  if (jumpOrigin) snprintf(buf, size, "%d%%", jumpOrigin->bookPercent);
+}
+
+void EpubReaderActivity::jumpBack() {
+  if (!jumpOrigin) return;
+  ProgressChangeResult target;
+  target.spineIndex = jumpOrigin->spineIndex;
+  target.page = jumpOrigin->page;
+  target.totalPages = jumpOrigin->totalPages;
+  // applyProgressChange() resolves content offsets only for the horizontal layout.
+  target.hasVisibleTextOffset = jumpOrigin->visibleTextOffset.has_value() && !useVerticalText();
+  target.visibleTextOffset = jumpOrigin->visibleTextOffset.value_or(0);
+  // Records the current page as the new origin, so Jump Back toggles between the two.
+  applyProgressChange(target);
+}
+
+namespace {
+constexpr uint8_t JUMP_FILE_VERSION = 1;
+// [version] [spine u16] [page u16] [totalPages u16] [percent u8] [hasOffset u8] [offset u32], LE
+constexpr size_t JUMP_FILE_SIZE = 13;
+}  // namespace
+
+void EpubReaderActivity::saveJumpOrigin() const {
+  uint8_t data[JUMP_FILE_SIZE];
+  const uint32_t offset = jumpOrigin->visibleTextOffset.value_or(0);
+  data[0] = JUMP_FILE_VERSION;
+  data[1] = jumpOrigin->spineIndex & 0xFF;
+  data[2] = (jumpOrigin->spineIndex >> 8) & 0xFF;
+  data[3] = jumpOrigin->page & 0xFF;
+  data[4] = (jumpOrigin->page >> 8) & 0xFF;
+  data[5] = jumpOrigin->totalPages & 0xFF;
+  data[6] = (jumpOrigin->totalPages >> 8) & 0xFF;
+  data[7] = static_cast<uint8_t>(jumpOrigin->bookPercent);
+  data[8] = jumpOrigin->visibleTextOffset.has_value() ? 1 : 0;
+  for (int i = 0; i < 4; i++) data[9 + i] = (offset >> (8 * i)) & 0xFF;
+  HalFile f;
+  if (!Storage.openFileForWrite("ERS", epub->getCachePath() + "/jump.bin", f)) return;
+  if (f.write(data, sizeof(data)) != sizeof(data)) LOG_ERR("ERS", "Failed to write jump origin");
+}
+
+void EpubReaderActivity::loadJumpOrigin() {
+  const std::string path = epub->getCachePath() + "/jump.bin";
+  if (!Storage.exists(path.c_str())) return;
+  {
+    HalFile f;
+    uint8_t data[JUMP_FILE_SIZE];
+    if (Storage.openFileForRead("ERS", path, f) && f.read(data, sizeof(data)) == static_cast<int>(sizeof(data)) &&
+        data[0] == JUMP_FILE_VERSION) {
+      JumpOrigin origin;
+      origin.spineIndex = data[1] | (data[2] << 8);
+      origin.page = data[3] | (data[4] << 8);
+      origin.totalPages = data[5] | (data[6] << 8);
+      origin.bookPercent = std::min<int>(data[7], 100);
+      if (data[8]) {
+        origin.visibleTextOffset = static_cast<uint32_t>(data[9]) | (static_cast<uint32_t>(data[10]) << 8) |
+                                   (static_cast<uint32_t>(data[11]) << 16) | (static_cast<uint32_t>(data[12]) << 24);
+      }
+      if (origin.spineIndex < epub->getSpineItemsCount()) jumpOrigin = origin;
+    }
+  }
+  // Consumed once: a later exit rewrites it, and an unclean shutdown must not resurrect a stale one.
+  Storage.remove(path.c_str());
 }
 
 void EpubReaderActivity::loadCachedBookmarks() {

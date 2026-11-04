@@ -36,7 +36,8 @@ class EpubReaderMenuActivity final : public UiListActivity {
     TOGGLE_VERTICAL,
     TOGGLE_FURIGANA,
     TOGGLE_PANELS_ONLY,
-    READER_SETTINGS
+    READER_SETTINGS,
+    JUMP_BACK
   };
 
   struct MenuItem {
@@ -47,7 +48,8 @@ class EpubReaderMenuActivity final : public UiListActivity {
   static void toggleBluetooth();
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool hasWordLookup,
                                               bool imageReaderMinimal, bool mangaMode, bool hideGenericLookup,
-                                              bool showPanelsOnlyToggle, bool hasClippings = false);
+                                              bool showPanelsOnlyToggle, bool hasClippings = false,
+                                              bool hasJumpBack = false);
 
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
@@ -57,7 +59,8 @@ class EpubReaderMenuActivity final : public UiListActivity {
                                   const bool hasPageText = true, const bool imageReaderMinimal = false,
                                   const bool mangaMode = false, const bool hideGenericLookup = false,
                                   const bool showPanelsOnlyToggle = false, const bool panelsOnlyEnabled = false,
-                                  const bool scrubOnEnter = false, const bool hasClippings = false);
+                                  const bool scrubOnEnter = false, const bool hasClippings = false,
+                                  const char* jumpBackTarget = nullptr);
 
   void render(RenderLock&&) override;
   bool handleHomeGesture() override;
@@ -73,10 +76,10 @@ class EpubReaderMenuActivity final : public UiListActivity {
   // are set once in the constructor (buildMenuRowItems()); buildScreen()
   // only refreshes the rows whose value reflects live state (rotation,
   // page-turn interval, night mode, Bluetooth, frontlight).
-  // 21 rows at most in the fork's buildMenuItems() (Word Lookup, Translate Page, Panels Only and
-  // Reader Settings on top of upstream's set, plus upstream's Night Mode, Bluetooth and Frontlight,
-  // plus Create/View Clippings); 23 leaves headroom for one more without a silent truncation, which a
-  // fixed-capacity array cannot report.
+  // 22 rows at most in the fork's buildMenuItems() (Word Lookup, Translate Page, Panels Only,
+  // Reader Settings and Jump Back on top of upstream's set, plus upstream's Night Mode, Bluetooth and
+  // Frontlight, plus Create/View Clippings); 23 leaves headroom for one more without a silent
+  // truncation, which a fixed-capacity array cannot report.
   static constexpr size_t MAX_MENU_ITEMS = 23;
   freeink::ui::ListItem menuRowItems[MAX_MENU_ITEMS]{};
   void buildMenuRowItems();
@@ -102,6 +105,8 @@ class EpubReaderMenuActivity final : public UiListActivity {
   // list but render with ListItem::enabled=false when it doesn't, so their positions never shift
   // page-to-page (manga panels without OCR'd dialogue, image-only EPUB pages).
   bool hasPageText = true;
+  // Jump Back's value: where it leads (e.g. "Page 300" or "42%").
+  char jumpBackTarget[24] = {};
 
   OptionPopup optionPopup;
   std::string title = "Reader Menu";

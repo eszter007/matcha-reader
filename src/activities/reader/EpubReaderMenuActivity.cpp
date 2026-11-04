@@ -5,6 +5,8 @@
 #include <HalFrontlight.h>
 #include <I18n.h>
 
+#include <cstdio>
+
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
@@ -19,11 +21,12 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
     const int totalPages, const int bookProgressPercent, const uint8_t currentOrientation, const bool hasFootnotes,
     const bool hasBookmarks, const bool hasWordLookup, const bool verticalEnabled, const bool furiganaEnabled,
     const bool hasPageText, const bool imageReaderMinimal, const bool mangaMode, const bool hideGenericLookup,
-    const bool showPanelsOnlyToggle, const bool panelsOnlyEnabled, const bool scrubOnEnter, const bool hasClippings)
+    const bool showPanelsOnlyToggle, const bool panelsOnlyEnabled, const bool scrubOnEnter, const bool hasClippings,
+    const char* jumpBackTarget)
     : UiListActivity("EpubReaderMenu", renderer, mappedInput),
       scrubOnEnter_(scrubOnEnter),
       menuItems(buildMenuItems(hasFootnotes, hasBookmarks, hasWordLookup, imageReaderMinimal, mangaMode,
-                               hideGenericLookup, showPanelsOnlyToggle, hasClippings)),
+                               hideGenericLookup, showPanelsOnlyToggle, hasClippings, jumpBackTarget != nullptr)),
       hasPageText(hasPageText),
       title(title),
       pendingOrientation(currentOrientation),
@@ -33,6 +36,7 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
       currentPage(currentPage),
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {
+  if (jumpBackTarget) snprintf(this->jumpBackTarget, sizeof(this->jumpBackTarget), "%s", jumpBackTarget);
   buildMenuRowItems();
 }
 
@@ -52,6 +56,9 @@ void EpubReaderMenuActivity::buildMenuRowItems() {
       case MenuAction::DISPLAY_QR:
         item.enabled = hasPageText;
         break;
+      case MenuAction::JUMP_BACK:
+        item.value = jumpBackTarget;
+        break;
       case MenuAction::TOGGLE_PANELS_ONLY:
         item.toggle = true;
         item.toggleChecked = panelsOnlyEnabled;
@@ -70,7 +77,7 @@ void EpubReaderMenuActivity::buildMenuRowItems() {
 
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(
     bool hasFootnotes, bool hasBookmarks, bool hasWordLookup, bool imageReaderMinimal, bool mangaMode,
-    bool hideGenericLookup, bool showPanelsOnlyToggle, bool hasClippings) {
+    bool hideGenericLookup, bool showPanelsOnlyToggle, bool hasClippings, bool hasJumpBack) {
   std::vector<MenuItem> items;
   items.reserve(MAX_MENU_ITEMS);
 
@@ -88,6 +95,10 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     return items;
   }
 
+  // First, so an accidental jump is one press away from being undone.
+  if (hasJumpBack) {
+    items.push_back({MenuAction::JUMP_BACK, StrId::STR_JUMP_BACK});
+  }
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
