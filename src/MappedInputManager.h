@@ -47,6 +47,9 @@ class MappedInputManager {
   // Home-key actions so the next main-loop pass can dispatch them, while the
   // current action remains available for immediate Home cancellation.
   void update(bool deferHomeButtonAction = false) const;
+  // Touch boards draw a button cursor (list row, bottom bar slot) only while buttons are in use:
+  // a button press shows it, a touch hides it again. Always true on boards without touch.
+  static bool buttonCursorShown();
 #if FREEINK_CAP_TOUCH
   // X4 Pro delays a single power click until its frontlight double-click window
   // expires. The main loop supplies that one-frame event here.
@@ -202,6 +205,7 @@ class MappedInputManager {
   // in the first milliseconds after boot is not misread as a ghost.
   static constexpr unsigned long SIDE_GHOST_WINDOW_MS = 150;
   mutable unsigned long lastFrontActivityMs = static_cast<unsigned long>(-1000);
+  static inline bool buttonsInUse = false;
   mutable bool sideActionsActive = false;
   mutable uint8_t comboAction = static_cast<uint8_t>(SideButtonAction::None);
   bool sideRoleSuppressed(uint8_t physical) const;

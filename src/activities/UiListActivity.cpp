@@ -303,6 +303,8 @@ void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, c
   // One cursor on screen: while a band holds it, no row is drawn selected. The row selection
   // itself is kept, so coming back up out of the bar lands where the ring says.
   if (ringFocus() != TabRing::Focus::Content) props.selectedIndex = -1;
+  // A touch board draws no row cursor until a button is pressed (see buttonCursorShown).
+  if (!MappedInputManager::buttonCursorShown()) props.selectedIndex = -1;
 }
 
 void UiListActivity::drawChrome() {
