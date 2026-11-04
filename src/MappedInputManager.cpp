@@ -26,6 +26,12 @@ void MappedInputManager::update(const bool deferHomeButtonAction) const {
       gpio.wasReleased(HalGPIO::BTN_RIGHT)) {
     lastFrontActivityMs = millis();
   }
+  // Touch first: a board that synthesizes Confirm from a tap reports both in one frame.
+  if (gpio.wasTouchActivity()) {
+    buttonsInUse = false;
+  } else if (gpio.wasAnyPressed()) {
+    buttonsInUse = true;
+  }
   const bool pagePressed =
       SETTINGS.vibration == CrossPointSettings::VIBRATION_TOUCH_PAGE && gpio.wasCapacitivePagePressed();
   HalHaptics::feedback(SETTINGS.vibration != CrossPointSettings::VIBRATION_OFF, pagePressed, SETTINGS.hapticIntensity);
@@ -529,6 +535,8 @@ bool MappedInputManager::consumeSuppressedRelease() const {
 bool MappedInputManager::isPressed(const Button button) const { return mapButton(button, &HalGPIO::isPressed); }
 
 bool MappedInputManager::wasAnyPressed() const { return gpio.wasAnyPressed(); }
+
+bool MappedInputManager::buttonCursorShown() { return !BoardConfig::hasTouch() || buttonsInUse; }
 
 bool MappedInputManager::sideReleaseAlone() const {
   return side_button::loneRelease(millis(), lastFrontActivityMs, SIDE_GHOST_WINDOW_MS);

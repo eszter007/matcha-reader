@@ -59,8 +59,9 @@ void HomeTabBar::draw(const GfxRenderer& renderer, const HomeTab active, const i
   // The ring marks where the cursor sits, including on the tab you are already in: a button
   // board's cursor enters the band on the active slot, and with nothing drawn there the first
   // Left/Right press looked like a dead key. Nothing moves a cursor into the band on a board
-  // without those keys, so `focused` is simply -1 there.
-  const int cursor = focused;
+  // without those keys, so `focused` is simply -1 there. On a touch board it shows only while
+  // buttons are in use; the underline still marks the tab you are in.
+  const int cursor = MappedInputManager::buttonCursorShown() ? focused : -1;
   for (int i = 0; i < COUNT; ++i) {
     const int slotX = barLeft() + i * step;
     const bool isActive = i == static_cast<int>(active);
