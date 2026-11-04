@@ -130,9 +130,19 @@ void ClipSelectionActivity::onEnter() {
 bool ClipSelectionActivity::extractWords() {
   if (vertical()) return extractVerticalCells();
   wordCount = 0;
-  words = makeUniqueNoThrow<WordBox[]>(MAX_SELECTABLE_WORDS);
+  // Room for every word of the first page, so a dense page can be selected to its end.
+  size_t firstPageWords = 0;
+  if (!pages.empty()) {
+    for (const auto& element : pages[0]->elements) {
+      if (element->getTag() != TAG_PageLine) continue;
+      const auto& block = static_cast<const PageLine&>(*element).getBlock();
+      if (block && block->valid()) firstPageWords += block->wordCount();
+    }
+  }
+  const size_t capacity = std::min<size_t>(UINT16_MAX, std::max<size_t>(MAX_SELECTABLE_WORDS, firstPageWords + 10));
+  words = makeUniqueNoThrow<WordBox[]>(capacity);
   if (!words) {
-    LOG_ERR("CLIP", "OOM: selection words (%u bytes)", static_cast<unsigned>(MAX_SELECTABLE_WORDS * sizeof(WordBox)));
+    LOG_ERR("CLIP", "OOM: selection words (%u bytes)", static_cast<unsigned>(capacity * sizeof(WordBox)));
     return false;
   }
   rowCount = 0;
@@ -161,7 +171,7 @@ bool ClipSelectionActivity::extractWords() {
 
       const size_t lineStart = wordCount;
       const bool isRtl = block->getBlockStyle().isRtl;
-      const size_t remaining = MAX_SELECTABLE_WORDS - lineStart;
+      const size_t remaining = capacity - lineStart;
       size_t rtlWordCount = 0;
       const int rubyShift = block->getRubyShift(renderer.getFontAscenderSize(fontId));
       for (uint16_t i = 0; i < block->wordCount(); ++i) {
@@ -177,7 +187,7 @@ bool ClipSelectionActivity::extractWords() {
           width = std::min(width, static_cast<int>(block->wordXpos(i + 1) - block->wordXpos(i)));
         }
 
-        if (!isRtl && wordCount == MAX_SELECTABLE_WORDS) break;
+        if (!isRtl && wordCount == capacity) break;
 
         WordBox& word = isRtl ? words[lineStart + (rtlWordCount < remaining ? rtlWordCount : rtlWordCount % remaining)]
                               : words[wordCount++];
@@ -216,13 +226,13 @@ bool ClipSelectionActivity::extractWords() {
         paragraphStartPending = false;
       }
       if (wordCount != lineStart) ++rowCount;
-      if (wordCount == MAX_SELECTABLE_WORDS) {
+      if (wordCount == capacity) {
         LOG_ERR("CLIP", "Selectable word cap hit (%u); multi-page selection was truncated",
-                static_cast<unsigned>(MAX_SELECTABLE_WORDS));
+                static_cast<unsigned>(capacity));
         break;
       }
     }
-    if (wordCount == MAX_SELECTABLE_WORDS) break;
+    if (wordCount == capacity) break;
   }
 
   // Tight line spacing packs rows closer than a line height. The selection is XOR-inverted, so a

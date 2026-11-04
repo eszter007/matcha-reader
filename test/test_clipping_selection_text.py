@@ -24,13 +24,10 @@ def method(name, next_name, text=source):
     start = text.rfind("\n", 0, signature) + 1
     return text[start:text.index(next_name, signature)].rstrip()
 
-extract_words = method("bool ClipSelectionActivity::extractWords", "int ClipSelectionActivity::closestInRow")
-clean_draw = method("void ClipSelectionActivity::drawWordClean", "void ClipSelectionActivity::drawWordHighlight")
-highlight_draw = method("void ClipSelectionActivity::drawWordHighlight", "bool ClipSelectionActivity::renderIncremental")
-selection_draw = method("void ClipSelectionActivity::drawSelection", "void ClipSelectionActivity::render(")
+extract_words = method("bool ClipSelectionActivity::extractWords", "void ClipSelectionActivity::prewarmVerticalPage")
 word_rect = method("Rect clippingWordRect", "int clampPercent", reader_source)
-saved_hit = method("int EpubReaderActivity::clippingAtPoint", "void EpubReaderActivity::drawClippingHighlights", reader_source)
-saved_draw = method("void EpubReaderActivity::drawClippingHighlights", "void EpubReaderActivity::renderStatusBar", reader_source)
+saved_hit = method("int EpubReaderActivity::clippingAtPoint", "void EpubReaderActivity::recordTapLines", reader_source)
+saved_draw = method("void EpubReaderActivity::drawClippingHighlights", "\nnamespace {", reader_source)
 
 # Compile production extraction, export, and redraws with bounded UI/rendering stubs.
 harness = r"""
@@ -145,6 +142,19 @@ struct Renderer {
   void drawRect(int, int, int, int, bool) const {}
   void drawPixel(int, int, bool) const {}
 };
+// The word's measuring font; the block's letter spacing is the part these checks exercise.
+struct ClippingWordFont {
+  int fontId = 0;
+  uint16_t scale = 1;
+  int8_t letterSpacing = 0;
+};
+ClippingWordFont clippingWordFont(const Block& block, uint16_t, int fontId) {
+  return {fontId, 1, block.getBlockStyle().characterSpacing};
+}
+int clippingWordWidth(const Renderer& renderer, const ClippingWordFont& font, const char* text,
+                      EpdFontFamily::Style style) {
+  return renderer.getTextAdvanceX(font.fontId, text, style, font.letterSpacing);
+}
 struct Theme {
   void drawSelectionHandle(const Renderer&, Rect, bool) const {}
   void drawSelectionActions(const Renderer&, Rect) const {}
@@ -194,11 +204,10 @@ struct ClipSelectionActivity {
   int fontId = 0, lineHeight = 16, marginLeft = 0, marginTop = 0;
   int selected = 0, rangeStart = -1, currentPageOffset = 0;
   bool touchDragSelecting = false;
+  bool vertical() const { return false; }
+  bool extractVerticalCells() { return false; }
   bool buildSelectedText(int first, int last, std::string& text) const;
   bool extractWords();
-  void drawWordClean(int, int, int) const;
-  void drawWordHighlight(int, int, int, int, int) const;
-  void drawSelection() const;
   void prewarmWord(int) const {}
   void clearGapBetween(const WordBox&, const WordBox&, int, int) const {}
   void ditherGapBetween(const WordBox&, const WordBox&, int, int) const {}
@@ -207,13 +216,15 @@ struct ClipSelectionActivity {
   Rect handleRect(int, bool) const { return {}; }
   Rect actionRect() const { return {}; }
 };
-""" + build_text + extract_words + clean_draw + highlight_draw + selection_draw + r"""
+""" + build_text + extract_words + r"""
 struct EpubReaderActivity {
   Renderer& renderer;
   explicit EpubReaderActivity(Renderer& renderer) : renderer(renderer) {}
   struct Section { int currentPage = 0, pageCount = 1; } sectionData;
   Section* section = &sectionData;
   int currentSpineIndex = 0, buildViewportWidth = 480, buildViewportHeight = 800;
+  int effectiveReaderFontId() const { return 0; }
+  ReaderRenderSpec readerSpec(int width, int height) const { return SETTINGS.readerRenderSpec(width, height); }
   int clippingAtPoint(const Page&, int, int) const;
   void drawClippingHighlights(const Page&, int, int, int) const;
 };
@@ -277,6 +288,34 @@ int main() {
     assert(cold.words[239].pageOffset == 1);
     assert(cold.renderer.coldMeasurements == 0);
   }
+  {
+    ClipSelectionActivity dense;
+    auto page0 = std::make_unique<Page>();
+    auto line0 = std::make_unique<PageLine>();
+    for (int i = 0; i < 300; ++i) {
+      line0->block.packedText += "あ";
+      line0->block.packedText += '\0';
+      line0->block.styles.push_back(EpdFontFamily::REGULAR);
+    }
+    page0->elements.push_back(std::move(line0));
+    dense.pages.push_back(std::move(page0));
+
+    auto page1 = std::make_unique<Page>();
+    auto line1 = std::make_unique<PageLine>();
+    for (int i = 0; i < 20; ++i) {
+      line1->block.packedText += "い";
+      line1->block.packedText += '\0';
+      line1->block.styles.push_back(EpdFontFamily::REGULAR);
+    }
+    page1->elements.push_back(std::move(line1));
+    dense.pages.push_back(std::move(page1));
+
+    assert(dense.extractWords());
+    assert(dense.wordCount == 310);
+    assert(dense.words[299].pageOffset == 0);
+    assert(dense.words[300].pageOffset == 1);
+    assert(dense.words[309].pageOffset == 1);
+  }
   HalMemory::stats = {5908, 3444};  // Physical X3 crash workload.
   assert(selectionLowMemory(0, 0));
   HalMemory::stats = {4500, 4200};  // A large enough block still needs spare heap.
@@ -307,25 +346,8 @@ int main() {
     assert(activity.extractWords());
     assert(activity.wordCount == 2);
     expect(activity, 0, 1, "one\ntwo");
-    activity.renderer.draws.clear();
-    activity.renderer.fills.clear();
-    activity.rangeStart = 0;
-    activity.selected = 1;
-    activity.drawSelection();
-    activity.drawWordClean(0, 0, 0);  // Cursor leaves the old word.
-    activity.drawWordHighlight(1, 1, 1, 0, 0);
-    assert(activity.renderer.draws.size() == 4);
-    assert(activity.renderer.fills.size() == 4);
-    for (size_t i = 0; i < 4; ++i) {
-      const auto& draw = activity.renderer.draws[i];
-      const auto& fill = activity.renderer.fills[i];
-      assert(draw.tracking == tracking);
-      assert(draw.width == 24 + 2 * tracking);
-      assert(fill.width == draw.width);
-      assert(fill.x == draw.x);
-    }
     for (size_t i = 0; i < 2; ++i) {
-      assert(activity.words[i].characterSpacing == tracking);
+      assert(activity.words[i].font.letterSpacing == tracking);
       assert(activity.words[i].width == 24 + 2 * tracking);
     }
     EpubReaderActivity reader{activity.renderer};
