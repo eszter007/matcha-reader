@@ -241,19 +241,18 @@ void bookActivity() {
   struct Log {
     std::string calls;
   } log;
-  const BookActivityParser::Sink sink{
-      &log, [](void* c, const uint32_t* keys, const size_t n, const int64_t started, const int64_t finished,
-               const BookDay* days, const size_t count) {
-        auto& l = static_cast<Log*>(c)->calls;
-        for (size_t i = 0; i < n; i++) l += std::to_string(keys[i]) + " ";
-        l += std::to_string(started) + " " + std::to_string(finished) + ":";
-        for (size_t i = 0; i < count; i++) {
-          l += " " + std::to_string(days[i].month) + "-" + std::to_string(days[i].day) + "/" +
-               std::to_string(days[i].minutes);
-        }
-        l += ";";
-        return true;
-      }};
+  const BookActivityParser::Sink sink{&log, [](void* c, const uint32_t* keys, const size_t n, const int64_t started,
+                                               const int64_t finished, const BookDay* days, const size_t count) {
+                                        auto& l = static_cast<Log*>(c)->calls;
+                                        for (size_t i = 0; i < n; i++) l += std::to_string(keys[i]) + " ";
+                                        l += std::to_string(started) + " " + std::to_string(finished) + ":";
+                                        for (size_t i = 0; i < count; i++) {
+                                          l += " " + std::to_string(days[i].month) + "-" + std::to_string(days[i].day) +
+                                               "/" + std::to_string(days[i].minutes);
+                                        }
+                                        l += ";";
+                                        return true;
+                                      }};
   BookActivityParser parser(sink);
   for (size_t i = 0; i < body.size(); i += 7) parser.feed(body.data() + i, std::min<size_t>(7, body.size() - i));
   assert(parser.complete());
