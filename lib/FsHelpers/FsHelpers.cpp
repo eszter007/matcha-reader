@@ -216,12 +216,22 @@ bool hasPngExtension(std::string_view fileName) { return checkFileExtension(file
 
 bool hasBmpExtension(std::string_view fileName) { return checkFileExtension(fileName, ".bmp"); }
 
+bool hasImageExtension(std::string_view fileName) {
+  return hasBmpExtension(fileName) || hasPngExtension(fileName) || hasJpgExtension(fileName);
+}
+
 bool hasGifExtension(std::string_view fileName) { return checkFileExtension(fileName, ".gif"); }
 
 bool hasEpubExtension(std::string_view fileName) { return checkFileExtension(fileName, ".epub"); }
 
 bool hasXtcExtension(std::string_view fileName) {
   return checkFileExtension(fileName, ".xtc") || checkFileExtension(fileName, ".xtch");
+}
+
+bool hasMatchaExtension(std::string_view fileName) { return checkFileExtension(fileName, ".matcha"); }
+
+std::string_view stripMatchaExtension(const std::string_view path) {
+  return hasMatchaExtension(path) ? path.substr(0, path.size() - (sizeof(".matcha") - 1)) : path;
 }
 
 bool hasTxtExtension(std::string_view fileName) { return checkFileExtension(fileName, ".txt"); }

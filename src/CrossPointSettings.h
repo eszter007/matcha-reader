@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ArduinoJson.h>
+#include <BlePageTurner.h>
 #include <BoardConfig.h>
 #include <Epub/ReaderRenderSpec.h>
 #include <PersistableStore.h>
@@ -29,6 +30,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     // Upstream's name for what the fork called TRANSPARENT. Same slot 7, same meaning, so a
     // settings.json written before the merge still selects the overlay screen.
     TRANSPARENT_CUSTOM = 7,
+    STATS = 8,
+    // Upstream uses 8 for this; the fork's STATS already holds 8 in saved settings.
+    COVER_TRANSPARENT = 9,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
@@ -109,6 +113,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     SIDE_BTN_FOOTNOTES = 5,
     SIDE_BTN_WORD_LOOKUP = 6,
     SIDE_BTN_NONE = 7,
+    SIDE_BTN_CREATE_CLIPPING = 8,
+    SIDE_BTN_SYNC_STATS_CLOCK = 9,
+    SIDE_BTN_SYNC_CLOCK = 10,
     SIDE_BUTTON_ACTION_COUNT
   };
   static_assert(static_cast<uint8_t>(SideButtonAction::Default) == SIDE_BTN_DEFAULT);
@@ -119,6 +126,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   static_assert(static_cast<uint8_t>(SideButtonAction::Footnotes) == SIDE_BTN_FOOTNOTES);
   static_assert(static_cast<uint8_t>(SideButtonAction::WordLookup) == SIDE_BTN_WORD_LOOKUP);
   static_assert(static_cast<uint8_t>(SideButtonAction::None) == SIDE_BTN_NONE);
+  static_assert(static_cast<uint8_t>(SideButtonAction::CreateClipping) == SIDE_BTN_CREATE_CLIPPING);
+  static_assert(static_cast<uint8_t>(SideButtonAction::SyncStatsClock) == SIDE_BTN_SYNC_STATS_CLOCK);
+  static_assert(static_cast<uint8_t>(SideButtonAction::SyncClock) == SIDE_BTN_SYNC_CLOCK);
   static_assert(static_cast<uint8_t>(SideButtonAction::Count) == SIDE_BUTTON_ACTION_COUNT);
 
   // Pre-1.5 single "Side Button Layout" setting, kept only so fromJson() can migrate a stored
@@ -126,7 +136,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   enum LEGACY_SIDE_BUTTON_LAYOUT { LEGACY_PREV_NEXT = 0, LEGACY_NEXT_PREV = 1, LEGACY_SIDE_DISABLED = 2 };
 
   // Font family options (built-in fonts only; SD card fonts use sdFontFamilyName)
-  enum FONT_FAMILY { NOTOSERIF = 0, NOTOSANS = 1, FONT_FAMILY_COUNT };
+  enum FONT_FAMILY { NOTOSERIF = 0, FONT_FAMILY_COUNT };
+  // Persisted IDs of families that moved to the SD card; fromJson() maps them to sdFontFamilyName.
+  static constexpr uint8_t LEGACY_NOTOSANS = 1;
   static constexpr uint8_t LEGACY_OPENDYSLEXIC = 2;
   static constexpr uint8_t BUILTIN_FONT_COUNT = FONT_FAMILY_COUNT;
   // Reader font size is a point size, not an enum slot — see fontPointSize.
@@ -134,7 +146,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // slot; fromJson() folds that range up (see LEGACY_FONT_SIZE_MAX).
   static constexpr uint8_t LEGACY_FONT_SIZE_MAX = 3;
   static constexpr uint8_t DEFAULT_FONT_POINT_SIZE = 14;
-  enum LINE_COMPRESSION { TIGHT = 0, NORMAL = 1, WIDE = 2, EXTRA_WIDE = 3, LINE_COMPRESSION_COUNT };
+  // Line height as a percent of font size.
+  enum LINE_COMPRESSION {
+    LINE_SPACING_100 = 0,
+    LINE_SPACING_110 = 1,
+    LINE_SPACING_120 = 2,
+    LINE_SPACING_130 = 3,
+    LINE_SPACING_145 = 4,
+    LINE_SPACING_160 = 5,
+    LINE_SPACING_175 = 6,
+    LINE_COMPRESSION_COUNT
+  };
   enum PARAGRAPH_ALIGNMENT {
     JUSTIFIED = 0,
     LEFT_ALIGN = 1,
@@ -165,8 +187,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     REFRESH_FREQUENCY_COUNT
   };
 
-  // Short power button press actions. PWR_CONFIRM is only offered on touch
-  // boards (see SettingsList.h).
+  // Short power button press actions. Touch boards also get PWR_CONFIRM; touch boards
+  // without a home key also get the reader shortcuts (see SettingsList.h). Persisted by
+  // index: append only.
   enum SHORT_PWRBTN {
     IGNORE = 0,
     SLEEP = 1,
@@ -181,19 +204,28 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     // Previous Page is appended at the end for the same reason: inserting it
     // beside PAGE_TURN would shift every stored index after it.
     PWR_PREV_PAGE = 7,
+    // Save Clipping (upstream's 6) is appended after the fork's own entries, like the two above.
+    CREATE_CLIPPING = 8,
+    // Upstream's short-press shortcuts for touch boards without a Home key (Picco), appended
+    // after the fork's own entries for the same reason.
+    PWR_BOOKMARK = 9,
+    PWR_SYNC = 10,
+    PWR_READER_MENU = 11,
+    PWR_SYNC_STATS_CLOCK = 12,
+    PWR_SYNC_CLOCK = 13,
     SHORT_PWRBTN_COUNT
   };
 
-  // Long-press Confirm action while reading an EPUB. The setting cycles through these values.
-  // Persisted in settings.json by index: any new function (e.g. dictionary, bookmark) MUST use a
-  // value >= 2 and be appended at the END of the enumValues array in SettingsList.h, otherwise the
-  // stored indices shift and existing saves are silently misinterpreted.
+  // Long-press Confirm action while reading an EPUB. Persisted values are stable;
+  // SettingsList maps them to the device-specific option list shown to the user.
   enum LONG_PRESS_MENU_FUNCTION {
     LP_MENU_KOSYNC = 0,
     LP_MENU_DISABLED = 1,
     LP_MENU_BOOKMARK = 2,
     LP_MENU_DICTIONARY = 3,
     LP_MENU_READER_MENU = 4,
+    LP_MENU_CREATE_CLIPPING = 5,
+    LP_MENU_FOOTNOTES = 6,
     LONG_PRESS_MENU_FUNCTION_COUNT
   };
 
@@ -211,8 +243,16 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // UI Theme
   enum UI_THEME { CLASSIC = 0, LYRA = 1, LYRA_3_COVERS = 2, ROUNDEDRAFF = 3, COVER_GRID = 4 };
 
-  // Image rendering in EPUB reader
-  enum IMAGE_RENDERING { IMAGES_DISPLAY = 0, IMAGES_PLACEHOLDER = 1, IMAGES_SUPPRESS = 2, IMAGE_RENDERING_COUNT };
+  // Image rendering in EPUB reader. IMAGES_DISPLAY_BW lays images out like
+  // IMAGES_DISPLAY but draws them as a B/W dither, so image pages skip the
+  // extra grayscale refresh.
+  enum IMAGE_RENDERING {
+    IMAGES_DISPLAY = 0,
+    IMAGES_PLACEHOLDER = 1,
+    IMAGES_SUPPRESS = 2,
+    IMAGES_DISPLAY_BW = 3,
+    IMAGE_RENDERING_COUNT
+  };
 
   // How Select opens the reader menu: the classic full-screen list, or a toolbar
   // overlay (top/bottom bars with Contents / Text / More bottom-sheet panels)
@@ -220,6 +260,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   enum READER_MENU_STYLE { READER_MENU_LIST = 0, READER_MENU_TOOLBAR = 1, READER_MENU_STYLE_COUNT };
 
   enum TILT_PAGE_TURN { TILT_OFF = 0, TILT_NORMAL = 1, TILT_NVERTED = 2, TILT_PAGE_TURN_COUNT };
+  enum VIBRATION { VIBRATION_TOUCH = 0, VIBRATION_TOUCH_PAGE = 1, VIBRATION_OFF = 2 };
+  uint8_t vibration = VIBRATION_OFF;
+  enum HAPTIC_INTENSITY { HAPTIC_LOW = 0, HAPTIC_MEDIUM = 1, HAPTIC_HIGH = 2 };
+  uint8_t hapticIntensity = HAPTIC_HIGH;
 
   enum TOUCH_READER_CONTROLS { TOUCH_READER_OFF = 0, TOUCH_READER_ON = 1, TOUCH_READER_CONTROLS_COUNT };
 
@@ -271,6 +315,13 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Night mode: inverted output polarity, applied to every activity per
   // render by ActivityManager. The sleep screen opts out itself.
   uint8_t screenInverted = 0;
+  // Per-language tabs on the Insights screen. Display only: stats are tracked per language either way.
+  uint8_t showLanguageStats = 1;
+  // Drops the Unknown tab: time on books with no language tag, which the sync account has no group for.
+  uint8_t hideUnknownLanguages = 1;
+  // Insights and the Stats sleep screen: 1 counts every device's reading on the sync account, 0 this
+  // device's own. Display only: uploads always send this device's own days.
+  uint8_t insightsAllDevices = 1;
   // Sleep screen cover mode settings
   uint8_t sleepScreenCoverMode = FIT;
   // Sleep screen cover filter
@@ -285,6 +336,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t xtcStatusBarMode = XTC_STATUS_BAR_HIDE;
   // Clock display in status bar (any board whose RTC probe succeeds)
   uint8_t statusBarClock = STATUS_BAR_CLOCK_HIDE;
+  // Time left in the status bar, from the reading speed in this book (ReadingPace).
+  enum STATUS_BAR_TIME_LEFT : uint8_t { TIME_LEFT_CHAPTER = 0, TIME_LEFT_BOOK = 1, TIME_LEFT_HIDE = 2 };
+  uint8_t statusBarTimeLeft = TIME_LEFT_HIDE;
   // LEGACY, kept for migration only: quarter-hour UTC offset biased by 48
   // (48 = UTC+0). Superseded by clockTimezone; read once by
   // timezones::activeIndex() when clockTimezone is unset.
@@ -303,6 +357,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t clockHasBeenSynced = 0;
   // Text rendering settings
   uint8_t extraParagraphSpacing = 1;
+  uint8_t paragraphIndentSpaces = 2;
   static constexpr uint8_t WORD_SPACING_MIN = 50;
   static constexpr uint8_t WORD_SPACING_MAX = 200;
   static constexpr uint8_t WORD_SPACING_STEP = 25;
@@ -316,6 +371,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // X4 Pro: double-click power toggles the frontlight. Disabling frees the
   // power button for shortPwrBtn actions without the double-click wait.
   uint8_t doubleClickPwrLight = 1;
+  // Power + Side Up, a SIDE_BUTTON_ACTION. Sleep, Refresh and the syncs work on any screen; the
+  // rest only in a book. Default is never offered: the combination has no built-in role.
+  uint8_t powerUpAction = SIDE_BTN_NONE;
   uint8_t homeButtonTapAction = static_cast<uint8_t>(HomeButtonAction::Home);
   uint8_t homeButtonDoubleTapAction = static_cast<uint8_t>(HomeButtonAction::ToggleFrontlight);
   uint8_t homeButtonLongPressAction = static_cast<uint8_t>(HomeButtonAction::ReaderMenu);
@@ -333,9 +391,6 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Thin wrappers over util/SideButtonActions.h -- that header holds the only copy of the logic
   // (and is what the unit tests exercise); duplicating it here once let the two drift.
   bool sideButtonsCustomized() const { return side_button::customized(upperSideButtonAction, lowerSideButtonAction); }
-  bool sideButtonsFullyCustomized() const {
-    return side_button::fullyCustomized(upperSideButtonAction, lowerSideButtonAction);
-  }
   uint8_t sideButtonActionForUp() const { return side_button::clampAction(upperSideButtonAction); }
   uint8_t sideButtonActionForDown() const { return side_button::clampAction(lowerSideButtonAction); }
 
@@ -343,6 +398,23 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // ReaderPrefs entry: it lives in the Controls screen, which a book cannot reach, so a per-book
   // copy could never be changed once that book had prefs saved.
   uint8_t reversePageTurn = 0;
+  // Whether Japanese (tategaki), Traditional Chinese (zhipai) and Simplified Chinese (zhipaiSimplified)
+  // books open in vertical columns. The per-book
+  // vertical toggle overrides both. AUTOMATIC follows the book's declared page order.
+  enum VERTICAL_MODE : uint8_t { VERTICAL_AUTOMATIC = 0, VERTICAL_ON = 1, VERTICAL_OFF = 2, VERTICAL_MODE_COUNT };
+  uint8_t tategaki = VERTICAL_AUTOMATIC;
+  uint8_t zhipai = VERTICAL_AUTOMATIC;
+  uint8_t zhipaiSimplified = VERTICAL_AUTOMATIC;
+  // Back on Home reopens the most recent book, and its hint says Resume. Off by default: Back is a
+  // "go back" button everywhere else, which made the shortcut too easy to hit by accident.
+  uint8_t homeBackResumes = 0;
+  // Only boards whose front row carries a Back key under the screen's bottom-left hint: the X3,
+  // the plain X4 and the X4 Classic. Elsewhere the setting is neither listed nor acted on.
+  static bool homeBackResumesSupported() {
+    const auto board = BoardConfig::ACTIVE.board;
+    return board == BoardConfig::Board::XteinkX4 || board == BoardConfig::Board::XteinkX3 ||
+           board == BoardConfig::Board::XteinkX3Uc8279 || board == BoardConfig::Board::XteinkX4Classic;
+  }
   // Default ON: with it off, rotating the screen leaves every directional button pointing the way it
   // did in portrait, which reads as broken rather than as a preference. Saved settings keep whatever
   // they already store, so only new installs (and users who never touched it) see the change.
@@ -359,7 +431,41 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // are selectable; SdCardFontSystem::ensureLoaded() snaps this to the nearest
   // available size (and persists the snap) whenever the family changes.
   uint8_t fontPointSize = DEFAULT_FONT_POINT_SIZE;
-  uint8_t lineSpacing = NORMAL;
+  uint8_t lineSpacing = LINE_SPACING_120;
+  // Text profiles: books in each script keep their own font, size and spacing. The live fields
+  // (fontFamily, sdFontFamilyName, fontPointSize, lineSpacing, characterSpacing, wordSpacing) hold
+  // the Latin profile; a book in another script swaps its profile in while it is open
+  // (EpubReaderActivity), and Text Settings does the same while editing one from Settings.
+  enum class TextProfileId : uint8_t { Latin, Japanese, TraditionalChinese, SimplifiedChinese, Korean, Count };
+  // Defaults match the live fields', so a settings file that never loads leaves usable profiles.
+  struct TextProfile {
+    uint8_t fontPointSize = DEFAULT_FONT_POINT_SIZE;
+    uint8_t lineSpacing = LINE_SPACING_120;
+    uint8_t characterSpacing = CHARACTER_SPACING_OFFSET;
+    uint8_t wordSpacing = 100;
+    uint8_t fontFamily = NOTOSERIF;
+    char sdFontFamilyName[32] = "";
+    bool operator==(const TextProfile&) const = default;
+  };
+  TextProfile liveTextProfile() const;
+  void setLiveTextProfile(const TextProfile& p);
+  // The stored profile. Latin's lives in the live fields, or in the held copy while another
+  // profile is swapped in.
+  TextProfile textProfile(TextProfileId id) const;
+  void setTextProfile(TextProfileId id, const TextProfile& p);
+  // While another profile sits in the live fields, the Latin values wait here, and saveToFile()
+  // writes them as the Latin settings instead of the swapped-in ones.
+  // One swap at a time: a second hold would replace the real Latin values with a swapped-in profile.
+  void holdLatinTextProfile(const TextProfile& latin);
+  // Ends the hold and returns the Latin values for the live fields.
+  TextProfile releaseLatinTextProfile() {
+    latinIsHeld = false;
+    return latinHeld;
+  }
+  // Profiles other than Latin, indexed by TextProfileId - 1.
+  TextProfile scriptTextProfiles[static_cast<int>(TextProfileId::Count) - 1]{};
+  TextProfile latinHeld{};
+  bool latinIsHeld = false;
   uint8_t paragraphAlignment = JUSTIFIED;
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
   uint8_t sleepTimeoutMinutes = 10;
@@ -412,6 +518,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   char sdFontFamilyName[32] = "";
   // Fallback dictionary folder under /dictionaries (empty = no fallback)
   char dictionaryName[32] = "";
+  // Master switch for all SD-card plugin discovery/execution. New installs keep
+  // this disabled; settings migration enables it when pre-existing plugin files
+  // are found so a firmware update never silently disables an existing setup.
+  uint8_t pluginsEnabled = 0;
+  // User hid the Plugin Hub install row; cleared when plugins are turned back on.
+  uint8_t pluginHubPromptHidden = 0;
   // Show hidden files/directories (starting with '.') in the file browser (0 = hidden, 1 = show)
   uint8_t showHiddenFiles = 0;
   // Show the title and author read from inside each book rather than its
@@ -435,8 +547,6 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // default was swipe, so both keep SWIPE_ONLY rather than upstream's tap-and-swipe.
   uint8_t pageTurnGesture = SWIPE_ONLY;
   uint8_t previousPageGesture = SWIPE_ONLY;
-  // Swap Word Lookup navigation to side buttons and scrolling to front buttons.
-  uint8_t wordLookupSideButtons = 0;
   // Word Lookup definition font: 8/12/14/16pt (Tiny/Small/Medium/Large; Small is the default).
   enum WORD_LOOKUP_FONT_SIZE {
     WORD_LOOKUP_FONT_TINY = 0,
@@ -458,6 +568,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Restore the saved on/off state after a normal boot or wake. Brightness and
   // warmth are always remembered even when this is disabled.
   uint8_t frontlightRestoreOnWake = 1;
+  // What the slide switch controls (boards with one): frontlight on/off or
+  // night mode. The switch's position is applied at boot and on each change.
+  enum SLIDE_SWITCH_ACTION : uint8_t {
+    SLIDE_SWITCH_FRONTLIGHT = 0,
+    SLIDE_SWITCH_NIGHT_MODE = 1,
+    SLIDE_SWITCH_TOUCH_CONTROLS = 2,
+  };
+  uint8_t slideSwitchAction = SLIDE_SWITCH_FRONTLIGHT;
   // Language setting (Language enum index, default 0 = EN)
   uint8_t language = 0;
   // Keyboard layouts the user can reach, using keyboard_layouts::ALL table bits.
@@ -466,6 +584,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // books someone reads is not necessarily the language of their UI.
   // See keyboard_layouts:: for the bit assignment and the defaulting rules.
   uint16_t keyboardLayouts = 0;
+  // Bluetooth page turner, saved under the keys lib/BlePageTurner reads and writes (BlePageTurnerJson.h).
+  bleturner::Config ble;
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.
   uint8_t quickResumeSleepScreen = QUICK_RESUME_NEVER;
 
@@ -518,6 +638,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     uint8_t progressBarMode = HIDE_PROGRESS;  // STATUS_BAR_PROGRESS_BAR
     uint8_t progressBarHeightPx = 0;          // (thickness+1)*2; 0 when the bar is hidden
     uint8_t xtcMode = XTC_STATUS_BAR_HIDE;    // XTC_STATUS_BAR_MODE
+    uint8_t timeLeftMode = TIME_LEFT_HIDE;    // STATUS_BAR_TIME_LEFT
 
     bool showsProgressBar() const { return progressBarMode != HIDE_PROGRESS; }
     bool showsTitle() const { return titleMode != HIDE_TITLE; }
@@ -525,8 +646,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     // Visibility of the text lane. Whether a clock can be read is the caller's
     // concern: pass halClock.hasTime(), or true for layout reservation.
     bool textLaneVisible(bool clockAvailable) const {
-      return showChapterPageCount || showBookProgressPercent || showsTitle() || showBattery ||
-             (showsClock() && clockAvailable);
+      return showChapterPageCount || showBookProgressPercent || timeLeftMode != TIME_LEFT_HIDE || showsTitle() ||
+             showBattery || (showsClock() && clockAvailable);
     }
   };
   StatusBarSpec statusBarSpec() const;

@@ -6,6 +6,7 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
+#include <HiddenItems.h>
 #include <I18n.h>
 #include <JpegToBmpConverter.h>
 #include <MangaPanel.h>
@@ -15,10 +16,13 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <iterator>
 #include <memory>
 
+#include "HapticFeedback.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include "SdCardFontSystem.h"
 #include "activities/home/EpubProgressUtil.h"
 #include "activities/home/XtcProgressUtil.h"
 #include "components/BookActionsMenu.h"
@@ -31,6 +35,8 @@
 #include "util/BookProgress.h"
 
 namespace {
+bool recentFileExists(const std::string& path) { return Storage.exists(path.c_str()); }
+
 constexpr unsigned long LONG_PRESS_MS = 1000;
 constexpr int COVER_ASPECT_NUM = 2;
 constexpr int COVER_ASPECT_DEN = 3;
@@ -188,7 +194,7 @@ void CoverLibraryActivity::loadRecentBooks() {
   RecentBooksStore cache;
   if (cache.loadFromPath(LIBRARY_CACHE_JSON)) {
     recentBooks = cache.takeBooks();
-    mergeRecentBooks(recentBooks, RECENT_BOOKS.getBooks());
+    mergeRecentBooks(recentBooks, RECENT_BOOKS.getBooks(), recentFileExists);
   } else {
     recentBooks = RECENT_BOOKS.getBooks();
   }
@@ -363,8 +369,15 @@ bool CoverLibraryActivity::stepLibraryScan() {
                          result->coverKnownAbsent);
       }
       const bool completed = result->completed;
+      if (matches && completed && !result->hasGridThumb && !result->coverKnownAbsent) {
+        CoverWorker::noteRetryableFailure(book.path);
+      }
       coverWorker_.consumeResult();
       if (matches && completed) scan_.thumbIndex++;
+      return false;
+    }
+    if (CoverWorker::failedThisSession(book.path)) {
+      scan_.thumbIndex++;
       return false;
     }
     // A [HEIGHT]-templated path does NOT mean the thumb exists at the height this theme asks
@@ -563,7 +576,11 @@ void CoverLibraryActivity::scanDirectoryEntry() {
 
   file.getName(scan_.nameBuf.data(), scan_.nameBuf.size());
   const char* name = scan_.nameBuf.data();
-  if (name[0] == '.' || strcmp(name, "System Volume Information") == 0 || strcmp(name, "dict") == 0) return;
+  if (name[0] == '.' || strcmp(name, "dict") == 0 ||
+      std::any_of(std::begin(FsHelpers::HIDDEN_ITEMS), std::end(FsHelpers::HIDDEN_ITEMS),
+                  [name](const char* item) { return strcmp(name, item) == 0; })) {
+    return;
+  }
 
   std::string fullPath = scan_.activeDirPath;
   if (fullPath.back() != '/') fullPath += '/';
@@ -584,7 +601,8 @@ void CoverLibraryActivity::scanDirectoryEntry() {
 
   const std::string_view filename{name};
   if ((!FsHelpers::hasEpubExtension(filename) && !FsHelpers::hasXtcExtension(filename) &&
-       !FsHelpers::hasTxtExtension(filename) && !FsHelpers::hasMarkdownExtension(filename)) ||
+       !FsHelpers::hasTxtExtension(filename) && !FsHelpers::hasMarkdownExtension(filename) &&
+       !FsHelpers::hasMatchaExtension(filename)) ||
       isCrashReportFile(name)) {
     return;
   }
@@ -603,7 +621,7 @@ bool CoverLibraryActivity::applyLibraryScan() {
 
   // Cached entries whose files vanished drop out; recents remain first without building a
   // second full catalog.
-  mergeRecentBooks(scan_.results, RECENT_BOOKS.getBooks());
+  mergeRecentBooks(scan_.results, RECENT_BOOKS.getBooks(), recentFileExists);
 
   bool changed = scan_.results.size() != recentBooks.size();
   if (!changed) {
@@ -638,6 +656,7 @@ void CoverLibraryActivity::finishLibraryScan() {
 void CoverLibraryActivity::loadBookProgress() {
   // Progress is filled progressively from loop() -- ~5 file reads per book made the old
   // upfront pass a visible chunk of the Library open time.
+  remoteBooks.load();
   markAllProgressPending();
 }
 
@@ -736,6 +755,11 @@ void CoverLibraryActivity::loadShelfBooks(const std::string& folderPath) {
 }
 
 int CoverLibraryActivity::readProgressPercent(const std::string& bookPath) const {
+  const int percent = readLocalProgressPercent(bookPath);
+  return std::max(percent, remoteBooks.percent(bookPath));
+}
+
+int CoverLibraryActivity::readLocalProgressPercent(const std::string& bookPath) const {
   std::string cachePath;
   if (FsHelpers::hasReflowableBookExtension(bookPath)) {
     cachePath = "/.crosspoint/epub_" + std::to_string(std::hash<std::string>{}(bookPath));
@@ -764,6 +788,12 @@ void CoverLibraryActivity::onEnter() {
   }
 
   loadRecentBooks();
+  // A title or author beyond the built-in CJK subset (Chinese, a rare kanji) needs the SD companion
+  // for the grid and shelf labels. This list is the whole last card scan, so one pass covers both
+  // tabs.
+  sdFontSystem.setUiCjkNeededForBooks(
+      renderer, recentBooks, [](const auto& book) { return book.title.c_str(); },
+      [](const auto& book) { return book.author.c_str(); });
   loadBookProgress();
   shelvesLoaded = false;
   coverWorker_.start("LibraryCover");
@@ -894,6 +924,7 @@ void CoverLibraryActivity::loop() {
       const int hit = gridIndexAtPoint(shelfTouchX, shelfTouchY, contentTop, contentHeight, shelfScrollRow, shelfCount);
       hideSelector();
       if (hit >= 0) {
+        haptic_feedback::touchAction(/*longPress=*/true);
         shelfContentIndex = hit;
         showBookActions(shelfBooks[hit].path, shelfBooks[hit].title,
                         hit < static_cast<int>(shelfBookProgress.size()) ? shelfBookProgress[hit].percent : -1);
@@ -913,6 +944,7 @@ void CoverLibraryActivity::loop() {
       const int hit = gridIndexAtPoint(shelfTouchX, shelfTouchY, contentTop, contentHeight, shelfScrollRow, shelfCount);
       hideSelector();
       if (hit >= 0) {
+        haptic_feedback::touchAction();
         shelfContentIndex = hit;
         LOG_DBG("RBA", "Tapped shelf book: %s", shelfBooks[hit].path.c_str());
         onSelectBook(shelfBooks[hit].path);
@@ -1111,6 +1143,7 @@ void CoverLibraryActivity::loop() {
       hideSelector();
       // Stats are for books; a shelf has none.
       if (hit >= 0 && selectedTab == 0 && hit < static_cast<int>(recentBooks.size())) {
+        haptic_feedback::touchAction(/*longPress=*/true);
         contentIndex = hit + 1;
         showBookActions(recentBooks[hit].path, recentBooks[hit].title,
                         hit < static_cast<int>(bookProgress.size()) ? bookProgress[hit].percent : -1);
@@ -1148,6 +1181,7 @@ void CoverLibraryActivity::loop() {
       const int hit = hitAtPoint(gx, gy);
       hideSelector();
       if (hit >= 0) {
+        haptic_feedback::touchAction();
         contentIndex = hit + 1;
         if (selectedTab == 0) {
           if (hit < static_cast<int>(recentBooks.size())) {
@@ -1260,12 +1294,18 @@ void CoverLibraryActivity::showBookActions(const std::string& path, const std::s
                                           ? shelves[openShelfIndex].folderPath
                                           : std::string();
   BookActionsMenu::show(optionPopup, *this, renderer, mappedInput, path, title, percent,
-                        [this, openShelfFolder](const bool deleted) {
+                        [this, openShelfFolder, path](const bool deleted) {
                           // Either way the frame underneath is stale; a delete also drops a book
                           // out of the lists the grid is drawn from.
                           lastRendered.valid = false;
                           if (deleted) {
                             loadRecentBooks();
+                            // The scan cache still lists the book, and a running scan may already
+                            // have collected it; drop it from both so it does not come back.
+                            const auto samePath = [&path](const RecentBook& book) { return book.path == path; };
+                            std::erase_if(recentBooks, samePath);
+                            std::erase_if(scan_.results, samePath);
+                            RecentBooksStore::saveBooksToPath(recentBooks, LIBRARY_CACHE_JSON);
                             shelvesLoaded = false;
                             contentIndex = 0;
                           }
@@ -1758,7 +1798,7 @@ void CoverLibraryActivity::render(RenderLock&&) {
   }
 
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_MENU_RECENT_BOOKS),
-                 nullptr, HomeTabBar::showsBackButton(true));
+                 nullptr, HomeTabBar::showsBackButton(true), UiTabBand::drawsTopRule() ? 0 : -1);
 
   const int tabBarY = metrics.topPadding + metrics.headerHeight;
   {

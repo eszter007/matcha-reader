@@ -1,5 +1,6 @@
 #include "EpubReaderMenuActivity.h"
 
+#include <BlePageTurner.h>
 #include <GfxRenderer.h>
 #include <HalFrontlight.h>
 #include <I18n.h>
@@ -9,6 +10,7 @@
 #include "ReaderUtils.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
+#include "util/SlideSwitch.h"
 
 namespace fui = freeink::ui;
 
@@ -17,11 +19,11 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
     const int totalPages, const int bookProgressPercent, const uint8_t currentOrientation, const bool hasFootnotes,
     const bool hasBookmarks, const bool hasWordLookup, const bool verticalEnabled, const bool furiganaEnabled,
     const bool hasPageText, const bool imageReaderMinimal, const bool mangaMode, const bool hideGenericLookup,
-    const bool showPanelsOnlyToggle, const bool panelsOnlyEnabled, const bool scrubOnEnter)
+    const bool showPanelsOnlyToggle, const bool panelsOnlyEnabled, const bool scrubOnEnter, const bool hasClippings)
     : UiListActivity("EpubReaderMenu", renderer, mappedInput),
       scrubOnEnter_(scrubOnEnter),
       menuItems(buildMenuItems(hasFootnotes, hasBookmarks, hasWordLookup, imageReaderMinimal, mangaMode,
-                               hideGenericLookup, showPanelsOnlyToggle)),
+                               hideGenericLookup, showPanelsOnlyToggle, hasClippings)),
       hasPageText(hasPageText),
       title(title),
       pendingOrientation(currentOrientation),
@@ -68,19 +70,20 @@ void EpubReaderMenuActivity::buildMenuRowItems() {
 
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(
     bool hasFootnotes, bool hasBookmarks, bool hasWordLookup, bool imageReaderMinimal, bool mangaMode,
-    bool hideGenericLookup, bool showPanelsOnlyToggle) {
+    bool hideGenericLookup, bool showPanelsOnlyToggle, bool hasClippings) {
   std::vector<MenuItem> items;
   items.reserve(MAX_MENU_ITEMS);
 
   // Minimal menu for the image readers (XTC): a page-based format has no text/footnotes/vertical
   // toggles, so only chapter select (when present), Go-to-page, bookmarks, screenshot and
-  // clear-cache apply. hasFootnotes is repurposed as "has chapters" in this mode.
+  // sync and clear-cache apply. hasFootnotes is repurposed as "has chapters" in this mode.
   if (imageReaderMinimal) {
     if (hasFootnotes) items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
     items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
     items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
     if (hasBookmarks) items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
     items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
+    items.push_back({MenuAction::SYNC, StrId::STR_SYNC_PROGRESS});
     items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
     return items;
   }
@@ -105,13 +108,21 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
   }
   items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
+  items.push_back({MenuAction::SAVE_CLIPPING, StrId::STR_SAVE_CLIPPING});
+  if (hasClippings) {
+    items.push_back({MenuAction::VIEW_CLIPPINGS, StrId::STR_VIEW_CLIPPINGS});
+  }
   items.push_back({MenuAction::NIGHT_MODE, StrId::STR_NIGHT_MODE});
-  if (Frontlight.present()) {
+  if (Frontlight.present() && !slideSwitchOwnsLight()) {
     items.push_back({MenuAction::FRONTLIGHT, StrId::STR_FRONTLIGHT});
   }
+  if (bleturner::status().compiledIn) {
+    items.push_back({MenuAction::BLUETOOTH, StrId::STR_BT_PAGE_TURNER});
+  }
   // Free-form dictionary lookup doesn't apply to manga (Word Lookup covers OCR'd text) or to
-  // unsegmented Japanese text, where Word Lookup is the only lookup that makes sense.
-  if (!mangaMode && !hideGenericLookup) {
+  // unsegmented Japanese text, where Word Lookup is the only lookup that makes sense. Without a
+  // StarDict dictionary configured it has nothing to search.
+  if (!mangaMode && !hideGenericLookup && SETTINGS.dictionaryName[0] != '\0') {
     items.push_back({MenuAction::DICTIONARY, StrId::STR_LOOKUP});
   }
   // Text Settings is not re-added here even though upstream lists it: this fork reaches it
@@ -129,6 +140,15 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   items.push_back({MenuAction::SYNC, StrId::STR_SYNC_PROGRESS});
   items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
   return items;
+}
+
+void EpubReaderMenuActivity::toggleBluetooth() {
+  SETTINGS.ble.enabled = SETTINGS.ble.enabled ? 0 : 1;
+  if (!SETTINGS.ble.enabled) bleturner::switchOff();
+  SETTINGS.saveToFile();
+  // Enabling waits for the main-loop lifecycle's reader heap gates, then says in the status bar
+  // whether a remote linked.
+  if (SETTINGS.ble.enabled) bleturner::requestConnect();
 }
 
 void EpubReaderMenuActivity::closeCancelled() {
@@ -180,6 +200,12 @@ void EpubReaderMenuActivity::activateIndex(const int index) {
   if (selectedAction == MenuAction::NIGHT_MODE) {
     SETTINGS.screenInverted = SETTINGS.screenInverted == 0 ? 1 : 0;
     SETTINGS.saveToFile();
+    requestUpdate();
+    return;
+  }
+
+  if (selectedAction == MenuAction::BLUETOOTH) {
+    toggleBluetooth();
     requestUpdate();
     return;
   }
@@ -270,6 +296,8 @@ void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
     } else if (action == MenuAction::NIGHT_MODE) {
       // A switch row draws its state in the switch, so the value slot stays empty.
       menuRowItems[i].toggleChecked = SETTINGS.screenInverted != 0;
+    } else if (action == MenuAction::BLUETOOTH) {
+      menuRowItems[i].toggleChecked = SETTINGS.ble.enabled != 0;
     } else if (action == MenuAction::FRONTLIGHT) {
       menuRowItems[i].value = I18N.get(Frontlight.isOn() ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
     }
@@ -294,13 +322,9 @@ void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
 }
 
 void EpubReaderMenuActivity::drawChrome() {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-
   // Header via GUI.drawHeader (already FreeInkUI-themed) for the battery
   // indicator; the rest of the screen renders through the app.
-  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                 title.c_str());
+  GUI.drawHeader(renderer, UITheme::getInstance().getHeaderRect(renderer, true, false), title.c_str());
 }
 
 void EpubReaderMenuActivity::render(RenderLock&&) {

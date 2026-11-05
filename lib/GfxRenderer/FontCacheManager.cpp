@@ -81,6 +81,7 @@ void FontCacheManager::releaseRenderMemory() {
 }
 
 void FontCacheManager::releaseAllFontMemory() {
+  if (releaseCb_) releaseCb_(releaseCtx_);
   clearCache();
   // The emergency path also surrenders the persistent advance tables (up to ~6KB per active
   // style per font since the 1536-entry cap): they are pure measurement caches that rebuild
@@ -125,14 +126,17 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
   // funnels through (reader endScanAndPrewarm, the settings preview, UI text),
   // so building here covers them all. accumulate=false means "this is the whole
   // glyph set for this render" → replace; accumulate=true → add incrementally.
-  // styleMask is ignored: a TTF face has no synthesized bold/italic here.
 #if CROSSPOINT_VECTOR_FONTS
   auto tit = ttfFonts_.find(fontId);
   if (tit != ttfFonts_.end() && tit->second) {
-    if (accumulate) {
-      tit->second->addCoverage(utf8Text);
-    } else {
-      tit->second->build(utf8Text);
+    for (uint8_t i = 0; i < 4; ++i) {
+      if (styleMask & (1 << i)) {
+        if (accumulate) {
+          tit->second->addCoverage(utf8Text, i);
+        } else {
+          tit->second->build(utf8Text, i);
+        }
+      }
     }
     return;
   }

@@ -4,8 +4,11 @@
 #include <gtest/gtest.h>
 
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
+#include <functional>
 #include <string>
+#include <vector>
 
 #include "CssParser.h"
 
@@ -35,6 +38,23 @@ class CssParserTest : public ::testing::Test {
 
   std::filesystem::path dir_;
 };
+
+TEST_F(CssParserTest, FontInheritIsKeptThroughTheCascade) {
+  CssParser parser(cachePath());
+  ASSERT_TRUE(loadCss(parser,
+                      "p { font-weight:bold; font-style:italic; }"
+                      ".last { font-weight:bold; font-weight:inherit; font-style:italic; font-style:INHERIT; }"
+                      ".normal { font-weight:inherit; font-weight:normal; font-style:inherit; font-style:normal; }"));
+  const CssStyle last = parser.resolveStyle("p", "last");
+  EXPECT_EQ(last.fontWeight, CssFontWeight::Inherit);
+  EXPECT_EQ(last.fontStyle, CssFontStyle::Inherit);
+  const CssStyle normal = parser.resolveStyle("p", "normal");
+  EXPECT_EQ(normal.fontWeight, CssFontWeight::Normal);
+  EXPECT_EQ(normal.fontStyle, CssFontStyle::Normal);
+  const CssStyle inlineStyle = CssParser::parseInlineStyle("font-weight:bold;font-weight:inherit;font-style:inherit");
+  EXPECT_EQ(inlineStyle.fontWeight, CssFontWeight::Inherit);
+  EXPECT_EQ(inlineStyle.fontStyle, CssFontStyle::Inherit);
+}
 
 TEST_F(CssParserTest, ResolvesTagAndClassRules) {
   CssParser parser(cachePath());
@@ -130,6 +150,125 @@ TEST_F(CssParserTest, IncrementalAppendRoundTripsAndMergesAcrossFlushes) {
   const CssStyle style = reader.resolveStyle("p", "");
   EXPECT_TRUE(style.defined.textAlign);
   EXPECT_TRUE(style.defined.fontWeight);
+}
+
+// Writes the Matcha E-Book shape: a text stylesheet the chapters link, and an image-page one whose
+// `body { text-align: center }` they do not. `copy.css` is an identical copy of `text.css`.
+void writeTwoStylesheetCache(CssParser& writer, const std::function<bool(const std::string&)>& load) {
+  const std::vector<std::string> sources{"OPS/css/text.css", "OPS/css/image.css", "OPS/css/copy.css"};
+  const uint8_t aliases[] = {0, 1, 0};
+  ASSERT_TRUE(writer.beginCacheAppend(&sources, aliases));
+  writer.setSource(0);
+  ASSERT_TRUE(load("p { font-weight: bold; }\n"));
+  ASSERT_TRUE(writer.appendRulesToCache());
+  writer.clear();
+  writer.setSource(1);
+  ASSERT_TRUE(load("body { text-align: center; }\n"));
+  ASSERT_TRUE(writer.appendRulesToCache());
+  writer.clear();
+  ASSERT_TRUE(writer.endCacheAppend(/*discard=*/false));
+}
+
+TEST_F(CssParserTest, ChapterAppliesOnlyTheStylesheetsItLinks) {
+  {
+    CssParser writer(cachePath());
+    writeTwoStylesheetCache(writer, [&](const std::string& css) { return loadCss(writer, css); });
+  }
+  CssParser reader(cachePath());
+  ASSERT_TRUE(reader.validateCache());
+  const auto filter = reader.stylesheetFilterFor({"OPS/css/text.css"});
+  ASSERT_TRUE(reader.loadFromCache(nullptr, &filter));
+  EXPECT_TRUE(reader.resolveStyle("p", "").defined.fontWeight);
+  EXPECT_FALSE(reader.resolveStyle("body", "").defined.textAlign) << "an unlinked stylesheet leaked into the chapter";
+
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  reader.collectVerticalStyles(vertical, 256, &filter);
+  EXPECT_TRUE(vertical.empty()) << "the vertical engine centred a chapter from an unlinked stylesheet";
+}
+
+TEST_F(CssParserTest, LinkingAnIdenticalCopyAppliesTheOriginalsRules) {
+  {
+    CssParser writer(cachePath());
+    writeTwoStylesheetCache(writer, [&](const std::string& css) { return loadCss(writer, css); });
+  }
+  CssParser reader(cachePath());
+  const auto filter = reader.stylesheetFilterFor({"OPS/css/copy.css"});
+  ASSERT_TRUE(reader.loadFromCache(nullptr, &filter));
+  EXPECT_TRUE(reader.resolveStyle("p", "").defined.fontWeight);
+  EXPECT_FALSE(reader.resolveStyle("body", "").defined.textAlign);
+}
+
+// The EBPAJ shape: chapters link only book-style.css, whose rules are all @imported -- one level
+// through a "../" path, the next from inside the imported sheet.
+TEST_F(CssParserTest, LinkedStylesheetBringsInWhatItImports) {
+  {
+    CssParser writer(cachePath());
+    const std::vector<std::string> sources{"item/style/book-style.css", "item/style/style-standard.css",
+                                           "item/style/style-advance.css", "item/style/image.css"};
+    const uint8_t aliases[] = {0, 1, 2, 3};
+    ASSERT_TRUE(writer.beginCacheAppend(&sources, aliases));
+    const char* sheets[] = {
+        "@charset \"UTF-8\";\n@import url(\"../style/style-standard.css\");\n",
+        "@import \"style-advance.css\";\n.k-solid { border-style: solid solid solid solid; }\n",
+        ".start-1em { margin-top: 1em; }\n",
+        "body { text-align: center; }\n",
+    };
+    for (size_t i = 0; i < 4; ++i) {
+      writer.setSource(i);
+      ASSERT_TRUE(loadCss(writer, sheets[i]));
+      ASSERT_TRUE(writer.appendRulesToCache());
+      writer.clear();
+    }
+    ASSERT_TRUE(writer.endCacheAppend(/*discard=*/false));
+  }
+  CssParser reader(cachePath());
+  ASSERT_TRUE(reader.validateCache());
+  const auto filter = reader.stylesheetFilterFor({"item/style/book-style.css"});
+  ASSERT_TRUE(reader.loadFromCache(nullptr, &filter));
+  EXPECT_TRUE(reader.resolveStyle("div", "k-solid").hasBorder()) << "an @imported stylesheet was filtered out";
+  EXPECT_TRUE(reader.resolveStyle("div", "start-1em").defined.marginTop) << "a nested @import was not followed";
+  EXPECT_FALSE(reader.resolveStyle("body", "").defined.textAlign) << "an unlinked stylesheet leaked into the chapter";
+
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  reader.collectVerticalStyles(vertical, 256, &filter);
+  EXPECT_EQ(vertical.size(), 2u) << "the vertical engine must see the imported box and indent rules";
+}
+
+TEST_F(CssParserTest, ImportPathIsPercentDecoded) {
+  {
+    CssParser writer(cachePath());
+    const std::vector<std::string> sources{"OPS/book.css", "OPS/my sheet.css"};
+    const uint8_t aliases[] = {0, 1};
+    ASSERT_TRUE(writer.beginCacheAppend(&sources, aliases));
+    writer.setSource(0);
+    ASSERT_TRUE(loadCss(writer, "@import \"my%20sheet.css\";\n"));
+    ASSERT_TRUE(writer.appendRulesToCache());
+    writer.clear();
+    writer.setSource(1);
+    ASSERT_TRUE(loadCss(writer, "p { font-weight: bold; }\n"));
+    ASSERT_TRUE(writer.appendRulesToCache());
+    writer.clear();
+    ASSERT_TRUE(writer.endCacheAppend(/*discard=*/false));
+  }
+  CssParser reader(cachePath());
+  const auto filter = reader.stylesheetFilterFor({"OPS/book.css"});
+  ASSERT_TRUE(reader.loadFromCache(nullptr, &filter));
+  EXPECT_TRUE(reader.resolveStyle("p", "").defined.fontWeight);
+}
+
+TEST_F(CssParserTest, ChapterWithNoKnownLinkKeepsEveryStylesheet) {
+  {
+    CssParser writer(cachePath());
+    writeTwoStylesheetCache(writer, [&](const std::string& css) { return loadCss(writer, css); });
+  }
+  CssParser reader(cachePath());
+  for (const std::vector<std::string>& links :
+       {std::vector<std::string>{}, std::vector<std::string>{"OPS/css/missing.css"}}) {
+    const auto filter = reader.stylesheetFilterFor(links);
+    ASSERT_TRUE(reader.loadFromCache(nullptr, &filter));
+    EXPECT_TRUE(reader.resolveStyle("p", "").defined.fontWeight);
+    EXPECT_TRUE(reader.resolveStyle("body", "").defined.textAlign);
+  }
 }
 
 // The reason the append writes to a temp file at all.
@@ -354,4 +493,110 @@ TEST_F(CssParserTest, ScopedFirstLetterRuleDoesNotLeakIntoTheElementCascade) {
   EXPECT_FLOAT_EQ(size.value, 300.0f);
 }
 
+TEST_F(CssParserTest, PreservedWhitespaceSurvivesCacheAndNormalOverridesIt) {
+  {
+    CssParser writer(cachePath());
+    ASSERT_TRUE(loadCss(writer,
+                        ".code { white-space: pre-wrap; }\n.plain { white-space: normal; }\n"
+                        ".wrap { white-space: break-spaces; }\n.odd { white-space: inherit; }\n"));
+    ASSERT_TRUE(writer.saveToCache());
+  }
+  CssParser reader(cachePath());
+  ASSERT_TRUE(reader.loadFromCache());
+  const CssStyle code = reader.resolveStyle("div", "code");
+  EXPECT_TRUE(code.hasWhiteSpace());
+  EXPECT_TRUE(code.preserveWhitespace());
+  EXPECT_TRUE(reader.resolveStyle("div", "wrap").preserveWhitespace());
+  const CssStyle plain = reader.resolveStyle("div", "plain");
+  EXPECT_TRUE(plain.hasWhiteSpace());
+  EXPECT_FALSE(plain.preserveWhitespace());
+  // An unsupported value leaves the property unset, so an inherited value keeps applying.
+  EXPECT_FALSE(reader.resolveStyle("div", "odd").hasWhiteSpace());
+}
+
+TEST_F(CssParserTest, EqualSpecificityUsesSourceOrderAndSurvivesCache) {
+  {
+    CssParser writer(cachePath());
+    ASSERT_TRUE(loadCss(writer,
+                        ".zeta { text-align: right; }\n.alpha { text-align: center; }\n"
+                        ".late { font-weight: bold; }\n.early { font-weight: normal; }\n"));
+    // Later rule wins the tie, whatever the selectors' alphabetical order.
+    EXPECT_EQ(writer.resolveStyle("p", "alpha zeta").textAlign, CssTextAlign::Center);
+    EXPECT_EQ(writer.resolveStyle("p", "late early").fontWeight, CssFontWeight::Normal);
+    ASSERT_TRUE(writer.saveToCache());
+  }
+  CssParser reader(cachePath());
+  ASSERT_TRUE(reader.loadFromCache());
+  EXPECT_EQ(reader.resolveStyle("p", "alpha zeta").textAlign, CssTextAlign::Center);
+  EXPECT_EQ(reader.resolveStyle("p", "zeta alpha").textAlign, CssTextAlign::Center);
+  EXPECT_EQ(reader.resolveStyle("p", "late early").fontWeight, CssFontWeight::Normal);
+}
+
+TEST_F(CssParserTest, HigherSpecificityStillBeatsLaterSource) {
+  CssParser parser(cachePath());
+  ASSERT_TRUE(loadCss(parser, "p.note { text-align: right; }\n.note { text-align: center; }\n"));
+  EXPECT_EQ(parser.resolveStyle("p", "note").textAlign, CssTextAlign::Right);
+}
+
+TEST_F(CssParserTest, LightBackgroundIsShadedAndSurvivesCache) {
+  {
+    CssParser writer(cachePath());
+    ASSERT_TRUE(loadCss(writer,
+                        ".note { background-color: #ddd; }\n.page { background-color: #fff; }\n"
+                        ".dark { color: #fff; background-color: #333; }\n"));
+    EXPECT_EQ(writer.resolveStyle("div", "note").inkMode, CssInkMode::Shaded);
+    EXPECT_EQ(writer.resolveStyle("div", "page").inkMode, CssInkMode::Normal);
+    EXPECT_EQ(writer.resolveStyle("div", "dark").inkMode, CssInkMode::Inverted);
+    ASSERT_TRUE(writer.saveToCache());
+  }
+  CssParser reader(cachePath());
+  ASSERT_TRUE(reader.loadFromCache());
+  EXPECT_EQ(reader.resolveStyle("div", "note").inkMode, CssInkMode::Shaded);
+}
+
+TEST_F(CssParserTest, InitialLetterSizesTheInitialUnlessFontSizeIsSet) {
+  CssParser parser(cachePath());
+  ASSERT_TRUE(loadCss(parser,
+                      ".dc { initial-letter: 3; }\n.both { initial-letter: 3; font-size: 2em; }\n"
+                      ".one { initial-letter: 1; }\n"));
+  const CssStyle dc = parser.resolveStyle("span", "dc");
+  ASSERT_TRUE(dc.hasFontSize());
+  EXPECT_FLOAT_EQ(dc.fontSize.value, 3.0f);
+  EXPECT_EQ(dc.fontSize.unit, CssUnit::Em);
+  EXPECT_FLOAT_EQ(parser.resolveStyle("span", "both").fontSize.value, 2.0f);
+  EXPECT_FALSE(parser.resolveStyle("span", "one").hasFontSize());
+}
+
 }  // namespace
+
+TEST_F(CssParserTest, AutoMarginsAndEndAlignReachTheVerticalEngine) {
+  {
+    CssParser writer(cachePath());
+    ASSERT_TRUE(loadCss(writer,
+                        ".vrtl .block-align-center { margin: auto 0; }\n"
+                        ".vrtl .block-align-end { margin: auto 0 0 0; }\n"
+                        ".align-end { text-align: right; }\n"
+                        ".wrapper { margin: auto; }\n"));
+    ASSERT_TRUE(writer.saveToCache());
+  }
+  CssParser reader(cachePath());
+  ASSERT_TRUE(reader.loadFromCache());
+  // A horizontal layout still reads an auto margin as 0.
+  const CssStyle centered = reader.resolveStyle("div", "block-align-center");
+  EXPECT_FLOAT_EQ(centered.marginTop.toPixels(16.0f), 0.0f);
+
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  reader.collectVerticalStyles(vertical);
+  const auto styleOf = [&](const char* cls) {
+    const uint32_t hash = CssParser::blockSelectorHash(cls, strlen(cls));
+    for (const auto& rule : vertical) {
+      if (rule.classHash == hash) return rule.style;
+    }
+    return CssParser::VerticalBlockStyle{};
+  };
+  EXPECT_EQ(styleOf("block-align-center").blockAlign, CssParser::VERTICAL_BLOCK_CENTER);
+  EXPECT_EQ(styleOf("block-align-end").blockAlign, CssParser::VERTICAL_BLOCK_END);
+  EXPECT_TRUE(styleOf("align-end").alignEnd);
+  EXPECT_FALSE(styleOf("align-end").alignCenter);
+  EXPECT_EQ(styleOf("wrapper").blockAlign, 0) << "a plain auto margin centres a wrapper horizontally, not a block";
+}

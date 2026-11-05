@@ -12,8 +12,12 @@
 // backstop (a 0x0 viewport lays out nothing), not an invitation to omit it.
 struct ReaderRenderSpec {
   int fontId = 0;
-  float lineCompression = 1.0f;
+  float lineCompression = 1.0f;  // Multiplier of font size in pixels, independent of advanceY.
+  // The vertical column-gap step (0 tight .. 2 wide), derived from the Line Spacing setting. Vertical text sets its
+  // column gap in quarter ems from this step; lineCompression above is the same setting as horizontal reads it.
+  uint8_t lineSpacingLevel = 1;
   bool extraParagraphSpacing = false;
+  uint8_t paragraphIndentSpaces = 2;
   int8_t characterSpacing = 0;
   uint8_t wordSpacingPercent = 100;
   uint8_t paragraphAlignment = 0;
@@ -36,4 +40,36 @@ struct ReaderRenderSpec {
   // taking it from the store. Layout and drawing must agree on it: TextBlock::render shifts
   // words down by exactly the reserve this adds.
   bool furiganaEnabled = true;
+  // Matcha, vertical text: the margin right of the text area, bezel inset included. The first
+  // column's ruby is drawn there, and where it is narrower than the ruby the layout holds back
+  // the difference. Set by the reader like fontId; 0 (the default) reserves the full ruby width.
+  uint16_t rightMarginPx = 0;
+
+  bool operator==(const ReaderRenderSpec&) const = default;
 };
+
+// Stable signature for clipping anchors. Page-local word ordinals are valid
+// only for the exact layout that produced them.
+inline uint32_t readerRenderSpecSignature(const ReaderRenderSpec& spec) {
+  uint32_t signature = 2166136261U;
+  const auto mix = [&signature](const uint32_t value) {
+    signature ^= value;
+    signature *= 16777619U;
+  };
+  // Bump when the same spec values lay out differently, so old clipping word ranges stop matching.
+  constexpr uint32_t LAYOUT_SIGNATURE_VERSION = 1;
+  mix(LAYOUT_SIGNATURE_VERSION);
+  mix(static_cast<uint32_t>(spec.fontId));
+  mix(static_cast<uint32_t>(spec.lineCompression * 1000.0f));
+  mix(spec.extraParagraphSpacing);
+  mix(static_cast<uint8_t>(spec.characterSpacing));
+  mix(spec.wordSpacingPercent);
+  mix(spec.paragraphAlignment);
+  mix(spec.viewportWidth);
+  mix(spec.viewportHeight);
+  mix(spec.hyphenationEnabled);
+  mix(spec.embeddedStyle);
+  mix(spec.imageRendering);
+  mix(spec.focusReadingEnabled);
+  return signature == 0 ? 1 : signature;
+}

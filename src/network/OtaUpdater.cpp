@@ -6,9 +6,9 @@
 // the local header last and break the build.
 #include "HttpDownloader.h"
 #include <Logging.h>
+#include <Memory.h>
 #include <ReleaseJsonParser.h>
 #include <esp_ota_ops.h>
-#include <esp_wifi.h>
 // clang-format on
 
 #include <algorithm>
@@ -33,7 +33,13 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   // on top of the TLS session's heap during the fetch; with -fno-exceptions an
   // OOM there aborts. fetchUrl handles the verified-https GET, redirects, and
   // User-Agent (see HttpDownloader).
-  ReleaseJsonParser releaseParser;
+  // Heap-allocated: the parser embeds a 2 KB JSON token buffer.
+  auto releaseParserPtr = makeUniqueNoThrow<ReleaseJsonParser>();
+  if (!releaseParserPtr) {
+    LOG_ERR("OTA", "OOM: release parser");
+    return OOM_ERROR;
+  }
+  ReleaseJsonParser& releaseParser = *releaseParserPtr;
   // Each board updates from <board>-firmware.bin, the naming this fork's releases use.
   // The combined X3/X4 C3 image is published as x4old-x3, the one asset whose name does
   // not match its board tag. The name carries no version, so it is known before the fetch
@@ -112,9 +118,9 @@ bool OtaUpdater::isUpdateNewer() const {
   if (latestPatch != currentPatch) return latestPatch > currentPatch;
 
   // If we reach here, it means all segments are equal.
-  // One final check, if we're on an RC build (contains "-rc"), we should consider the latest version as newer even if
-  // the segments are equal, since RC builds are pre-release versions.
-  if (strstr(currentVersion, "-rc") != nullptr) {
+  // One final check: on a pre-release build (a release candidate or a nightly) the released version with the same
+  // three segments is newer, so 1.7.0-nightly-1 and 1.7.0-rc-2 are both offered 1.7.0.
+  if (strstr(currentVersion, "-rc") != nullptr || strstr(currentVersion, "-nightly") != nullptr) {
     return true;
   }
 
@@ -145,9 +151,6 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     LOG_ERR("OTA", "esp_ota_begin failed: %s", esp_err_to_name(esp_err));
     return INTERNAL_UPDATE_ERROR;
   }
-
-  /* For better timing and connectivity, we disable power saving for WiFi */
-  esp_wifi_set_ps(WIFI_PS_NONE);
 
   processedSize = 0;
   int lastReportedPct = -1;
@@ -203,9 +206,6 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     }
     return true;
   });
-
-  /* Return back to default power saving for WiFi in case of failing */
-  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 
   if (wrongChip || tagScanner.mismatch()) {
     LOG_ERR("OTA", "Firmware install aborted: wrong device");

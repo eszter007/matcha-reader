@@ -8,6 +8,7 @@
 #include <Logging.h>
 #include <Memory.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -19,10 +20,12 @@
 
 namespace {
 
-// See RenderConfig::lightenBy -- saturating lift applied before the Bayer screen.
-inline uint8_t lightenGray(const uint8_t gray, const uint8_t lightenBy) {
-  if (lightenBy == 0) return gray;
-  const int lifted = gray + lightenBy;
+// Tone adjustments applied before the Bayer screen; see RenderConfig::lightenBy and
+// RenderConfig::whitenPaper.
+inline uint8_t toneGray(uint8_t gray, const RenderConfig& config) {
+  if (config.whitenPaper) gray = whitenPaper(gray);
+  if (config.lightenBy == 0) return gray;
+  const int lifted = gray + config.lightenBy;
   return lifted > 255 ? 255 : static_cast<uint8_t>(lifted);
 }
 
@@ -35,9 +38,11 @@ struct JpegContext {
   int screenWidth{0};
   int screenHeight{0};
 
-  // Source dimensions after JPEGDEC's built-in scaling
+  // Visible source dimensions after JPEGDEC's built-in scaling
   int scaledSrcWidth{0};
   int scaledSrcHeight{0};
+  int cropLeft{0};
+  int cropTop{0};
 
   // Final output dimensions
   int dstWidth{0};
@@ -234,8 +239,8 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   GfxRenderer& renderer = *ctx->renderer;
   const int cfgX = ctx->config->x;
   const int cfgY = ctx->config->y;
-  const int blockX = pDraw->x;
-  const int blockY = pDraw->y;
+  const int blockX = pDraw->x - ctx->cropLeft;
+  const int blockY = pDraw->y - ctx->cropTop;
 
   // Determine destination pixel range covered by this source block
   const int srcYEnd = blockY + blockH;
@@ -294,7 +299,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
         uint8_t gray = row[dstX - blockX];
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
+          dithered = applyBayerDither4Level(toneGray(gray, *ctx->config), outX, outY);
         } else {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
@@ -353,7 +358,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
+          dithered = applyBayerDither4Level(toneGray(gray, *ctx->config), outX, outY);
         } else {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
@@ -376,7 +381,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
+          dithered = applyBayerDither4Level(toneGray(gray, *ctx->config), outX, outY);
         } else {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
@@ -402,7 +407,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
+          dithered = applyBayerDither4Level(toneGray(gray, *ctx->config), outX, outY);
         } else {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
@@ -435,7 +440,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
       uint8_t dithered;
       if (useDithering) {
-        dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
+        dithered = applyBayerDither4Level(toneGray(gray, *ctx->config), outX, outY);
       } else {
         dithered = gray / 85;
         if (dithered > 3) dithered = 3;
@@ -480,6 +485,13 @@ bool JpegToFramebufferConverter::getDimensionsStatic(const std::string& imagePat
 
 bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath, GfxRenderer& renderer,
                                                      const RenderConfig& config) {
+  bool cacheWritten;
+  return decodeToFramebuffer(imagePath, renderer, config, cacheWritten);
+}
+
+bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath, GfxRenderer& renderer,
+                                                     const RenderConfig& config, bool& cacheWritten) {
+  cacheWritten = false;
   LOG_DBG("JPG", "Decoding JPEG: %s", imagePath.c_str());
 
   size_t freeHeap = ESP.getFreeHeap();
@@ -522,6 +534,10 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   if (!validateAndStoreDimensions(jpeg->getWidth(), jpeg->getHeight(), sourceDimensions, "JPEG")) return false;
   const int srcWidth = sourceDimensions.width;
   const int srcHeight = sourceDimensions.height;
+  const float cropX = std::clamp(config.sourceCropX, 0.0f, 0.99f);
+  const float cropY = std::clamp(config.sourceCropY, 0.0f, 0.99f);
+  const int visibleWidth = srcWidth - 2 * static_cast<int>(srcWidth * cropX / 2);
+  const int visibleHeight = srcHeight - 2 * static_cast<int>(srcHeight * cropY / 2);
 
   bool isProgressive = jpeg->getJPEGType() == JPEG_MODE_PROGRESSIVE;
   if (isProgressive) {
@@ -535,24 +551,26 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   if (config.useExactDimensions && config.maxWidth > 0 && config.maxHeight > 0) {
     destWidth = config.maxWidth;
     destHeight = config.maxHeight;
-    targetScale = (float)destWidth / srcWidth;
+    targetScale = (float)destWidth / visibleWidth;
   } else if (config.fillCrop && config.maxWidth > 0 && config.maxHeight > 0) {
     // Aspect-fill: scale by whichever axis needs LESS shrinkage (may upscale),
     // so the box is fully covered and the other axis overflows for cropping.
-    float scaleX = (float)config.maxWidth / srcWidth;
-    float scaleY = (float)config.maxHeight / srcHeight;
+    float scaleX = (float)config.maxWidth / visibleWidth;
+    float scaleY = (float)config.maxHeight / visibleHeight;
     targetScale = (scaleX > scaleY) ? scaleX : scaleY;
 
-    destWidth = (int)(srcWidth * targetScale + 0.5f);
-    destHeight = (int)(srcHeight * targetScale + 0.5f);
+    destWidth = (int)(visibleWidth * targetScale + 0.5f);
+    destHeight = (int)(visibleHeight * targetScale + 0.5f);
   } else {
-    float scaleX = (config.maxWidth > 0 && srcWidth > config.maxWidth) ? (float)config.maxWidth / srcWidth : 1.0f;
-    float scaleY = (config.maxHeight > 0 && srcHeight > config.maxHeight) ? (float)config.maxHeight / srcHeight : 1.0f;
+    float scaleX =
+        (config.maxWidth > 0 && visibleWidth > config.maxWidth) ? (float)config.maxWidth / visibleWidth : 1.0f;
+    float scaleY =
+        (config.maxHeight > 0 && visibleHeight > config.maxHeight) ? (float)config.maxHeight / visibleHeight : 1.0f;
     targetScale = (scaleX < scaleY) ? scaleX : scaleY;
     if (targetScale > 1.0f) targetScale = 1.0f;
 
-    destWidth = (int)(srcWidth * targetScale);
-    destHeight = (int)(srcHeight * targetScale);
+    destWidth = (int)(visibleWidth * targetScale);
+    destHeight = (int)(visibleHeight * targetScale);
   }
 
   // Choose JPEGDEC built-in scaling for coarse downscaling.
@@ -576,6 +594,10 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
 
   ctx.scaledSrcWidth = (srcWidth + jpegScaleDenom - 1) / jpegScaleDenom;
   ctx.scaledSrcHeight = (srcHeight + jpegScaleDenom - 1) / jpegScaleDenom;
+  ctx.cropLeft = static_cast<int>(ctx.scaledSrcWidth * cropX / 2);
+  ctx.cropTop = static_cast<int>(ctx.scaledSrcHeight * cropY / 2);
+  ctx.scaledSrcWidth -= 2 * ctx.cropLeft;
+  ctx.scaledSrcHeight -= 2 * ctx.cropTop;
   ctx.dstWidth = destWidth;
   ctx.dstHeight = destHeight;
   if (ctx.cacheOnly) {
@@ -640,7 +662,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   // Finalize the streamed cache file. Note: a flush failure mid-decode clears
   // ctx.caching (the partial file is dropped), so re-read the flag here.
   if (ctx.caching) {
-    ctx.cache.finalize();
+    cacheWritten = ctx.cache.finalize();
   }
 
   return true;

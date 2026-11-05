@@ -1,0 +1,11 @@
+# Tabler outline icons (https://github.com/tabler/tabler-icons, icons/outline/*.svg), balanced to one
+# optical size and stroke by scripts/balance_clip_icons.py (needs Pillow and resvg-py; gen_icons.py
+# needs rsvg-convert). Regenerate from the repository root:
+#   python3 scripts/balance_clip_icons.py <tabler>/icons/outline src/components/icons
+#   python3 freeink-sdk/libs/assets/Icons/tools/gen_icons.py \
+#     --manifest src/components/icons/clipActionIcons.manifest \
+#     --svgdir src/components/icons --sizes 32 --out src/components/icons/clipActionIcons.h
+clip-lookup = search-clip
+clip-translate = language-clip
+clip-clip = quote-clip
+clip-bookmark = bookmark-clip

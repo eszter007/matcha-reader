@@ -8,9 +8,11 @@
 #include <Epub/converters/PixelCache.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalMemory.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
+#include <ResidentFiles.h>
 
 #include <algorithm>
 #include <climits>
@@ -24,6 +26,9 @@
 #include "CrossPointState.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderTranslationActivity.h"
+#include "HapticFeedback.h"
+#include "KOReaderCredentialStore.h"
+#include "KOReaderSyncActivity.h"
 #include "MangaBookmarksActivity.h"
 #include "MangaChapterSelectionActivity.h"
 #include "MangaWordLookupActivity.h"
@@ -35,12 +40,17 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "WordSelectionScan.h"
-#include "activities/settings/SettingsActivity.h"
+#include "activities/settings/ReaderSettingsActivity.h"
+#include "components/SyncedPositionPrompt.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookProgress.h"
 #include "util/BookmarkFile.h"
 #include "util/BookmarkUtil.h"
+#include "util/CjkScript.h"
+#include "util/RemoteProgress.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SyncedPosition.h"
 
 namespace {
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
@@ -66,6 +76,15 @@ constexpr uint32_t PREFETCH_HEAP_FLOOR = 60000;
 constexpr uint32_t PREFETCH_TASK_STACK = 8192;
 }  // namespace
 
+namespace {
+// Script of the comic, for the companion font and dictionary folder. Folders converted before
+// convert_manga.py recorded a language, or from a source without one, are Japanese manga.
+CjkScript mangaScript(const manga::MangaBook* book) {
+  const CjkScript script = book ? cjk::scriptForLanguage(book->getLanguage()) : CjkScript::None;
+  return script == CjkScript::None ? CjkScript::Japanese : script;
+}
+}  // namespace
+
 void MangaReaderActivity::onEnter() {
   Activity::onEnter();
 
@@ -79,7 +98,7 @@ void MangaReaderActivity::onEnter() {
     {
       RenderLock lock;
       sdFontSystem.releaseAllResidentFonts(renderer);
-      sdFontSystem.setJpFallbackNeeded(renderer, false);
+      sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
     }
     book = makeUniqueNoThrow<manga::MangaBook>(std::move(pendingBookPath));
     if (!book) {
@@ -101,6 +120,10 @@ void MangaReaderActivity::onEnter() {
       finish();
       return;
     }
+    // The converted dictionary lives in a per-language folder; pick the comic's before the first
+    // DictIndex::isAvailable() decides whether Word Lookup is offered.
+    DictIndex::setLanguageFolder(
+        DictIndex::installedFolderFor(cjk::dictFolderFor(book->getLanguage(), mangaScript(book.get()))));
   }
 
   // Which layout this book's panel crops use. Newer conversions put them in a subfolder so the
@@ -125,6 +148,11 @@ void MangaReaderActivity::onEnter() {
   // that is single-threaded by construction (no render has been requested yet). See the header.
   baseScreenW = renderer.getScreenWidth();
   baseScreenH = renderer.getScreenHeight();
+  // The first render streams page and panel .2bp caches into this folder, before anything else
+  // has created it.
+  Storage.mkdir(book->getCachePath().c_str());
+  // Smart sync moves to another device's position without asking, before the saved one is read.
+  if (KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART) writeSyncedPosition();
   loadProgress();
   loadCachedBookmarks();
   updateBookmarkFlag();
@@ -147,6 +175,7 @@ void MangaReaderActivity::onEnter() {
   // full-size page into the card instead of blitting the cached one.
   RECENT_BOOKS.addBook(book->getFolder(), book->getTitle(), bookAuthor, book->getThumbBmpPath());
   BookStats::recordOpen(book->getFolder().c_str());
+  enterPercent = mangaProgressPercent(book->getFolder());
 
   readingSessionStartMs = millis();
 
@@ -198,12 +227,15 @@ void MangaReaderActivity::onExit() {
   // got marked finished even at 100% progress, unlike Epub/Txt readers.
   const bool atLastPage = book && book->getPageCount() > 0 && currentPage >= book->getPageCount() - 1;
   if (atLastPage) {
-    READING_STATS_STORE.loadFromFile();
-    READING_STATS_STORE.markBookFinished(book->getFolder());
-    READING_STATS_STORE.saveToFile();
+    ReadingStatsStore::Change update;
+    update.finishedPath = book->getFolder().c_str();
+    READING_STATS_STORE.record(update);
   }
 
+  dropLookupPrescan();
   saveProgress();
+  if (book) remoteProgress::readHere(book->getFolder(), enterPercent, mangaProgressPercent(book->getFolder()));
+  flushReaderSession();
   endOfBookOptionsReady.store(false, std::memory_order_release);
   endOfBookOptions.reset();
   panels.clear();
@@ -220,7 +252,7 @@ void MangaReaderActivity::onExit() {
   // released it only from RAM; ensureLoaded() restores the unchanged saved selection here.
   {
     RenderLock lock;
-    sdFontSystem.setJpFallbackNeeded(renderer, false);
+    sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
     sdFontSystem.ensureLoaded(renderer);
   }
 
@@ -449,6 +481,16 @@ void MangaReaderActivity::clearEndOfBookOptionsIfNeeded() {
   endOfBookOptions.reset();
 }
 
+void MangaReaderActivity::jumpToPercent(const int percent) {
+  if (!book || book->getPageCount() == 0) return;
+  currentPage =
+      std::min<uint32_t>(static_cast<uint32_t>(percent) * book->getPageCount() / 100, book->getPageCount() - 1);
+  currentPanel = -1;
+  viewMode = ViewMode::FullPage;
+  loadCurrentPagePanels();
+  requestUpdate();
+}
+
 void MangaReaderActivity::onReturnFromEndOfBook() {
   currentPage = book && book->getPageCount() > 0 ? book->getPageCount() - 1 : 0;
   currentPanel = -1;
@@ -505,13 +547,20 @@ bool MangaReaderActivity::renderEndOfBook() {
   }
   renderer.clearScreen();
   if (endOfBookOptions) {
-    endOfBookOptions->loadOnce(book->getFolder(), book->getTitle(), book->getLanguage().c_str());
+    // The stamp counts the read up to this screen, so its last minutes go in first.
+    if (!endOfBookOptions->menuActive()) {
+      ReaderUtils::flushReadingStats(readingSessionStartMs, true, book->getFolder().c_str(),
+                                     book->getLanguage().c_str(), true);
+    }
+    endOfBookOptions->loadOnce(book->getFolder(), book->getTitle(), book->getLanguage().c_str(), "");
     endOfBookOptions->render(renderer, mappedInput);
   } else {
     renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() * 3 / 8, tr(STR_END_OF_BOOK), true,
                               EpdFontFamily::BOLD);
   }
   renderer.displayBuffer();
+  // Credits the last page's dwell and brings the session's progress to the end of the book.
+  sessionReporter_.pageRendered(progressBasisPoints());
   return true;
 }
 
@@ -527,21 +576,32 @@ void MangaReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOptio
 
 void MangaReaderActivity::loop() {
   // Crash-proof stats: flush whole minutes every few minutes so an exit path that
-  // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
-  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/false, book ? book->getFolder().c_str() : nullptr,
-                                 book ? book->getLanguage().c_str() : nullptr);
+  // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day. The end-of-book
+  // screen is not reading: what came before it is recorded, its own time is not.
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/isAtEndOfBook(),
+                                 book ? book->getFolder().c_str() : nullptr,
+                                 book ? book->getLanguage().c_str() : nullptr, /*pause=*/isAtEndOfBook());
 
   // Publish any finished prefetch-worker result (panelDims slot + done flags) under the loop
   // task's normal locking rules. Runs before everything else so a completed warm is visible to
   // this very tick's input handling, and so the single job slot frees up for the next post.
   applyPrefetchResult();
 
+  if (!syncedPositionOffered && book && !isAtEndOfBook()) {
+    syncedPositionOffered = true;
+    if (SyncedPositionPrompt::offer(*this, renderer, mappedInput, book->getFolder(), syncedPositionPercent(), [this] {
+          if (writeSyncedPosition()) activityManager.goToReader(book->getFolder());  // reopens there
+        })) {
+      return;
+    }
+  }
+
   if (translationPageReady.exchange(false, std::memory_order_acquire)) {
     translationAfterRender.store(false, std::memory_order_relaxed);
-    startActivityForResult(
-        std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(pendingTranslationSource),
-                                                        std::move(pendingTranslation)),
-        [this](const ActivityResult&) { requestUpdate(); });
+    auto translation = std::make_unique<EpubReaderTranslationActivity>(
+        renderer, mappedInput, std::move(pendingTranslationSource), std::move(pendingTranslation));
+    translation->setPageTurnReversed(SETTINGS.reversePageTurn != 0);
+    startActivityForResult(std::move(translation), [this](const ActivityResult&) { requestUpdate(); });
     return;
   }
 
@@ -589,7 +649,7 @@ void MangaReaderActivity::loop() {
         mappedInput.wasScreenLongPress(holdX, holdY) && !holdTarget(holdX, holdY, holdText, holdGlyph)) {
       holdGlyph = -1;
     }
-    touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+    touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput, false, SETTINGS.reversePageTurn != 0);
     touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
     if (rotateTouch) {
       renderer.setOrientation(baseOrientation);
@@ -597,6 +657,7 @@ void MangaReaderActivity::loop() {
   }
 
   if (holdGlyph >= 0) {
+    haptic_feedback::touchAction(/*longPress=*/true);
     launchWordLookupAt(std::move(holdText), holdGlyph);
     return;
   }
@@ -640,30 +701,14 @@ void MangaReaderActivity::loop() {
     return;
   }
 
-  if (viewMode == ViewMode::TextOverlay) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      viewMode = ViewMode::PanelZoom;
-      requestUpdate();
-      return;
-    }
-    // A tap anywhere on the overlay looks the word up, matching Confirm: the overlay is a
-    // full-screen text panel, so there is no page-turn zone here to keep clear.
-    int overlayTapX = 0;
-    int overlayTapY = 0;
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-        (mappedInput.hasTouch() && mappedInput.wasScreenTapped(overlayTapX, overlayTapY))) {
-      launchWordLookup();
-      return;
-    }
-    return;
-  }
-
   if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
     activityManager.goToFileBrowser(book ? book->getFolder() : "");
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) &&
+  // The reading surface ignores the left-edge Back swipe, as ReaderUtils::handleBackNavigation
+  // does for the other readers: in swipe mode it turns the page.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && !mappedInput.wasBackGesture() &&
       mappedInput.getHeldTime() < ReaderUtils::GO_HOME_MS) {
     if (viewMode == ViewMode::PanelZoom) {
       if (currentPageHasImage && !panelsOnlyMode) {
@@ -679,10 +724,15 @@ void MangaReaderActivity::loop() {
     return;
   }
 
+  if (!ignoreNextConfirmRelease && ReaderUtils::confirmHoldStartsSync(mappedInput)) {
+    onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SYNC);
+    return;
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || touchMenu) {
     if (ignoreNextConfirmRelease) {
       ignoreNextConfirmRelease = false;
     } else if (viewMode == ViewMode::PanelZoom || viewMode == ViewMode::FullPage) {
+      if (touchMenu) haptic_feedback::touchAction();
       launchMenu();
       return;
     }
@@ -728,10 +778,17 @@ void MangaReaderActivity::loop() {
         prefetchPanelCache(currentPanel + 1);
       }
     }
+    stepLookupPrescan();
     return;
   }
 
   if (handleEndOfBookPageTurn(prevTriggered, nextTriggered)) return;
+
+  // What the turn below may change, to tell a turn that happened from one that was refused
+  // (Previous on the first page).
+  const uint32_t pageBefore = currentPage;
+  const int panelBefore = currentPanel;
+  const ViewMode modeBefore = viewMode;
 
   if (viewMode == ViewMode::PanelZoom) {
     if (nextTriggered) nextPanel();
@@ -758,6 +815,26 @@ void MangaReaderActivity::loop() {
     }
     if (prevTriggered) prevPage();
   }
+
+  const bool moved = currentPage != pageBefore || currentPanel != panelBefore || viewMode != modeBefore;
+  // A panel step is reading, the same as a page turn.
+  sessionReporter_.noteTurn(nextTriggered && !prevTriggered, moved);
+  if (moved && (touch.prev || touch.next)) haptic_feedback::touchAction();
+}
+
+void MangaReaderActivity::prepareForSleep() { flushReaderSession(); }
+
+// A manga book is a folder, so its document id comes from the panel index inside it: one file
+// per book, written once at conversion.
+void MangaReaderActivity::flushReaderSession() {
+  if (!book) return;
+  sessionReporter_.flush(book->getFolder(), book->getFolder() + "/panels.idx");
+}
+
+int MangaReaderActivity::progressBasisPoints() const {
+  if (!book || book->getPageCount() == 0) return 0;
+  if (currentPage >= book->getPageCount()) return 10000;
+  return static_cast<int>(static_cast<uint64_t>(currentPage) * 10000 / book->getPageCount());
 }
 
 void MangaReaderActivity::render(RenderLock&&) {
@@ -780,12 +857,10 @@ void MangaReaderActivity::render(RenderLock&&) {
     case ViewMode::PanelZoom:
       renderPanelZoom();
       break;
-    case ViewMode::TextOverlay:
-      renderTextOverlay();
-      break;
   }
 
   saveProgress();
+  sessionReporter_.pageRendered(progressBasisPoints());
 
   if (translationAfterRender.load(std::memory_order_relaxed)) {
     translationPageReady.store(true, std::memory_order_release);
@@ -975,6 +1050,7 @@ void MangaReaderActivity::renderFullPage() {
   config.maxHeight = screenH;
   config.useGrayscale = true;
   config.useDithering = true;
+  config.whitenPaper = true;
   config.cachePath = cachePath;
 
   // 1-bit BMP fast path: pure black/white content needs no 4-level gray refresh, so render a
@@ -1185,6 +1261,7 @@ void MangaReaderActivity::renderPanelZoom() {
   config.allowUpscale = true;  // panel zoom: a small mono crop should fill the screen
   config.useGrayscale = !bwOnly;
   config.useDithering = !bwOnly;
+  config.whitenPaper = true;
   config.cachePath = cachePath;
 
   // One open for every pass this render performs -- the BW rebuild here plus, on a deferred gray
@@ -1468,6 +1545,7 @@ void MangaReaderActivity::workerWarmNextPage() {
   config.maxHeight = g.screenH;
   config.useGrayscale = true;
   config.useDithering = true;
+  config.whitenPaper = true;
   config.cacheOnly = true;
   config.shouldCancel = &prefetchShouldCancel;
   config.cancelCtx = this;
@@ -1562,6 +1640,7 @@ void MangaReaderActivity::workerWarmPanel() {
   config.allowUpscale = true;  // same panel geometry as the on-screen render above
   config.useGrayscale = true;
   config.useDithering = true;
+  config.whitenPaper = true;
   config.cacheOnly = true;
   config.shouldCancel = &prefetchShouldCancel;
   config.cancelCtx = this;
@@ -1584,116 +1663,71 @@ void MangaReaderActivity::workerWarmPanel() {
   // Cancelled: completed stays false (dims, if probed, still get published) -> retried later.
 }
 
-void MangaReaderActivity::renderTextOverlay() {
-  renderer.clearScreen();
-  displayedRotated_ = false;  // see renderFullPage(): text is laid out in the base orientation
-  displayedMap_.valid = false;
-
-  if (currentPanel < 0 || currentPanel >= static_cast<int>(panels.size())) {
-    viewMode = ViewMode::PanelZoom;
-    renderPanelZoom();
-    return;
-  }
-
-  const auto& panel = panels[currentPanel];
-  auto& theme = UITheme::getInstance();
-  auto metrics = theme.getMetrics();
-  Rect screen = theme.getScreenSafeArea(renderer, true, false);
-
-  const int jaFont = SETTINGS.getReaderFontId();
-  const int lineH = renderer.getLineHeight(jaFont);
-  int textY = screen.y + metrics.topPadding;
-
-  // Header
-  char headerBuf[32];
-  snprintf(headerBuf, sizeof(headerBuf), tr(STR_PANEL_NUMBER_FORMAT), currentPanel + 1, (int)panels.size());
-  renderer.drawText(UI_12_FONT_ID, screen.x + metrics.contentSidePadding, textY, headerBuf, true, EpdFontFamily::BOLD);
-  textY += renderer.getLineHeight(UI_12_FONT_ID) + metrics.verticalSpacing;
-
-  // Draw text blocks
-  int maxWidth = screen.width - metrics.contentSidePadding * 2;
-  int textX = screen.x + metrics.contentSidePadding;
-  int maxY = screen.y + screen.height - renderer.getLineHeight(SMALL_FONT_ID) - 4;
-
-  for (const auto& tb : panel.textBlocks) {
-    if (textY + lineH > maxY) break;
-    if (tb.text.empty()) continue;
-
-    // Word-wrap the text block
-    std::string remaining = tb.text;
-    while (!remaining.empty() && textY + lineH <= maxY) {
-      if (renderer.getTextWidth(jaFont, remaining.c_str()) <= maxWidth) {
-        renderer.drawText(jaFont, textX, textY, remaining.c_str(), true);
-        textY += lineH;
-        break;
-      }
-
-      // Find break point
-      std::string accum;
-      const char* p = remaining.c_str();
-      while (*p) {
-        size_t charLen = 1;
-        auto c0 = static_cast<unsigned char>(*p);
-        if (c0 >= 0xF0)
-          charLen = 4;
-        else if (c0 >= 0xE0)
-          charLen = 3;
-        else if (c0 >= 0xC0)
-          charLen = 2;
-        std::string test = accum + std::string(p, charLen);
-        if (renderer.getTextWidth(jaFont, test.c_str()) > maxWidth) break;
-        accum = test;
-        p += charLen;
-      }
-
-      if (accum.empty()) {
-        auto c0 = static_cast<unsigned char>(remaining[0]);
-        size_t cl = 1;
-        if (c0 >= 0xF0)
-          cl = 4;
-        else if (c0 >= 0xE0)
-          cl = 3;
-        else if (c0 >= 0xC0)
-          cl = 2;
-        accum = remaining.substr(0, cl);
-        remaining = remaining.substr(cl);
-      } else {
-        remaining = remaining.substr(accum.size());
-      }
-
-      renderer.drawText(jaFont, textX, textY, accum.c_str(), true);
-      textY += lineH;
-    }
-
-    textY += lineH / 2;
-  }
-
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), DictIndex::isAvailable() ? tr(STR_WORD_LOOKUP) : "", "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-}
-
 void MangaReaderActivity::launchWordLookupCurrentView() {
   // In panel zoom, look up just that panel's text. In full-page view,
   // combine every panel's text on the page so lookup still works
   // without having to zoom into each panel individually.
   if (!book) return;
   if (!DictIndex::isAvailable()) {
-    LOG_ERR("MANGA", "Word lookup: no Japanese dictionary (%s / %s)", DictIndex::vocabIdxPath(),
-            DictIndex::vocabDatPath());
+    LOG_ERR("MANGA", "Word lookup: no dictionary (%s / %s)", DictIndex::vocabIdxPath(), DictIndex::vocabDatPath());
     return;
   }
   LOG_DBG("MANGA", "Word lookup: page %u panel %d", static_cast<unsigned>(currentPage), currentPanel);
   // With line geometry the page itself becomes the selector; the text-only panel remains for
   // volumes converted before line boxes existed.
   if (enterWordSelect()) return;
-  std::string combined;
+  launchWordLookupAt(viewText(), -1);
+}
+
+std::string MangaReaderActivity::viewText() const {
+  std::string text;
   for (const auto* tb : viewTextBlocks()) {
-    if (!combined.empty()) combined += '\n';
-    combined += tb->text;
+    if (!text.empty()) text += '\n';
+    text += tb->text;
   }
-  launchWordLookupAt(std::move(combined), -1);
+  return text;
+}
+
+void MangaReaderActivity::dropLookupPrescan() {
+  if (!prescan_) return;
+  prescan_.reset();
+  DictIndex::releaseCaches();
+}
+
+void MangaReaderActivity::stepLookupPrescan() {
+  const ResidentFiles::NoLoads noLoads;  // a slice must not stall on a whole-file read
+  // Same pacing as EpubReaderActivity::stepLookupPrescan().
+  constexpr unsigned long PRESCAN_REST_MS = 1500;
+  constexpr uint32_t PRESCAN_SLICE_MS = 25;
+  constexpr uint32_t PRESCAN_MIN_ALLOC = 40 * 1024;
+  const int panel = currentPanel + 1;
+  if (prescan_ && (prescanPage_ != currentPage || prescanPanel_ != panel)) dropLookupPrescan();  // moved on
+  const unsigned long shownMs = viewMode == ViewMode::PanelZoom ? panelRenderedMs.load() : fullPageRenderedMs.load();
+  if (!book || HalMemory::getPsramHeap().totalBytes == 0 || !DictIndex::isAvailable() || shownMs == 0 ||
+      millis() - shownMs < PRESCAN_REST_MS || mappedInput.anyButtonDownRaw()) {
+    return;
+  }
+  const std::string cachePath = book->getCachePath() + "/wlscan.bin";
+  if (!prescan_) {
+    if (prescanPage_ == currentPage && prescanPanel_ == panel) return;  // done (or tried) here
+    if (ESP.getMaxAllocHeap() < PRESCAN_MIN_ALLOC) return;
+    prescanPage_ = currentPage;
+    prescanPanel_ = panel;
+    const std::string text = viewText();
+    if (text.empty()) return;
+    auto scan = makeUniqueNoThrow<WordSelectionScan>();
+    if (!scan) return;
+    scan->initFromUtf8Text(text);  // as MangaWordLookupActivity builds it, or the cache would not match
+    if (scan->tryLoadCache(cachePath, static_cast<uint16_t>(currentPage), static_cast<uint16_t>(panel))) return;
+    prescan_ = std::move(scan);
+    return;
+  }
+  if (!prescan_->step(PRESCAN_SLICE_MS)) return;
+  // A truncated scan is refused by saveCache() itself; the lookup then scans on open as before.
+  prescan_->saveCache(cachePath, static_cast<uint16_t>(currentPage), static_cast<uint16_t>(panel),
+                      WordSelectionScan::kNoRestoredCursor);
+  LOG_DBG("MRA", "Lookup prescan of page=%u panel=%d done", static_cast<unsigned>(currentPage), panel);
+  dropLookupPrescan();
 }
 
 std::vector<const manga::TextBlock*> MangaReaderActivity::viewTextBlocks() const {
@@ -1824,25 +1858,22 @@ bool MangaReaderActivity::holdTarget(const int x, const int y, std::string& text
       std::clamp(static_cast<int>(static_cast<int64_t>(along) * static_cast<int64_t>(cells.size()) / length), 0,
                  static_cast<int>(cells.size()) - 1);
 
-  text.clear();
-  for (const auto* tb : blocks) {
-    if (!text.empty()) text += '\n';
-    text += tb->text;
-  }
+  text = viewText();
   glyph = base + static_cast<int>(cells[cell]);
   return true;
 }
 
 void MangaReaderActivity::launchWordLookupAt(std::string combined, const int glyph) {
   if (!book || !DictIndex::isAvailable()) return;
+  dropLookupPrescan();  // the lookup scans (or loads the cache) itself
   const ViewMode returnMode = viewMode;
   if (combined.empty()) return;
-  // Dictionary text needs the Japanese SD fallback. Restore it only for the child activity, then
-  // return its memory to the page decoder before the manga redraws.
+  // Dictionary text needs the comic's CJK SD fallback. Restore it only for the child activity,
+  // then return its memory to the page decoder before the manga redraws.
   {
     RenderLock lock;
     sdFontSystem.ensureLoaded(renderer);
-    sdFontSystem.setJpFallbackNeeded(renderer, true);
+    sdFontSystem.setCjkFallbackNeeded(renderer, mangaScript(book.get()));
   }
   auto lookup = makeUniqueNoThrow<MangaWordLookupActivity>(
       renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
@@ -1851,62 +1882,17 @@ void MangaReaderActivity::launchWordLookupAt(std::string combined, const int gly
     LOG_ERR("MRA", "OOM: word lookup");
     RenderLock lock;
     sdFontSystem.releaseAllResidentFonts(renderer);
-    sdFontSystem.setJpFallbackNeeded(renderer, false);
+    sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
     return;
   }
   lookup->setMiningContext({book->getTitle(), book->getAuthor(), {}, book->getLanguage(), book->getFolder()});
+  lookup->setPageTurnReversed(SETTINGS.reversePageTurn != 0);
   startActivityForResult(std::move(lookup), [this, returnMode](const ActivityResult&) {
     {
       RenderLock lock;
       sdFontSystem.releaseAllResidentFonts(renderer);
-      sdFontSystem.setJpFallbackNeeded(renderer, false);
+      sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
       viewMode = returnMode;
-    }
-    requestUpdate();
-  });
-}
-
-void MangaReaderActivity::launchWordLookup() {
-  if (currentPanel < 0 || currentPanel >= static_cast<int>(panels.size())) return;
-  if (!DictIndex::isAvailable()) return;
-
-  const auto& panel = panels[currentPanel];
-  if (panel.textBlocks.empty()) return;
-
-  // Build a combined text string from all text blocks in this panel
-  std::string combined;
-  for (const auto& tb : panel.textBlocks) {
-    if (!combined.empty()) combined += '\n';
-    combined += tb.text;
-  }
-
-  if (combined.empty()) return;
-
-  {
-    RenderLock lock;
-    sdFontSystem.ensureLoaded(renderer);
-    sdFontSystem.setJpFallbackNeeded(renderer, true);
-  }
-
-  // Use the MangaWordLookup sub-activity with raw text. The scan cache makes a re-open of the
-  // same panel/page text instant (validated by content hash, so the key is just a hint).
-  auto lookup = makeUniqueNoThrow<MangaWordLookupActivity>(
-      renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
-      static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1));
-  if (!lookup) {
-    LOG_ERR("MRA", "OOM: word lookup");
-    RenderLock lock;
-    sdFontSystem.releaseAllResidentFonts(renderer);
-    sdFontSystem.setJpFallbackNeeded(renderer, false);
-    return;
-  }
-  lookup->setMiningContext({book->getTitle(), book->getAuthor(), {}, book->getLanguage(), book->getFolder()});
-  startActivityForResult(std::move(lookup), [this](const ActivityResult&) {
-    {
-      RenderLock lock;
-      sdFontSystem.releaseAllResidentFonts(renderer);
-      sdFontSystem.setJpFallbackNeeded(renderer, false);
-      viewMode = ViewMode::PanelZoom;
     }
     requestUpdate();
   });
@@ -2119,14 +2105,14 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
         RenderLock lock;
         sdFontSystem.ensureLoaded(renderer);
       }
-      startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
-                                                                /*finishOnBack=*/true, /*japaneseBook=*/true,
-                                                                /*dictionaryLanguage=*/std::string{},
-                                                                /*showReaderToggles=*/false,
-                                                                /*verticalTextEnabled=*/false,
-                                                                /*furiganaEnabled=*/false,
-                                                                /*mangaMode=*/true,
-                                                                /*hideMangaOnlySettings=*/false),
+      startActivityForResult(std::make_unique<ReaderSettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
+                                                                      /*finishOnBack=*/true, mangaScript(book.get()),
+                                                                      /*dictionaryLanguage=*/std::string{},
+                                                                      /*showReaderToggles=*/false,
+                                                                      /*verticalTextEnabled=*/false,
+                                                                      /*furiganaEnabled=*/false,
+                                                                      /*mangaMode=*/true,
+                                                                      /*hideMangaOnlySettings=*/false),
                              [this](const ActivityResult&) {
                                ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
                                baseScreenW = renderer.getScreenWidth();
@@ -2287,9 +2273,7 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
       break;
     }
     case EpubReaderMenuActivity::MenuAction::SYNC:
-      // KOReader sync matches progress against a document hash computed from
-      // an actual ebook file. A manga folder of images has no equivalent
-      // document on the KOReader server side, so sync is not applicable.
+      if (launchSync(false)) return;
       break;
     default:
       // AUTO_PAGE_TURN handled above in launchMenu(); FOOTNOTES,
@@ -2307,6 +2291,8 @@ ScreenshotInfo MangaReaderActivity::getScreenshotInfo() const {
     info.currentPage = static_cast<int>(currentPage) + 1;
     info.progressPercent =
         book->getPageCount() > 0 ? static_cast<int>((currentPage + 1) * 100 / book->getPageCount()) : 0;
+    // The percent already counts the visible page as read.
+    info.endProgressPercent = info.progressPercent;
   }
   return info;
 }
@@ -2543,5 +2529,55 @@ bool MangaReaderActivity::updateOutlineInPlace() {
   drawnOutline_ = std::move(next);
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   if (displayedRotated_) renderer.setOrientation(saved);
+  return true;
+}
+
+bool MangaReaderActivity::writeSyncedPosition() {
+  syncedPosition::Position position;
+  const uint32_t count = book ? book->getPageCount() : 0;
+  if (syncedPositionPercent() < 0 || !syncedPosition::load(book->getFolder(), position)) return false;
+  if (!writePageProgress(book->getFolder(), syncedPosition::pageOf(position, count))) return false;
+  syncedPosition::dismiss(book->getFolder());
+  // The page in memory too: leaving the reader saves it over the record otherwise.
+  RenderLock lock(*this);
+  loadProgress();
+  return true;
+}
+
+int MangaReaderActivity::syncedPositionPercent() {
+  syncedPosition::Position position;
+  const uint32_t count = book ? book->getPageCount() : 0;
+  if (count == 0 || !syncedPosition::load(book->getFolder(), position)) return -1;
+  const uint32_t targetPage = syncedPosition::pageOf(position, count);
+  // Read past it here since it was fetched: going there would be going back. Pages, not the rounded
+  // percentages, which put neighbouring pages of a long book on the same whole number.
+  uint32_t ownPage = 0;
+  if (readPageProgress(book->getFolder(), ownPage) && targetPage <= ownPage) {
+    syncedPosition::dismiss(book->getFolder());
+    return -1;
+  }
+  return static_cast<int>(targetPage * 100 / count);
+}
+
+bool MangaReaderActivity::startShortcutSync() { return KOREADER_STORE.hasCredentials() && launchSync(true); }
+
+bool MangaReaderActivity::launchSync(const bool withClockAndInsights) {
+  if (!book) return false;
+  saveProgress();
+  PagedSyncBook paged;
+  paged.page = currentPage;
+  paged.pageCount = book->getPageCount();
+  paged.title = book->getTitle();
+  paged.author = book->getAuthor();
+  paged.language = book->getLanguage();
+  paged.series = book->getSeries();
+  paged.seriesIndex = book->getSeriesIndex();
+  auto sync = makeUniqueNoThrow<KOReaderSyncActivity>(renderer, mappedInput, book->getFolder(), std::move(paged));
+  if (!sync) {
+    LOG_ERR("SYNC", "OOM: sync activity");
+    return false;
+  }
+  if (withClockAndInsights) sync->alsoSyncClockAndInsights();
+  activityManager.replaceActivity(std::move(sync));
   return true;
 }

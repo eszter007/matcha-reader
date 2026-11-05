@@ -25,6 +25,11 @@ class RenderLock {
   // the "guarded" acquire into a full block. Use this from any task that must never wait on a
   // render (e.g. the input-polling loop task).
   explicit RenderLock(Try);
+  // Waits at most `ms` for the lock: for input that must not be misread, nor wait on a long build.
+  struct TryFor {
+    unsigned long ms;
+  };
+  explicit RenderLock(TryFor);
   RenderLock(const RenderLock&) = delete;
   RenderLock& operator=(const RenderLock&) = delete;
   ~RenderLock();

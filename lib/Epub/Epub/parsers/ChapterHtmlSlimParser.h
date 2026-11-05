@@ -5,6 +5,7 @@
 
 #include <array>
 #include <climits>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -56,18 +57,29 @@ class ChapterHtmlSlimParser {
 
   // Bordered-block tracking. Full boxes and partial top/bottom separators are all emitted only
   // after their content has landed, so a page break cannot strand a rule on the preceding page.
-  // The packed spec retains edge mask, dotted/dashed/solid style and 1..4px width.
-  int boxDepth = -1;
-  uint8_t boxBorderSpec = 0;
-  int16_t boxStartY = 0;
-  int16_t boxEmptyAdvance = 0;
-  size_t boxFirstElementIndex = 0;
-  bool boxShrinkToContent = false;
-  bool boxContinued = false;          // continued from the previous page: omit the top edge
-  bool boxAwaitingFirstLine = false;  // capture boxStartY from the first line the box lays out
-  // Bottom of the last line placed inside the open box. emitBoxRect() pulls its closing edge up
-  // toward the text, and this is the floor it must not cross -- see the comment there.
-  int16_t boxLastLineBottomY = 0;
+  // Boxes nest: openBoxes[0] is the outermost, a fixed array so opening one never allocates.
+  struct OpenBox {
+    int depth = -1;
+    uint8_t sides[4] = {};  // per-side CssStyle border specs (top, right, bottom, left), 0 = no line
+    int16_t startY = 0;
+    int16_t emptyAdvance = 0;
+    int16_t left = 0;  // frame x extent; the outermost box spans the viewport
+    int16_t right = 0;
+    size_t firstElementIndex = 0;
+    bool shrinkToContent = false;
+    bool continued = false;          // continued from the previous page: omit the top edge
+    bool awaitingFirstLine = false;  // capture startY from the first line the box lays out
+    // Bottom of the last line (or nested frame) inside the box. emitBoxRect() pulls the closing
+    // edge up toward the text, and this is the floor it must not cross -- see the comment there.
+    int16_t lastLineBottomY = 0;
+  };
+  static constexpr uint8_t MAX_OPEN_BOXES = 4;
+  OpenBox openBoxes[MAX_OPEN_BOXES];
+  uint8_t openBoxCount = 0;
+  // Space between a nested frame and the frame or text around it.
+  int16_t nestedFrameGap() const;
+  void openBox(int elementDepth, const CssStyle& cssStyle, int16_t emptyAdvance, const BlockStyle& ownStyle);
+  void fitStyleInsideBox(BlockStyle& accumulated) const;
   // Inverted-block panel tracking (CSS color/background-color, see CssInkMode). Each line of an
   // inverted block gets a filled PageBox pushed just before it, so the panel survives a page break
   // and needs no knowledge of the block's total height. Only the block's own padding needs
@@ -90,6 +102,7 @@ class ChapterHtmlSlimParser {
   // style is reused for every text block it opens, so reading it per block would break a page
   // before every paragraph in the container instead of once.
   bool pendingForcedBreak = false;
+  bool forcedBreakTaken = false;  // openBox already broke for this element's page-break-before
   // `inside: avoid` / `after: avoid`: the block's lines are buffered instead of being placed, so
   // the block can move to the next page as a UNIT once its total height is known (streaming
   // layout means the height is not knowable before the last line). Buffering stops the moment
@@ -103,17 +116,59 @@ class ChapterHtmlSlimParser {
   // addLineToPage so content positions survive the keep-together delay.
   std::vector<std::pair<std::unique_ptr<TextBlock>, uint32_t>> keepBuffer;
   void breakPage();
+  // white-space: pre / pre-wrap and <pre>. An inherited property, scoped by the element's depth on
+  // the CSS ancestor chain (pushed and popped exactly once per element). Inside it a newline
+  // breaks the line, a blank line keeps its height, and runs of spaces are kept: the first space
+  // between two words stays an ordinary breakable gap, the rest become visible space tokens.
+  struct WhitespaceScope {
+    uint16_t pathDepth;
+    bool preserve;
+  };
+  static constexpr uint8_t MAX_WHITESPACE_SCOPES = 8;
+  WhitespaceScope whitespaceScopes[MAX_WHITESPACE_SCOPES] = {};
+  uint8_t whitespaceScopeCount = 0;
+  uint8_t preSpaceRun = 0;
+  bool preJustOpened = false;  // HTML drops the newline directly after <pre>
+  [[nodiscard]] bool preserveWhitespaceActive() const {
+    return whitespaceScopeCount > 0 && whitespaceScopes[whitespaceScopeCount - 1].preserve;
+  }
+  void emitPreservedSpaces(uint32_t visibleOffset);
+  void preservedLineBreak();
+  // Widow/orphan control: a paragraph's lone first line, or its lone last line, moves to the next
+  // page with company instead of being stranded, and a heading's lines move with the first line
+  // of the block after it. Only plain trailing text lines move -- a line that brought a link, a
+  // footnote or a panel with it, or one inside an open box, falls back to an ordinary break.
+  static constexpr uint8_t MAX_CARRIED_LINES = 6;
+  struct RecentLine {
+    int16_t height;
+    uint32_t visibleOffset;
+    bool hasExtras;
+  };
+  RecentLine recentLines[MAX_CARRIED_LINES] = {};
+  uint8_t recentLineCount = 0;      // trailing lines of the page recorded above, newest last
+  size_t lastLineElementCount = 0;  // elements.size() after the newest recorded line
+  uint8_t paragraphLinesOnPage = 0;
+  uint8_t keepWithNextLines = 0;      // heading lines at the page tail, waiting for the next block
+  uint8_t paragraphHeadingLines = 0;  // heading lines directly above this paragraph on the page
+  bool currentBlockIsHeading = false;
+  const ParsedText* layoutParagraph = nullptr;  // the block makePages() is laying out
+  bool layoutParagraphHasDropCap = false;
+  uint8_t linesToCarry() const;
+  bool canCarry(uint8_t count) const;
+  void breakPageCarryingLines(uint8_t count);
+  void resetRecentLines();
   void beginKeepTogether(const BlockStyle& blockStyle);
   void finishKeepTogether();
   void flushKeepBuffer();
 
   void flushPendingBlockLayout();
-  void emitBoxRect(bool openBottom);
+  int16_t emitBoxRect(OpenBox& box, bool openBottom);
   void maybeEmitOpenBoxForPageBreak();
   void closeBoxBlock();
   int fontId;
   float lineCompression;
   bool extraParagraphSpacing;
+  uint8_t paragraphIndentSpaces = 2;
   int8_t characterSpacing = 0;
   uint8_t wordSpacingPercent = 100;
   uint8_t paragraphAlignment;
@@ -163,6 +218,7 @@ class ChapterHtmlSlimParser {
     // 0 with hasFontId set means "explicitly the block's own font" (a nested reset).
     bool hasFontId = false;
     int32_t fontIdOverride = 0;
+    float fontScale = 1.0f;  // this element's size relative to the reader's body size
   };
   std::vector<StyleStackEntry> inlineStyleStack;
   std::vector<BlockStyle> blockStyleStack;  // accumulated block styles from open ancestor elements
@@ -203,16 +259,22 @@ class ChapterHtmlSlimParser {
   bool tableRowRtl = false;
   uint16_t tableRowsSpannedRemaining = 0;
   size_t tableCellTextBytes = 0;
+  // Border spec (CssStyle::makeBorderSpec) framing every grid cell: from <table border="N"> or a
+  // CSS border on the table or a cell. 0 keeps the plain rule under each row.
+  uint8_t tableBorderSpec = 0;
+  void emitTableCellBoxes(size_t columnCount, uint16_t cellWidth, int16_t top, int16_t bottom);
   std::vector<std::unique_ptr<ParsedText>> tableRowCells;
   std::array<std::vector<std::unique_ptr<TextBlock>>, MAX_GRID_TABLE_COLUMNS> tableCellLines;
   std::vector<uint32_t> tableLineVisibleOffsets;
   bool listItemBulletOnly = false;  // true when currentTextBlock has only the <li> bullet
 
-  // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
+  // Anchor-to-page mapping: tracks which page each HTML id attribute lands on. A deque grows in
+  // small chunks, so a long chapter never needs one large free block (a vector doubling past 512
+  // anchors needs ~28 KB contiguous, and a failed allocation aborts).
   int completedPageCount = 0;
   static constexpr size_t MAX_SECTION_FOOTNOTES = 128;
   std::vector<std::pair<uint16_t, FootnoteEntry>> sectionFootnoteData;
-  std::vector<std::pair<std::string, uint16_t>> anchorData;
+  std::deque<std::pair<std::string, uint16_t>> anchorData;
   std::string pendingAnchorId;          // deferred until after previous text block is flushed
   std::vector<std::string> tocAnchors;  // the list of anchors that are TOC chapter boundaries
   uint16_t xpathParagraphIndex = 0;
@@ -264,6 +326,7 @@ class ChapterHtmlSlimParser {
   // boundaries.
   XML_Parser xmlParser_ = nullptr;
   HalFile parseFile_;
+  bool firstParseChunk_ = true;  // the prolog is inspected once; see XhtmlDoctype.h
   uint32_t parseStartTime_ = 0;
 
   void updateEffectiveInlineStyle();
@@ -300,7 +363,7 @@ class ChapterHtmlSlimParser {
   void finishTableRow();
   void addTableRowSeparator();
   void setCurrentPageVisibleOffset(uint32_t offset);
-  void makePages();
+  void makePages(bool includeLastLine = true);
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css);
@@ -308,6 +371,7 @@ class ChapterHtmlSlimParser {
   static void applyVerticalAlignToEntry(StyleStackEntry& entry, const CssStyle& css);
   void pushTableTextStyleEntry(const CssStyle& cssStyle);
   void pushDecorationStyleEntry(CssTextDecoration defaultDecoration, const CssStyle& cssStyle);
+  void pushBlockFontScaleEntry(const CssStyle& cssStyle);
   void emitHorizontalRule(const BlockStyle& blockStyle);
   // XML callbacks
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts);
@@ -354,6 +418,7 @@ class ChapterHtmlSlimParser {
     characterSpacing = character;
     wordSpacingPercent = wordPercent;
   }
+  void setParagraphIndentSpaces(const uint8_t spaces) { paragraphIndentSpaces = spaces; }
 
   // One-shot parse: builds every page before returning (begin + step* + finish).
   bool parseAndBuildPages();
@@ -370,7 +435,7 @@ class ChapterHtmlSlimParser {
   void abortParse();   // tear down without flushing (error / abandon)
 
   void addLineToPage(std::unique_ptr<TextBlock> line, uint32_t visibleOffset);
-  const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
+  const std::deque<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
   // Every footnote reference in the section with the page it appears on (same page counter as
   // getAnchors), for the section-wide footnote table -- see Section::loadSectionFootnotes().
   const std::vector<std::pair<uint16_t, FootnoteEntry>>& getSectionFootnotes() const { return sectionFootnoteData; }

@@ -1,6 +1,7 @@
 #include "ChapterHtmlSlimParser.h"
 
 #include <FsHelpers.h>
+#include <GaijiText.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -29,6 +30,7 @@
 #include "Epub/converters/ImageDimsProbe.h"
 #include "Epub/converters/ImageToFramebufferDecoder.h"
 #include "Epub/htmlEntities.h"
+#include "XhtmlDoctype.h"
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
@@ -62,8 +64,8 @@ constexpr const char* HEADER_TAGS[] = {"h1", "h2", "h3", "h4", "h5", "h6"};
 // HTML5 sectioning/grouping tags (aside, section, ...) are block-level in every browser and
 // publishers hang block CSS on them (e.g. <aside class="box"> with border+padding for call-out
 // boxes). Treating them as inline dropped their margins, borders and text-align entirely.
-constexpr const char* BLOCK_TAGS[] = {"p",  "li",    "div",     "br",      "blockquote", "ol",
-                                      "ul", "aside", "section", "article", "figure",     "figcaption"};
+constexpr const char* BLOCK_TAGS[] = {"p",     "li",      "div",     "br",     "blockquote", "ol", "ul",
+                                      "aside", "section", "article", "figure", "figcaption", "pre"};
 
 // UTF-8 mark glyph for a text-emphasis style (JP bouten), nullptr for none.
 const char* emphasisMarkUtf8(const CssTextEmphasis e) {
@@ -291,6 +293,20 @@ void ChapterHtmlSlimParser::pushDecorationStyleEntry(const CssTextDecoration def
   applyTextTransformToEntry(entry, cssStyle);
   inlineStyleStack.push_back(entry);
   updateEffectiveInlineStyle();
+}
+
+// A block's font-size on an SD-card reader font: that font is resident at one size, so the block
+// cannot switch font (cssBlockFontId). Scale its words' bitmaps instead, as an inline <span>
+// font-size does, so a heading is not stuck at body size. Popped with the element.
+void ChapterHtmlSlimParser::pushBlockFontScaleEntry(const CssStyle& cssStyle) {
+  const int32_t tag = cssBlockFontScaleTag(cssStyle, fontId);
+  if (tag == 0) return;
+  StyleStackEntry entry;
+  entry.depth = depth;
+  entry.hasFontId = true;
+  entry.fontIdOverride = tag;
+  entry.fontScale = cssFontSizeScale(cssStyle);
+  inlineStyleStack.push_back(entry);
 }
 
 // Update effective bold/italic/decorations based on block style and inline style stack
@@ -541,6 +557,7 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
             ? 1
             : 0;
   }
+  const size_t firstNewWord = currentTextBlock->size();
   int frenchVerbLen = 0;
   int frenchConnectorLen = 0;
   if (frenchBookCache &&
@@ -583,35 +600,33 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   }
   if (effectiveEmphasis != CssTextEmphasis::None) {
     if (const char* mark = emphasisMarkUtf8(effectiveEmphasis)) {
-      // Synthetic per-glyph ruby: one mark per codepoint, each followed by an ideographic space.
+      // Synthetic ruby, one mark per codepoint. addWord() splits CJK runs into one token per
+      // character, so each token gets its own marks; ruby centred over the whole run would
+      // land on the last token only.
       //
-      // The spacer is what makes the marks line up. Ruby draws in SUP style, which drawText
-      // renders at 50% scale, and TextBlock::render centres the whole ruby string over the whole
-      // word. Bare marks therefore advance only N/2 character widths and bunch into the middle
-      // third of the run they are meant to mark -- observed on device as a dense row of marks
-      // roughly a third the width of the emphasised text, aligned with none of it. U+3000 is
-      // full-width, so at SUP it is another 0.5 character: mark + space = exactly one character
-      // cell, making the run the same width as the text and putting one mark per character.
+      // Ruby draws in SUP style at 50% scale, so a mark is half a character wide. Joining the
+      // marks of a multi-codepoint token with U+3000 (also half a character at SUP) makes the
+      // string n - 0.5 characters wide, which centres mark i exactly over character i.
+      // U+3000 shares its block with the kutouten, so it is present wherever the marks are.
       //
-      // U+3000 shares its block (CJK Symbols and Punctuation) with the brackets and kutouten used
-      // on every page, so it is present wherever the marks themselves are.
-      //
-      // A real <rt> annotation following this word simply overwrites the marks - furigana wins
-      // over bouten. Marks render through the ruby path, so they follow the furigana toggle.
-      int cps = 0;
-      for (int i = 0; partWordBuffer[i] != '\0'; i++) {
-        if ((static_cast<unsigned char>(partWordBuffer[i]) & 0xC0) != 0x80) cps++;
-      }
-      if (cps > 0 && cps <= 24) {
-        static constexpr char IDEOGRAPHIC_SPACE[] = "\xE3\x80\x80";  // U+3000
-        std::string marks;
-        const size_t markLen = strlen(mark);
-        marks.reserve((markLen + sizeof(IDEOGRAPHIC_SPACE) - 1) * cps);
-        for (int i = 0; i < cps; i++) {
-          marks.append(mark, markLen);
-          marks.append(IDEOGRAPHIC_SPACE, sizeof(IDEOGRAPHIC_SPACE) - 1);
+      // A real <rt> annotation following this word overwrites the marks - furigana wins over
+      // bouten. Marks render through the ruby path, so they follow the furigana toggle.
+      static constexpr char IDEOGRAPHIC_SPACE[] = "\xE3\x80\x80";  // U+3000
+      const size_t markLen = strlen(mark);
+      for (size_t w = firstNewWord; w < currentTextBlock->size(); w++) {
+        const std::string_view token = currentTextBlock->wordAt(w);
+        size_t cps = 0;
+        for (const char c : token) {
+          if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) cps++;
         }
-        currentTextBlock->setLastWordRuby(marks);
+        if (cps == 0 || cps > 24) continue;
+        std::string marks;
+        marks.reserve(markLen * cps + (sizeof(IDEOGRAPHIC_SPACE) - 1) * (cps - 1));
+        for (size_t i = 0; i < cps; i++) {
+          if (i > 0) marks.append(IDEOGRAPHIC_SPACE, sizeof(IDEOGRAPHIC_SPACE) - 1);
+          marks.append(mark, markLen);
+        }
+        currentTextBlock->setRubyForWordAt(w, marks);
       }
     }
   }
@@ -627,8 +642,8 @@ void ChapterHtmlSlimParser::flushPendingBlockLayout() {
   if (!currentTextBlock || currentTextBlock->isEmpty()) return;
   makePages();
   const auto style = currentTextBlock->getBlockStyle();
-  currentTextBlock.reset(new (std::nothrow)
-                             ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, style));
+  currentTextBlock =
+      makeUniqueNoThrow<ParsedText>(hyphenationEnabled, focusReadingEnabled, style, paragraphIndentSpaces);
   wordsExtractedInBlock = 0;
 }
 
@@ -656,7 +671,7 @@ void ChapterHtmlSlimParser::emitInvertedPanel(const BlockStyle& blockStyle, cons
 
   auto panel = makeUniqueNoThrow<PageBox>(static_cast<int16_t>(right - left), static_cast<int16_t>(height),
                                           /*edges=*/0, static_cast<int16_t>(left), static_cast<int16_t>(top),
-                                          /*filled=*/true);
+                                          blockStyle.isInverted() ? PageBox::FILL_BLACK : PageBox::FILL_LIGHT_GRAY);
   if (!panel) {
     LOG_ERR("EHP", "OOM: inverted panel box");
     return;
@@ -677,10 +692,105 @@ void ChapterHtmlSlimParser::breakPage() {
     currentPage.reset(new (std::nothrow) Page());
     if (!currentPage) LOG_ERR("EHP", "OOM: page after break");
     currentPageVisibleOffsetSet = false;
-    boxFirstElementIndex = 0;
+    for (uint8_t i = 0; i < openBoxCount; ++i) openBoxes[i].firstElementIndex = 0;
   }
   // Pending top spacing dies with the boundary: a block that starts a page starts it at the top.
   currentPageNextY = 0;
+  resetRecentLines();
+}
+
+void ChapterHtmlSlimParser::emitPreservedSpaces(const uint32_t visibleOffset) {
+  const bool lineStart = !currentTextBlock || currentTextBlock->isEmpty();
+  // Mid-line, one space of the run is the ordinary (breakable) gap before the next word.
+  const int tokens = lineStart ? preSpaceRun : preSpaceRun - 1;
+  preSpaceRun = 0;
+  for (int k = 0; k < tokens; ++k) {
+    partWordBuffer[0] = ' ';
+    partWordBuffer[1] = '\0';
+    partWordBufferIndex = 1;
+    partWordVisibleOffset = visibleOffset;
+    nextWordContinues = true;
+    flushPartWordBuffer();
+  }
+  nextWordContinues = lineStart && tokens > 0;
+}
+
+void ChapterHtmlSlimParser::preservedLineBreak() {
+  if (currentTextBlock && currentTextBlock->isEmpty()) {
+    // A blank line keeps its height: it becomes top spacing on the line that follows it.
+    BlockStyle style = currentTextBlock->getBlockStyle();
+    style.marginTop = static_cast<int16_t>(style.marginTop + renderer.getLineHeight(fontId, lineCompression));
+    currentTextBlock->setBlockStyle(style);
+    return;
+  }
+  BlockStyle lineStyle = blockStyleStack.empty() ? BlockStyle() : blockStyleStack.back();
+  lineStyle = lineStyle.withoutTop().withoutBottom();
+  lineStyle.alignment = CssTextAlign::Left;
+  lineStyle.textIndent = 0;
+  lineStyle.textIndentDefined = true;
+  startNewTextBlock(lineStyle);
+}
+
+void ChapterHtmlSlimParser::resetRecentLines() {
+  recentLineCount = 0;
+  lastLineElementCount = 0;
+  paragraphLinesOnPage = 0;
+  keepWithNextLines = 0;
+  paragraphHeadingLines = 0;
+}
+
+// How many of the page's trailing lines must move with the line that just overflowed it.
+uint8_t ChapterHtmlSlimParser::linesToCarry() const {
+  if (layoutParagraphHasDropCap) return 0;
+  const int after = layoutParagraph ? layoutParagraph->linesAfterCurrentLine() : -1;
+  uint8_t carry = 0;
+  if (paragraphLinesOnPage == 1) {
+    carry = 1;  // orphan: the paragraph's first line alone at the foot of the page
+  } else if (after == 0 && paragraphLinesOnPage >= 2) {
+    // widow: the last line would start the next page alone. Taking one line along leaves the
+    // paragraph's opening alone instead when only two are on this page, so both move.
+    carry = paragraphLinesOnPage == 2 ? 2 : 1;
+  }
+  // A heading moves with the block after it only when none of that block stays behind.
+  if (carry == paragraphLinesOnPage) carry = static_cast<uint8_t>(carry + paragraphHeadingLines);
+  return carry;
+}
+
+bool ChapterHtmlSlimParser::canCarry(const uint8_t count) const {
+  if (count == 0 || count > recentLineCount || !currentPage || tableDepth > 0) return false;
+  if (openBoxCount > 0) return false;
+  const size_t elements = currentPage->elements.size();
+  // Never the whole page, and only when the page's tail is exactly the recorded lines.
+  if (count >= elements || elements != lastLineElementCount) return false;
+  for (uint8_t i = recentLineCount - count; i < recentLineCount; ++i) {
+    if (recentLines[i].hasExtras) return false;
+  }
+  return true;
+}
+
+void ChapterHtmlSlimParser::breakPageCarryingLines(const uint8_t count) {
+  std::unique_ptr<PageElement> carried[MAX_CARRIED_LINES];
+  RecentLine carriedInfo[MAX_CARRIED_LINES];
+  const uint8_t firstRecent = static_cast<uint8_t>(recentLineCount - count);
+  for (uint8_t i = 0; i < count; ++i) {
+    carriedInfo[i] = recentLines[firstRecent + i];
+    carried[i] = std::move(currentPage->elements[currentPage->elements.size() - count + i]);
+  }
+  currentPage->elements.resize(currentPage->elements.size() - count);
+  const uint8_t paragraphLines = paragraphLinesOnPage;
+  const uint8_t headingLines = count > paragraphLines ? static_cast<uint8_t>(count - paragraphLines) : 0;
+  breakPage();
+  if (!currentPage) return;
+  setCurrentPageVisibleOffset(carriedInfo[0].visibleOffset);
+  for (uint8_t i = 0; i < count; ++i) {
+    carried[i]->yPos = currentPageNextY;
+    currentPage->elements.push_back(std::move(carried[i]));
+    currentPageNextY = static_cast<int16_t>(currentPageNextY + carriedInfo[i].height);
+    recentLines[recentLineCount++] = carriedInfo[i];
+  }
+  lastLineElementCount = currentPage->elements.size();
+  paragraphLinesOnPage = static_cast<uint8_t>(count - headingLines);
+  paragraphHeadingLines = headingLines;
 }
 
 // Start buffering this block's lines if it asks to be kept together (page-break-inside: avoid) or
@@ -738,11 +848,95 @@ void ChapterHtmlSlimParser::flushKeepBuffer() {
   keepBuffer.clear();
 }
 
-void ChapterHtmlSlimParser::emitBoxRect(const bool openBottom) {
-  if (!currentPage || boxDepth < 0 || boxAwaitingFirstLine) return;  // no box content on this page yet
-  const int lineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
+int16_t ChapterHtmlSlimParser::nestedFrameGap() const {
+  return static_cast<int16_t>(std::max(4, renderer.getLineHeight(fontId, lineCompression) / 4));
+}
+
+void ChapterHtmlSlimParser::openBox(const int elementDepth, const CssStyle& cssStyle, const int16_t emptyAdvance,
+                                    const BlockStyle& ownStyle) {
+  OpenBox box;
+  box.depth = elementDepth;
+  for (size_t i = 0; i < 4; ++i) box.sides[i] = cssStyle.borderSides[i];
+  box.emptyAdvance = emptyAdvance;
+  box.shrinkToContent = cssStyle.display == CssDisplay::InlineBlock;
+  box.awaitingFirstLine = true;
+  if (openBoxCount == 0) {
+    box.left = 2;
+    box.right = static_cast<int16_t>(viewportWidth - 3);
+    box.firstElementIndex = currentPage ? currentPage->elements.size() : 0;
+    openBoxes[openBoxCount++] = box;
+    return;
+  }
+  // A nested frame sits at its element's margin edge, and always a gap inside the frame around it.
+  OpenBox& parent = openBoxes[openBoxCount - 1];
+  const int16_t gap = nestedFrameGap();
+  const int outerLeft = blockStyleStack.empty() ? 0 : blockStyleStack.back().leftInset();
+  const int outerRight = blockStyleStack.empty() ? 0 : blockStyleStack.back().rightInset();
+  box.left = static_cast<int16_t>(std::max<int>(parent.left + gap, outerLeft + ownStyle.marginLeft));
+  box.right =
+      static_cast<int16_t>(std::min<int>(parent.right - gap, viewportWidth - outerRight - ownStyle.marginRight));
+  if (box.right - box.left < 4 * gap) return;  // too narrow to frame; its text stays in the parent
+
+  // The parent has no line yet, so its top edge would land on this one: place it now, a gap above.
+  // Its own pending top spacing sits above its frame, as for a box whose first child is text, and
+  // is taken off the empty block so it is not added a second time.
+  if (parent.awaitingFirstLine) {
+    if (!currentPage) {
+      currentPage.reset(new (std::nothrow) Page());
+      if (!currentPage) LOG_ERR("EHP", "OOM: page for nested box");
+    }
+    int above = 0;
+    if (currentTextBlock && currentTextBlock->isEmpty()) {
+      BlockStyle& pending = currentTextBlock->getBlockStyle();
+      above = pending.marginTop + pending.paddingTop;
+      pending.marginTop = pending.paddingTop = 0;
+    }
+    // Room for the nested box's first line, or the parent would frame nothing at this page's foot.
+    // A forced break -- the parent's, still pending, or this box's own -- is taken here for the same
+    // reason, and not raised again for this box.
+    const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
+    const bool ownBreak = cssStyle.pageBreakBefore() == CssPageBreak::Always;
+    if (pendingForcedBreak || ownBreak ||
+        currentPageNextY + above + gap + ownStyle.topInset() + lineHeight > viewportHeight) {
+      breakPage();
+      above = 0;  // top spacing dies with the page boundary
+      pendingForcedBreak = false;
+      forcedBreakTaken = ownBreak;
+    }
+    if (currentPage) {
+      // emitBoxRect draws the top edge a third of a line above startY and clamps it at 0; at a page
+      // top the two edges would both clamp there, so keep the parent's edge on the page.
+      const int edgePad = std::max(2, lineHeight / 3);
+      parent.startY = static_cast<int16_t>(std::max(currentPageNextY + above, edgePad));
+      parent.awaitingFirstLine = false;
+      currentPageNextY = static_cast<int16_t>(parent.startY + gap);
+    }
+  }
+  // After any break above, so a shrink-to-content box scans this page's elements, not the last's.
+  box.firstElementIndex = currentPage ? currentPage->elements.size() : 0;
+  openBoxes[openBoxCount++] = box;
+}
+
+// Keeps a nested box's text clear of its own frame, which the book's padding may not do.
+void ChapterHtmlSlimParser::fitStyleInsideBox(BlockStyle& accumulated) const {
+  if (openBoxCount < 2 || openBoxes[openBoxCount - 1].depth != depth) return;
+  const OpenBox& box = openBoxes[openBoxCount - 1];
+  const int16_t gap = nestedFrameGap();
+  const int textLeft = accumulated.leftInset();
+  if (box.sides[3] != 0 && textLeft < box.left + gap)
+    accumulated.paddingLeft = static_cast<int16_t>(accumulated.paddingLeft + box.left + gap - textLeft);
+  const int textRight = viewportWidth - accumulated.rightInset();
+  if (box.sides[1] != 0 && textRight > box.right - gap) {
+    accumulated.paddingRight = static_cast<int16_t>(accumulated.paddingRight + textRight - (box.right - gap));
+  }
+}
+
+// Returns the y of the drawn bottom edge, or -1 when nothing was drawn.
+int16_t ChapterHtmlSlimParser::emitBoxRect(OpenBox& box, const bool openBottom) {
+  if (!currentPage || box.awaitingFirstLine) return -1;  // no box content on this page yet
+  const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
   const auto pad = static_cast<int16_t>(std::max(2, lineHeight / 3));
-  const auto yTop = boxContinued ? static_cast<int16_t>(0) : static_cast<int16_t>(std::max(0, boxStartY - pad));
+  const auto yTop = box.continued ? static_cast<int16_t>(0) : static_cast<int16_t>(std::max(0, box.startY - pad));
   // Closing edge: currentPageNextY at close already includes the last block's bottom spacing
   // (margin/padding + extra paragraph spacing), so the line must be pulled back UP toward the
   // text ink rather than padded further down (device feedback, three rounds).
@@ -752,22 +946,22 @@ void ChapterHtmlSlimParser::emitBoxRect(const bool openBottom) {
   // at the last line's bottom, and a third of a line above that lands inside its glyphs -- the
   // closing border drew THROUGH the final line of text, striking it out (reported on a German
   // EPUB whose bordered blocks carry no bottom margin).
-  const int lineHeight2 = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
-  const int pulledUp = std::max<int>(boxLastLineBottomY, currentPageNextY - lineHeight2 / 3);
+  const int lineHeight2 = renderer.getLineHeight(fontId, lineCompression);
+  const int pulledUp = std::max<int>(box.lastLineBottomY, currentPageNextY - lineHeight2 / 3);
   const auto yBottom = openBottom
                            ? static_cast<int16_t>(viewportHeight - 1)
                            : static_cast<int16_t>(std::min<int>(viewportHeight - 1, std::max<int>(yTop + 1, pulledUp)));
-  if (yBottom <= yTop) return;
-  uint8_t edges = CssStyle::edgeMaskOf(boxBorderSpec);
-  if (boxContinued) edges &= static_cast<uint8_t>(~CssStyle::BORDER_TOP);
-  if (openBottom) edges &= static_cast<uint8_t>(~CssStyle::BORDER_BOTTOM);
+  if (yBottom <= yTop) return -1;
+  // A page break slices the box: the edges at the slice are left open.
+  uint8_t sides[4] = {box.continued ? uint8_t{0} : box.sides[0], box.sides[1], openBottom ? uint8_t{0} : box.sides[2],
+                      box.sides[3]};
 
-  int16_t x = 2;
-  int16_t width = static_cast<int16_t>(viewportWidth - 5);
-  if (boxShrinkToContent) {
+  int16_t x = box.left;
+  int16_t width = static_cast<int16_t>(box.right - box.left);
+  if (box.shrinkToContent) {
     int contentLeft = viewportWidth;
     int contentRight = 0;
-    for (size_t i = boxFirstElementIndex; i < currentPage->elements.size(); ++i) {
+    for (size_t i = box.firstElementIndex; i < currentPage->elements.size(); ++i) {
       const auto& element = currentPage->elements[i];
       if (element->getTag() != TAG_PageLine) continue;
       const auto* line = static_cast<const PageLine*>(element.get());
@@ -794,57 +988,62 @@ void ChapterHtmlSlimParser::emitBoxRect(const bool openBottom) {
       }
     }
     if (contentRight > contentLeft) {
-      x = static_cast<int16_t>(std::max(2, contentLeft));
-      width = static_cast<int16_t>(std::min<int>(viewportWidth - 3, contentRight + 2) - x);
+      x = static_cast<int16_t>(std::max<int>(box.left, contentLeft));
+      width = static_cast<int16_t>(std::min<int>(box.right, contentRight + 2) - x);
     }
   }
 
-  const uint8_t borderSpec =
-      CssStyle::makeBorderSpec(edges, CssStyle::lineStyleOf(boxBorderSpec), CssStyle::lineWidthOf(boxBorderSpec));
-  auto box = makeUniqueNoThrow<PageBox>(width, static_cast<int16_t>(yBottom - yTop), borderSpec, x, yTop);
-  if (box) currentPage->elements.push_back(std::move(box));
+  auto rect = makeUniqueNoThrow<PageBox>(width, static_cast<int16_t>(yBottom - yTop), sides, x, yTop);
+  if (!rect) {
+    LOG_ERR("EHP", "OOM: PageBox");
+    return -1;
+  }
+  currentPage->elements.push_back(std::move(rect));
+  return yBottom;
 }
 
 void ChapterHtmlSlimParser::maybeEmitOpenBoxForPageBreak() {
-  if (boxDepth < 0) return;
-  // Nothing of the box is on this page yet, so no open-bottomed rect is emitted -- and it must not
-  // be marked continued either, or the first page that does hold it would omit its top edge.
-  if (boxAwaitingFirstLine) return;
-  emitBoxRect(/*openBottom=*/true);
-  boxContinued = true;
-  // The continuation starts at y = 0 on the next page, so the floor from this page's last line
-  // would sit far below anything drawn there and push the closing edge to the wrong place.
-  boxLastLineBottomY = 0;
+  for (uint8_t i = 0; i < openBoxCount; ++i) {
+    OpenBox& box = openBoxes[i];
+    // Nothing of the box is on this page yet, so no open-bottomed rect is emitted -- and it must
+    // not be marked continued either, or the first page that does hold it would omit its top edge.
+    if (box.awaitingFirstLine) continue;
+    emitBoxRect(box, /*openBottom=*/true);
+    box.continued = true;
+    // The continuation starts at y = 0 on the next page, so the floor from this page's last line
+    // would sit far below anything drawn there and push the closing edge to the wrong place.
+    box.lastLineBottomY = 0;
+  }
 }
 
 void ChapterHtmlSlimParser::closeBoxBlock() {
   flushPendingBlockLayout();
-  if (boxAwaitingFirstLine) {
+  OpenBox& box = openBoxes[openBoxCount - 1];
+  if (box.awaitingFirstLine) {
     if (!currentPage) currentPage.reset(new (std::nothrow) Page());
     if (currentPage) {
-      boxStartY = currentPageNextY;
-      currentPageNextY =
-          static_cast<int16_t>(std::min<int>(viewportHeight, currentPageNextY + std::max<int16_t>(1, boxEmptyAdvance)));
-      boxAwaitingFirstLine = false;
+      box.startY = currentPageNextY;
+      currentPageNextY = static_cast<int16_t>(
+          std::min<int>(viewportHeight, currentPageNextY + std::max<int16_t>(1, box.emptyAdvance)));
+      box.awaitingFirstLine = false;
     }
   }
-  emitBoxRect(/*openBottom=*/false);
+  const int16_t bottomY = emitBoxRect(box, /*openBottom=*/false);
   // Full boxes need a little clearance after their closing edge. Partial publisher rules already
   // carry their own margin/padding; adding the old box clearance here doubled the space after
   // headings, quotes and worksheet lines.
-  if (CssStyle::edgeMaskOf(boxBorderSpec) == CssStyle::BORDER_ALL) {
-    const int lineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
+  if (box.sides[0] != 0 && box.sides[1] != 0 && box.sides[2] != 0 && box.sides[3] != 0) {
+    const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
     currentPageNextY =
         static_cast<int16_t>(currentPageNextY + std::max(2, lineHeight / 12) + std::max(4, lineHeight / 2));
   }
-  boxDepth = -1;
-  boxBorderSpec = 0;
-  boxEmptyAdvance = 0;
-  boxFirstElementIndex = 0;
-  boxShrinkToContent = false;
-  boxContinued = false;
-  boxAwaitingFirstLine = false;
-  boxLastLineBottomY = 0;
+  openBoxCount--;
+  // The box around it must close below this frame, not just below the text inside it.
+  if (openBoxCount > 0 && bottomY >= 0) {
+    OpenBox& parent = openBoxes[openBoxCount - 1];
+    parent.lastLineBottomY =
+        std::max<int16_t>(parent.lastLineBottomY, static_cast<int16_t>(bottomY + nestedFrameGap()));
+  }
 }
 
 void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
@@ -858,16 +1057,21 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       // open. Merge those into the new style so the first child in a container inherits
       // the container's vertical spacing.
       const auto style = currentTextBlock->getBlockStyle();
-      BlockStyle incoming = blockStyle;
+      const BlockStyle& incoming = blockStyle;
+      BlockStyle combined = style.getCombinedBlockStyle(incoming, BlockStyle::CombineAxis::Vertical);
       if (style.fromBrElement) {
         // The empty block was created by a <br> section separator. Inject a full line of
         // blank space before the following paragraph so the scene/section break is visible.
         // This only fires when the <br> block stayed empty (i.e. no inline text was added).
+        // Added AFTER the vertical merge, which collapses margins: added before it, a second
+        // blank line would be swallowed by the first.
         const int16_t lineHeight = static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression));
-        incoming.marginTop = static_cast<int16_t>(incoming.marginTop + lineHeight);
+        combined.marginTop = static_cast<int16_t>(combined.marginTop + lineHeight);
       }
-
-      currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(incoming, BlockStyle::CombineAxis::Vertical));
+      // Another <br> on a still-empty <br> block: keep the mark, so each further <br> adds a line.
+      if (incoming.fromBrElement) combined.fromBrElement = true;
+      currentTextBlock->setBlockStyle(combined);
+      currentBlockIsHeading = false;
 
       flushPendingAnchor();
       updateEffectiveInlineStyle();
@@ -881,6 +1085,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       const auto style = currentTextBlock->getBlockStyle();
       currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(blockStyle, BlockStyle::CombineAxis::Vertical));
       listItemBulletOnly = false;
+      currentBlockIsHeading = false;
       flushPendingAnchor();
       updateEffectiveInlineStyle();
       return;
@@ -888,16 +1093,17 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
 
     makePages();
   }
+  currentBlockIsHeading = false;
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
   flushPendingAnchor();
   currentTextBlock =
-      makeUniqueNoThrow<ParsedText>(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle);
+      makeUniqueNoThrow<ParsedText>(hyphenationEnabled, focusReadingEnabled, blockStyle, paragraphIndentSpaces);
   if (!currentTextBlock) {
     // Evict rebuildable caches and retry once before failing the build.
     freeink::MemoryManager::instance().ensureFree(4 * 1024);
     currentTextBlock =
-        makeUniqueNoThrow<ParsedText>(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle);
+        makeUniqueNoThrow<ParsedText>(hyphenationEnabled, focusReadingEnabled, blockStyle, paragraphIndentSpaces);
   }
   if (!currentTextBlock) {
     LOG_ERR("EHP", "OOM: ParsedText");
@@ -1118,6 +1324,22 @@ void ChapterHtmlSlimParser::addTableRowSeparator() {
   currentPageNextY += TABLE_ROW_SEPARATOR_GAP;
 }
 
+void ChapterHtmlSlimParser::emitTableCellBoxes(const size_t columnCount, const uint16_t cellWidth, const int16_t top,
+                                               const int16_t bottom) {
+  if (!currentPage || bottom <= top) return;
+  for (size_t column = 0; column < columnCount; ++column) {
+    const auto x = static_cast<int16_t>(column * cellWidth);
+    // The last cell's right edge stays inside the viewport.
+    const auto width = static_cast<int16_t>(column + 1 == columnCount ? viewportWidth - x - 1 : cellWidth);
+    auto box = makeUniqueNoThrow<PageBox>(width, static_cast<int16_t>(bottom - top), tableBorderSpec, x, top);
+    if (!box) {
+      LOG_ERR("EHP", "OOM: table cell box");
+      return;
+    }
+    currentPage->elements.push_back(std::move(box));
+  }
+}
+
 void ChapterHtmlSlimParser::finishTableRow() {
   closeTableCell();
 
@@ -1130,7 +1352,7 @@ void ChapterHtmlSlimParser::finishTableRow() {
   }
 
   const int16_t lineHeight =
-      std::max<int16_t>(1, static_cast<int16_t>(renderer.getLineHeight(fontId) * lineCompression));
+      std::max<int16_t>(1, static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression)));
   const size_t columnCount = tableRowCells.size();
   const uint16_t cellWidth = static_cast<uint16_t>(viewportWidth / columnCount);
 
@@ -1187,6 +1409,11 @@ void ChapterHtmlSlimParser::finishTableRow() {
     tableLineVisibleOffsets.clear();
   };
 
+  // Cell frames: one set of boxes per page the row lands on, around the row's slice there. Text
+  // keeps a small gap from the frame above and below it.
+  const bool bordered = tableBorderSpec != 0;
+  constexpr int16_t CELL_FRAME_GAP = 3;
+  int16_t segmentTop = -1;
   for (size_t lineIndex = 0; lineIndex < maxLineCount; ++lineIndex) {
     const uint32_t lineVisibleOffset =
         lineIndex < tableLineVisibleOffsets.size() ? tableLineVisibleOffsets[lineIndex] : visibleTextOffset;
@@ -1199,10 +1426,15 @@ void ChapterHtmlSlimParser::finishTableRow() {
       }
     }
 
-    const bool pageFull =
-        currentPage && !currentPage->elements.empty() && currentPageNextY + rowLineHeight > viewportHeight;
+    const bool pageFull = currentPage && !currentPage->elements.empty() &&
+                          currentPageNextY + rowLineHeight + (bordered ? CELL_FRAME_GAP : 0) > viewportHeight;
     if (!currentPage || pageFull) {
       if (pageFull) {
+        if (bordered && segmentTop >= 0) {
+          emitTableCellBoxes(columnCount, cellWidth, segmentTop,
+                             static_cast<int16_t>(currentPageNextY + CELL_FRAME_GAP));
+        }
+        segmentTop = -1;
         setCurrentPageVisibleOffset(lineVisibleOffset);
         completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
         completedPageCount++;
@@ -1215,8 +1447,13 @@ void ChapterHtmlSlimParser::finishTableRow() {
       }
       currentPageNextY = 0;
       currentPageVisibleOffsetSet = false;
+      resetRecentLines();
     }
 
+    if (bordered && segmentTop < 0) {
+      segmentTop = currentPageNextY;
+      currentPageNextY = static_cast<int16_t>(currentPageNextY + CELL_FRAME_GAP);
+    }
     const int16_t rowY = currentPageNextY;
     const size_t requiredCapacity = currentPage->elements.size() + columnCount;
     if (currentPage->elements.capacity() < requiredCapacity) {
@@ -1244,7 +1481,14 @@ void ChapterHtmlSlimParser::finishTableRow() {
     currentPageNextY = static_cast<int16_t>(rowY + rowLineHeight);
   }
 
-  addTableRowSeparator();
+  if (bordered) {
+    if (segmentTop >= 0) {
+      currentPageNextY = static_cast<int16_t>(currentPageNextY + CELL_FRAME_GAP);
+      emitTableCellBoxes(columnCount, cellWidth, segmentTop, currentPageNextY);
+    }
+  } else {
+    addTableRowSeparator();
+  }
   tableRowStacked = false;
   clearLayoutLines();
 }
@@ -1340,6 +1584,26 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
   }
 
+  // Resolve explicit inheritance after the cascade, before this element changes the active style.
+  switch (cssStyle.fontWeight) {
+    case CssFontWeight::Normal:
+    case CssFontWeight::Bold:
+      break;
+    case CssFontWeight::Inherit:
+      cssStyle.fontWeight =
+          (self->effectiveBold || self->boldUntilDepth < self->depth) ? CssFontWeight::Bold : CssFontWeight::Normal;
+      break;
+  }
+  switch (cssStyle.fontStyle) {
+    case CssFontStyle::Normal:
+    case CssFontStyle::Italic:
+      break;
+    case CssFontStyle::Inherit:
+      cssStyle.fontStyle =
+          (self->effectiveItalic || self->italicUntilDepth < self->depth) ? CssFontStyle::Italic : CssFontStyle::Normal;
+      break;
+  }
+
   // A font-size on <html>/<body> is the book restating the size its body text should have --
   // and that base is the READER's font here, because every font-size resolves against it
   // (cssBlockFontId, ReaderFontScale.cpp) rather than against a fixed 16px. Applying a root
@@ -1351,6 +1615,17 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // headings, captions and small print keep their intended relationship to the body text.
   if (strcasecmp(name, "body") == 0 || strcasecmp(name, "html") == 0) {
     cssStyle.defined.fontSize = 0;
+  }
+
+  // white-space is inherited: open a scope when this element sets it (or is a <pre>).
+  {
+    const bool isPre = strcasecmp(name, "pre") == 0;
+    if ((cssStyle.hasWhiteSpace() || isPre) && self->whitespaceScopeCount < MAX_WHITESPACE_SCOPES) {
+      const bool preserve = cssStyle.hasWhiteSpace() ? cssStyle.preserveWhitespace() : true;
+      self->whitespaceScopes[self->whitespaceScopeCount++] = {static_cast<uint16_t>(self->cssPath.depth()), preserve};
+      self->preSpaceRun = 0;
+      self->preJustOpened = isPre;
+    }
   }
 
   // HTML hidden attribute overrides CSS display.
@@ -1412,6 +1687,18 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->tableRowRtl = cssStyle.hasDirection() && cssStyle.direction == CssTextDirection::Rtl;
     self->tableRowsSpannedRemaining = 0;
     self->tableCellTextBytes = 0;
+    self->tableBorderSpec = 0;
+    if (const char* borderAttr = getAttribute(atts, "border")) {
+      const int width = atoi(borderAttr);
+      if (width > 0) {
+        self->tableBorderSpec = CssStyle::makeBorderSpec(CssStyle::BORDER_ALL, CssBorderLineStyle::Solid,
+                                                         static_cast<uint8_t>(std::min(width, 4)));
+      }
+    }
+    if (cssStyle.hasBorder() && cssStyle.borderEdgeMask() != 0) {
+      self->tableBorderSpec =
+          CssStyle::makeBorderSpec(CssStyle::BORDER_ALL, cssStyle.borderLineStyle(), cssStyle.borderLineWidth());
+    }
     self->tableRowCells.clear();
     self->tableRowCells.reserve(MAX_GRID_TABLE_COLUMNS);
     self->depth += 1;
@@ -1445,6 +1732,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
     self->currentTextBlock.reset();
 
+    // A cell's own CSS border frames the grid when the table itself declared none.
+    if (self->tableBorderSpec == 0 && cssStyle.hasBorder() && cssStyle.borderEdgeMask() != 0) {
+      self->tableBorderSpec =
+          CssStyle::makeBorderSpec(CssStyle::BORDER_ALL, cssStyle.borderLineStyle(), cssStyle.borderLineWidth());
+    }
     const uint16_t columnSpan = parseTableSpan(getAttribute(atts, "colspan"));
     const uint16_t rowSpan = parseTableSpan(getAttribute(atts, "rowspan"));
     if (columnSpan > 1 || rowSpan > 1) {
@@ -1469,8 +1761,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       tableCellBlockStyle.isRtl = cssStyle.direction == CssTextDirection::Rtl;
     }
 
-    self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled,
-                                                           self->focusReadingEnabled, tableCellBlockStyle);
+    self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->hyphenationEnabled, self->focusReadingEnabled,
+                                                           tableCellBlockStyle, self->paragraphIndentSpaces);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: table cell");
       self->skipUntilDepth = self->depth;
@@ -1599,6 +1891,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               ImageDimsProbe headerProbe;
               self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
               bool gotDimensions = headerProbe.getDimensions(dims);
+
+              if (!gotDimensions) {
+                // Retry with framebuffer scratch when the heap cannot fit the inflate window.
+                GfxRenderer::FrameBufferLoan probeLoan(self->renderer);
+                ImageDimsProbe retryProbe;
+                self->epub->readItemContentsToStream(resolvedPath, retryProbe, 1024, /*allowEarlyStop=*/true);
+                gotDimensions = retryProbe.getDimensions(dims);
+              }
 
               if (!gotDimensions) {
                 // No header within the stream (rare) — fall back to extracting the
@@ -2146,24 +2446,21 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
   // Defer every block border until its content is placed. This keeps top/bottom pairs together
   // across page breaks and lets bottom-only heading/worksheet rules render at all.
-  if (self->boxDepth < 0 && cssStyle.hasBorder() && cssStyle.borderEdgeMask() != 0 && isHeaderOrBlock(name) &&
-      self->tableDepth == 0) {
+  if (self->openBoxCount < MAX_OPEN_BOXES && cssStyle.hasBorder() && cssStyle.borderEdgeMask() != 0 &&
+      isHeaderOrBlock(name) && self->tableDepth == 0) {
+    // Text running straight into the box ("Intro<div class=box>") belongs before it, not in it.
+    if (self->partWordBufferIndex > 0) self->flushPartWordBuffer();
     self->flushPendingBlockLayout();
-    self->boxDepth = self->depth;
-    self->boxBorderSpec = cssStyle.borderEdges;
-    self->boxContinued = false;
-    self->boxAwaitingFirstLine = true;
-    self->boxLastLineBottomY = 0;
-    self->boxShrinkToContent = cssStyle.display == CssDisplay::InlineBlock;
-    self->boxFirstElementIndex = self->currentPage ? self->currentPage->elements.size() : 0;
     // Adjacent CSS vertical margins collapse. For an empty worksheet paragraph, advancing by the
     // sum makes each ruled row roughly twice as tall as the publisher intended.
     const int emptySpacing = std::max(userAlignmentBlockStyle.topInset(), userAlignmentBlockStyle.bottomInset());
-    self->boxEmptyAdvance =
+    const auto emptyAdvance =
         static_cast<int16_t>(std::clamp(emptySpacing, std::max(1, self->renderer.getLineHeight(self->fontId) / 2),
                                         static_cast<int>(self->viewportHeight)));
-    LOG_DBG("EHP", "border open: <%s class=%s> edges=0x%02x style=%u width=%u", name, classAttr.c_str(),
-            cssStyle.borderEdgeMask(), static_cast<unsigned>(cssStyle.borderLineStyle()), cssStyle.borderLineWidth());
+    self->openBox(self->depth, cssStyle, emptyAdvance, userAlignmentBlockStyle);
+    LOG_DBG("EHP", "border open: <%s class=%s> edges=0x%02x style=%u width=%u level=%u", name, classAttr.c_str(),
+            cssStyle.borderEdgeMask(), static_cast<unsigned>(cssStyle.borderLineStyle()), cssStyle.borderLineWidth(),
+            self->openBoxCount);
   }
 
   if (strcmp(name, "hr") == 0) {
@@ -2187,6 +2484,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   }
 
   if (matches(name, HEADER_TAGS, std::size(HEADER_TAGS))) {
+    // Text running straight into a block ("text<h3>…") is still in the part-word
+    // buffer; flush it into the block it belongs to before that block is replaced.
+    if (self->partWordBufferIndex > 0) {
+      self->flushPartWordBuffer();
+    }
     self->currentCssStyle = cssStyle;
     // HTML headings default to left alignment. The former hard-coded Center made every h2/h3
     // ignore the publisher unless it repeated `text-align:left`, which is why the comparison
@@ -2200,13 +2502,17 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     if (self->embeddedStyle && cssStyle.hasTextAlign()) {
       headerBlockStyle.alignment = cssStyle.textAlign;
     }
-    const auto accumulated =
+    auto accumulated =
         self->blockStyleStack.back().getCombinedBlockStyle(headerBlockStyle, BlockStyle::CombineAxis::Horizontal);
+    self->fitStyleInsideBox(accumulated);
     self->blockStyleStack.push_back(accumulated);
     self->startNewTextBlock(accumulated.withoutBottom());
+    self->currentBlockIsHeading = true;
+    self->pushBlockFontScaleEntry(cssStyle);
     // AFTER startNewTextBlock: that call flushes the PREVIOUS block, which must stay on the page
     // it was already on. The break is spent by the first block laid out from here on.
-    if (cssStyle.pageBreakBefore() == CssPageBreak::Always) self->pendingForcedBreak = true;
+    if (cssStyle.pageBreakBefore() == CssPageBreak::Always && !self->forcedBreakTaken) self->pendingForcedBreak = true;
+    self->forcedBreakTaken = false;
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, BLOCK_TAGS, std::size(BLOCK_TAGS))) {
@@ -2234,16 +2540,31 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       brStyle.fromBrElement = true;
       self->startNewTextBlock(brStyle);
     } else {
+      // Flush pending text before the new block, as the header and <br/> branches do.
+      if (self->partWordBufferIndex > 0) {
+        self->flushPartWordBuffer();
+      }
       self->currentCssStyle = cssStyle;
-      const auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
-                                                                                  BlockStyle::CombineAxis::Horizontal);
+      auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
+                                                                            BlockStyle::CombineAxis::Horizontal);
+      if (self->preserveWhitespaceActive()) {
+        // Preformatted text is laid out as written: no justification, no first-line indent.
+        accumulated.alignment = CssTextAlign::Left;
+        accumulated.textIndent = 0;
+        accumulated.textIndentDefined = true;
+      }
+      self->fitStyleInsideBox(accumulated);
       self->blockStyleStack.push_back(accumulated);
       self->startNewTextBlock(accumulated.withoutBottom());
       // On the block itself, never on the style stack: a drop cap belongs to this one
       // paragraph, and the stack is what every nested and sibling block inherits from.
       self->applyDropCap(name, classAttr);
+      self->pushBlockFontScaleEntry(cssStyle);
       // See the header branch above: raised only once the previous block has been flushed.
-      if (cssStyle.pageBreakBefore() == CssPageBreak::Always) self->pendingForcedBreak = true;
+      if (cssStyle.pageBreakBefore() == CssPageBreak::Always && !self->forcedBreakTaken) {
+        self->pendingForcedBreak = true;
+      }
+      self->forcedBreakTaken = false;
       self->updateEffectiveInlineStyle();
 
       if (strcmp(name, "ol") == 0 || strcmp(name, "ul") == 0) {
@@ -2422,17 +2743,28 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         entry.hasSmallCaps = true;
         entry.smallCaps = cssStyle.fontVariant == CssFontVariant::SmallCaps;
       }
-      if (cssStyle.hasFontSize()) {
+      if (cssStyle.hasFontSize() && cssFontSizeScale(cssStyle) > 0.0f) {
         entry.hasFontId = true;
-        // Body-relative, exactly like the block path (BlockStyle::fromCssStyle passes the
-        // reader's font as the em base): the ladder snaps to a resident 12/14/16/18pt size.
-        // 0 = no distinct size resident (or SD-card base font) -> the block font is kept.
-        entry.fontIdOverride = cssBlockFontId(cssStyle, self->fontId);
+        // em and % compound through the nearest sized inline ancestor (0.8em inside 0.8em is
+        // 0.64 of the body); rem, pt and px are relative to the reader's body size. The ladder
+        // snaps the result to a resident 12/14/16/18pt size; 0 = no distinct size resident (or
+        // an SD-card base font) -> the block font is kept.
+        float parentScale = 1.0f;
+        if (cssFontSizeIsParentRelative(cssStyle)) {
+          for (auto it = self->inlineStyleStack.rbegin(); it != self->inlineStyleStack.rend(); ++it) {
+            if (it->hasFontId) {
+              parentScale = it->fontScale;
+              break;
+            }
+          }
+        }
+        entry.fontScale = parentScale * cssFontSizeScale(cssStyle);
+        entry.fontIdOverride = fontIdForScale(entry.fontScale, self->fontId);
         if (entry.fontIdOverride == 0) {
           // No resident size can serve the ask: the reader font is a single-size SD-card font
           // with no ladder, or the nearest step IS the base. Scale the block font's bitmap
           // instead, so `<small>` really is small rather than silently rendering at body size.
-          entry.fontIdOverride = cssFontScaleTag(cssStyle);
+          entry.fontIdOverride = fontScaleTagForScale(entry.fontScale);
         }
       }
       self->inlineStyleStack.push_back(entry);
@@ -2495,8 +2827,8 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
   if (!self->currentTextBlock) {
     const BlockStyle flowStyle =
         self->blockStyleStack.empty() ? BlockStyle() : self->blockStyleStack.back().withoutBottom();
-    self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled,
-                                                           self->focusReadingEnabled, flowStyle);
+    self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->hyphenationEnabled, self->focusReadingEnabled,
+                                                           flowStyle, self->paragraphIndentSpaces);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: text block for character data");
       return;
@@ -2538,6 +2870,27 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     if (countVisibleOffsets && (static_cast<uint8_t>(s[i]) & 0xC0) != 0x80) {
       nextCodepointOffset++;
     }
+
+    if (isWhitespace(s[i]) && self->preserveWhitespaceActive()) {
+      if (self->partWordBufferIndex > 0) {
+        self->flushPartWordBuffer();
+      }
+      if (s[i] == '\n') {
+        self->preSpaceRun = 0;
+        if (self->preJustOpened) {
+          self->preJustOpened = false;
+        } else {
+          self->preservedLineBreak();
+        }
+      } else if (s[i] == '\t') {
+        self->preSpaceRun = static_cast<uint8_t>(std::min(255, self->preSpaceRun + 4));
+      } else if (s[i] == ' ') {
+        self->preSpaceRun = static_cast<uint8_t>(std::min(255, self->preSpaceRun + 1));
+      }
+      continue;
+    }
+    if (self->preSpaceRun > 0) self->emitPreservedSpaces(codepointOffset);
+    self->preJustOpened = false;
 
     if (isWhitespace(s[i])) {
       // Currently looking at whitespace, if there's anything in the partWordBuffer, flush it
@@ -2675,16 +3028,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
   if (blockWordCount > softFlushThreshold && !self->inRuby) {
     LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
-    const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
-    const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
-                                        ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
-                                        : self->viewportWidth;
-    self->currentTextBlock->layoutAndExtractLines(
-        self->renderer, self->fontId, effectiveWidth,
-        [self](std::unique_ptr<TextBlock> textBlock, const uint32_t offset) {
-          self->addLineToPage(std::move(textBlock), offset);
-        },
-        false, self->lineCompression, self->characterSpacing, self->wordSpacingPercent);
+    self->makePages(/*includeLastLine=*/false);
   }
 }
 
@@ -2708,6 +3052,13 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
   if (self->nonVisibleTextDepth > 0) {
     self->nonVisibleTextDepth--;
+  }
+
+  if (self->whitespaceScopeCount > 0 &&
+      self->whitespaceScopes[self->whitespaceScopeCount - 1].pathDepth == self->cssPath.depth()) {
+    self->whitespaceScopeCount--;
+    self->preSpaceRun = 0;
+    self->preJustOpened = false;
   }
 
   // Close this element on the CSS ancestor chain FIRST, pairing with the single push at the
@@ -2845,7 +3196,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   self->depth -= 1;
 
   // Closing the boxed block: lay out its trailing text and draw the rect.
-  if (self->boxDepth >= 0 && self->depth == self->boxDepth) {
+  if (self->openBoxCount > 0 && self->depth == self->openBoxes[self->openBoxCount - 1].depth) {
     self->closeBoxBlock();
   }
 
@@ -2898,6 +3249,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->tableRowStacked = false;
     self->tableRowsSpannedRemaining = 0;
     self->tableCellTextBytes = 0;
+    self->tableBorderSpec = 0;
     self->tableRowCells.clear();
     self->nextWordContinues = false;
     self->currentCssStyle.reset();
@@ -2905,8 +3257,8 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
 
     const BlockStyle flowStyle =
         self->blockStyleStack.empty() ? BlockStyle() : self->blockStyleStack.back().withoutBottom();
-    self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled,
-                                                           self->focusReadingEnabled, flowStyle);
+    self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->hyphenationEnabled, self->focusReadingEnabled,
+                                                           flowStyle, self->paragraphIndentSpaces);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: text block after table");
     }
@@ -2925,12 +3277,14 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
 
   self->releaseInlineDropCapIfNotSingleLetter();
 
-  // Pop from inline style stack if we pushed an entry at this depth
-  // This handles all inline elements: b, i, u, span, etc.
-  if (!self->inlineStyleStack.empty() && self->inlineStyleStack.back().depth == self->depth) {
+  // Pop every inline style entry this element pushed: inline elements (b, i, u, span, ...) and a
+  // block's font-size scale, which can share its depth with a table cell's text style.
+  bool popped = false;
+  while (!self->inlineStyleStack.empty() && self->inlineStyleStack.back().depth == self->depth) {
     self->inlineStyleStack.pop_back();
-    self->updateEffectiveInlineStyle();
+    popped = true;
   }
+  if (popped) self->updateEffectiveInlineStyle();
 
   // Clear block style when leaving header or block elements
   if (headerOrBlockTag && !insideSkippedSubtree) {
@@ -3022,6 +3376,7 @@ bool ChapterHtmlSlimParser::beginParse() {
   // Using DefaultHandlerExpand preserves normal entity expansion from DOCTYPE
   XML_SetDefaultHandlerExpand(xmlParser_, defaultHandlerExpand);
 
+  firstParseChunk_ = true;
   if (!Storage.openFileForRead("EHP", filepath, parseFile_)) {
     destroyXmlParser(xmlParser_);
     xmlParser_ = nullptr;
@@ -3060,6 +3415,21 @@ ChapterHtmlSlimParser::ParseStatus ChapterHtmlSlimParser::parseStep() {
   if (len == 0 && parseFile_.available() > 0) {
     LOG_ERR("EHP", "File read error");
     return ParseStatus::Error;
+  }
+
+  if (firstParseChunk_) {
+    firstParseChunk_ = false;
+    const auto patch = xhtml::findDoctypePatch(static_cast<const char*>(buf), len);
+    if (patch.inject) {
+      // The buffer's tail is dropped with this call; the file resumes after the old DOCTYPE.
+      if (XML_ParseBuffer(xmlParser_, static_cast<int>(patch.keep), 0) == XML_STATUS_ERROR ||
+          XML_Parse(xmlParser_, xhtml::kExternalDoctype, sizeof(xhtml::kExternalDoctype) - 1, 0) == XML_STATUS_ERROR ||
+          !parseFile_.seek(patch.keep + patch.skip)) {
+        LOG_ERR("EHP", "Parse error in prolog: %s", XML_ErrorString(XML_GetErrorCode(xmlParser_)));
+        return ParseStatus::Error;
+      }
+      return ParseStatus::More;
+    }
   }
 
   const int done = parseFile_.available() == 0;
@@ -3186,22 +3556,32 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
   // broken rather than as tight typography.
   int inkFloor = renderer.getFontInkHeight(lineFontId);
   if (line->hasWordFonts()) {
+    // A line made only of sized words (a block's own font-size drawn as a scale) takes their
+    // leading alone, so a small note is set tight as well as a heading set loose.
+    bool everyWordSized = line->wordCount() > 0;
+    int wordsTallest = 0;
+    int wordsInk = 0;
     for (uint16_t w = 0; w < line->wordCount(); ++w) {
-      const int32_t wf = line->wordFont(w);
-      if (wf == 0 || wf == lineFontId) continue;
+      const int32_t wf = line->wordFontSlot(w);
+      if (wf == 0 || wf == lineFontId) {
+        everyWordSized = false;
+        continue;
+      }
       int h = 0;
       int ink = 0;
       if (TextBlock::isWordScaleTag(wf)) {
         const auto scale = static_cast<uint16_t>(-wf);
-        h = static_cast<int>(renderer.getLineHeightScaled(lineFontId, scale) * lineCompression + 0.5f);
+        h = std::max(1, (renderer.getLineHeight(lineFontId, lineCompression) * scale + 128) / 256);
         ink = (renderer.getFontInkHeight(lineFontId) * scale + 128) / 256;
       } else {
         h = renderer.getLineHeight(wf, lineCompression);
         ink = renderer.getFontInkHeight(wf);
       }
-      if (h > tallest) tallest = h;
-      if (ink > inkFloor) inkFloor = ink;
+      wordsTallest = std::max(wordsTallest, h);
+      wordsInk = std::max(wordsInk, ink);
     }
+    tallest = everyWordSized ? wordsTallest : std::max(tallest, wordsTallest);
+    inkFloor = everyWordSized ? wordsInk : std::max(inkFloor, wordsInk);
   }
   // Ink alone sets the line solid: the deepest descender meets the tallest ascender below it with
   // nothing between them, which on a bold heading reads as cramped even though nothing overlaps.
@@ -3239,20 +3619,29 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
       // is simply taller than the viewport) and keep the line here.
       currentPageNextY = 0;
     } else {
-      breakPage();
+      const uint8_t carry = linesToCarry();
+      if (canCarry(carry)) {
+        breakPageCarryingLines(carry);
+      } else {
+        breakPage();
+      }
       if (!currentPage) return;
     }
   }
   setCurrentPageVisibleOffset(visibleOffset);
 
   // First laid-out line inside an open box: its y anchors the box rect's top edge.
-  if (boxDepth >= 0 && boxAwaitingFirstLine) {
-    boxStartY = currentPageNextY;
-    boxAwaitingFirstLine = false;
+  for (uint8_t i = 0; i < openBoxCount; ++i) {
+    if (!openBoxes[i].awaitingFirstLine) continue;
+    openBoxes[i].startY = currentPageNextY;
+    openBoxes[i].awaitingFirstLine = false;
   }
 
   // Track cumulative words to assign footnotes to the page containing their anchor
   wordsExtractedInBlock += line->wordCount();
+  const size_t footnotesBefore = currentPage->footnotes.size();
+  const size_t linksBefore = currentPage->links.size();
+  const size_t elementsBefore = currentPage->elements.size();
   auto footnoteIt = pendingFootnotes.begin();
   while (footnoteIt != pendingFootnotes.end() && footnoteIt->first <= wordsExtractedInBlock) {
     currentPage->addFootnote(footnoteIt->second.number, footnoteIt->second.href.c_str());
@@ -3265,7 +3654,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
 
   // Panel BEFORE the line: page elements render in insertion order, so the fill has to be pushed
   // first or it would paint over the text it is meant to sit behind.
-  if (line->getBlockStyle().isInverted()) {
+  if (line->getBlockStyle().hasPanel()) {
     emitInvertedPanel(line->getBlockStyle(), static_cast<int16_t>(lineHeight));
   }
 
@@ -3288,10 +3677,22 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
   currentPage->elements.push_back(std::move(pageLine));
   currentPageNextY += lineHeight;
   // Floor for the box's closing edge: it may be pulled up into trailing spacing, never into text.
-  if (boxDepth >= 0) boxLastLineBottomY = currentPageNextY;
+  for (uint8_t i = 0; i < openBoxCount; ++i) {
+    openBoxes[i].lastLineBottomY = std::max(openBoxes[i].lastLineBottomY, currentPageNextY);
+  }
+
+  const bool hasExtras = currentPage->footnotes.size() != footnotesBefore || currentPage->links.size() != linksBefore ||
+                         currentPage->elements.size() != elementsBefore + 1;
+  if (recentLineCount == MAX_CARRIED_LINES) {
+    std::move(recentLines + 1, recentLines + MAX_CARRIED_LINES, recentLines);
+    --recentLineCount;
+  }
+  recentLines[recentLineCount++] = {static_cast<int16_t>(lineHeight), visibleOffset, hasExtras};
+  lastLineElementCount = currentPage->elements.size();
+  if (paragraphLinesOnPage < UINT8_MAX) ++paragraphLinesOnPage;
 }
 
-void ChapterHtmlSlimParser::makePages() {
+void ChapterHtmlSlimParser::makePages(const bool includeLastLine) {
   if (!currentTextBlock) {
     LOG_ERR("EHP", "!! No text block to make pages for !!");
     return;
@@ -3304,23 +3705,37 @@ void ChapterHtmlSlimParser::makePages() {
     layoutOom = true;
   }
 
+  // A pending `page-break-before/after: always` lands here, ahead of the block's own top spacing
+  // (a block that starts a page has no margin above it). It waits for a block with actual content
+  // so the break cannot be spent on an empty wrapper and leave the real content mid-page.
+  if (pendingForcedBreak && !currentTextBlock->isEmpty()) {
+    pendingForcedBreak = false;
+    breakPage();
+  }
+
   if (!currentPage) {
     currentPage.reset(new Page());
     currentPageNextY = 0;
     currentPageVisibleOffsetSet = false;
   }
 
-  // Apply top spacing before the paragraph (stored in pixels)
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
   // Paragraph spacing follows the block's own font AND its own line-height, like its line
   // height does: a heading led at 0.83 gets a proportionally tighter half-line after it.
   const int lineHeight = applyCssLineHeight(renderer.getLineHeight(blockStyle.resolveFontId(fontId), lineCompression),
                                             blockStyle.lineHeightPct);
-  if (blockStyle.marginTop > 0) {
-    currentPageNextY += blockStyle.marginTop;
-  }
-  if (blockStyle.paddingTop > 0) {
-    currentPageNextY += blockStyle.paddingTop;
+  // A long paragraph reaches here several times: once per soft flush (includeLastLine false) and
+  // once when it closes. Only the first call opens the block, and only the last one closes it.
+  const bool opensBlock = wordsExtractedInBlock == 0;
+  // Apply top spacing before the paragraph (stored in pixels). Ahead of the layout rather than on
+  // its first line, because the panel padding below reads the advanced position.
+  if (opensBlock) {
+    if (blockStyle.marginTop > 0) {
+      currentPageNextY += blockStyle.marginTop;
+    }
+    if (blockStyle.paddingTop > 0) {
+      currentPageNextY += blockStyle.paddingTop;
+    }
   }
 
   // Calculate effective width accounting for horizontal margins/padding
@@ -3330,29 +3745,42 @@ void ChapterHtmlSlimParser::makePages() {
 
   // Hand the block's top padding to its first panel line: currentPageNextY has already advanced
   // past it, so without this the panel would start below the padding it is meant to fill.
-  if (blockStyle.isInverted()) {
-    pendingPanelTopPad = std::max<int16_t>(0, blockStyle.paddingTop);
+  if (blockStyle.hasPanel()) {
+    if (opensBlock) pendingPanelTopPad = std::max<int16_t>(0, blockStyle.paddingTop);
+    // Every call: a box placed by an earlier chunk may sit on a page that has since been written.
     lastPanelBox = nullptr;
   }
 
   // page-break-inside/after: avoid -- buffer the lines, then decide (see beginKeepTogether).
-  beginKeepTogether(blockStyle);
+  // Only for a block laid out in one go: one long enough to be soft-flushed cannot be kept on a
+  // page anyway, and its chunks must not each be treated as a block of their own.
+  const bool keepTogether = opensBlock && includeLastLine;
+  if (keepTogether) beginKeepTogether(blockStyle);
 
+  if (opensBlock) {
+    paragraphLinesOnPage = 0;
+    paragraphHeadingLines = keepWithNextLines;
+    keepWithNextLines = 0;
+  }
+  layoutParagraph = currentTextBlock.get();
+  layoutParagraphHasDropCap = currentTextBlock->hasDropCapLines();
   currentTextBlock->layoutAndExtractLines(
       renderer, fontId, effectiveWidth,
       [this](std::unique_ptr<TextBlock> textBlock, const uint32_t offset) {
         addLineToPage(std::move(textBlock), offset);
       },
-      true, lineCompression, characterSpacing, wordSpacingPercent);
+      includeLastLine, lineCompression, characterSpacing, wordSpacingPercent);
+  layoutParagraph = nullptr;
+  layoutParagraphHasDropCap = false;
 
   // Before the panel stitching below: the buffered lines are only placed now, and it is their
   // placement that sets lastPanelBox.
-  finishKeepTogether();
+  if (keepTogether) finishKeepTogether();
 
   // ... and its bottom padding to the last one, which is only identifiable now the block is laid
   // out. The last line always sits on the still-open page (a page is completed on the NEXT line
   // that does not fit), so the box is still both alive and unwritten.
-  if (blockStyle.isInverted()) {
+  if (blockStyle.hasPanel() && includeLastLine) {
     if (lastPanelBox && blockStyle.paddingBottom > 0) {
       lastPanelBox->extendHeight(std::min<int16_t>(
           blockStyle.paddingBottom, static_cast<int16_t>(std::max(0, viewportHeight - currentPageNextY))));
@@ -3361,29 +3789,35 @@ void ChapterHtmlSlimParser::makePages() {
     lastPanelBox = nullptr;
   }
 
-  // Fallback: transfer any remaining pending footnotes to current page.
-  // Normally addLineToPage handles this via word-index tracking, but this catches
-  // edge cases where a footnote's word index equals the exact block size.
-  if (!pendingFootnotes.empty() && currentPage) {
-    for (const auto& [idx, fn] : pendingFootnotes) {
-      currentPage->addFootnote(fn.number, fn.href.c_str());
-      if (sectionFootnoteData.size() < MAX_SECTION_FOOTNOTES) {
-        sectionFootnoteData.push_back({static_cast<uint16_t>(completedPageCount), fn});
+  // A heading's lines wait at the page tail for the first line of the block after it.
+  if (includeLastLine && currentBlockIsHeading) keepWithNextLines = paragraphLinesOnPage;
+
+  // Trailing spacing and footnotes only apply when the block is finalized
+  if (includeLastLine) {
+    // Fallback: transfer any remaining pending footnotes to current page.
+    // Normally addLineToPage handles this via word-index tracking, but this catches
+    // edge cases where a footnote's word index equals the exact block size.
+    if (!pendingFootnotes.empty() && currentPage) {
+      for (const auto& [idx, fn] : pendingFootnotes) {
+        currentPage->addFootnote(fn.number, fn.href.c_str());
+        if (sectionFootnoteData.size() < MAX_SECTION_FOOTNOTES) {
+          sectionFootnoteData.push_back({static_cast<uint16_t>(completedPageCount), fn});
+        }
       }
+      pendingFootnotes.clear();
     }
-    pendingFootnotes.clear();
-  }
 
-  // Apply bottom spacing after the paragraph (stored in pixels)
-  if (blockStyle.marginBottom > 0) {
-    currentPageNextY += blockStyle.marginBottom;
-  }
-  if (blockStyle.paddingBottom > 0) {
-    currentPageNextY += blockStyle.paddingBottom;
-  }
+    // Apply bottom spacing after the paragraph (stored in pixels)
+    if (blockStyle.marginBottom > 0) {
+      currentPageNextY += blockStyle.marginBottom;
+    }
+    if (blockStyle.paddingBottom > 0) {
+      currentPageNextY += blockStyle.paddingBottom;
+    }
 
-  // Extra paragraph spacing if enabled (default behavior)
-  if (extraParagraphSpacing) {
-    currentPageNextY += lineHeight / 2;
+    // Extra paragraph spacing if enabled (default behavior)
+    if (extraParagraphSpacing) {
+      currentPageNextY += lineHeight / 2;
+    }
   }
 }

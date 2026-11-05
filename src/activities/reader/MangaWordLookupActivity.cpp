@@ -16,7 +16,9 @@
 #include "BookStats.h"
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
+#include "DictSourceNames.h"
 #include "MappedInputManager.h"
+#include "PanelTouch.h"
 #include "ReaderUtils.h"
 #include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
@@ -183,13 +185,15 @@ void MangaWordLookupActivity::saveSentence() {
   // Japanese manga, which is what they were made for.
   std::string language = sentencemining::languageForDictionary("", mining_.bookLanguage);
   if (language.empty()) language = sentencemining::JAPANESE;
-  miningStatus_ = sentencemining::append(card, language) ? MiningStatus::Saved : MiningStatus::Failed;
-  if (miningStatus_ == MiningStatus::Saved) BookStats::addCounts(mining_.bookPath.c_str(), 0, 1);
+  const auto result =
+      miningFeedback_.saved() ? sentencemining::SaveResult::AlreadySaved : sentencemining::saveOnce(card, language);
+  if (result == sentencemining::SaveResult::Saved) BookStats::addCounts(mining_.bookPath.c_str(), 0, 1);
+  miningFeedback_.record(result != sentencemining::SaveResult::Failed, millis());
   requestUpdate();
 }
 
 void MangaWordLookupActivity::moveCursor(int delta) {
-  miningStatus_ = MiningStatus::None;
+  miningFeedback_.clear();
   // Moving past the last already-discovered word while the background scan is still running:
   // scan forward just enough to reveal the next one (see EpubReaderWordLookupActivity).
   if (delta > 0 && !scan.isDone() && cursorIndex + delta >= static_cast<int>(scan.selectableGlyphs.size())) {
@@ -226,7 +230,8 @@ std::string MangaWordLookupActivity::buildLookupText(size_t startIdx) const {
 
   const size_t allStart = scan.selectToAllIdx[startIdx];
   int charCount = 0;
-  for (size_t i = allStart; i < scan.allGlyphs.size() && charCount < WordSelectionScan::kMaxLookupChars; i++) {
+  const int limit = scan.lookupCharLimit(startIdx);
+  for (size_t i = allStart; i < scan.allGlyphs.size() && charCount < limit; i++) {
     WordSelectionScan::encodeUtf8(scan.allGlyphs[i].codepoint, text);
     charCount++;
   }
@@ -234,7 +239,7 @@ std::string MangaWordLookupActivity::buildLookupText(size_t startIdx) const {
 }
 
 void MangaWordLookupActivity::performLookup() {
-  miningStatus_ = MiningStatus::None;
+  miningFeedback_.clear();
   // Serialize against the render task, which reads the result strings concurrently -- see
   // EpubReaderWordLookupActivity::performLookup() for the confirmed tear/abort.
   RenderLock lock;
@@ -266,6 +271,7 @@ void MangaWordLookupActivity::performLookupImpl() {
   hasResult = false;
   resultHeadword.clear();
   resultSource = nullptr;
+  resultDict = 0;
   resultDefinition.clear();
   resultReading.clear();
   resultGrammar.clear();
@@ -311,9 +317,8 @@ void MangaWordLookupActivity::performLookupImpl() {
     DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
     resultReading = std::move(metadata.reading);
     resultGrammar = std::move(metadata.grammar);
-    resultSource = result.entry.sourceDict == DictIndex::DICT_NAMES     ? "JMnedict"
-                   : result.entry.sourceDict == DictIndex::DICT_GRAMMAR ? "Grammar"
-                                                                        : "JMdict";
+    resultDict = result.entry.sourceDict;
+    resultSource = dictsource::name(resultDict);
     resultDictionaryLabel = std::move(metadata.source);
 
     int chars = 0;
@@ -372,7 +377,8 @@ void MangaWordLookupActivity::performLookupImpl() {
           resultReading = std::move(grammarMetadata.reading);
           resultGrammar = std::move(grammarMetadata.grammar);
           resultDictionaryLabel = std::move(grammarMetadata.source);
-          resultSource = "Grammar";
+          resultDict = DictIndex::DICT_GRAMMAR;
+          resultSource = dictsource::name(resultDict);
         }
       }
     }
@@ -443,13 +449,13 @@ void MangaWordLookupActivity::performLookupImpl() {
     }
   }
 
-  DefinitionText::formatEntryBody(resultDefinition, resultSource != nullptr && strcmp(resultSource, "Grammar") == 0
-                                                        ? resultHeadword
-                                                        : std::string());
+  DefinitionText::formatEntryBody(
+      resultDefinition, resultDict == DictIndex::DICT_GRAMMAR ? resultHeadword : std::string(), resultGrammar);
   requestUpdate();
 }
 
 void MangaWordLookupActivity::loop() {
+  if (miningFeedback_.popupExpired(millis())) requestUpdate();
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput)) {
     ActivityResult result;
     result.isCancelled = true;
@@ -490,81 +496,45 @@ void MangaWordLookupActivity::loop() {
     return;
   }
 
-  const bool sideButtonsForLookup = SETTINGS.wordLookupSideButtons != 0 && !SETTINGS.sideButtonsFullyCustomized();
-  // Both roles are named by SCREEN direction, never by a physical button. The rotation hands the
-  // horizontal pair to one set of buttons and the vertical pair to the other, so naming both this
-  // way guarantees the two roles land on different buttons in every orientation. Reaching for the
-  // physical side buttons (PageBack/PageForward) for entries collided in landscape, where
-  // ScreenLeft/Right resolve to those very buttons -- scrolling and entry navigation ended up on
-  // the same pair and the front buttons did nothing.
-  //
-  // The setting keeps its meaning: it swaps which AXIS carries which role, so in portrait it still
-  // moves entry navigation onto the side buttons and scrolling onto the front pair.
-  const auto nextEntryButton =
-      sideButtonsForLookup ? MappedInputManager::Button::ScreenDown : MappedInputManager::Button::ScreenRight;
-  const auto previousEntryButton =
-      sideButtonsForLookup ? MappedInputManager::Button::ScreenUp : MappedInputManager::Button::ScreenLeft;
-  const auto scrollDownButton =
-      sideButtonsForLookup ? MappedInputManager::Button::ScreenRight : MappedInputManager::Button::ScreenDown;
-  const auto scrollUpButton =
-      sideButtonsForLookup ? MappedInputManager::Button::ScreenLeft : MappedInputManager::Button::ScreenUp;
-  // Outside the card is "put it away", as in the English and Japanese panels: the card floats
-  // over the page, so a tap around it reads as dismissing it. Checked before the paging below so
-  // the two cannot both claim one contact.
-  int tapX = 0;
-  int tapY = 0;
-  if (mappedInput.hasTouch() && mappedInput.wasScreenTapped(tapX, tapY)) {
-    const auto box = DictionaryPanel::compute(renderer).box;
-    if (tapX < box.x || tapX >= box.x + box.width || tapY < box.y || tapY >= box.y + box.height) {
+  // The gestures every floating panel answers, read in one place (PanelTouch): a tap outside the
+  // card puts it away, up/down swipes read on like a button press, and a page turn skips to the
+  // previous/next word like a hold.
+  switch (const auto touch = PanelTouch::read(renderer, mappedInput, hasResult, pageTurnReversed)) {
+    case PanelTouch::Action::Close: {
       ActivityResult result;
       result.isCancelled = true;
       setResult(std::move(result));
       finish();
       return;
     }
-    const auto add = DictionaryPanel::compute(renderer).addButton;
-    if (hasResult && tapX >= add.x && tapX < add.x + add.width && tapY >= add.y && tapY < add.y + add.height) {
+    case PanelTouch::Action::AddButton:
       saveSentence();
       return;
-    }
+    case PanelTouch::Action::ScrollDown:
+    case PanelTouch::Action::ScrollUp:
+      readOn(touch == PanelTouch::Action::ScrollDown ? 1 : -1);
+      return;
+    case PanelTouch::Action::Next:
+    case PanelTouch::Action::Previous:
+      moveCursor(touch == PanelTouch::Action::Next ? 1 : -1);
+      return;
+    case PanelTouch::Action::None:
+      break;
   }
 
-  // Tap zones, inverted zones, swipes or inverted swipes -- whatever the reader is set to, through
-  // the same helper the page turns and the other panels use. A turn steps to the previous/next
-  // word, as this panel's own left/right buttons do: the entry itself scrolls on the vertical
-  // swipe below.
-  const auto touchTurn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
-  if (touchTurn.prev || touchTurn.next) {
-    moveCursor(touchTurn.next ? 1 : -1);
-    return;
+  // Every pair reads the same way, as in the book's lookup panel: a press reads on through the
+  // definition and onto the next word at its end; a hold skips to the next word.
+  int delta = 0;
+  switch (ReaderUtils::lookupPressAny(mappedInput, delta)) {
+    case ReaderUtils::LookupPress::Press:
+      readOn(delta);
+      break;
+    case ReaderUtils::LookupPress::Hold:
+      moveCursor(delta);
+      break;
+    case ReaderUtils::LookupPress::None:
+      break;
   }
-
-  // Up/down swipes scroll a long definition a screenful at a time, whatever the page-turn setting
-  // says -- the same gesture as the EPUB panels.
-  if (const int scroll = ReaderUtils::definitionScrollSwipe(mappedInput)) {
-    const int target = std::clamp(scrollOffset + scroll * visibleCapacity, 0, maxScroll);
-    if (hasResult && target != scrollOffset) {
-      scrollOffset = target;
-      miningStatus_ = MiningStatus::None;
-      requestUpdate();
-    }
-    return;
-  }
-
-  buttonNavigator.onPressAndContinuous({nextEntryButton}, [this] { moveCursor(1); });
-  buttonNavigator.onPressAndContinuous({previousEntryButton}, [this] { moveCursor(-1); });
-  buttonNavigator.onPressAndContinuous({scrollDownButton}, [this] {
-    if (hasResult && scrollOffset < maxScroll) {
-      scrollOffset = std::min(maxScroll, scrollOffset + 5);
-      requestUpdate();
-    }
-  });
-  buttonNavigator.onPressAndContinuous({scrollUpButton}, [this] {
-    if (scrollOffset > 0) {
-      scrollOffset = std::max(0, scrollOffset - 5);
-      requestUpdate();
-    }
-  });
 
   // Progressive background scan + one-time result persistence -- same structure as
   // EpubReaderWordLookupActivity::loop(), see there for the full rationale.
@@ -579,6 +549,16 @@ void MangaWordLookupActivity::loop() {
       requestUpdate();
     }
   }
+}
+
+void MangaWordLookupActivity::readOn(const int delta) {
+  const int target = std::clamp(scrollOffset + delta * std::max(1, visibleCapacity), 0, maxScroll);
+  if (hasResult && target != scrollOffset) {
+    scrollOffset = target;
+    requestUpdate();
+    return;
+  }
+  moveCursor(delta);
 }
 
 void MangaWordLookupActivity::renderContentArea(const Rect& body) {
@@ -655,25 +635,21 @@ void MangaWordLookupActivity::render(RenderLock&&) {
 
   // The panel is opaque and always covers the same rectangle, so a re-render overwrites the
   // previous one; the manga page stays visible around it instead of being cleared away.
-  const char* kind = resultSource == nullptr
-                         ? nullptr
-                         : I18N.get(strcmp(resultSource, "Grammar") == 0    ? StrId::STR_DICT_KIND_GRAMMAR
-                                    : strcmp(resultSource, "JMnedict") == 0 ? StrId::STR_DICT_KIND_NAME
-                                                                            : StrId::STR_DICT_KIND_VOCAB);
-  // A save's outcome takes the footer's label until the next move, in place of "kind | dictionary".
-  const bool showStatus = miningStatus_ != MiningStatus::None;
-  const char* statusText = miningStatus_ == MiningStatus::Saved ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE_FAILED);
-  const auto layout =
-      DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", showStatus ? nullptr : dictionaryLabel(),
-                            counterText.empty() ? nullptr : counterText.c_str(), showStatus ? statusText : kind,
-                            hasResult && mappedInput.hasTouch());
+  const char* kind = resultSource == nullptr ? nullptr : I18N.get(dictsource::kind(resultDict));
+  const auto layout = DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", dictionaryLabel(),
+                                            counterText.empty() ? nullptr : counterText.c_str(), kind,
+                                            hasResult && mappedInput.hasTouch(), hasResult && miningFeedback_.saved());
   renderContentArea(layout.body);
+  DictionaryPanel::drawPopup(renderer, layout, miningFeedback_.popupText(millis()));
 
   // Directional labels for the same reason as the EPUB lookup panel: the hint must name the
   // direction on the rotated screen, which a fixed left/right pair cannot do.
   const auto labels =
-      mappedInput.mapDirectionalLabels(tr(STR_BACK), hasResult ? tr(STR_MINING_SAVE) : tr(STR_SELECT), tr(STR_DIR_LEFT),
-                                       tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+      mappedInput.mapDirectionalLabels(tr(STR_BACK),
+                                       !hasResult                ? tr(STR_SELECT)
+                                       : miningFeedback_.saved() ? tr(STR_MINING_SAVED)
+                                                                 : tr(STR_MINING_SAVE),
+                                       tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 

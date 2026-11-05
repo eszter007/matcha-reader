@@ -31,8 +31,6 @@ void ImageBlock::setExtractor(void* ctx, ExtractFn fn) {
   extractFn = fn;
 }
 
-bool ImageBlock::imageExists() const { return Storage.exists(imagePath.c_str()); }
-
 namespace {
 
 std::string getCachePath(const std::string& imagePath) {
@@ -85,6 +83,8 @@ bool imageFailedThisRender(const std::string& path) {
 }
 
 bool deferredDecode = false;
+// A decoder ran and failed in this render (heap, mostly): another render may succeed.
+bool decodeFailedThisRender = false;
 
 void rememberImageFailure(const std::string& path) {
   if (failedImageCount == MAX_RENDER_IMAGE_FAILURES || imageFailedThisRender(path)) return;
@@ -256,10 +256,6 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
     return false;
   }
 
-  // Use cached dimensions for rendering (they're the actual decoded size)
-  expectedWidth = cachedWidth;
-  expectedHeight = cachedHeight;
-
   LOG_DBG("IMG", "Loading from cache: %s (%dx%d)", cachePath.c_str(), cachedWidth, cachedHeight);
 
   const int bytesPerRow = (cachedWidth + 3) / 4;  // 2 bits per pixel, 4 pixels per byte
@@ -360,11 +356,22 @@ bool ImageBlock::hasValidCache() const {
 
 bool ImageBlock::needsDecode() const { return !imageFailedThisRender(imagePath) && !hasValidCache(); }
 
-void ImageBlock::clearRenderFailures() { failedImageCount = 0; }
-
-bool ImageBlock::needsFramebufferLoanToDecode() const {
-  return FsHelpers::hasPngExtension(imagePath) && !PngToFramebufferConverter::decoderFitsHeap() && !hasValidCache();
+void ImageBlock::clearRenderFailures() {
+  failedImageCount = 0;
+  decodeFailedThisRender = false;
 }
+
+bool ImageBlock::renderHadDecodeFailure() { return decodeFailedThisRender; }
+
+bool ImageBlock::decodeNeedsMoreHeap() const {
+  if (FsHelpers::hasPngExtension(imagePath) && !PngToFramebufferConverter::decoderFitsHeap()) return true;
+  // Not yet pulled out of the book: the zip inflate window is one contiguous 32KB block.
+  constexpr uint32_t INFLATE_WINDOW_BYTES = 32768;
+  return !srcPath.empty() && extractFn && ESP.getMaxAllocHeap() < INFLATE_WINDOW_BYTES &&
+         !Storage.exists(imagePath.c_str());
+}
+
+bool ImageBlock::needsFramebufferLoanToDecode() const { return decodeNeedsMoreHeap() && !hasValidCache(); }
 
 bool ImageBlock::consumeDeferredDecode() {
   const bool deferred = deferredDecode;
@@ -471,8 +478,8 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   // Before the extraction below: it needs the same scarce contiguous heap (a 32KB inflate window),
   // and the warm task extracts too, inside the framebuffer loan where the window can use the lent
   // bytes. Deferring after a failed extraction left an unextracted PNG as a placeholder for good.
-  if (FsHelpers::hasPngExtension(imagePath) && !PngToFramebufferConverter::decoderFitsHeap()) {
-    LOG_INF("IMG", "Deferring PNG decode to the warm task (largest=%u): %s", (unsigned)ESP.getMaxAllocHeap(),
+  if (decodeNeedsMoreHeap()) {
+    LOG_INF("IMG", "Deferring image decode to the warm task (largest=%u): %s", (unsigned)ESP.getMaxAllocHeap(),
             imagePath.c_str());
     deferredDecode = true;
     rememberImageFailure(imagePath);
@@ -546,6 +553,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   if (!success) {
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
     rememberImageFailure(imagePath);
+    decodeFailedThisRender = true;
     renderPlaceholderAt(renderer, drawX, drawY, drawW, drawH);
     return;
   }

@@ -7,22 +7,19 @@
 
 #include <functional>
 
+#include "ClippingStore.h"
 #include "RecentBooksStore.h"
+#include "util/BookWalk.h"
 #include "util/BookmarkUtil.h"
 
 namespace renamestate {
 namespace {
 
-// Deepest folder nesting this will walk. A card organised into series/volume folders is two or
-// three levels; the bound exists so a malformed tree cannot recurse without end on a device whose
-// stack is measured in kilobytes.
-constexpr int MAX_DEPTH = 8;
-
 // Moves one state path, reporting whether it actually moved so the caller can put it back.
 // A missing source is success with moved=false: not every book has a cache or a bookmark.
 bool moveState(const std::string& from, const std::string& to, bool& moved, const char* tag) {
   moved = false;
-  if (from.empty() || to.empty() || !Storage.exists(from.c_str())) return true;
+  if (from.empty() || to.empty() || from == to || !Storage.exists(from.c_str())) return true;
   if (Storage.exists(to.c_str())) {
     LOG_ERR(tag, "Rename state target already exists: %s", to.c_str());
     return false;
@@ -41,38 +38,6 @@ void moveStateBack(const std::string& from, const std::string& to, const char* t
   }
 }
 
-// Calls `fn(bookPath)` for every book at or under `path`. A manga folder IS a book, so it is
-// reported and not descended into. Nothing is accumulated: a folder of a thousand books would
-// cost tens of KB as a list of paths, on a heap that has ~30KB free when the web server runs.
-// The walk is deterministic, so the rollback pass re-derives the same set instead of storing it.
-bool forEachBook(const std::string& path, int depth, const std::function<bool(const std::string&)>& fn) {
-  if (depth > MAX_DEPTH) return true;
-  HalFile entry = Storage.open(path.c_str());
-  if (!entry) return true;
-  if (!entry.isDirectory()) {
-    entry.close();
-    return fn(path);
-  }
-  if (manga::MangaBook::isMangaFolder(path)) {
-    entry.close();
-    return fn(path);
-  }
-  bool ok = true;
-  for (auto child = entry.openNextFile(); child && ok; child = entry.openNextFile()) {
-    char nameBuf[256];
-    child.getName(nameBuf, sizeof(nameBuf));
-    const bool childIsDir = child.isDirectory();
-    child.close();
-    if (nameBuf[0] == '\0' || nameBuf[0] == '.') continue;  // skip dotfiles and the cache dir
-    std::string childPath = path;
-    if (childPath.back() != '/') childPath += '/';
-    childPath += nameBuf;
-    ok = childIsDir ? forEachBook(childPath, depth + 1, fn) : fn(childPath);
-  }
-  entry.close();
-  return ok;
-}
-
 // The path a book under `oldRoot` will have once that root becomes `newRoot`.
 std::string rebase(const std::string& bookPath, const std::string& oldRoot, const std::string& newRoot) {
   if (bookPath.size() < oldRoot.size()) return bookPath;
@@ -89,9 +54,9 @@ std::string bookCachePath(const std::string& path) {
   } else if (FsHelpers::hasXtcExtension(path)) {
     prefix = "xtc_";
   } else if (manga::MangaBook::isMangaFolder(path)) {
-    // A manga book is a folder of page images; its index and progress live under this hash the
-    // same way an EPUB's do, so a folder rename has to carry them too.
-    prefix = "manga_";
+    // A manga book's index and progress live under this hash the same way an EPUB's do, so a
+    // rename has to carry them too.
+    return manga::MangaBook::cachePathFor(path);
   } else {
     return "";
   }
@@ -103,7 +68,7 @@ bool renamePathWithState(const std::string& oldPath, const std::string& newPath,
   // first failure, and pass 1b puts back everything pass 1 moved -- all-or-nothing, so the card is
   // never left with a book's state filed under a name no book has.
   bool allMoved = true;
-  forEachBook(oldPath, 0, [&](const std::string& bookPath) {
+  bookwalk::forEachBook(oldPath, 0, [&](const std::string& bookPath) {
     const std::string newBookPath = rebase(bookPath, oldPath, newPath);
     bool cacheMoved = false;
     bool marksMoved = false;
@@ -124,7 +89,7 @@ bool renamePathWithState(const std::string& oldPath, const std::string& newPath,
   });
 
   const auto rollBackState = [&]() {
-    forEachBook(oldPath, 0, [&](const std::string& bookPath) {
+    bookwalk::forEachBook(oldPath, 0, [&](const std::string& bookPath) {
       const std::string newBookPath = rebase(bookPath, oldPath, newPath);
       moveStateBack(bookCachePath(newBookPath), bookCachePath(bookPath), logTag);
       if (FsHelpers::hasReflowableBookExtension(bookPath)) {
@@ -141,7 +106,8 @@ bool renamePathWithState(const std::string& oldPath, const std::string& newPath,
 
   // Pass 2: the rename itself, last -- while it is still undone, the walk above can re-derive
   // every book path from oldPath. Once it succeeds there is nothing left that can fail.
-  if (!Storage.rename(oldPath.c_str(), newPath.c_str())) {
+  // ClippingStore::moveBook renames the path and carries every clipping store under it along.
+  if (!ClippingStore::moveBook(oldPath, newPath)) {
     LOG_ERR(logTag, "Failed to rename: %s -> %s", oldPath.c_str(), newPath.c_str());
     rollBackState();
     return false;
@@ -149,7 +115,7 @@ bool renamePathWithState(const std::string& oldPath, const std::string& newPath,
 
   // Pass 3: recents. The walk now has to run over the NEW path, and reports the new book paths,
   // so each entry is mapped back to find what it used to be.
-  forEachBook(newPath, 0, [&](const std::string& newBookPath) {
+  bookwalk::forEachBook(newPath, 0, [&](const std::string& newBookPath) {
     const std::string oldBookPath = rebase(newBookPath, newPath, oldPath);
     RECENT_BOOKS.updatePath(oldBookPath, newBookPath, bookCachePath(oldBookPath), bookCachePath(newBookPath));
     return true;

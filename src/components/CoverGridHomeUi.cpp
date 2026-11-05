@@ -133,15 +133,19 @@ void CoverGridHomeUi::draw(UiScreen& screen) {
   coverCache.prepare();
   const auto& theme = screen.theme();
   const auto safe = UITheme::getInstance().getScreenSafeArea(renderer, true);
-  screen.setContentMarginFromScreen(fui::Insets{
-      static_cast<int16_t>(safe.y), static_cast<int16_t>(renderer.getScreenWidth() - safe.x - safe.width),
-      static_cast<int16_t>(renderer.getScreenHeight() - safe.y - safe.height), static_cast<int16_t>(safe.x)});
+  // Sides clear the rounded corners like the header, so the grid lines up under it.
+  const int corner = BoardConfig::ACTIVE.cornerRadius;
+  const auto left = static_cast<int16_t>(std::max(safe.x, corner));
+  const auto right = static_cast<int16_t>(std::max(renderer.getScreenWidth() - safe.x - safe.width, corner));
+  screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(safe.y), right,
+                                                static_cast<int16_t>(renderer.getScreenHeight() - safe.y - safe.height),
+                                                left});
   // Horizontal inset sized so the outer cover columns (content x plus the
   // grid's cell inset) sit on the theme's side-padding line: the heading and
   // tabs then align with the clock and battery, which tuck a few px further
   // in (headerStatusInset's optical bias).
   const int16_t hInset = std::max<int16_t>(
-      0, static_cast<int16_t>(UITheme::getInstance().getMetrics().headerSidePadding - COVER_CELL_INSET - safe.x));
+      0, static_cast<int16_t>(UITheme::getInstance().getMetrics().headerSidePadding - COVER_CELL_INSET - left));
   // Drop the status band, hero, and grid down: touch boards get a full step
   // (no button-hint band to fit), button boards a modest nudge. The tabs stay
   // put (bottom-anchored below).

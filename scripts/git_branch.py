@@ -79,7 +79,8 @@ def get_base_version(project_dir):
 def inject_version(env):
     # Only applies to development environments; release envs set the
     # version via build_flags in platformio.ini and are unaffected.
-    if env['PIOENV'] not in ('default', 'sticky', 'x4pro', 'x4c', 'papermono'):
+    if env['PIOENV'] not in ('default', 'sticky', 'x4pro', 'x4c', 'papermono', 'metalio_eink4', 'eego_a4',
+                           'picco'):
         return
 
     project_dir = env['PROJECT_DIR']
@@ -88,7 +89,16 @@ def inject_version(env):
     # -debug marks the LOG_LEVEL=2 dev environment apart from release binaries.
     version_string = f'matcha-reader-{base_version}-debug'
 
-    env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
+    def add_version(build_env, node):
+        # Only these translation units depend on Git metadata. Keep library and
+        # reader objects reusable when the branch or commit changes.
+        if b'CROSSPOINT_VERSION' not in node.srcnode().get_contents():
+            return node
+        version_env = build_env.Clone()
+        version_env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
+        return version_env.Object(node)
+
+    env.AddBuildMiddleware(add_version)
     print(f'CrossPoint build version: {version_string}')
 
 
@@ -100,8 +110,8 @@ try:
     inject_version(env)     # noqa: F821  # type: ignore[name-defined]
 except NameError:
     class _Env(dict):
-        def Append(self, **_):
-            # Validation mode does not need SCons state; this stub only satisfies inject_version().
+        def AddBuildMiddleware(self, _):
+            # Validation mode only reports the computed version.
             return None
 
     _project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

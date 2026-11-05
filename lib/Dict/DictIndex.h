@@ -49,6 +49,22 @@ class DictIndex {
  public:
   // Check whether the dictionary files exist on the SD card.
   static bool isAvailable();
+  // isAvailable() for another language folder ("jp", "zh", "yue"), for a status display. Switches
+  // the folder and back, which drops the lookup caches: not for use during a lookup session.
+  static bool isInstalled(const char* folder);
+
+  // Select the language folder the files are read from: "jp" (default) or "zh". The reader sets
+  // it when a book opens. Switching releases every cache, so call it between lookup sessions.
+  static void setLanguageFolder(const char* folder);
+  // The folder a book should read: `folder`, except a Cantonese book without the yue dictionary
+  // reads the Mandarin one, which covers most of its words. Probes the card; call on book open.
+  static const char* installedFolderFor(const char* folder);
+  static const char* languageFolder();
+
+  // Display name of a dictionary slot (DICT_JMDICT, DICT_NAMES or DICT_GRAMMAR), from the
+  // <folder>/vocab.title, names.title or grammar.title the converter wrote. Empty when absent;
+  // the caller then falls back to a name of its own.
+  static const char* slotTitle(uint8_t dict);
 
   // Preferred filenames. The vocab/names dictionaries also accept the pre-rename legacy
   // filenames (jmdict/jmnedict) -- resolved at runtime by the accessors below, so existing SD
@@ -110,6 +126,10 @@ class DictIndex {
   static bool lookupExact(const char* headword, DictEntry& out, uint8_t dictMask = DICT_ALL, bool needDefinition = true,
                           uint8_t posMask = 0);
 
+  // After a lookupExact() miss: false when no headword in the searched dictionaries starts with
+  // the key, so no longer window can match either. True after a hit or when that is not known.
+  static bool longerHeadwordMayExist();
+
   // Look up in a specific index/dat file pair. Collects ALL entries with
   // the same headword (scanning adjacent records) and merges definitions
   // (unless needDefinition=false; see lookupExact). posMask: see lookupExact.
@@ -126,6 +146,8 @@ class DictIndex {
   // memory and retry instead of presenting the empty result to the reader as "no definition".
   // Reading the flag clears it.
   static bool consumeHeapLimited();
+  // Whether a block of `bytes` fits with the headroom lookups keep for the rest of the system.
+  static bool fitsInHeap(size_t bytes);
 
   static void releaseCaches();
 

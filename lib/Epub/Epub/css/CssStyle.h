@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 // Matches order of PARAGRAPH_ALIGNMENT in CrossPointSettings
 enum class CssTextAlign : uint8_t { Justify = 0, Left = 1, Center = 2, Right = 3, None = 4 };
@@ -9,7 +11,9 @@ enum class CssTextAlign : uint8_t { Justify = 0, Left = 1, Center = 2, Right = 3
 // falls back to Pixels, which is right for every other property but would turn `line-height:
 // 1.4` into 1.4 PIXELS. It resolves exactly like Em in toPixels(); the distinction is kept
 // because only line-height produces it and a bare number is not a length.
-enum class CssUnit : uint8_t { Pixels = 0, Em = 1, Rem = 2, Points = 3, Percent = 4, Number = 5 };
+// Auto is a margin's `auto`: it resolves to 0 like any unknown unit, but the vertical engine reads it as
+// block alignment along the column (EBPAJ .block-align-center is `margin: auto 0` in vertical writing).
+enum class CssUnit : uint8_t { Pixels = 0, Em = 1, Rem = 2, Points = 3, Percent = 4, Number = 5, Auto = 6 };
 enum class CssTextDirection : uint8_t { Ltr = 0, Rtl = 1 };
 
 // Represents a CSS length value with its unit, allowing deferred resolution to pixels
@@ -53,10 +57,10 @@ struct CssLength {
 };
 
 // Font style options matching CSS font-style property
-enum class CssFontStyle : uint8_t { Normal = 0, Italic = 1 };
+enum class CssFontStyle : uint8_t { Normal = 0, Italic = 1, Inherit = 2 };
 
 // Font weight options - CSS supports 100-900, we simplify to normal/bold
-enum class CssFontWeight : uint8_t { Normal = 0, Bold = 1 };
+enum class CssFontWeight : uint8_t { Normal = 0, Bold = 1, Inherit = 2 };
 
 // Text decoration options. Values are bit flags so CSS can combine multiple line decorations.
 enum class CssTextDecoration : uint8_t { None = 0, Underline = 1, LineThrough = 2 };
@@ -115,6 +119,7 @@ enum class CssListStyleType : uint8_t { Disc = 0, Circle = 1, Square = 2, Decima
 enum class CssInkMode : uint8_t {
   Normal = 0,    // dark ink straight onto the page
   Inverted = 1,  // light ink on a filled dark panel
+  Shaded = 2,    // dark ink on a light gray panel (a light, non-white background-color)
 };
 
 // page-break-before / -after / -inside, and the modern break-before / -after / -inside aliases.
@@ -151,8 +156,10 @@ constexpr uint8_t cssPageBreakWith(const uint8_t packed, const CssPageBreakSlot 
 // so a byte per property costs twice as much for no extra information.
 //   bits 0-1  CssTextTransform
 //   bit  2    hyphens: none  (the ONLY hyphens value that changes anything -- see hyphensNone())
+//   bit  3    white-space: pre / pre-wrap / break-spaces (spaces and line breaks kept)
 constexpr uint8_t CSS_TEXT_TRANSFORM_MASK = 0x03;
 constexpr uint8_t CSS_HYPHENS_NONE_BIT = 1 << 2;
+constexpr uint8_t CSS_PRESERVE_WHITESPACE_BIT = 1 << 3;
 
 // Bitmask for tracking which properties have been explicitly set
 struct CssPropertyFlags {
@@ -185,6 +192,7 @@ struct CssPropertyFlags {
   uint16_t textTransform : 1;
   uint16_t hyphens : 1;
   uint16_t letterSpacing : 1;
+  uint16_t whiteSpace : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -215,7 +223,8 @@ struct CssPropertyFlags {
         lineHeight(0),
         textTransform(0),
         hyphens(0),
-        letterSpacing(0) {}
+        letterSpacing(0),
+        whiteSpace(0) {}
 
   // EVERY flag above must appear in both anySet() and clearAll(). An omission is silent and
   // total: anySet() gates processRuleBlockWithStyle's first line, so a rule that defines only
@@ -225,7 +234,8 @@ struct CssPropertyFlags {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
            imageWidth || display || direction || verticalAlign || border || textEmphasis || fontVariant ||
-           listStyleType || fontSize || inkMode || pageBreak || lineHeight || textTransform || hyphens || letterSpacing;
+           listStyleType || fontSize || inkMode || pageBreak || lineHeight || textTransform || hyphens ||
+           letterSpacing || whiteSpace;
   }
 
   void clearAll() {
@@ -234,7 +244,7 @@ struct CssPropertyFlags {
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = border = 0;
     textEmphasis = fontVariant = listStyleType = fontSize = inkMode = pageBreak = lineHeight = 0;
-    textTransform = hyphens = letterSpacing = 0;
+    textTransform = hyphens = letterSpacing = whiteSpace = 0;
   }
 };
 
@@ -295,6 +305,8 @@ struct CssStyle {
   static constexpr uint8_t BORDER_STYLE_MASK = 0x30;
   static constexpr uint8_t BORDER_WIDTH_SHIFT = 6;
   static constexpr uint8_t BORDER_WIDTH_MASK = 0xC0;
+  // Summary of the border: which edges, and the style and width last declared. The vertical engine
+  // and tables read it; borderSides below holds each side's own. A border property sets both.
   uint8_t borderEdges = 0;
   [[nodiscard]] static constexpr uint8_t makeBorderSpec(const uint8_t edges, const CssBorderLineStyle style,
                                                         const uint8_t width) {
@@ -319,6 +331,17 @@ struct CssStyle {
     borderEdges = static_cast<uint8_t>((borderEdges & ~BORDER_EDGE_MASK) | (edges & BORDER_EDGE_MASK));
   }
   [[nodiscard]] bool isFullBorderBox() const { return defined.border && borderEdgeMask() == BORDER_ALL; }
+
+  // Each side's own style and width, as a spec whose edge mask is that side's bit alone (0 = no
+  // line). borderEdges stays the summary the vertical engine and edge-mask callers read.
+  static constexpr uint8_t BORDER_SIDE_BITS[4] = {BORDER_TOP, BORDER_RIGHT, BORDER_BOTTOM, BORDER_LEFT};
+  uint8_t borderSides[4] = {};  // top, right, bottom, left
+  void setBorderSide(const size_t side, const bool drawn, const CssBorderLineStyle style, const uint8_t width) {
+    borderSides[side] = drawn ? makeBorderSpec(BORDER_SIDE_BITS[side], style, width) : 0;
+  }
+  void setBorderSides(const uint8_t edges, const CssBorderLineStyle style, const uint8_t width) {
+    for (size_t side = 0; side < 4; ++side) setBorderSide(side, edges & BORDER_SIDE_BITS[side], style, width);
+  }
 
   CssTextEmphasis textEmphasis = CssTextEmphasis::None;     // JP bouten marks
   CssFontVariant fontVariant = CssFontVariant::Normal;      // small-caps
@@ -352,6 +375,11 @@ struct CssStyle {
   void setHyphensNone(const bool value) {
     textFlags = static_cast<uint8_t>(value ? (textFlags | CSS_HYPHENS_NONE_BIT)
                                            : (textFlags & static_cast<uint8_t>(~CSS_HYPHENS_NONE_BIT)));
+  }
+  [[nodiscard]] bool preserveWhitespace() const { return (textFlags & CSS_PRESERVE_WHITESPACE_BIT) != 0; }
+  void setPreserveWhitespace(const bool value) {
+    textFlags = static_cast<uint8_t>(value ? (textFlags | CSS_PRESERVE_WHITESPACE_BIT)
+                                           : (textFlags & static_cast<uint8_t>(~CSS_PRESERVE_WHITESPACE_BIT)));
   }
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
@@ -433,6 +461,7 @@ struct CssStyle {
     }
     if (base.hasBorder()) {
       borderEdges = base.borderEdges;
+      memcpy(borderSides, base.borderSides, sizeof(borderSides));
       defined.border = 1;
     }
     if (base.hasTextEmphasis()) {
@@ -469,6 +498,10 @@ struct CssStyle {
     if (base.hasHyphens()) {
       setHyphensNone(base.hyphensNone());
       defined.hyphens = 1;
+    }
+    if (base.hasWhiteSpace()) {
+      setPreserveWhitespace(base.preserveWhitespace());
+      defined.whiteSpace = 1;
     }
     if (base.hasInkMode()) {
       inkMode = base.inkMode;
@@ -528,6 +561,7 @@ struct CssStyle {
   // `letter-spacing: normal` leaves this clear; 0 and unset render identically, but the flag
   // still lets an explicit `normal` stop the cascade from inheriting a parent's tracking.
   [[nodiscard]] bool hasLetterSpacing() const { return defined.letterSpacing; }
+  [[nodiscard]] bool hasWhiteSpace() const { return defined.whiteSpace; }
 
   void reset() {
     textAlign = CssTextAlign::Left;
@@ -545,6 +579,7 @@ struct CssStyle {
     display = CssDisplay::Block;
     verticalAlign = CssVerticalAlign::Baseline;
     borderEdges = 0;
+    memset(borderSides, 0, sizeof(borderSides));
     textEmphasis = CssTextEmphasis::None;
     fontVariant = CssFontVariant::Normal;
     listStyleType = CssListStyleType::Disc;

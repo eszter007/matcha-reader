@@ -5,11 +5,13 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <TrustedTime.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 
 #include "Epub/Section.h"
 #include "EpubReaderUtils.h"
@@ -21,9 +23,17 @@
 #include "SilentRestart.h"
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "activities/settings/ClockSyncActivity.h"
+#include "clippings/ClippingSync.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"  // list icons for the compare rows
 #include "fontIds.h"
+#include "network/WifiPowerSaveGuard.h"
+#include "stats/StatsSync.h"
+#include "util/BookProgress.h"
+#include "util/PluginEvents.h"
+#include "util/PluginHttp.h"
+#include "util/SyncedPosition.h"
 
 namespace fui = freeink::ui;
 
@@ -50,7 +60,8 @@ const char* matchMethodName(const DocumentMatchMethod method) {
 
 KOReaderSyncActivity::KOReaderSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                            const std::string& epubPath, CrossPointPosition localPosition,
-                                           SavedProgressPosition localKoPos, std::string localChapterName)
+                                           SavedProgressPosition localKoPos, std::string localChapterName,
+                                           const bool pluginEventsOnly)
     : Activity("KOReaderSync", renderer, mappedInput),
       UiAppHost(renderer),
       epubPath(epubPath),
@@ -58,7 +69,24 @@ KOReaderSyncActivity::KOReaderSyncActivity(GfxRenderer& renderer, MappedInputMan
       localPosition(localPosition),
       remoteProgress{},
       remotePosition{},
-      localProgress(std::move(localKoPos)) {}
+      localProgress(std::move(localKoPos)),
+      pluginEventsOnly(pluginEventsOnly) {}
+
+KOReaderSyncActivity::KOReaderSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                           const std::string& path, PagedSyncBook book)
+    : Activity("KOReaderSync", renderer, mappedInput),
+      UiAppHost(renderer),
+      epubPath(path),
+      localPosition{},
+      remoteProgress{},
+      remotePosition{},
+      localProgress{},
+      paged(std::move(book)) {
+  // KOReader's paged-document position: the 1-based page as text, and the share of pages read.
+  localProgress.xpath = std::to_string(paged->page + 1);
+  localProgress.percentage =
+      paged->pageCount > 0 ? static_cast<float>(paged->page + 1) / static_cast<float>(paged->pageCount) : 0.0f;
+}
 
 void KOReaderSyncActivity::ensureEpubLoaded() {
   if (!epub) {
@@ -76,6 +104,20 @@ void KOReaderSyncActivity::ensureEpubLoaded() {
 }
 
 void KOReaderSyncActivity::saveProgressAndReturn(int spineIndex, int page) {
+  if (paged) {
+    if (!writePageProgress(epubPath, remotePage)) {
+      {
+        RenderLock lock(*this);
+        state = SYNC_FAILED;
+        statusMessage = tr(STR_SAVE_PROGRESS_FAILED);
+      }
+      requestUpdate(true);
+      return;
+    }
+    positionSettled = true;
+    returnToReader();
+    return;
+  }
   // epub is guaranteed non-null here: ensureEpubLoaded() was called in performSync() before
   // SHOWING_RESULT state is entered, and this method is only called from that state.
   assert(epub);
@@ -92,10 +134,15 @@ void KOReaderSyncActivity::saveProgressAndReturn(int spineIndex, int page) {
     requestUpdate(true);
     return;
   }
+  positionSettled = true;
   returnToReader();
 }
 
-void KOReaderSyncActivity::returnToReader() { activityManager.goToReader(epubPath); }
+void KOReaderSyncActivity::returnToReader() {
+  // This sync matched the exact position: one an earlier Insights sync fetched is not offered again.
+  if (positionSettled) syncedPosition::dismiss(epubPath);
+  activityManager.goToReader(epubPath);
+}
 
 bool KOReaderSyncActivity::smartSyncEnabled() const {
   return KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART;
@@ -108,6 +155,7 @@ void KOReaderSyncActivity::completeAlreadySynced() {
     RenderLock lock(*this);
     state = SYNC_COMPLETE;
   }
+  positionSettled = !pluginEventsOnly;  // a plugin-events-only run synced no position
   markAutoReturn();
   requestUpdate(true);
 }
@@ -127,6 +175,19 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
   WiFi.setSleep(false);
   LOG_DBG("KOSync", "WiFi sleep disabled for sync");
 
+  if (pluginEventsOnly) {
+    {
+      RenderLock lock(*this);
+      state = SYNCING;
+      statusMessage = tr(STR_SYNC_PROGRESS);
+    }
+    requestUpdate(true);
+
+    pluginevents::drain(&renderer);
+    completeAlreadySynced();
+    return;
+  }
+
   {
     RenderLock lock(*this);
     state = SYNCING;
@@ -139,8 +200,13 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
 }
 
 void KOReaderSyncActivity::performSync() {
+  WifiPowerSaveGuard psGuard;
+  // First: the clippings and stats that follow are dated by it.
+  if (withClockAndInsights && !ClockSyncActivity::syncAndRecord()) LOG_ERR("KOSync", "Clock sync failed");
   const DocumentMatchMethod primaryMethod = KOREADER_STORE.getMatchMethod();
   documentHash = calculateDocumentHashForMethod(epubPath, primaryMethod);
+  // A manga folder has no file to hash by content; its title is its identity.
+  if (documentHash.empty() && paged) documentHash = KOReaderDocumentId::calculateFromFilename(epubPath);
   if (documentHash.empty()) {
     {
       RenderLock lock(*this);
@@ -153,6 +219,42 @@ void KOReaderSyncActivity::performSync() {
   const std::string primaryHash = documentHash;
 
   LOG_DBG("KOSync", "Document hash (%s): %s", matchMethodName(primaryMethod), documentHash.c_str());
+
+  if (KOREADER_STORE.getSyncClippings() && !paged) {
+    {
+      RenderLock lock(*this);
+      statusMessage = tr(STR_SYNCING_CLIPPINGS);
+    }
+    requestUpdateAndWait();
+    bool clippingsSynced;
+    {
+#if defined(CONFIG_IDF_TARGET_ESP32C3) && CONFIG_IDF_TARGET_ESP32C3
+      RenderLock lock;
+      GfxRenderer::FrameBufferLoan loan(renderer);
+#endif
+      clippingsSynced = clippingSync::run(epubPath, documentHash);
+    }
+    if (!clippingsSynced) {
+      {
+        RenderLock lock(*this);
+        state = SYNC_FAILED;
+        statusMessage = tr(STR_CLIPPING_SYNC_FAILED);
+      }
+      requestUpdate(true);
+      return;
+    }
+  }
+
+  if (KOREADER_STORE.getServerType() == KOReaderServerType::CROSSPOINT) {
+    {
+      RenderLock lock(*this);
+      statusMessage = tr(STR_SYNCING_STATS);
+    }
+    requestUpdateAndWait();
+    // Saved for the boot that ends this session, as the Insights sync does.
+    if (withClockAndInsights && !statsSync::download()) LOG_ERR("KOSync", "Insights download saved nothing");
+    statsSync::run(epubPath, documentHash);
+  }
 
   {
     RenderLock lock(*this);
@@ -192,6 +294,12 @@ void KOReaderSyncActivity::performSync() {
     result = KOReaderSyncClient::OK;
   }
 
+  bool fromTwin = false;
+  if (result == KOReaderSyncClient::NOT_FOUND && paged) {
+    result = fetchTwinProgress();
+    fromTwin = result == KOReaderSyncClient::OK;
+  }
+
   if (result == KOReaderSyncClient::NOT_FOUND) {
     if (smartSyncEnabled()) {
       LOG_DBG("KOSync", "Smart sync: no remote progress found for known document hashes; uploading local %.6f",
@@ -220,8 +328,13 @@ void KOReaderSyncActivity::performSync() {
     return;
   }
 
-  // Epub was released before sync to free RAM for the TLS handshake — reload it now.
   hasRemoteProgress = true;
+  if (paged) {
+    decidePaged(fromTwin);
+    return;
+  }
+
+  // Epub was released before sync to free RAM for the TLS handshake — reload it now.
   ensureEpubLoaded();
   if (!epub) {
     {
@@ -300,6 +413,56 @@ void KOReaderSyncActivity::performSync() {
   requestUpdate(true);
 }
 
+// The same manga under another name: "Title.cbz" or "Title.epub" read on another device, or the
+// folder for an XTC. Their pages do not line up with ours, so decidePaged() uses only the share.
+KOReaderSyncClient::Error KOReaderSyncActivity::fetchTwinProgress() {
+  std::string twins[KOReaderDocumentId::MAX_TWINS];
+  const size_t count = KOReaderDocumentId::twinFilenameHashes(epubPath, twins);
+  for (size_t i = 0; i < count; i++) {
+    if (twins[i] == documentHash) continue;
+    KOReaderProgress twin;
+    const auto result = KOReaderSyncClient::getProgress(twins[i], twin);
+    if (result != KOReaderSyncClient::OK && result != KOReaderSyncClient::NOT_FOUND) return result;  // network down
+    if (result == KOReaderSyncClient::OK) {
+      LOG_DBG("KOSync", "Twin remote: doc=%s remote=%.6f progress=%s", twins[i].c_str(), twin.percentage,
+              twin.progress.c_str());
+      remoteProgress = std::move(twin);
+      return KOReaderSyncClient::OK;
+    }
+  }
+  return KOReaderSyncClient::NOT_FOUND;
+}
+
+void KOReaderSyncActivity::decidePaged(const bool fromTwin) {
+  const uint32_t count = paged->pageCount;
+  remotePage = syncedPosition::pageOf({remoteProgress.progress, remoteProgress.percentage, fromTwin}, count);
+
+  const ProgressComparison comparison = remotePage == paged->page  ? ProgressComparison::Synchronized
+                                        : remotePage > paged->page ? ProgressComparison::RemoteAhead
+                                                                   : ProgressComparison::LocalAhead;
+  LOG_DBG("KOSync", "Paged decision: local=%u remote=%u of %u twin=%d", static_cast<unsigned>(paged->page),
+          static_cast<unsigned>(remotePage), static_cast<unsigned>(count), fromTwin);
+  if (smartSyncEnabled()) {
+    switch (comparison) {
+      case ProgressComparison::Synchronized:
+        completeAlreadySynced();
+        return;
+      case ProgressComparison::LocalAhead:
+        performUpload();
+        return;
+      default:
+        saveProgressAndReturn(0, static_cast<int>(remotePage));
+        return;
+    }
+  }
+  {
+    RenderLock lock(*this);
+    state = SHOWING_RESULT;
+    selectedOption = comparison == ProgressComparison::LocalAhead ? 1 : 0;
+  }
+  requestUpdate(true);
+}
+
 void KOReaderSyncActivity::performUpload() {
   {
     RenderLock lock(*this);
@@ -324,18 +487,19 @@ void KOReaderSyncActivity::performUpload() {
     fcm->releaseAllFontMemory();
   }
   LOG_DBG("KOSync", "Released epub+fonts before upload (heap: %u)", (unsigned)ESP.getFreeHeap());
-  // Rich CrossPoint position for the default CrossPoint sync server (lossless
-  // CrossPoint<->CrossPoint sync). The HTTP client also enforces this boundary
-  // before serializing the extension.
-  if (KOREADER_STORE.usesCrossPointSyncServer()) {
+  // Rich position for server profiles that explicitly support the CrossPoint extension.
+  // The HTTP client enforces the same boundary before serializing the extension.
+  if (KOREADER_STORE.supportsRichProgress()) {
     KOReaderRichPosition pos;
     const float pct = localProgress.percentage < 0.0f   ? 0.0f
                       : localProgress.percentage > 1.0f ? 1.0f
                                                         : localProgress.percentage;
     pos.pctQ = static_cast<uint32_t>(pct * 1000000.0f + 0.5f);
-    pos.spineIndex = static_cast<uint16_t>(localPosition.spineIndex);
-    pos.pageNumber = static_cast<uint16_t>(localPosition.pageNumber);
-    pos.totalPages = static_cast<uint16_t>(localPosition.totalPages > 0 ? localPosition.totalPages : 1);
+    // A paged book is one "section" of pageCount pages.
+    pos.spineIndex = paged ? 0 : static_cast<uint16_t>(localPosition.spineIndex);
+    pos.pageNumber = static_cast<uint16_t>(paged ? paged->page : localPosition.pageNumber);
+    const int total = paged ? static_cast<int>(paged->pageCount) : localPosition.totalPages;
+    pos.totalPages = static_cast<uint16_t>(total > 0 ? total : 1);
     if (localPosition.hasParagraphIndex) {
       pos.paragraphIndex = localPosition.paragraphIndex;
     }
@@ -349,16 +513,42 @@ void KOReaderSyncActivity::performUpload() {
     // remote-progress path (performSync). When uploading from NO_REMOTE_PROGRESS the
     // Epub is still null, so reload it here and guard the title/author reads to avoid
     // dereferencing a null Epub. Filename is derived from the path and is always safe.
-    ensureEpubLoaded();
+    if (!paged) ensureEpubLoaded();
     KOReaderMetadata meta;
     const auto lastSlash = epubPath.rfind('/');
     meta.filename = (lastSlash != std::string::npos) ? epubPath.substr(lastSlash + 1) : epubPath;
-    if (epub) {
+    if (paged) {
+      meta.title = paged->title;
+      meta.authors = paged->author;
+      if (KOREADER_STORE.supportsRichProgress()) meta.language = paged->language;
+      if (KOREADER_STORE.supportsExtendedMetadata()) {
+        meta.series = paged->series;
+        meta.seriesIndex = paged->seriesIndex;
+      }
+    } else if (epub) {
       meta.title = epub->getTitle();
       meta.authors = epub->getAuthor();
+      // CrossPoint and custom servers store it; plain KOSync has no such field.
+      if (KOREADER_STORE.supportsRichProgress()) meta.language = epub->getLanguage();  // book cache, no extra read
+      if (KOREADER_STORE.supportsExtendedMetadata()) {
+        Epub::SyncMetadata syncMetadata;
+        if (epub->loadSyncMetadata(syncMetadata)) {
+          meta.isbn = std::move(syncMetadata.isbn);
+          meta.asin = std::move(syncMetadata.asin);
+          meta.series = std::move(syncMetadata.series);
+          meta.seriesIndex = syncMetadata.seriesIndex;
+        } else {
+          LOG_DBG("KOSync", "Could not read extended EPUB metadata; sending core metadata only");
+        }
+      }
     } else {
       LOG_ERR("KOSync", "Epub unavailable for metadata; sending filename only");
     }
+    // Plugin sidecar fields ("<book>.meta.json", written at download time via
+    // the catalog sidecar mechanism or /api/plugin-fs) ride along so a custom
+    // sync server can route progress by a service book id.
+    // A missing sidecar (the common case) leaves extraJson empty.
+    Storage.readFileToString("KOSync", epubPath + ".meta.json", 2 * 1024, meta.extraJson);
     progress.metadata = std::move(meta);
   }
 
@@ -366,7 +556,12 @@ void KOReaderSyncActivity::performUpload() {
   // (consistent with the release-before-sync pattern in performSync); nothing below needs it.
   epub.reset();
 
-  const auto result = KOReaderSyncClient::updateProgress(progress);
+  KOReaderSyncClient::Error result;
+  {
+    // Restore power-save before esp_wifi_stop below; set_ps on a stopped radio fails.
+    WifiPowerSaveGuard psGuard;
+    result = KOReaderSyncClient::updateProgress(progress);
+  }
 
   // Drop the radio while user reads the result; full teardown happens at silent reboot.
   esp_wifi_stop();
@@ -385,6 +580,7 @@ void KOReaderSyncActivity::performUpload() {
     RenderLock lock(*this);
     state = UPLOAD_COMPLETE;
   }
+  positionSettled = true;
   markAutoReturn();
   requestUpdate(true);
 }
@@ -397,8 +593,8 @@ void KOReaderSyncActivity::onEnter() {
   app.on(ACTION_ROW, &KOReaderSyncActivity::onResultRow, this);
   app.setScreen(&KOReaderSyncActivity::resultScreen, this);
 
-  // Check for credentials first
-  if (!KOREADER_STORE.hasCredentials()) {
+  // Check for credentials first (plugin-events-only mode needs none).
+  if (!pluginEventsOnly && !KOREADER_STORE.hasCredentials()) {
     state = NO_CREDENTIALS;
     requestUpdate();
     return;
@@ -443,6 +639,7 @@ void KOReaderSyncActivity::startUpload() {
     documentHash = KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::FILENAME
                        ? KOReaderDocumentId::calculateFromFilename(epubPath)
                        : KOReaderDocumentId::calculate(epubPath);
+    if (documentHash.empty() && paged) documentHash = KOReaderDocumentId::calculateFromFilename(epubPath);
   }
   performUpload();
 }
@@ -476,25 +673,35 @@ void KOReaderSyncActivity::buildResultScreen(UiScreen& screen) {
 
   if (state == SHOWING_RESULT) {
     // Chapter names (remote requires the lazily-loaded Epub; local was
-    // pre-computed before the Epub was released).
-    const int remoteTocIndex = epub->getTocIndexForSpineIndex(remotePosition.spineIndex);
-    const std::string remoteChapter =
-        (remoteTocIndex >= 0) ? epub->getTocItem(remoteTocIndex).title
-                              : (std::string(tr(STR_SECTION_PREFIX)) + std::to_string(remotePosition.spineIndex + 1));
+    // pre-computed before the Epub was released). A paged book shows pages only.
+    std::string remoteChapter;
+    if (!paged) {
+      const int remoteTocIndex = epub->getTocIndexForSpineIndex(remotePosition.spineIndex);
+      remoteChapter = (remoteTocIndex >= 0)
+                          ? epub->getTocItem(remoteTocIndex).title
+                          : (std::string(tr(STR_SECTION_PREFIX)) + std::to_string(remotePosition.spineIndex + 1));
+    }
     char localChapterFallback[32];
     const char* localChapter = localChapterName.c_str();
-    if (localChapterName.empty()) {
+    if (localChapterName.empty() && !paged) {
       snprintf(localChapterFallback, sizeof(localChapterFallback), "%s%d", tr(STR_SECTION_PREFIX),
                localPosition.spineIndex + 1);
       localChapter = localChapterFallback;
     }
 
     char remoteVal[64];
-    snprintf(remoteVal, sizeof(remoteVal), tr(STR_PAGE_OVERALL_FORMAT), remotePosition.pageNumber + 1,
-             remoteProgress.percentage * 100);
     char localVal[64];
-    snprintf(localVal, sizeof(localVal), tr(STR_PAGE_TOTAL_OVERALL_FORMAT), localPosition.pageNumber + 1,
-             localPosition.totalPages, localProgress.percentage * 100);
+    if (paged) {
+      snprintf(remoteVal, sizeof(remoteVal), tr(STR_PAGE_TOTAL_OVERALL_FORMAT), static_cast<int>(remotePage + 1),
+               static_cast<int>(paged->pageCount), remoteProgress.percentage * 100);
+      snprintf(localVal, sizeof(localVal), tr(STR_PAGE_TOTAL_OVERALL_FORMAT), static_cast<int>(paged->page + 1),
+               static_cast<int>(paged->pageCount), localProgress.percentage * 100);
+    } else {
+      snprintf(remoteVal, sizeof(remoteVal), tr(STR_PAGE_OVERALL_FORMAT), remotePosition.pageNumber + 1,
+               remoteProgress.percentage * 100);
+      snprintf(localVal, sizeof(localVal), tr(STR_PAGE_TOTAL_OVERALL_FORMAT), localPosition.pageNumber + 1,
+               localPosition.totalPages, localProgress.percentage * 100);
+    }
     char deviceStr[80];
     deviceStr[0] = '\0';
     if (!remoteProgress.device.empty()) {
@@ -526,12 +733,12 @@ void KOReaderSyncActivity::buildResultScreen(UiScreen& screen) {
     };
 
     labelLine(tr(STR_REMOTE_LABEL));
-    detailLine(remoteChapter.c_str());
+    if (!remoteChapter.empty()) detailLine(remoteChapter.c_str());
     detailLine(remoteVal);
     if (deviceStr[0] != '\0') detailLine(deviceStr);
     screen.spacer(screen.theme().spaceLg);
     labelLine(tr(STR_LOCAL_LABEL));
-    detailLine(localChapter);
+    if (localChapter[0] != '\0') detailLine(localChapter);
     detailLine(localVal);
 
     // Two themed action rows flowing directly below the labels (not anchored to
@@ -609,10 +816,9 @@ void KOReaderSyncActivity::buildResultScreen(UiScreen& screen) {
 void KOReaderSyncActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
-  auto metrics = UITheme::getInstance().getMetrics();
   Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
 
-  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
+  GUI.drawHeader(renderer, UITheme::getInstance().getHeaderRect(renderer, true, false),
                  state == SHOWING_RESULT ? tr(STR_PROGRESS_FOUND) : tr(STR_KOREADER_SYNC));
 
   int top = screen.y + screen.height / 2 - 40;

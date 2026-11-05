@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 
+#include "Epub/VerticalBatch.h"
 #include "GfxRenderer.h"
 #include "Kinsoku.h"
 
@@ -30,7 +31,9 @@ constexpr uint32_t SMALL_ALLOC_MARGIN = 8 * 1024;
 // Every reserve() here is one contiguous allocation that ABORTS the process on failure under
 // -fno-exceptions, so nothing may be requested without first checking it fits. `margin` is what
 // the request must leave behind for everything else.
-inline bool heapCanAfford(const size_t bytes, const uint32_t margin) { return ESP.getMaxAllocHeap() >= bytes + margin; }
+inline bool heapCanAfford(const size_t bytes, const uint32_t margin) {
+  return vertical_batch::largestBlockFor(bytes) >= bytes + margin;
+}
 
 // Cushion for the per-run reserves in addAnnotatedParagraph, which are a few hundred bytes each --
 // far below MIN_FREE_HEAP_FOR_RESERVE, sized for the multi-KB page and stream reserves. Charging
@@ -341,11 +344,21 @@ int punctEmHalf(const uint32_t cp) {
   }
 }
 
+// Halves of a pair JLREQ 3.1.10 never splits across columns: …… ‥‥ —— ――.
+bool isInseparableMark(const uint32_t cp) { return cp == 0x2026 || cp == 0x2025 || cp == 0x2014 || cp == 0x2015; }
+
 // Digits that are set SIDEWAYS in vertical text -- as a tate-chu-yoko pair, or as a rotated run.
 // Halfwidth ASCII only. Fullwidth digits (U+FF10-U+FF19) are East Asian Wide: they are ideographic
 // -width characters and stand upright in tategaki, one per cell, exactly like kanji. Gathering them
 // into a rotated run laid １９３８年 on its side across four cells.
 bool isAsciiDigit(const uint32_t cp) { return cp >= '0' && cp <= '9'; }
+
+// Units and symbols written after a number (JLREQ cl-18 postfixed abbreviations, and the squared
+// unit signs ㎏ ㍉): never split from it (3.1.10).
+bool isPostfixUnit(const uint32_t cp) {
+  return cp == 0xFF05 || cp == 0x2030 || cp == 0x2103 || cp == 0x00B0 || cp == 0x2032 || cp == 0x2033 || cp == 0x00A2 ||
+         cp == 0xFFE0 || (cp >= 0x3300 && cp <= 0x33FF);
+}
 
 bool isAsciiAlnum(const uint32_t cp) {
   return (cp >= '0' && cp <= '9') || (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z');
@@ -369,6 +382,7 @@ void trimSpaces(std::string& s) {
 // placement rules can be read (and moved out of the loop) without carrying a dozen captures.
 struct ColumnGeometry {
   int cellPx = 1;            // one em, the kihon-hanmen cell
+  int rowPitchPx = 1;        // cell + the character-spacing setting: the step from one row to the next
   int inkGapPx = 0;          // gap a normal adjacent pair leaves between ink boxes
   int baselineInCellPx = 0;  // baseline measured down from the cell top
   int ascenderPx = 0;
@@ -376,6 +390,11 @@ struct ColumnGeometry {
   int usableWidthPx = 1;
   uint16_t rowsPerColumn = 1;
   uint16_t columnsPerPage = 1;
+
+  // Top of a row's cell. Glyphs are still set in a one-em cell; only the step between cells moves.
+  int rowTopPx(const int row) const { return row * rowPitchPx; }
+  // The spacing between two cells (may be negative). The last row of a column carries none.
+  int rowGapPx() const { return rowPitchPx - cellPx; }
 
   // Columns are anchored to the right edge and march leftwards.
   int columnLeftX(const uint16_t col) const { return usableWidthPx - cellPx - static_cast<int>(col) * columnAdvancePx; }
@@ -385,6 +404,7 @@ struct ColumnGeometry {
 enum class InkVAlign : uint8_t {
   HalfEmHead,  // 。、 -- centred in the FIRST half em, so the second half is free (JLREQ 3.1.4)
   Centre,      // small kana -- centred in the full em (JLREQ A.11)
+  CentreCell,  // 。，、 in traditional Chinese -- centred in the em on BOTH axes, not right-aligned
 };
 
 // Places a mark's letter face against the RIGHT edge of its cell, from the glyph's own ink box:
@@ -402,8 +422,9 @@ bool rightAlignedInk(const GfxRenderer& renderer, const int fontId, InkMemo& mem
   // Draw resolves ink left as x + glyph->left, and ink top as (cellTop + baselineInCell) - top.
   const int inkTopInCell = vAlign == InkVAlign::HalfEmHead ? std::max(0, (geom.cellPx / 2 - ink.height) / 2)
                                                            : std::max(0, (geom.cellPx - ink.height) / 2);
-  *gxOut = geom.columnLeftX(col) + geom.cellPx - ink.left - ink.width;
-  *gyOut = std::max(0, rowIdx * geom.cellPx + inkTopInCell + ink.top - geom.baselineInCellPx);
+  *gxOut = vAlign == InkVAlign::CentreCell ? geom.columnLeftX(col) + (geom.cellPx - ink.width) / 2 - ink.left
+                                           : geom.columnLeftX(col) + geom.cellPx - ink.left - ink.width;
+  *gyOut = std::max(0, geom.rowTopPx(rowIdx) + inkTopInCell + ink.top - geom.baselineInCellPx);
   if (inkHeightOut) *inkHeightOut = inkTopInCell + ink.height;
   return true;
 }
@@ -430,10 +451,10 @@ int runInkWidth(const GfxRenderer& renderer, const int fontId, const std::string
 }
 
 // Rows a rotated run occupies: enough that the next character's ink clears the run's, no more.
-uint16_t rotatedRunRows(const int cellPx, const int startY, const int inkWidthPx, const uint16_t rowArg,
+uint16_t rotatedRunRows(const int rowPitchPx, const int startY, const int inkWidthPx, const uint16_t rowArg,
                         const int nextInkOffset) {
   const int intrusion = (nextInkOffset >= 0) ? nextInkOffset : 0;
-  const int endRow = static_cast<int>(std::ceil(static_cast<double>(startY + inkWidthPx - intrusion) / cellPx));
+  const int endRow = static_cast<int>(std::ceil(static_cast<double>(startY + inkWidthPx - intrusion) / rowPitchPx));
   return static_cast<uint16_t>(std::max(1, endRow - static_cast<int>(rowArg)));
 }
 
@@ -489,13 +510,13 @@ void VerticalParsedText::reserveStreamFor(size_t utf8Bytes) {
 }
 
 void VerticalParsedText::preallocateStream() {
-  constexpr size_t STREAM_STABLE_ENTRIES = 512;
+  constexpr size_t STREAM_STABLE_ENTRIES = 512 * vertical_batch::kScale;
   const size_t bytes = STREAM_STABLE_ENTRIES * sizeof(PendingChar);
   if (stream_.capacity() >= STREAM_STABLE_ENTRIES) return;
   if (heapCanAfford(bytes, MIN_FREE_HEAP_FOR_RESERVE)) {
     stream_.reserve(STREAM_STABLE_ENTRIES);
     // A batch's ruby, pinned with the stream for the same reason (a few bytes per ruby'd char).
-    rubyPool_.reserve(1024);
+    rubyPool_.reserve(1024 * vertical_batch::kScale);
   } else {
     LOG_DBG("VPT", "preallocateStream: %u bytes don't fit (maxAlloc=%u); falling back to incremental growth",
             static_cast<unsigned>(bytes), ESP.getMaxAllocHeap());
@@ -585,7 +606,8 @@ void VerticalParsedText::addParagraph(const std::string& utf8Text) {
     // visibleTextOffset stays 0: this overload takes plain text with no extractor context, so
     // there is no chapter-wide position to attribute it to. Only the annotated path (the one
     // the real chapter build uses) carries offsets.
-    stream_.push_back(PendingChar{cp, paragraphIndex, static_cast<uint32_t>(i), 0, false, {}, 0});
+    stream_.push_back(
+        PendingChar{Kinsoku::verticalFormOf(cp), paragraphIndex, static_cast<uint32_t>(i), 0, false, 0, 0, 0});
     i += consumed;
   }
 }
@@ -723,13 +745,9 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
     if (run.rubyText.empty()) {
       for (size_t k = 0; k < baseCps.size(); k++) {
         if (!canPushStreamChar()) return;
-        stream_.push_back(PendingChar{baseCps[k],
-                                      paragraphIndex,
-                                      static_cast<uint32_t>(baseOffsets[k]),
-                                      run.style,
-                                      run.emphasis,
-                                      {},
-                                      run.visibleTextOffset + baseCpIndex[k]});
+        stream_.push_back(PendingChar{Kinsoku::verticalFormOf(baseCps[k]), paragraphIndex,
+                                      static_cast<uint32_t>(baseOffsets[k]), run.style, run.emphasis,
+                                      run.indentQuarters, 0, run.visibleTextOffset + baseCpIndex[k]});
       }
     } else {
       // Decode ruby codepoints to distribute evenly across base characters.
@@ -755,11 +773,16 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
         std::string slice;
         for (size_t r = rubyStart; r < rubyEnd; r++) utf8AppendCodepoint(rubyCps[r], slice);
         if (!canPushStreamChar()) return;
-        PendingChar pc{baseCps[k],
+        // Group ruby: the characters after the first are marked, so layout keeps the group in one
+        // column and the renderer sets the annotation over the whole group (JLREQ 3.3.6). Each
+        // still carries its share, which keeps a group split across a page drawable.
+        const uint8_t style = k > 0 ? static_cast<uint8_t>(run.style | EpdFontFamily::RUBY_CONTINUE) : run.style;
+        PendingChar pc{Kinsoku::verticalFormOf(baseCps[k]),
                        paragraphIndex,
                        static_cast<uint32_t>(baseOffsets[k]),
-                       run.style,
+                       style,
                        run.emphasis,
+                       run.indentQuarters,
                        0,
                        run.visibleTextOffset + baseCpIndex[k]};
         setRuby(pc, slice.data(), slice.size());
@@ -803,27 +826,33 @@ struct VerticalParsedText::LayoutCursor {
   void* const ctx;
   const PageReadyCallback onPageReady;
 
+  // = growForOnePush's LINEAR_GROWTH_STEP for glyphs: the room a page keeps before it must grow.
+  static constexpr size_t PAGE_GLYPH_HEADROOM = 16;
+
   // Can one more glyph be appended without a reallocation that the heap cannot serve?
   bool pageVectorCanTakeMore() const {
-    constexpr size_t GROWTH_STEP = 16;  // = growForOnePush's LINEAR_GROWTH_STEP for glyphs
-    if (page.glyphs.size() + GROWTH_STEP <= page.glyphs.capacity()) return true;
-    const size_t growBytes = (page.glyphs.capacity() + GROWTH_STEP) * sizeof(VerticalGlyph);
+    if (page.glyphs.size() + PAGE_GLYPH_HEADROOM <= page.glyphs.capacity()) return true;
+    const size_t growBytes = (page.glyphs.capacity() + PAGE_GLYPH_HEADROOM) * sizeof(VerticalGlyph);
     return ESP.getMaxAllocHeap() >= growBytes;
   }
 
   void reservePageGlyphs(VerticalPage& p) const {
-    const size_t requestBytes = glyphsPerPage * sizeof(VerticalGlyph);
+    // A full page plus pageVectorCanTakeMore()'s step twice: a page that fills never has to grow,
+    // including the few that hold a cell or two more than glyphsPerPage (ruby, half-width pairs).
+    const size_t fullCapacity = glyphsPerPage + 2 * PAGE_GLYPH_HEADROOM;
+    if (p.glyphs.capacity() >= fullCapacity) return;  // a recycled page's buffer
+    const size_t requestBytes = fullCapacity * sizeof(VerticalGlyph);
     if (heapCanAfford(requestBytes, MIN_FREE_HEAP_FOR_RESERVE)) {
-      p.glyphs.reserve(glyphsPerPage);
+      p.glyphs.reserve(fullCapacity);
       return;
     }
     // Partial fallback: reserve the largest fitting fraction of the page instead of nothing.
     // Starting from capacity 0 makes the vector double 1-2-4-...-256, and every doubling's
     // grow-copy (old + new buffer coexisting) is a fresh chance to land on a heap dip -- on
     // the X3's tighter heap that fired the emergency page split constantly, which the reader
-    // sees as pages breaking at random fill levels. This runs right after the previous page
-    // was flushed and freed (the heap's local best), so one medium block now prevents most of
-    // the risky growth steps later at the dips.
+    // sees as pages breaking at random fill levels. This runs only while no recycled buffer of
+    // full size exists, so one medium block now prevents most of the risky growth steps later
+    // at the dips.
     for (size_t fraction = 2; fraction <= 8; fraction *= 2) {
       const size_t partial = glyphsPerPage / fraction;
       if (partial < 32) break;
@@ -888,12 +917,9 @@ struct VerticalParsedText::LayoutCursor {
     int reduction = geom.cellPx / 2;
 
     // 。and 、 carry their own trailing half em inside their em, so a following mark closes onto
-    // it: an opening bracket wants exactly that half (figure 3), a closing bracket or another
-    // 。/、 is set solid (1, 2), a middle dot keeps a quarter.
-    if (Kinsoku::verticalShiftType(prev.codepoint) == 1) {
-      if (thisHalf == 2) return;
-      reduction = (thisHalf == 3) ? geom.cellPx / 4 : geom.cellPx / 2;
-    }
+    // it: an opening bracket keeps half an em between them (figure 3), a closing bracket or
+    // another 。/、 is set solid (1, 2), a middle dot keeps a quarter.
+    if (Kinsoku::verticalShiftType(prev.codepoint) == 1 && thisHalf == 3) reduction = geom.cellPx / 4;
     columnYShift += reduction;
     shiftColumn = columnArg;
   }
@@ -967,9 +993,12 @@ struct VerticalParsedText::LayoutCursor {
       o.renderer_.ensureSdCardFontReady(o.fontId_, nextChar, static_cast<uint8_t>(1u << (next.style & 3)));
       GlyphInk ink;
       if (measureGlyphInk(o.renderer_, o.fontId_, next.codepoint, next.style, &ink) && ink.height > 0) {
-        // 。、 are drawn at the head of their cell (rightAlignedInk, HalfEmHead), not on the baseline.
-        offset = Kinsoku::verticalShiftType(next.codepoint) == 1 ? std::max(0, (geom.cellPx / 2 - ink.height) / 2)
-                                                                 : geom.baselineInCellPx - ink.top;
+        // 。、 are drawn at the head of their cell (rightAlignedInk, HalfEmHead), not on the baseline;
+        // their centred traditional-Chinese form (type 5) sits mid-cell.
+        const int shift = Kinsoku::verticalShiftType(next.codepoint);
+        offset = shift == 1   ? std::max(0, (geom.cellPx / 2 - ink.height) / 2)
+                 : shift == 5 ? std::max(0, (geom.cellPx - ink.height) / 2)
+                              : geom.baselineInCellPx - ink.top;
       }
     }
     // A miss is worth caching too -- it is the expensive case, and a glyph the font lacks
@@ -1007,10 +1036,10 @@ struct VerticalParsedText::LayoutCursor {
   // correctly yields fewer rows.
   uint16_t rowsAvailable() const {
     const int shift = (column == shiftColumn) ? columnYShift : 0;
-    // Inside a box the column stops short of the foot, leaving room for the bottom rule's inset
-    // (boxFootReservePx_). Columns outside a box are unaffected.
-    const int reserve = o.inBox_ ? o.boxFootReservePx_ : 0;
-    const int rows = (static_cast<int>(o.viewportHeight_) - reserve + shift) / geom.cellPx;
+    // Inside a framed block the column stops short of the foot, leaving room for the bottom rule's
+    // inset (boxFootReservePx_). Unframed blocks and columns outside a block run to the foot.
+    const int reserve = o.inBox_ && o.activeBlock_.borderEdges != 0 ? o.boxFootReservePx_ : 0;
+    const int rows = (static_cast<int>(o.viewportHeight_) - reserve + shift + geom.rowGapPx()) / geom.rowPitchPx;
     return static_cast<uint16_t>(std::clamp(rows, 1, static_cast<int>(UINT16_MAX)));
   }
 
@@ -1025,8 +1054,10 @@ struct VerticalParsedText::LayoutCursor {
   //
   // Two cases are deliberately left ragged:
   //   - the column ends where its PARAGRAPH ended (shortfall >= one cell). Not a fitting problem;
-  //     stretching it would space a two-character line down the whole page.
+  //     stretching it would space a two-character line down the whole page. A column oidashi
+  //     pushed characters out of ends short mid-paragraph, so it is spread whatever the shortfall.
   //   - the last glyph HANGS past the foot (burasage), i.e. leftover is negative.
+  static constexpr int MAX_SPREAD_PER_GAP_DIVISOR = 8;  // em / 8
   void spreadColumnToFoot(VerticalPage& pg, const uint16_t col) {
     int lastRow = -1;
     int lastY = 0;
@@ -1038,10 +1069,14 @@ struct VerticalParsedText::LayoutCursor {
     }
     if (lastRow < 1) return;  // nothing to spread across
     const int leftover = static_cast<int>(o.viewportHeight_) - (lastY + geom.cellPx);
-    if (leftover <= 0 || leftover >= geom.cellPx) return;
+    const bool pushedOut = col < 64 && (o.oidashiColumns_ >> col) & 1u;
+    if (leftover <= 0 || (leftover >= geom.rowPitchPx && !pushedOut)) return;
+    // At most an eighth of an em between two characters: a column oidashi shortened by several
+    // cells otherwise spreads into visibly loose type, so it ends short of the foot instead.
+    const int spread = std::min(leftover, lastRow * geom.cellPx / MAX_SPREAD_PER_GAP_DIVISOR);
     for (auto& g : pg.glyphs) {
       if (g.column != col) continue;
-      g.y = static_cast<uint16_t>(static_cast<int>(g.y) + leftover * static_cast<int>(g.row) / lastRow);
+      g.y = static_cast<uint16_t>(static_cast<int>(g.y) + spread * static_cast<int>(g.row) / lastRow);
     }
   }
 
@@ -1059,64 +1094,123 @@ struct VerticalParsedText::LayoutCursor {
   // em, and a paragraph's leading ideographic space. Aozora-derived books write that indent as a
   // U+3000 GLYPH rather than CSS, so it is a full em sitting in the column -- giving up half of it
   // still reads as an indent, and it is very often the only thing a short column has to offer.
-  static bool isReducible(const uint32_t cp) { return Kinsoku::verticalShiftType(cp) != 0 || cp == 0x3000; }
+  // Only 。、 and brackets (types 1-3): dashes and ー (type 4) and centred 。， (type 5) fill their
+  // em, and taking from them pulls the next character into their ink.
+  static bool isHalfEmMark(const uint32_t cp) {
+    const int shift = Kinsoku::verticalShiftType(cp);
+    return shift >= 1 && shift <= 3;
+  }
+  // An opening bracket is set in the second half of its em, so its white half is the one BEFORE
+  // it: giving that up moves the bracket itself, not the character after it into its ink.
+  static bool givesLeadingSpace(const uint32_t cp) { return Kinsoku::verticalShiftType(cp) == 3; }
+  static bool isReducible(const uint32_t cp) { return isHalfEmMark(cp) || cp == 0x3000; }
 
   // How much room a character actually needs at the end of a column. A half-em mark (a closing
   // bracket, 。、) is set in one half of its em and the other half is white, so half a cell is
   // enough for it -- demanding a whole one is what kept a lone 」 off the column it belongs to.
-  int spaceNeededFor(const uint32_t cp) const {
-    return Kinsoku::verticalShiftType(cp) != 0 ? (geom.cellPx + 1) / 2 : geom.cellPx;
+  int spaceNeededFor(const uint32_t cp) const { return isHalfEmMark(cp) ? (geom.cellPx + 1) / 2 : geom.cellPx; }
+
+  // Where a glyph's cell starts now. 。、 are positioned by their ink, so their y sits above
+  // their cell top; measuring a squeeze from it counts that offset as white space still to give,
+  // and a second squeeze then prints the next character over the mark.
+  int cellTopOf(const VerticalGlyph& g) {
+    if (g.renderKind != VerticalGlyph::Upright || Kinsoku::verticalShiftType(g.codepoint) != 1) return g.y;
+    const int gridTop = geom.rowTopPx(g.row);
+    int qx = 0, placedY = 0;
+    if (!rightAlignedInk(o.renderer_, o.fontId_, inkMemo, geom, g.codepoint, g.style, g.column, g.row,
+                         InkVAlign::HalfEmHead, &qx, &placedY)) {
+      placedY = std::max(0, gridTop - geom.cellPx / 2);
+    }
+    return static_cast<int>(g.y) + gridTop - placedY;
   }
 
   // Returns the pixels actually recovered (0 when the column has nothing to give). The caller
   // places its character `applied` px above the grid row, since the tail moved up by that much.
+  //
+  // A column can be squeezed more than once (……？ pulls in two characters that may not start a
+  // line), so what a mark may still give is read from where its neighbours sit now: a mark keeps
+  // at least half its em whatever earlier squeezes took, or the next character lands in its ink.
   int squeezeColumnForOneMore(const uint16_t col, const int neededPx) {
     size_t first = page.glyphs.size();
     while (first > 0 && page.glyphs[first - 1].column == col) first--;
     if (first == page.glyphs.size()) return 0;
 
-    // The LAST glyph's trailing space is what the new character will occupy, so it is not itself
-    // reducible.
-    int marks = 0;
-    for (size_t i = first; i + 1 < page.glyphs.size(); i++) {
-      if (isReducible(page.glyphs[i].codepoint)) marks++;
-    }
-    if (marks == 0) return 0;
-
     // A mark may give up to the half em it carries. Round that cap UP: on an odd cell, two floored
     // halves sum to one pixel less than the whole (14 + 14 against a 29px cell), which made every
     // two-mark column miss by a pixel and fail.
     const int maxPerMark = (geom.cellPx + 1) / 2;
-    if (marks * maxPerMark < neededPx) return 0;
+    const int keep = geom.cellPx - maxPerMark;
 
-    // Spread the space being recovered across the marks rather than taking a fixed step from each:
-    // it lands on exactly what is needed, and with four or more marks nobody gives more than the
-    // quarter em 3.8 prefers. The share is rounded up so the remainder shrinks to zero on the last
-    // mark.
-    int needed = neededPx;
-    int remainingMarks = marks;
+    // The LAST glyph's trailing space is what the new character will occupy, so it is not itself
+    // reducible. A column is at most a few dozen cells; more marks than this is not a real column.
+    static constexpr size_t MAX_MARKS = 64;
+    int16_t avail[MAX_MARKS];
+    size_t marks = 0;
+    int total = 0;
+    for (size_t i = first; i + 1 < page.glyphs.size(); i++) {
+      const uint32_t cp = page.glyphs[i].codepoint;
+      if (!isReducible(cp)) continue;
+      if (marks == MAX_MARKS) return 0;
+      // The white half before an opening bracket sits between it and the previous glyph; every
+      // other mark's white half is between it and the next one.
+      int gap = geom.cellPx;
+      if (!givesLeadingSpace(cp)) {
+        gap = cellTopOf(page.glyphs[i + 1]) - cellTopOf(page.glyphs[i]);
+      } else if (i > first) {
+        gap = cellTopOf(page.glyphs[i]) - cellTopOf(page.glyphs[i - 1]);
+      }
+      const int a = std::clamp(gap - keep, 0, maxPerMark);
+      avail[marks++] = static_cast<int16_t>(a);
+      total += a;
+    }
+    if (total < neededPx) return 0;
+
+    // Spread the space being recovered evenly: the smallest per-mark level that covers what is
+    // needed, then trim the overshoot from the last marks at that level. With four or more marks
+    // nobody gives more than the quarter em 3.8 prefers.
+    int level = 0;
+    int covered = 0;
+    while (covered < neededPx) {
+      level++;
+      covered = 0;
+      for (size_t k = 0; k < marks; k++) covered += std::min<int>(avail[k], level);
+    }
+    for (size_t k = 0; k < marks; k++) avail[k] = static_cast<int16_t>(std::min<int>(avail[k], level));
+    for (size_t k = marks; k > 0 && covered > neededPx; k--) {
+      if (avail[k - 1] == level) {
+        avail[k - 1]--;
+        covered--;
+      }
+    }
+
     int applied = 0;
+    size_t k = 0;
     for (size_t i = first; i < page.glyphs.size(); i++) {
+      const bool gives = i + 1 < page.glyphs.size() && isReducible(page.glyphs[i].codepoint);
+      const int give = gives ? avail[k++] : 0;
+      const bool leading = gives && givesLeadingSpace(page.glyphs[i].codepoint);
+      if (leading) applied += give;  // the bracket rises into its own white half
       if (applied > 0) {
         page.glyphs[i].y = static_cast<uint16_t>(std::max(0, static_cast<int>(page.glyphs[i].y) - applied));
       }
-      if (needed > 0 && i + 1 < page.glyphs.size() && isReducible(page.glyphs[i].codepoint)) {
-        const int give = std::min(maxPerMark, (needed + remainingMarks - 1) / remainingMarks);
-        applied += give;
-        needed -= give;
-        remainingMarks--;
-      }
+      if (gives && !leading) applied += give;  // what follows rises into the mark's trailing half
     }
     return applied;
   }
 
   // Place a character in a cell the squeeze just freed: placeUprightAt works off the grid, so it
   // has to come up by the same amount the column's tail did.
+  // The new character's cell starts one row below the last one's, wherever squeezes left that: the
+  // last glyph has risen by this squeeze and by any before it in the column.
   void placeAfterSqueeze(const PendingChar& pc, const uint16_t col, const uint16_t rowIdx, const int applied) {
-    placeUprightAt(pc, col, rowIdx);
     if (page.glyphs.empty()) return;
+    const int cellTop = cellTopOf(page.glyphs.back()) + geom.rowPitchPx;
+    const size_t before = page.glyphs.size();
+    placeUprightAt(pc, col, rowIdx);
+    if (page.glyphs.size() == before) return;
     VerticalGlyph& placed = page.glyphs.back();
-    placed.y = static_cast<uint16_t>(std::max(0, static_cast<int>(placed.y) - applied));
+    const int lift = applied > 0 ? cellTopOf(placed) - cellTop : 0;
+    placed.y = static_cast<uint16_t>(std::max(0, static_cast<int>(placed.y) - lift));
   }
 
   // JLREQ 3.1.4: two adjacent half-em marks SHARE one em -- the first takes the first half, the
@@ -1139,7 +1233,7 @@ struct VerticalParsedText::LayoutCursor {
     g.row = prev.row;
     g.x = static_cast<uint16_t>(geom.columnLeftX(prev.column));
     // Raw grid position: pushGlyph applies this column's slide, as every other path expects.
-    g.y = static_cast<uint16_t>(prev.row * geom.cellPx + geom.cellPx / 2);
+    g.y = static_cast<uint16_t>(geom.rowTopPx(prev.row) + geom.cellPx / 2);
     g.renderKind = VerticalGlyph::RotatedPunct;
     g.paragraphIndex = pc.paragraphIndex;
     g.byteOffset = pc.byteOffset;
@@ -1154,7 +1248,7 @@ struct VerticalParsedText::LayoutCursor {
   void takeUpRunSlack(const int startY, const int inkWidthPx, const uint16_t rowAfter, const uint16_t columnArg,
                       const int nextInkOffset, const int trailSpacePx) {
     if (nextInkOffset < 0 || rowAfter >= rowsAvailable()) return;
-    const int nextGridInkTop = rowAfter * geom.cellPx + nextInkOffset;
+    const int nextGridInkTop = geom.rowTopPx(rowAfter) + nextInkOffset;
     // Leave the run's trailing space (3.2.6), never less than the gap a normal pair leaves.
     const int slack = nextGridInkTop - (startY + inkWidthPx) - std::max(geom.inkGapPx, trailSpacePx);
     if (slack > 0) {
@@ -1171,13 +1265,14 @@ struct VerticalParsedText::LayoutCursor {
       if (o.inBox_) {
         o.appendBoxRectToPage(page, o.boxStartCol_, static_cast<uint16_t>(geom.columnsPerPage - 1),
                               /*openLeft=*/true, /*openRight=*/o.boxContinuedFromPrevPage_);
-        if (o.activeBlock_.alignCenter) {
-          o.centerBlockColumns(page, o.boxStartCol_, static_cast<uint16_t>(geom.columnsPerPage - 1));
+        if (o.activeBlock_.aligns()) {
+          o.alignBlockColumns(page, o.boxStartCol_, static_cast<uint16_t>(geom.columnsPerPage - 1));
         }
         o.boxStartCol_ = 0;
         o.boxContinuedFromPrevPage_ = true;
       }
       for (uint16_t c = 0; c < geom.columnsPerPage; c++) spreadColumnToFoot(page, c);
+      o.oidashiColumns_ = 0;
       pages.push_back(std::move(page));
       o.anyPageEverProduced_ = true;
       // Stream out everything except the single most-recently-completed page: the oikomi
@@ -1186,11 +1281,14 @@ struct VerticalParsedText::LayoutCursor {
       // can never be touched again and is safe to write out and free now.
       if (onPageReady) {
         while (pages.size() > 1) {
-          onPageReady(ctx, std::move(pages.front()));
+          onPageReady(ctx, pages.front());
+          o.recyclePage(std::move(pages.front()));
           pages.erase(pages.begin());
         }
       }
-      page = VerticalPage{};
+      page = std::move(o.recycledPage_);
+      page.clearKeepingCapacity();
+      o.recycledPage_ = VerticalPage{};
       page.columnCount = geom.columnsPerPage;
       page.rowsPerColumn = geom.rowsPerColumn;
       // A break decided while placing a character opens this page WITH that character on it, so
@@ -1247,7 +1345,7 @@ struct VerticalParsedText::LayoutCursor {
       // punctuation so the renderer can center it by glyph metrics and apply
       // opening/closing bracket flow-direction bias.
       g.x = static_cast<uint16_t>(geom.columnLeftX(col));
-      g.y = static_cast<uint16_t>(rowIdx * geom.cellPx);
+      g.y = static_cast<uint16_t>(geom.rowTopPx(rowIdx));
       g.renderKind = VerticalGlyph::RotatedPunct;
       // JLREQ: an opening bracket at the LINE HEAD is set flush to it (tentsuki), the half em
       // before it deleted. "Line head" is the first glyph of THIS column, not row 0 -- a styled
@@ -1276,7 +1374,7 @@ struct VerticalParsedText::LayoutCursor {
         g.y = static_cast<uint16_t>(qy);
       } else {
         g.x = static_cast<uint16_t>(geom.columnLeftX(col) + std::max(1, geom.cellPx / 8));
-        g.y = static_cast<uint16_t>(rowIdx * geom.cellPx);
+        g.y = static_cast<uint16_t>(geom.rowTopPx(rowIdx));
       }
       g.renderKind = VerticalGlyph::Upright;
       pushGlyph(page, g, o.rubyOf(pc));
@@ -1284,14 +1382,15 @@ struct VerticalParsedText::LayoutCursor {
     }
 
     int gx = geom.columnLeftX(col);
-    int gy = rowIdx * geom.cellPx;
+    int gy = geom.rowTopPx(rowIdx);
     if (pc.codepoint >= '0' && pc.codepoint <= '9') {
       GlyphInk ink;
       if (measureGlyphInk(o.renderer_, o.fontId_, pc.codepoint, pc.style, &ink)) {
         gx = geom.columnLeftX(col) + (geom.cellPx - ink.width) / 2 - ink.left;
       }
     }
-    if (Kinsoku::verticalShiftType(pc.codepoint) == 1) {
+    const int shiftType = Kinsoku::verticalShiftType(pc.codepoint);
+    if (shiftType == 1) {
       // 。and 、 occupy a FULL em like every other character -- only their ink sits in one half
       // of it, at the cell's head. Charging them just their ink plus a half em looks tighter per
       // mark but takes a quarter em off the grid at every sentence, so no two columns end at the
@@ -1305,6 +1404,17 @@ struct VerticalParsedText::LayoutCursor {
       } else {
         gx += geom.cellPx / 2;
         gy = std::max(0, gy - geom.cellPx / 2);
+      }
+    } else if (shiftType == 5) {
+      // Traditional Chinese: the mark sits in the middle of its em (CNS 13180 / W3C clreq).
+      int qx = 0, qy = 0;
+      if (rightAlignedInk(o.renderer_, o.fontId_, inkMemo, geom, pc.codepoint, pc.style, col, rowIdx,
+                          InkVAlign::CentreCell, &qx, &qy)) {
+        gx = qx;
+        gy = qy;
+      } else {
+        gx += geom.cellPx / 4;
+        gy = std::max(0, gy - geom.cellPx / 4);
       }
     }
     g.x = static_cast<uint16_t>(gx);
@@ -1374,7 +1484,7 @@ struct VerticalParsedText::LayoutCursor {
     g.column = column;
     g.row = row;
     g.x = static_cast<uint16_t>(std::max(0, runX));
-    g.y = static_cast<uint16_t>(row * geom.cellPx);
+    g.y = static_cast<uint16_t>(geom.rowTopPx(row));
     g.paragraphIndex = o.stream_[i0].paragraphIndex;
     g.byteOffset = o.stream_[i0].byteOffset;
     g.style = o.stream_[i0].style;
@@ -1441,6 +1551,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   }
   const int cellPx = std::max(1, cellPxNow);
   const int columnAdvancePx = cellPx + columnGapPx_;
+  // The character-spacing setting widens or narrows the step down the column, as it does the
+  // step along a horizontal line. Never below half an em, whatever a caller passes.
+  const int rowPitchPx = std::max((cellPx + 1) / 2, cellPx + characterSpacingPx_);
   // What a normal grid-adjacent pair leaves between its ink boxes; off-grid runs match it.
   int inkGapNow = inkGapPxMemo_;
   if (inkGapNow < 0) {
@@ -1461,11 +1574,15 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     if (metricOk) baselineInCellMemo_ = baselineNow;
   }
   const int baselineInCellPx = baselineNow;
-  const uint16_t rowsPerColumn = static_cast<uint16_t>(std::max(1, static_cast<int>(viewportHeight_) / cellPx));
+  // N rows occupy N*pitch - spacing: the last one needs no trailing gap.
+  const uint16_t rowsPerColumn =
+      static_cast<uint16_t>(std::clamp((static_cast<int>(viewportHeight_) + rowPitchPx - cellPx) / rowPitchPx, 1,
+                                       static_cast<int>(VerticalGlyph::MAX_GRID_CELLS)));
   const int usableWidthPx = std::max(cellPx, static_cast<int>(viewportWidth_) - rightPaddingPx_);
   // N columns occupy N*advance - gap, not N*advance: the last one needs no trailing 行間, so
   // dividing the width by the advance drops a column whenever the remainder is a cell or more.
-  const uint16_t columnsPerPage = static_cast<uint16_t>(std::max(1, (usableWidthPx + columnGapPx_) / columnAdvancePx));
+  const uint16_t columnsPerPage = static_cast<uint16_t>(
+      std::clamp((usableWidthPx + columnGapPx_) / columnAdvancePx, 1, static_cast<int>(VerticalGlyph::MAX_GRID_CELLS)));
   // The width that does not divide evenly into whole columns is left where it falls: on the LEFT,
   // because tategaki starts at the right margin and marches leftwards. It must not be spread into
   // the gaps -- 行間 is set in quarter ems by the line-spacing setting (and by whether furigana
@@ -1475,6 +1592,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 
   // One bundle for the helpers that were lambdas purely to reach these values.
   const ColumnGeometry geom{.cellPx = cellPx,
+                            .rowPitchPx = rowPitchPx,
                             .inkGapPx = inkGapPx,
                             .baselineInCellPx = baselineInCellPx,
                             .ascenderPx = ascender,
@@ -1497,11 +1615,14 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // Snapshot the geometry for box-rect building: finalizePendingPage() runs OUTSIDE this
   // function and must still be able to close an open box on the final page.
   boxGeomCellPx_ = cellPx;
+  boxGeomRowPitchPx_ = rowPitchPx;
   boxGeomColumnAdvancePx_ = columnAdvancePx;
   boxGeomUsableWidthPx_ = usableWidthPx;
   boxFootReservePx_ = boxPadPx();
-  boxGeomRowsInBox_ =
-      static_cast<uint16_t>(std::max(1, (static_cast<int>(viewportHeight_) - boxFootReservePx_) / cellPx));
+  boxGeomRowsInBox_ = static_cast<uint16_t>(
+      std::max(1, (static_cast<int>(viewportHeight_) - boxFootReservePx_ + geom.rowGapPx()) / rowPitchPx));
+  boxGeomRowsFull_ =
+      static_cast<uint16_t>(std::max(1, (static_cast<int>(viewportHeight_) + geom.rowGapPx()) / rowPitchPx));
 
   // Re-record box markers carried across a batch boundary (see reset()) at index 0.
   if (boxEndCarry_) {
@@ -1563,8 +1684,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // The whole remainder of the column slides up by that amount, not just the next character --
   // moving one character only relocates the gap. Spacing stays even and this column's tail sits
   // slightly higher than its neighbours'.
-  int columnYShift = 0;
-  uint16_t shiftColumn = UINT16_MAX;
+  // Carried across batches with the row: a resumed batch continues the same column.
+  int& columnYShift = pendingColumnYShift_;
+  uint16_t& shiftColumn = pendingShiftColumn_;
 
   LayoutCursor cur{*this,       geom,         inkMemo,     pendingPage_,  pages, pendingColumn_,
                    pendingRow_, columnYShift, shiftColumn, glyphsPerPage, ctx,   onPageReady};
@@ -1578,8 +1700,13 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     pendingPage_.columnCount = columnsPerPage;
     pendingPage_.rowsPerColumn = rowsPerColumn;
     cur.reservePageGlyphs(pendingPage_);
+    // The second of the two page buffers that circulate (see recycledPage_), taken now while the
+    // heap is at its chapter-start best rather than at the first page break.
+    cur.reservePageGlyphs(recycledPage_);
     pendingColumn_ = 0;
     pendingRow_ = 0;
+    pendingColumnYShift_ = 0;
+    pendingShiftColumn_ = UINT16_MAX;
     pendingPageValid_ = true;
   }
   VerticalPage& page = pendingPage_;
@@ -1671,7 +1798,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       if (inBox_) {
         appendBoxRectToPage(page, boxStartCol_, column, /*openLeft=*/false,
                             /*openRight=*/boxContinuedFromPrevPage_);
-        if (activeBlock_.alignCenter) centerBlockColumns(page, boxStartCol_, column);
+        if (activeBlock_.aligns()) alignBlockColumns(page, boxStartCol_, column);
         // A BORDERED block always takes the gap, whatever margin-after the CSS asks for: its
         // LEFT rule sits in the column gap that the next column's furigana occupies (furigana is
         // set to the left of its own column in tategaki), so anything placed immediately after
@@ -1699,12 +1826,17 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     while (nextParagraphBreakIdx < paragraphBreaksBeforeIndex_.size() &&
            idx == paragraphBreaksBeforeIndex_[nextParagraphBreakIdx]) {
       paraBreakJustFired = true;
-      if (row != 0 || column == 0) {
+      if (row != 0) {
         column++;
         row = 0;
         cur.finalizePageIfNeeded();
       }
       row = cur.columnStartRow(true);
+      // The book's text-indent: the paragraph's first column starts that many cells down.
+      if (idx < stream_.size() && stream_[idx].indentQuarters > 0) {
+        const int indentRows = (stream_[idx].indentQuarters + 2) / 4;
+        row = static_cast<uint16_t>(std::min<int>(cur.rowsAvailable() - 1, row + indentRows));
+      }
       nextParagraphBreakIdx++;
     }
 
@@ -1802,13 +1934,33 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       }
     }
 
-    if (isAsciiDigit(pc.codepoint)) {
+    // A number written into a Latin word or with a Latin unit (10km, 50%, A4) is set sideways with it
+    // as one run, so the two never part (3.1.10).
+    size_t numberEnd = idx;
+    while (numberEnd < boundaryLimit && isAsciiDigit(stream_[numberEnd].codepoint)) numberEnd++;
+    const bool numberInWord = numberEnd > idx && numberEnd < boundaryLimit &&
+                              stream_[numberEnd].paragraphIndex == pc.paragraphIndex &&
+                              ((stream_[numberEnd].codepoint >= 'A' && stream_[numberEnd].codepoint <= 'Z') ||
+                               (stream_[numberEnd].codepoint >= 'a' && stream_[numberEnd].codepoint <= 'z') ||
+                               stream_[numberEnd].codepoint == '%');
+    if (isAsciiDigit(pc.codepoint) && !numberInWord) {
       size_t digitEnd = idx;
       while (digitEnd < boundaryLimit && isAsciiDigit(stream_[digitEnd].codepoint)) {
         digitEnd++;
       }
 
       const size_t digitCount = digitEnd - idx;
+
+      // 3.1.10: a number keeps its unit. One the rest of the column cannot take with the unit after
+      // it starts the next column (a longer run checks its own length below).
+      const int unitRows = digitEnd < boundaryLimit && isPostfixUnit(stream_[digitEnd].codepoint) ? 1 : 0;
+      if (digitCount <= 2 && unitRows && row > cur.columnStartRow(false) && row + 1 + unitRows > cur.rowsAvailable()) {
+        if (column < 64) oidashiColumns_ |= uint64_t{1} << column;  // spread to its foot
+        column++;
+        row = 0;
+        cur.finalizePageIfNeeded();
+        row = cur.columnStartRow(false);
+      }
 
       if (digitCount == 2) {
         cur.placeTcyPairAt(idx);
@@ -1835,16 +1987,16 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         // and left most of a cell empty behind the number (device photo, SCP－1305 だ。).
         const int digitInkWidth = runInkWidth(renderer_, fontId_, runUtf8, runWidthPx, runStyle);
         const int nextInkOffset = cur.nextGlyphInkOffset(digitEnd, pc.paragraphIndex);
-        int startY = cur.rotatedRunStartY(column, row * cellPx);
-        uint16_t rowsNeeded = rotatedRunRows(cellPx, startY, digitInkWidth, row, nextInkOffset);
+        int startY = cur.rotatedRunStartY(column, geom.rowTopPx(row));
+        uint16_t rowsNeeded = rotatedRunRows(rowPitchPx, startY, digitInkWidth, row, nextInkOffset);
 
-        if (row != 0 && row + rowsNeeded > cur.rowsAvailable()) {
+        if (row != 0 && row + rowsNeeded + unitRows > cur.rowsAvailable()) {
           column++;
           row = 0;
           cur.finalizePageIfNeeded();
           row = cur.columnStartRow(false);
-          startY = cur.rotatedRunStartY(column, row * cellPx);
-          rowsNeeded = rotatedRunRows(cellPx, startY, digitInkWidth, row, nextInkOffset);
+          startY = cur.rotatedRunStartY(column, geom.rowTopPx(row));
+          rowsNeeded = rotatedRunRows(rowPitchPx, startY, digitInkWidth, row, nextInkOffset);
         }
 
         VerticalGlyph g;
@@ -1886,13 +2038,14 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       continue;
     }
 
-    if (Kinsoku::isRotatedRunCharacter(pc.codepoint)) {
+    if (Kinsoku::isRotatedRunCharacter(pc.codepoint) || isAsciiDigit(pc.codepoint)) {
       // Gather the contiguous run of rotated-run characters (e.g. an
-      // embedded English phrase) so it's laid out, and later rendered,
+      // embedded English phrase, with any numbers in it) so it's laid out, and later rendered,
       // as a single sideways block instead of one cell per character.
       size_t runEnd = idx;
       std::string runUtf8;
-      while (runEnd < boundaryLimit && Kinsoku::isRotatedRunCharacter(stream_[runEnd].codepoint) &&
+      while (runEnd < boundaryLimit &&
+             (Kinsoku::isRotatedRunCharacter(stream_[runEnd].codepoint) || isAsciiDigit(stream_[runEnd].codepoint)) &&
              stream_[runEnd].paragraphIndex == pc.paragraphIndex) {
         utf8AppendCodepoint(stream_[runEnd].codepoint, runUtf8);
         runEnd++;
@@ -1924,7 +2077,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       // unstyled measurement, which under-reserved rows and overprinted the next glyph).
       const auto runStyle = static_cast<EpdFontFamily::Style>(pc.style);
       renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), static_cast<uint8_t>(1u << (pc.style & 3)));
-      const int maxColumnPx = cur.rowsAvailable() * cellPx;
+      const int maxColumnPx = cur.rowsAvailable() * rowPitchPx - geom.rowGapPx();
       // JP sources separate embedded Latin from kana with ASCII spaces (それは Germinal や).
       // Drawn verbatim, the leading space pushes the first letter deep into the run's first
       // cell and the trailing space inflates the reserved rows -- the word floats low with a
@@ -1950,9 +2103,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 
       while (!remaining.empty()) {
         const int remWidthPx = renderer_.getRenderAdvanceX(fontId_, remaining.c_str(), runStyle);
-        const int startY = continueY >= 0 ? continueY : cur.rotatedRunStartY(column, row * cellPx);
+        const int startY = continueY >= 0 ? continueY : cur.rotatedRunStartY(column, geom.rowTopPx(row));
         const uint16_t remRows = rotatedRunRows(
-            cellPx, startY, runInkWidth(renderer_, fontId_, remaining, remWidthPx, runStyle), row, nextInkOffset);
+            rowPitchPx, startY, runInkWidth(renderer_, fontId_, remaining, remWidthPx, runStyle), row, nextInkOffset);
         const uint16_t availRows = static_cast<uint16_t>(std::max(0, cur.rowsAvailable() - row));
 
         if (remRows <= availRows) {
@@ -1988,7 +2141,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           std::string prefix = remaining.substr(0, sp);
           const int prefixPx = renderer_.getRenderAdvanceX(fontId_, prefix.c_str(), runStyle);
           const uint16_t prefixRows = rotatedRunRows(
-              cellPx, startY, runInkWidth(renderer_, fontId_, prefix, prefixPx, runStyle), row, nextInkOffset);
+              rowPitchPx, startY, runInkWidth(renderer_, fontId_, prefix, prefixPx, runStyle), row, nextInkOffset);
           if (prefixRows <= availRows) {
             breakAt = sp;
             break;
@@ -2050,7 +2203,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         }
         const int chunkPx = renderer_.getRenderAdvanceX(fontId_, chunk.c_str(), runStyle);
         const uint16_t chunkRows = rotatedRunRows(
-            cellPx, startY, runInkWidth(renderer_, fontId_, chunk, chunkPx, runStyle), row, nextInkOffset);
+            rowPitchPx, startY, runInkWidth(renderer_, fontId_, chunk, chunkPx, runStyle), row, nextInkOffset);
 
         VerticalGlyph g;
         g.codepoint = 0;
@@ -2090,9 +2243,133 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     // "Nothing placed in this column yet" is the real condition -- glyphs are appended in layout
     // order, so the last glyph sitting in an earlier column (or an empty page) means this
     // character would be the column's first.
+    // Ruby (JLREQ 3.3): a group stays in one column, and a reading longer than its base plus what
+    // its neighbours may take spaces the base out to it. A column it does not fit ends early and is
+    // spread to its foot, like one oidashi pushed a character out of. Anything longer than a whole
+    // column still breaks.
+    constexpr uint8_t CONT = EpdFontFamily::RUBY_CONTINUE;
+    if (idx >= suppressKinsokuUntilIdx && (pc.style & CONT) == 0 &&
+        (pc.rubyLen > 0 || (idx + 1 < boundaryLimit && (stream_[idx + 1].style & CONT) != 0))) {
+      size_t groupEnd = idx + 1;
+      while (groupEnd < boundaryLimit && (stream_[groupEnd].style & CONT) != 0) groupEnd++;
+      const int n = static_cast<int>(groupEnd - idx);
+      const int gapPx = rowPitchPx - cellPx;
+      const int basePx = n * cellPx + (n - 1) * gapPx;
+      // Ruby is half the body size and set solid (VerticalTextBlock::render draws it so).
+      const int rubyLineH = (cellPx + 1) / 2;
+      int rubyChars = 0;
+      for (size_t k = idx; k < groupEnd; k++) {
+        const auto& c = stream_[k];
+        for (uint32_t b = 0; b < c.rubyLen; b++) {
+          if ((static_cast<uint8_t>(rubyPool_[c.rubyOffset + b]) & 0xC0) != 0x80) rubyChars++;
+        }
+      }
+      const int rubyPx = rubyShown_ ? rubyChars * rubyLineH : 0;
+      const auto hasRuby = [&](const size_t at) {
+        return stream_[at].rubyLen > 0 || (stream_[at].style & CONT) != 0 ||
+               (at + 1 < stream_.size() && (stream_[at + 1].style & CONT) != 0);
+      };
+      // How far the reading may hang over a neighbour (3.3.8): one ruby character over kana, or
+      // over the blank half of a closing bracket or 、。 before it and an opening bracket after it.
+      const auto hangOver = [&](const size_t at, const bool before) {
+        if (at >= boundaryLimit || stream_[at].paragraphIndex != pc.paragraphIndex || hasRuby(at)) return 0;
+        const uint32_t cp = stream_[at].codepoint;
+        const bool kana = (cp >= 0x3041 && cp <= 0x309F) || (cp >= 0x30A1 && cp <= 0x30FA);
+        const int shift = Kinsoku::verticalShiftType(cp);
+        return kana || (before ? (shift == 1 || shift == 2) : shift == 3) ? rubyLineH : 0;
+      };
+      const int startRow = cur.columnStartRow(false);
+      // The base's length with the reading set against it; whole rows it takes.
+      const auto fit = [&](const bool atHead, const bool atFoot, int& spanPx) {
+        const int before = atHead || idx == 0 ? 0 : hangOver(idx - 1, true);
+        const int after = atFoot ? 0 : hangOver(groupEnd, false);
+        spanPx = std::max(basePx, rubyPx - before - after);
+        return (spanPx + gapPx + rowPitchPx - 1) / rowPitchPx;
+      };
+      bool atHead = page.glyphs.empty() || page.glyphs.back().column < column;
+      int spanPx = basePx;
+      int rows = fit(atHead, false, spanPx);
+      if (row + rows >= cur.rowsAvailable()) rows = fit(atHead, true, spanPx);  // ends at the foot
+      int freshSpan = basePx;
+      if (!atHead && row > startRow && row + rows > cur.rowsAvailable() &&
+          startRow + fit(true, false, freshSpan) <= cur.rowsAvailable()) {
+        // An opening bracket just before the group may not end the column it leaves: it moves too.
+        // Only this batch's own stream entries, as for the oidashi below.
+        static constexpr size_t MAX_CARRIED = 2;
+        size_t carried = 0;
+        while (carried < MAX_CARRIED && idx > carried && page.glyphs.size() > carried) {
+          const VerticalGlyph& g = page.glyphs[page.glyphs.size() - 1 - carried];
+          const PendingChar& entry = stream_[idx - 1 - carried];
+          if (g.column != column || !Kinsoku::isLineEndProhibited(g.codepoint) || g.byteOffset != entry.byteOffset ||
+              g.paragraphIndex != entry.paragraphIndex) {
+            break;
+          }
+          carried++;
+        }
+        if (carried > 0 && page.glyphs.size() > carried &&
+            page.glyphs[page.glyphs.size() - 1 - carried].column != column) {
+          carried = 0;  // the brackets open the column: moving them would leave it empty
+        }
+        page.glyphs.resize(page.glyphs.size() - carried);
+        if (column < 64) oidashiColumns_ |= uint64_t{1} << column;
+        column++;
+        row = 0;
+        cur.finalizePageIfNeeded();
+        row = cur.columnStartRow(false);
+        if (carried > 0 && page.glyphs.empty()) page.visibleTextOffset = stream_[idx - carried].visibleTextOffset;
+        for (size_t k = carried; k > 0; k--) {
+          cur.placeUprightAt(stream_[idx - k], column, row);
+          row++;
+        }
+        atHead = carried == 0;
+        rows = fit(atHead, false, spanPx);
+        if (row + rows >= cur.rowsAvailable()) rows = fit(atHead, true, spanPx);
+      }
+      if (spanPx > basePx && row + rows <= cur.rowsAvailable()) {
+        // Spaced 1:2:1: half as much at each end as between two characters. The base stays centred
+        // on its reading, so at a column head the reading starts with the column (3.3.9).
+        const int extra = spanPx - basePx;
+        const int unit = extra / (2 * n);
+        int offset = unit;
+        for (size_t k = idx; k < groupEnd; k++) {
+          const uint16_t r = static_cast<uint16_t>(row + offset / rowPitchPx);
+          const size_t before = page.glyphs.size();
+          cur.placeUprightAt(stream_[k], column, r);
+          if (page.glyphs.size() > before) {
+            VerticalGlyph& placed = page.glyphs.back();
+            placed.y = static_cast<uint16_t>(std::max(0, static_cast<int>(placed.y) + offset - (r - row) * rowPitchPx));
+          }
+          offset += rowPitchPx + 2 * unit;
+        }
+        row = static_cast<uint16_t>(row + rows);
+        // The rows were rounded up: the rest of the column slides back up by the difference.
+        const int slack = rows * rowPitchPx - (spanPx + gapPx);
+        if (slack > 0) {
+          if (shiftColumn != column) {
+            columnYShift = 0;
+            shiftColumn = column;
+          }
+          columnYShift += slack;
+        }
+        if (row >= cur.rowsAvailable()) {
+          column++;
+          row = 0;
+          cur.finalizePageIfNeeded();
+          row = cur.columnStartRow(false);
+        }
+        idx = groupEnd;
+        continue;
+      }
+    }
+
     const bool startingNewColumn = page.glyphs.empty() || page.glyphs.back().column < column;
+    // The second half of a dash or leader pair is held to the first like a character that may not
+    // start a column.
+    const bool pairsWithPrevious = isInseparableMark(pc.codepoint) && idx > 0 &&
+                                   stream_[idx - 1].codepoint == pc.codepoint &&
+                                   stream_[idx - 1].paragraphIndex == pc.paragraphIndex;
     if (startingNewColumn && !paraBreakJustFired && idx >= suppressKinsokuUntilIdx &&
-        Kinsoku::isLineStartProhibited(pc.codepoint)) {
+        (Kinsoku::isLineStartProhibited(pc.codepoint) || pairsWithPrevious)) {
       if (!page.glyphs.empty()) {
         const VerticalGlyph& prev = page.glyphs.back();
         // Oikomi (追い込み): put the character on the previous column after all. Free when that
@@ -2137,11 +2414,48 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         // Only safe when that glyph is this batch's previous stream entry: streamed layout can
         // leave glyphs from an earlier batch on the page, which are not ours to re-place. And only
         // when the pair actually fits, so a short column cannot strand the bracket instead.
-        if (idx > 0 && row + 1 < cur.rowsAvailable() && prev.byteOffset == stream_[idx - 1].byteOffset &&
-            prev.paragraphIndex == stream_[idx - 1].paragraphIndex) {
-          page.glyphs.pop_back();
-          cur.placeUprightAt(stream_[idx - 1], column, row);
-          row++;
+        //
+        // The character before may itself be the second half of an inseparable pair (…… ‥‥ ——,
+        // JLREQ 3.1.11): then both halves move, or ？ after …… would split the dots across columns.
+        const auto isStreamEntry = [&](const VerticalGlyph& g, const size_t at) {
+          return g.byteOffset == stream_[at].byteOffset && g.paragraphIndex == stream_[at].paragraphIndex;
+        };
+        //
+        // The same holds whenever the group's head may not start a line itself (the first … of a
+        // …… that only half fits, or the 。 before it): the character before joins, until the
+        // group opens on one that may head a column -- た。…… moves as one.
+        static constexpr size_t MAX_MOVING = 4;
+        size_t moving = 1;
+        while (moving < MAX_MOVING && idx > moving && page.glyphs.size() > moving) {
+          const VerticalGlyph& head = page.glyphs[page.glyphs.size() - moving];
+          const VerticalGlyph& before = page.glyphs[page.glyphs.size() - moving - 1];
+          const bool samePair = isInseparableMark(head.codepoint) && before.codepoint == head.codepoint;
+          if (!samePair && !Kinsoku::isLineStartProhibited(head.codepoint)) break;
+          if (before.column != prev.column || !isStreamEntry(before, idx - moving - 1)) break;
+          moving++;
+        }
+        if (idx >= moving && row + moving < cur.rowsAvailable() && isStreamEntry(prev, idx - 1)) {
+          if (prev.column < 64) oidashiColumns_ |= uint64_t{1} << prev.column;
+          page.glyphs.resize(page.glyphs.size() - moving);
+          for (size_t k = moving; k > 0; k--) {
+            cur.placeUprightAt(stream_[idx - k], column, row);
+            row++;
+          }
+          // A moved ellipsis needs the same clearance the normal path gives one: its dots sit low
+          // in their cell, and this character would otherwise print into them.
+          const PendingChar& moved = stream_[idx - 1];
+          int inkTop = 0, inkHeight = 0;
+          const int nextInkOffset = cur.nextGlyphInkOffset(idx, pc.paragraphIndex);
+          if ((moved.codepoint == 0x2026 || moved.codepoint == 0x2025) && nextInkOffset >= 0 &&
+              renderer_.verticalPunctInkBox(fontId_, moved.codepoint, static_cast<EpdFontFamily::Style>(moved.style),
+                                            geom.rowTopPx(row - 1), cellPx, Kinsoku::verticalShiftType(moved.codepoint),
+                                            &inkTop, &inkHeight)) {
+            const int deficit = (inkTop + inkHeight + inkGapPx) - (geom.rowTopPx(row) + nextInkOffset);
+            if (deficit > 0) {
+              columnYShift -= deficit;
+              shiftColumn = column;
+            }
+          }
           // Fall through: this character is placed normally, now one row below its partner.
         }
       }
@@ -2164,14 +2478,15 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           g.column = prev.column;
           g.row = static_cast<uint16_t>(prev.row + 1);
           int gx = geom.columnLeftX(prev.column);
-          int gy = g.row * cellPx;
-          if (Kinsoku::verticalShiftType(pc.codepoint) == 1) {
+          int gy = geom.rowTopPx(g.row);
+          const int pullShift = Kinsoku::verticalShiftType(pc.codepoint);
+          if (pullShift == 1 || pullShift == 5) {
             int qx = 0, qy = 0;
             if (rightAlignedInk(renderer_, fontId_, inkMemo, geom, pc.codepoint, pc.style, prev.column, g.row,
-                                InkVAlign::HalfEmHead, &qx, &qy)) {
+                                pullShift == 1 ? InkVAlign::HalfEmHead : InkVAlign::CentreCell, &qx, &qy)) {
               gx = qx;
               gy = qy;
-            } else {
+            } else if (pullShift == 1) {
               gx += cellPx / 2;
               gy = std::max(0, gy - cellPx / 2);
             }
@@ -2181,7 +2496,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           g.renderKind = VerticalGlyph::Upright;
           if (Kinsoku::needsVerticalRotation(pc.codepoint)) {
             g.x = static_cast<uint16_t>(geom.columnLeftX(prev.column));
-            g.y = static_cast<uint16_t>(g.row * cellPx);
+            g.y = static_cast<uint16_t>(geom.rowTopPx(g.row));
             g.renderKind = VerticalGlyph::RotatedPunct;
           }
           g.paragraphIndex = pc.paragraphIndex;
@@ -2189,6 +2504,26 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           cur.pushGlyph(prevPage, g, rubyOf(pc));
           idx++;
           continue;
+        }
+        // Oidashi across the page break: the character that ended the previous page moves to the
+        // head of this one, so the pair opens it together. Only one that may start a column, and
+        // only this batch's previous stream entry (an earlier batch's glyph is not ours to re-place).
+        const VerticalGlyph* last = prevPage.glyphs.empty() ? nullptr : &prevPage.glyphs.back();
+        if (!prevColumnHasRoom && last && idx > 0 && last->codepoint != 0 &&
+            last->renderKind != VerticalGlyph::RotatedRun && last->renderKind != VerticalGlyph::UprightRun &&
+            !isImageMarker(last->codepoint) && !Kinsoku::isLineStartProhibited(last->codepoint) &&
+            last->byteOffset == stream_[idx - 1].byteOffset &&
+            last->paragraphIndex == stream_[idx - 1].paragraphIndex && row + 1 < cur.rowsAvailable()) {
+          const uint16_t lastColumn = last->column;
+          prevPage.glyphs.pop_back();
+          // The column it leaves ends short of the foot: spread like any column oidashi shortened.
+          if (lastColumn < 64) oidashiColumns_ |= uint64_t{1} << lastColumn;
+          cur.spreadColumnToFoot(prevPage, lastColumn);
+          oidashiColumns_ = 0;
+          page.visibleTextOffset = stream_[idx - 1].visibleTextOffset;
+          cur.placeUprightAt(stream_[idx - 1], column, row);
+          row++;
+          // Fall through: this character is placed normally, now one row below its partner.
         }
       }
     }
@@ -2220,11 +2555,11 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       int inkTop = 0, inkHeight = 0;
       if (nextInkOffset >= 0 &&
           renderer_.verticalPunctInkBox(fontId_, pc.codepoint, static_cast<EpdFontFamily::Style>(pc.style),
-                                        placedRow * cellPx, cellPx, Kinsoku::verticalShiftType(pc.codepoint), &inkTop,
-                                        &inkHeight)) {
+                                        geom.rowTopPx(placedRow), cellPx, Kinsoku::verticalShiftType(pc.codepoint),
+                                        &inkTop, &inkHeight)) {
         // The dots sit low in their cell, so close the resulting overlap down to the same ink
         // gap a normal pair of characters leaves.
-        const int deficit = (inkTop + inkHeight + inkGapPx) - (row * cellPx + nextInkOffset);
+        const int deficit = (inkTop + inkHeight + inkGapPx) - (geom.rowTopPx(row) + nextInkOffset);
         if (deficit > 0) {
           columnYShift -= deficit;
           shiftColumn = column;
@@ -2247,7 +2582,17 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   }
 
   if (isFinalFlush) {
+    // A block still open here ends with the chapter: its end marker sits at the stream's end, which the
+    // loop never visits. Close it as finalizePendingPage() does, or it loses its rect and alignment.
+    if (inBox_) {
+      const uint16_t lastCol = lastBlockColumn(page, boxStartCol_);
+      appendBoxRectToPage(page, boxStartCol_, lastCol, /*openLeft=*/false, /*openRight=*/boxContinuedFromPrevPage_);
+      if (activeBlock_.aligns()) alignBlockColumns(page, boxStartCol_, lastCol);
+      inBox_ = false;
+      boxContinuedFromPrevPage_ = false;
+    }
     for (uint16_t c = 0; c < columnsPerPage; c++) cur.spreadColumnToFoot(page, c);
+    oidashiColumns_ = 0;
     if (!page.glyphs.empty() || !anyPageEverProduced_) {
       pages.push_back(std::move(page));
       anyPageEverProduced_ = true;
@@ -2277,7 +2622,8 @@ void VerticalParsedText::appendBoxRectToPage(VerticalPage& p, const uint16_t sta
   // its last character -- never into the margin band beyond it. boxFootReservePx_ (see
   // rowsAvailable) is what guarantees that leftover is at least the inset.
   // Extending the rule through the margin band to the status bar was tried and looked worse.
-  const int textBottom = static_cast<int>(boxGeomRowsInBox_) * boxGeomCellPx_;
+  const int textBottom =
+      static_cast<int>(boxGeomRowsInBox_) * boxGeomRowPitchPx_ - (boxGeomRowPitchPx_ - boxGeomCellPx_);
   const int padBottom = std::max(pad, static_cast<int>(viewportHeight_) - textBottom);
   auto colLeft = [&](const uint16_t c) -> int {
     return boxGeomUsableWidthPx_ - boxGeomCellPx_ - static_cast<int>(c) * boxGeomColumnAdvancePx_;
@@ -2303,29 +2649,59 @@ void VerticalParsedText::appendBoxRectToPage(VerticalPage& p, const uint16_t sta
   p.boxes.push_back(r);
 }
 
-// Vertically center the glyphs of columns [startCol..endCol] within the column height
-// (text-align: center in vertical writing). Runs once when a centered block closes on a page.
-void VerticalParsedText::centerBlockColumns(VerticalPage& p, const uint16_t startCol, const uint16_t endCol) const {
-  // Boxed columns are laid out short of the foot, so centre within THAT height, not the full one.
-  if (boxGeomCellPx_ <= 0 || boxGeomRowsInBox_ == 0) return;
-  for (uint16_t c = startCol; c <= endCol; c++) {
-    int maxRow = -1;
-    int minRow = boxGeomRowsInBox_;
+// Place the glyphs of columns [startCol..endCol] along the column height once their block closes on a
+// page: text-align center / end moves each column on its own; auto head/foot margins move the block as
+// a whole, so its columns keep starting together (a title page centred as one block). Text only moves
+// down, by whole rows (rows stay true for selection), into the space below its own last glyph.
+void VerticalParsedText::alignBlockColumns(VerticalPage& p, const uint16_t startCol, const uint16_t endCol) const {
+  // A framed block's columns stop short of the foot for its bottom rule: align within THAT height. A
+  // block without a frame aligns to the real foot, like the text around it.
+  if (boxGeomCellPx_ <= 0 || boxGeomRowsInBox_ == 0 || boxGeomRowPitchPx_ <= 0) return;
+  const int rows = activeBlock_.borderEdges != 0 ? boxGeomRowsInBox_ : boxGeomRowsFull_;
+  const int footPx = (rows - 1) * boxGeomRowPitchPx_ + boxGeomCellPx_;
+  // Lowest ink edge of the columns, -1 when empty or holding an image (which is never moved). A
+  // sideways Latin word or number is one glyph at its first row but runs down for its whole length.
+  const auto bottomOf = [&](const uint16_t from, const uint16_t to) {
+    int bottom = -1;
     for (const auto& g : p.glyphs) {
-      if (g.column != c) continue;
-      maxRow = std::max(maxRow, static_cast<int>(g.row));
-      minRow = std::min(minRow, static_cast<int>(g.row));
+      if (g.column < from || g.column > to) continue;
+      if (isImageMarker(g.codepoint)) return -1;
+      int height = boxGeomCellPx_;
+      if (g.renderKind == VerticalGlyph::RotatedRun && g.textId != VerticalGlyph::NO_TEXT) {
+        height = renderer_.getRenderAdvanceX(fontId_, p.glyphText(g), static_cast<EpdFontFamily::Style>(g.style));
+      }
+      bottom = std::max(bottom, static_cast<int>(g.y) + height);
     }
-    if (maxRow < 0) continue;
-    const int usedRows = maxRow - minRow + 1;
-    const int shiftPx =
-        ((static_cast<int>(boxGeomRowsInBox_) - usedRows) * boxGeomCellPx_) / 2 - minRow * boxGeomCellPx_;
-    if (shiftPx == 0) continue;
+    return bottom;
+  };
+  const auto shift = [&](const uint16_t from, const uint16_t to, const bool toFoot) {
+    const int bottom = bottomOf(from, to);
+    if (bottom < 0) return;
+    // A column whose last mark hangs below the foot (burasage) has no free row.
+    const int freeRows = std::max(0, footPx - bottom) / boxGeomRowPitchPx_;
+    const int rowsDown = toFoot ? freeRows : freeRows / 2;
+    if (rowsDown == 0) return;
     for (auto& g : p.glyphs) {
-      if (g.column != c) continue;
-      g.y = static_cast<uint16_t>(std::max(0, static_cast<int>(g.y) + shiftPx));
+      if (g.column < from || g.column > to) continue;
+      g.y = static_cast<uint16_t>(g.y + rowsDown * boxGeomRowPitchPx_);
+      g.row = static_cast<uint8_t>(std::min(255, g.row + rowsDown));
     }
+  };
+  if (activeBlock_.blockAlign != VerticalBlockParams::BlockAlign::None) {
+    shift(startCol, endCol, activeBlock_.blockAlign == VerticalBlockParams::BlockAlign::End);
+    return;
   }
+  for (uint16_t c = startCol; c <= endCol; c++) shift(c, c, activeBlock_.alignEnd);
+}
+
+// The leftmost column [startCol..] that holds a glyph on page p (an image's glyph sits on the last column it
+// covers), or startCol when none does. A block's closing frame ends there, not at a cursor already moved on.
+uint16_t VerticalParsedText::lastBlockColumn(const VerticalPage& p, const uint16_t startCol) {
+  uint16_t last = startCol;
+  for (const auto& g : p.glyphs) {
+    if (g.column >= startCol) last = std::max<uint16_t>(last, g.column);
+  }
+  return last;
 }
 
 bool VerticalParsedText::finalizePendingPage(VerticalPage& out) {
@@ -2335,9 +2711,10 @@ bool VerticalParsedText::finalizePendingPage(VerticalPage& out) {
   // Chapter ended while inside a box (end marker carried past the last batch, or a truncated
   // chapter): close the rect on this final page so the border isn't silently dropped.
   if (inBox_) {
-    appendBoxRectToPage(pendingPage_, boxStartCol_, pendingColumn_, /*openLeft=*/false,
+    const uint16_t lastCol = lastBlockColumn(pendingPage_, boxStartCol_);
+    appendBoxRectToPage(pendingPage_, boxStartCol_, lastCol, /*openLeft=*/false,
                         /*openRight=*/boxContinuedFromPrevPage_);
-    if (activeBlock_.alignCenter) centerBlockColumns(pendingPage_, boxStartCol_, pendingColumn_);
+    if (activeBlock_.aligns()) alignBlockColumns(pendingPage_, boxStartCol_, lastCol);
     inBox_ = false;
     boxContinuedFromPrevPage_ = false;
   }

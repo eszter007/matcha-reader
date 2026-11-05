@@ -45,7 +45,7 @@ These three files are **untouched** and are where the remaining work lives:
 | `lib/Epub/Epub/Section.cpp` | `SECTION_FILE_VERSION` bump (62 → 63) — **only once laid-out output actually changes** |
 
 Also not done: `max-width` (item 4, trivial — reuse the existing `width` path),
-`clang-format`, the `-e private` build, and the host-side tests.
+`clang-format` and the host-side tests.
 
 ## Do this
 
@@ -115,20 +115,10 @@ for 6 declarations.**
 
 ```
 ~/.platformio/penv/bin/pio run -e default    # must succeed, zero new warnings
-~/.platformio/penv/bin/pio run -e private    # must also succeed
 ~/.platformio/penv/bin/clang-format -i <every file you changed>
 ```
 
-Then rebuild both after formatting.
-
-### About `-e private`
-`platformio.local.ini` (gitignored) defines an `env:private` that extends
-`env:default` and swaps in a private overlay from a local directory
-via `build_src_filter`. **You are not expected to modify anything in the
-overlay** — CSS work is entirely public-tree. `-e private` must simply keep
-building. If it fails only inside overlay files, stop and report rather than
-editing them; if `platformio.local.ini` is missing on this machine, say so and
-verify `-e default` only.
+Then rebuild after formatting.
 
 ### Host-side tests
 Phases 1-5 each compiled the relevant code standalone with

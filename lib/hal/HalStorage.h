@@ -45,17 +45,24 @@ class HalStorage {
   bool readFileToStream(const char* path, Print& out, size_t chunkSize = 256);
   // Read up to `bufferSize-1` bytes into `buffer`, null-terminating it. Returns bytes read.
   size_t readFileToBuffer(const char* path, char* buffer, size_t bufferSize, size_t maxBytes = 0);
+  // Read the whole file at `path` into `out`. Fails (without allocating) on
+  // missing, directory, empty, above-`cap`, or short-read files.
+  bool readFileToString(const char* moduleName, const std::string& path, size_t cap, std::string& out);
   // Write a string to `path` on the SD card. Overwrites existing file.
   // Returns true on success.
   bool writeFile(const char* path, const String& content);
   // Ensure a directory exists, creating it if necessary. Returns true on success.
   bool ensureDirectoryExists(const char* path);
 
+  // Paths inside a .matcha volume ("vol.matcha/page_0001.jpg", see MatchaContainer.h) work only
+  // with exists() and openFileForRead(); every other call sees the real SD card.
   HalFile open(const char* path, const oflag_t oflag = O_RDONLY);
   bool mkdir(const char* path, const bool pFlag = true);
   bool exists(const char* path);
   bool remove(const char* path);
   bool rename(const char* oldPath, const char* newPath);
+  // Move a fully written temp file over `path`, replacing any existing file.
+  bool replaceFile(const char* tmpPath, const char* path);
   bool rmdir(const char* path);
 
   bool openFileForRead(const char* moduleName, const char* path, HalFile& file);
@@ -109,6 +116,7 @@ class HalFile : public Print {
   bool seek64(uint64_t pos);
   bool seekCur(int64_t offset);
   bool seekSet(size_t offset);
+  bool truncate(uint64_t length);
   int available() const;
   size_t position() const;
   int read(void* buf, size_t count);
@@ -123,6 +131,11 @@ class HalFile : public Print {
   HalFile openNextFile();
   bool isOpen() const;
   operator bool() const;
+
+ private:
+  // Narrows a read-only file to [offset, offset + length): an entry inside a .matcha container
+  // (see MatchaContainer.h). Positions, sizes and reads are then relative to the entry.
+  bool setWindow(uint32_t offset, uint32_t length);
 };
 
 // Downstream code must use Storage instead of SdMan

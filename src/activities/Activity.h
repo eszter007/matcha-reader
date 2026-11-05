@@ -6,6 +6,8 @@
 #include <string>
 #include <utility>
 
+class ReaderActivity;
+
 #include "ActivityManager.h"  // for using the ActivityManager singleton
 #include "ActivityResult.h"
 #include "GfxRenderer.h"
@@ -30,6 +32,8 @@ class Activity {
   virtual ~Activity() = default;
   virtual void onEnter();
   virtual void onExit();
+  // Last chance to queue activity-owned state before sleep events are drained.
+  virtual void prepareForSleep() {}
   virtual void loop() {}
 
   virtual void render(RenderLock&&) {}
@@ -47,8 +51,19 @@ class Activity {
   // transitions so no filesystem code races a raw SD-card owner.
   virtual bool requiresExclusiveStorageLoop() const { return false; }
   virtual bool isReaderActivity() const { return false; }
+  // The ReaderActivity behind this screen, or null. isReaderActivity() is also true for screens
+  // that only act like a reader (clip selection, manga), so never cast on that alone.
+  virtual ReaderActivity* asReaderActivity() { return nullptr; }
+  virtual bool acceptsRemoteInput() const { return false; }
   // Returns true when the activity schedules its own forced refresh.
   virtual bool handleForcedRefresh() { return false; }
+  // The Sync Insights & Clock shortcut over this book: starts its progress sync with the clock and
+  // Insights added. False when the screen has no book position to sync.
+  virtual bool startShortcutSync() { return false; }
+  // Whether this screen keeps the font decompressor's 24KB glyph slab while it is in front. The
+  // slab speeds up redraws of small screens; a screen that needs contiguous heap more (a book page,
+  // Word Lookup) answers false. Applied by the render task before each render.
+  virtual bool wantsGlyphSlab() const { return true; }
   virtual bool isHomeActivity() const { return false; }
   virtual bool handleHomeGesture() { return false; }
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }

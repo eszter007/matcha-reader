@@ -668,7 +668,7 @@ typedef struct mz_dummy_time_t_tag
 #define MZ_MALLOC(x) NULL
 #define MZ_FREE(x) (void)x, ((void)0)
 #define MZ_REALLOC(p, x) NULL
-#else
+#elif !defined(MZ_MALLOC) /* CrossPoint: MinizConfig.h supplies its own */
 #define MZ_MALLOC(x) malloc(x)
 #define MZ_FREE(x) free(x)
 #define MZ_REALLOC(p, x) realloc(p, x)

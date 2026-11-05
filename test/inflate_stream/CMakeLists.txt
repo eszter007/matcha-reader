@@ -1,6 +1,7 @@
 add_executable(InflateStreamTest
   InflateStreamTest.cpp
   ${REPO_ROOT}/lib/miniz/src/miniz_impl.c
+  ${REPO_ROOT}/lib/miniz/src/MinizAlloc.cpp
   ${REPO_ROOT}/lib/Memory/BuildScratch.cpp
   ${REPO_ROOT}/lib/hal/HalMemory.cpp
 )

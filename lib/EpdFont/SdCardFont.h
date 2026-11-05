@@ -4,7 +4,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -136,6 +138,9 @@ class SdCardFont {
   // Used by GfxRenderer::getGlyphBitmap() to recover the SdCardFont from EpdFontData::glyphMissCtx.
   static SdCardFont* fromMissCtx(void* ctx);
 
+  // True once after a loaded font first hits a corrupt glyph entry, so the UI can tell the user.
+  static bool takeCorruptGlyphNotice() { return corruptGlyphNotice_.exchange(false); }
+
   struct Stats {
     uint32_t prewarmTotalMs = 0;
     uint32_t sdReadTimeMs = 0;
@@ -192,12 +197,30 @@ class SdCardFont {
     static_assert(sizeof(BmpInterval16) == 6, "BmpInterval16 must remain compact");
     BmpInterval16* bmpIntervals = nullptr;
     bool intervalsAreBmp16 = false;
-    // True when bmpIntervals/fullIntervals above points at another style's table instead of
-    // this style's own allocation (see the sharing check at the end of the interval-loading
-    // loop in load()). Regular/bold/italic weights of the same family almost always cover the
-    // identical codepoint set, so a CJK font's multi-KB-per-style interval table is otherwise
-    // paid once per style for no reason. freeStyleAll() must not delete[] a borrowed pointer.
-    bool intervalsShared = false;
+    // Packed form of a large BMP table (a sparse CJK subset: thousands of one- or two-glyph
+    // runs, 23 KB at 6 bytes each). Per run, a varint gap from the end of the previous run and a
+    // varint length minus one; no glyph offsets, since load() requires each run to start where
+    // the previous one ended. A directory entry every PACK_BLOCK runs bounds a lookup to one
+    // binary search plus one block decode, all in RAM.
+    static constexpr uint32_t PACK_BLOCK = 32;
+    struct PackBlock {
+      uint16_t firstCp;     // first codepoint of the block's first run
+      uint16_t glyphIndex;  // glyph index of that codepoint
+      uint16_t byteOffset;  // where the block's first run starts in packedIntervals
+    };
+    uint8_t* packedIntervals = nullptr;
+    PackBlock* packBlocks = nullptr;
+    uint32_t packBlockCount = 0;
+    uint32_t packedBytes = 0;
+    bool intervalsArePacked = false;
+    bool hasCoverageIndex() const { return fullIntervals || bmpIntervals || packedIntervals; }
+    // Reads a packed table front to back, one run per call.
+    struct PackCursor {
+      uint32_t byte = 0;
+      uint32_t nextCp = 0;
+      uint32_t glyph = 0;
+    };
+    // The table may be shared with other styles and other loaded fonts; see releaseIntervals().
     // Codepoints above the BMP (rare kanji from JIS X 0213 plane 2) sort after every BMP
     // interval, so they form a tail of the on-disk table. Keeping that tail resident cost
     // ~3.5KB per style -- it also forces every interval to the 12-byte form -- on a heap
@@ -279,14 +302,21 @@ class SdCardFont {
     uint16_t miniKernLeftCapacity = 0;
     uint16_t miniKernRightCapacity = 0;
     uint32_t miniKernMatrixCapacity = 0;
+    // True once the mini kern tables cover the resident mini glyph set (possibly
+    // with no pairs). Subset hits skip the rebuild.
+    bool miniKernBuilt = false;
 
     // The EpdFont whose data pointer we manage
     EpdFont epdFont{&stubData};
-
-    bool present = false;
   };
 
-  PerStyle styles_[MAX_STYLES] = {};
+  // One record per style the file has, allocated once per load: the EpdFont pointers handed to the
+  // renderer stay valid until the font is unloaded.
+  std::unique_ptr<PerStyle[]> styles_;
+  // Array slot plus one for each style id; zero means the file has no such style.
+  uint8_t styleSlots_[MAX_STYLES] = {};
+  PerStyle& styleData(uint8_t style) { return styles_[styleSlots_[style] - 1]; }
+  const PerStyle& styleData(uint8_t style) const { return styles_[styleSlots_[style] - 1]; }
   uint8_t styleCount_ = 0;
 
   char filePath_[128] = {};
@@ -384,6 +414,9 @@ class SdCardFont {
 
   Stats stats_;
   uint32_t contentHash_ = 0;
+  uint32_t fileSize_ = 0;  // bounds glyph bitmap offsets (glyphEntryValid)
+  uint8_t corruptGlyphsLogged_ = 0;
+  static inline std::atomic<bool> corruptGlyphNotice_{false};
   bool loaded_ = false;
 
   // Per-style helpers
@@ -400,6 +433,26 @@ class SdCardFont {
   void applyKernLigaturePointers(PerStyle& s, EpdFontData& data) const;
   void applyGlyphMissCallback(uint8_t styleIdx);
   int32_t findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) const;
+  static int32_t findPackedGlyphIndex(const PerStyle& s, uint32_t codepoint);
+  // Drops this style's reference to its interval table and frees the table with the last one.
+  static void releaseIntervals(PerStyle& s);
+  // False for a glyph entry the file cannot back (a corrupt .cpfont): its data length must be the
+  // packed size of its pixels and its bitmap must lie inside the file. Logs the first few per font.
+  bool glyphEntryValid(const PerStyle& s, const EpdGlyph& glyph, uint32_t codepoint);
+  // A corrupt entry, drawn as nothing at the font's full-width advance.
+  EpdGlyph blankGlyph(uint8_t styleIdx) const;
+  // A resident interval table in whichever form it was loaded (see releaseIntervals()).
+  struct IntervalView {
+    const EpdUnicodeInterval* full = nullptr;
+    const PerStyle::BmpInterval16* bmp = nullptr;
+    const uint8_t* packed = nullptr;
+    uint32_t residentCount = 0;
+  };
+  // `entry` is a shared-table registry entry (SdCardFont.cpp).
+  static IntervalView viewOf(const void* entry);
+  // Resident run `j` of `o`. A packed table is read in order through `cursor`, so callers
+  // ask for j = 0, 1, 2, ... False past the resident runs.
+  static bool residentRecord(const IntervalView& o, uint32_t j, PerStyle::PackCursor& cursor, EpdUnicodeInterval& out);
   int fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCount, uint8_t styleMask);
   int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly, bool loadKernLig,
                    bool accumulate);

@@ -41,12 +41,15 @@ class FrontlightPanelActivity final : public Activity, private UiAppHost {
   static constexpr uint32_t kOrientationTileDebounceMs = 750;
   int panelBottom = 0;
 
-  // Quick-setting buttons, left to right: night mode, refresh, orientation, touch, light. Round
-  // icon buttons with a caption under each; every icon shows what tapping it does, so the night,
-  // touch and light buttons swap glyph with their state. Touch boards only — they are touch
-  // targets. The light button lives here rather than beside the brightness slider so all five
-  // switches read as one row.
-  static constexpr int kQuickCount = 5;
+  // Quick-setting buttons, left to right: night mode, refresh, orientation, touch, light, and
+  // Bluetooth when the build has it. Round icon buttons with a caption under each; every icon
+  // shows what tapping it does, so the night, touch, light and Bluetooth buttons swap glyph with
+  // their state. Touch boards only — they are touch targets. The light button lives here rather
+  // than beside the brightness slider so all the switches read as one row.
+  static constexpr int kQuickLight = 4;
+  static constexpr int kQuickBluetooth = 5;
+  static constexpr int kQuickMax = 6;
+  static int quickCount();
 
   // fui::SliderRowProps and fui::TileGridProps embed a 324-byte fui::StyleSet,
   // so the props the render path fills in live here instead of on the stack

@@ -4,18 +4,22 @@
 
 #include <algorithm>
 
+#include "activities/reader/ProgressFile.h"
+
 namespace EpubProgress {
 
 int percentFromCache(const std::string& cachePath, const char* logTag) {
   HalFile f;
   if (!Storage.openFileForRead(logTag, cachePath + "/progress.bin", f)) return -1;
-  uint8_t data[9];
-  const int got = f.read(data, 9);
+  // Read past the fork's 9 bytes so the size can tell a stock CrossPoint file apart (see
+  // ProgressFile::isStockLayout): its byte 8 is part of the text offset, not a percent.
+  uint8_t data[13];
+  const int got = f.read(data, sizeof(data));
   if (got < 6) return -1;
   f.close();
   // Newer progress files carry the reader's page-based book percent (pages read / total
   // pages) directly -- use it so the Library matches the reader exactly. 0xFF = unknown.
-  if (got >= 9 && data[8] <= 100) return data[8];
+  if (!ProgressFile::isStockLayout(got) && got >= 9 && data[8] <= 100) return data[8];
   const uint16_t spineIndex = data[0] | (data[1] << 8);
   const uint16_t currentPage = data[2] | (data[3] << 8);
   const uint16_t pageCount = data[4] | (data[5] << 8);

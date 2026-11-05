@@ -46,6 +46,17 @@ struct NameCounter {
   int count;
 };
 
+// Mirrors crengine's IsEmptySpace(): only these four count as empty space.
+bool isWhitespaceOnly(const XML_Char* data, const int len) {
+  for (int i = 0; i < len; i++) {
+    const char c = data[i];
+    if (c != ' ' && c != '\r' && c != '\n' && c != '\t') {
+      return false;
+    }
+  }
+  return true;
+}
+
 struct ParentState {
   std::vector<NameCounter> children;
 
@@ -143,7 +154,9 @@ class ParagraphTextCounter final : public Print {
     return size;
   }
 
-  size_t totalVisibleChars() const { return visibleChars; }
+  // Visible codepoints up to the end of the last non-whitespace run. Trailing formatting
+  // whitespace is excluded so a 100% target still resolves inside real text.
+  size_t totalVisibleChars() const { return lastTextEndChars; }
 
  private:
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
@@ -208,6 +221,14 @@ class ParagraphTextCounter final : public Print {
     }
 
     visibleChars += countUtf8Codepoints(data, len);
+    if (!isWhitespaceOnly(data, len)) {
+      // Trailing whitespace inside this run is single-byte, so bytes equal codepoints here.
+      int trailing = 0;
+      while (trailing < len && isWhitespaceOnly(data + len - 1 - trailing, 1)) {
+        trailing++;
+      }
+      lastTextEndChars = visibleChars - static_cast<size_t>(trailing);
+    }
   }
 
  private:
@@ -219,6 +240,7 @@ class ParagraphTextCounter final : public Print {
   int bodyDepth = -1;
   uint16_t nonVisibleDepth = 0;
   size_t visibleChars = 0;
+  size_t lastTextEndChars = 0;
 };
 
 class XPathParagraphResolver final : public Print {
@@ -469,11 +491,11 @@ class XPathProgressResolver final : public Print {
       return;
     }
 
+    pendingTextNode = true;
     const int siblingIndex = parentStates.back().nextIndex(name);
     path.push_back({name, siblingIndex});
     parentStates.emplace_back();
     textNodeIndexStack.push_back(0);
-    pendingTextNode = true;
 
     if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name) || startsSkippedSubtree(atts)) {
       nonVisibleDepth++;
@@ -515,6 +537,9 @@ class XPathProgressResolver final : public Print {
     }
   }
 
+  // Visible-offset counting mirrors ChapterHtmlSlimParser::characterData (every body
+  // codepoint outside non-visible elements), so offsets recorded by the page LUT line up
+  // with what is counted here regardless of which elements hold the text.
   void onCharacterData(const XML_Char* data, const int len) {
     // Count every visible body text node, not just paragraph/list text: ChapterHtmlSlimParser
     // produces the offsets resolved here and counts headings, divs and bare body text too
@@ -529,9 +554,14 @@ class XPathProgressResolver final : public Print {
       return;
     }
 
+    const bool whitespaceOnly = isWhitespaceOnly(data, len);
+
     // Start a new text node on first non-empty content after any structural boundary.
     // Only counting non-empty nodes matches KOReader's text()[N] indexing behavior,
-    // which skips empty text nodes created by bare <a id="anchor"/> anchors.
+    // which skips empty text nodes created by bare <a id="anchor"/> anchors. crengine
+    // also drops a whitespace-only run that is the first child of a block element, but
+    // "block" there comes from the computed style (display, white-space), which this
+    // resolver does not see, so such a run is counted here like any other.
     if (pendingTextNode) {
       if (!textNodeIndexStack.empty()) {
         textNodeIndexStack.back()++;
@@ -540,11 +570,13 @@ class XPathProgressResolver final : public Print {
       pendingTextNode = false;
     }
 
+    // Whitespace-only runs are never used as anchors: a target that falls inside one is
+    // carried forward and resolves at the start of the next text run instead.
     const size_t nextVisibleChars = visibleChars + codepointCount;
-    const bool targetInCurrentChunk = boundaryMode == BoundaryMode::Inclusive ? targetVisibleChar <= nextVisibleChars
-                                                                              : targetVisibleChar < nextVisibleChars;
-    if (targetInCurrentChunk) {
-      const size_t delta = targetVisibleChar - visibleChars;
+    const bool targetReached = boundaryMode == BoundaryMode::Inclusive ? targetVisibleChar <= nextVisibleChars
+                                                                       : targetVisibleChar < nextVisibleChars;
+    if (targetReached && !whitespaceOnly) {
+      const size_t delta = targetVisibleChar > visibleChars ? targetVisibleChar - visibleChars : 0;
       const int texNode = textNodeIndexStack.empty() ? 0 : textNodeIndexStack.back();
       const size_t charOff = visibleChars - textNodeStartChars + delta;
       xpath = buildParagraphXPath(spineIndex, path, texNode, charOff);

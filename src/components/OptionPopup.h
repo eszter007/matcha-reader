@@ -9,6 +9,7 @@
 
 #include "GfxRenderer.h"
 #include "MappedInputManager.h"
+#include "activities/RenderLock.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 
@@ -28,6 +29,7 @@ class OptionPopup {
  public:
   void show(StrId titleId, const StrId* optionIds, int optionCount, int currentIndex,
             std::function<void(int)> onSelect) {
+    RenderLock lock;  // a render may still be reading the strings being replaced
     title = I18N.get(titleId);
     headline.clear();
     ownedStrings.resize(optionCount);
@@ -39,6 +41,7 @@ class OptionPopup {
 
   void show(const char* titleStr, const char* const* options, int optionCount, int currentIndex,
             std::function<void(int)> onSelect) {
+    RenderLock lock;  // a render may still be reading the strings being replaced
     title = titleStr;
     headline.clear();
     ownedStrings.resize(optionCount);
@@ -52,25 +55,45 @@ class OptionPopup {
   // It wraps to several lines under the caption; the dialog grows to fit.
   void show(const char* titleStr, const char* headlineStr, const char* const* options, int optionCount,
             int currentIndex, std::function<void(int)> onSelect) {
+    RenderLock lock;  // a render may still be reading the strings being replaced
     show(titleStr, options, optionCount, currentIndex, std::move(onSelect));
     headline = headlineStr ? headlineStr : "";
   }
 
-  void show(StrId titleId, const std::vector<std::string>& options, int currentIndex,
-            std::function<void(int)> onSelect) {
+  // Message dialog: a wrapped body under the (optional) title, like the
+  // Wi-Fi forget-network prompt. Pass an empty title for a message-only look.
+  void showMessage(const char* titleStr, const char* messageStr, const char* const* options, int optionCount,
+                   int currentIndex, std::function<void(int)> onSelect) {
+    RenderLock lock;  // a render may still be reading the strings being replaced
+    show(titleStr, options, optionCount, currentIndex, std::move(onSelect));
+    message = messageStr ? messageStr : "";
+  }
+
+  void show(StrId titleId, std::vector<std::string> options, int currentIndex, std::function<void(int)> onSelect) {
+    RenderLock lock;  // a render may still be reading the strings being replaced
     title = I18N.get(titleId);
     headline.clear();
-    ownedStrings = options;
+    ownedStrings = std::move(options);
     activate(currentIndex, std::move(onSelect));
   }
 
   bool handleInput(MappedInputManager& input, const std::function<void()>& requestUpdate) {
     if (!active) return false;
 
-    // Match the render cap: only the first MAX_OPTIONS rows exist on screen,
-    // so button wrap-around must not select an invisible option.
-    const int total = static_cast<int>(ownedStrings.size());
-    const int count = total > MAX_OPTIONS ? MAX_OPTIONS : total;
+    // A vertical swipe scrolls a long dialog a page at a time, like a list, and leaves the
+    // highlight where it is.
+    const auto swipe = input.wasSwipe();
+    if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
+      const int count = static_cast<int>(ownedStrings.size());
+      const int visible = shownRows.load();
+      if (visible > 0 && count > visible) {
+        const int page = swipe == MappedInputManager::SwipeDir::Up ? visible : -visible;
+        firstShown = std::clamp(firstShown.load() + page, 0, count - visible);
+        followSelection = false;
+        requestUpdate();
+      }
+      return true;
+    }
     const freeink::ui::InputSnapshot snap = touchSnapshotFrom(input);
     if (snap.touchPressed || snap.touchReleased || snap.touchHeld) {
       // Interactions are registered on the render task; only route once the
@@ -82,6 +105,7 @@ class OptionPopup {
           selectedIndex = event.value;
           active = false;
           if (onSelectCallback) onSelectCallback(selectedIndex);
+          haptic_feedback::touchAction();
           requestUpdate();
           return true;
         }
@@ -93,6 +117,7 @@ class OptionPopup {
           // Tap released outside the dialog: dismiss without firing. Swipe-end
           // releases arrive with -1,-1 coords and fall through (no dismiss).
           active = false;
+          haptic_feedback::touchAction();
           requestUpdate();
           return true;
         }
@@ -112,20 +137,32 @@ class OptionPopup {
       return true;
     }
 
-    if (input.wasPressed(MappedInputManager::Button::NavPrevious)) {
+    return handleButtons(input.wasPressed(MappedInputManager::Button::NavPrevious),
+                         input.wasPressed(MappedInputManager::Button::NavNext),
+                         input.wasReleased(MappedInputManager::Button::Confirm),
+                         input.wasReleased(MappedInputManager::Button::Back), requestUpdate);
+  }
+
+  bool handleButtons(const bool previous, const bool next, const bool confirm, const bool back,
+                     const std::function<void()>& requestUpdate) {
+    if (!active) return false;
+    const int count = static_cast<int>(ownedStrings.size());
+    if (previous) {
+      followSelection = true;
       selectedIndex = (selectedIndex - 1 + count) % count;
       requestUpdate();
       return true;
-    } else if (input.wasPressed(MappedInputManager::Button::NavNext)) {
+    } else if (next) {
+      followSelection = true;
       selectedIndex = (selectedIndex + 1) % count;
       requestUpdate();
       return true;
-    } else if (input.wasReleased(MappedInputManager::Button::Confirm)) {
+    } else if (confirm) {
       active = false;
       if (onSelectCallback) onSelectCallback(selectedIndex);
       requestUpdate();
       return true;
-    } else if (input.wasReleased(MappedInputManager::Button::Back)) {
+    } else if (back) {
       active = false;
       requestUpdate();
       return true;
@@ -167,21 +204,21 @@ class OptionPopup {
     fui::Frame<INTERACTION_CAPACITY> frame(target, device, noInput, interactions);
 
     const auto& metrics = UITheme::getInstance().getMetrics();
-    const int totalOptions = static_cast<int>(ownedStrings.size());
-    const uint8_t count = static_cast<uint8_t>(totalOptions > MAX_OPTIONS ? MAX_OPTIONS : totalOptions);
-
-    fui::DialogOption options[MAX_OPTIONS];
+    const auto count = static_cast<uint8_t>(dialogOptions.size());
     for (uint8_t i = 0; i < count; ++i) {
-      options[i].label = ownedStrings[i].c_str();
-      options[i].action = ACTION_OPTION;
-      options[i].value = static_cast<int16_t>(i);
-      options[i].state = (i == selectedIndex) ? fui::StateFocused : fui::StateNormal;
+      dialogOptions[i].state = (i == selectedIndex) ? fui::StateFocused : fui::StateNormal;
     }
 
     fui::OptionDialogProps props;
-    props.title = title.c_str();
+    props.title = title.empty() ? nullptr : title.c_str();
     props.headline = headline.empty() ? nullptr : headline.c_str();
-    props.options = options;
+    if (!message.empty()) {
+      props.message = message.c_str();
+      props.messageText.font = fui::GfxRendererTarget::FONT_BODY;
+      props.messageText.align = fui::TextAlign::Center;
+      props.messageText.maxLines = 6;
+    }
+    props.options = dialogOptions.data();
     props.optionCount = count;
     props.verticalOptions = true;
     // Touch only: physical buttons stay on the legacy wrap/confirm path above,
@@ -223,6 +260,22 @@ class OptionPopup {
     const fui::Rect screen = device.screen();
     const int16_t width =
         fui::clampI16(std::min<int>(screen.width * 3 / 4, screen.width - metrics.optionPopupDialogSideMargin * 2));
+    // As many rows as fit the screen (and the interaction table); past that the dialog scrolls,
+    // keeping the selection in view.
+    props.visibleOptions = std::min<uint8_t>(count, MAX_VISIBLE);
+    // Centered, so keeping the hint band free at both ends keeps the bottom edge above the hints.
+    const int maxHeight = screen.height - 2 * metrics.buttonHintsHeight;
+    while (props.visibleOptions > 1 && fui::optionDialogHeight(target, props, width) > maxHeight) {
+      props.visibleOptions--;
+    }
+    int first = firstShown.load();
+    if (followSelection) {
+      if (selectedIndex < first) first = selectedIndex;
+      if (selectedIndex >= first + props.visibleOptions) first = selectedIndex - props.visibleOptions + 1;
+      firstShown = first;
+    }
+    shownRows = props.visibleOptions;
+    props.firstOption = static_cast<uint8_t>(first);
     const int16_t height = fui::clampI16(fui::optionDialogHeight(target, props, width), 0, screen.height);
     const fui::Rect dialogRect = fui::centeredRect(screen, fui::Size{width, height});
 
@@ -246,18 +299,32 @@ class OptionPopup {
   }
 
  private:
-  // The dialog has no scrolling, so options past MAX_OPTIONS would render off
-  // screen anyway; a fixed cap keeps the DialogOption array on the stack and
-  // the interaction table small. +1 slot for the chrome guard rect.
-  static constexpr int MAX_OPTIONS = 16;
-  static constexpr size_t INTERACTION_CAPACITY = MAX_OPTIONS + 1;
+  // Rows shown at once; more options scroll. Keeps the interaction table small.
+  // +1 slot for the chrome guard rect. The option count is capped by the dialog's uint8_t.
+  static constexpr uint8_t MAX_VISIBLE = 16;
+  static constexpr int MAX_OPTIONS = 255;
+  static constexpr size_t INTERACTION_CAPACITY = MAX_VISIBLE + 1;
   static constexpr freeink::ui::ActionId ACTION_OPTION = 1;
   static constexpr freeink::ui::ActionId ACTION_CHROME = 2;
 
   void activate(int currentIndex, std::function<void(int)> onSelect) {
-    const int count = std::min<int>(ownedStrings.size(), MAX_OPTIONS);
+    if (ownedStrings.size() > MAX_OPTIONS) ownedStrings.resize(MAX_OPTIONS);
+    const int count = static_cast<int>(ownedStrings.size());
     selectedIndex = currentIndex >= 0 && currentIndex < count ? currentIndex : 0;
+    firstShown = 0;
+    followSelection = true;
+    // Built once per show(): the labels point into ownedStrings, which no longer changes.
+    dialogOptions.clear();
+    dialogOptions.reserve(count);
+    for (int i = 0; i < count; ++i) {
+      freeink::ui::DialogOption option;
+      option.label = ownedStrings[i].c_str();
+      option.action = ACTION_OPTION;
+      option.value = static_cast<int16_t>(i);
+      dialogOptions.push_back(option);
+    }
     onSelectCallback = std::move(onSelect);
+    message.clear();
     uiReady = false;
     active = count > 0;
   }
@@ -265,8 +332,16 @@ class OptionPopup {
   bool active = false;
   std::string title;
   std::string headline;
+  std::string message;
   std::vector<std::string> ownedStrings;
   int selectedIndex = 0;
+  // First option in the dialog's window. Render moves it to keep the selection shown, except
+  // after a swipe scrolled it, until the next button press.
+  mutable std::atomic<int> firstShown{0};
+  std::atomic<bool> followSelection{true};
+  // Rows the last render showed, for the swipe's page size (written on the render task).
+  mutable std::atomic<int> shownRows{0};
+  mutable std::vector<freeink::ui::DialogOption> dialogOptions;
   std::function<void(int)> onSelectCallback;
   // Written by the render task (frame registration), routed by the loop task;
   // uiReady closes the rebuild window exactly like UiListActivity::uiReady.

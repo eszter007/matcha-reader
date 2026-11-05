@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -30,5 +33,23 @@ void merge(const std::string& bookCachePath, const std::vector<Pair>& pairs);
 // (e.g. two characters sharing surname kanji) are joined with '・'. Returns false
 // when the glossary has no entry (or no glossary file exists).
 bool lookup(const std::string& bookCachePath, const std::string& base, std::string& outReadings);
+
+// Longest glossary base of at least two characters that `text` starts with. Fills outBase and
+// its reading(s) as lookup() does. Lets a name the dictionary lacks (緋倉美津子) be selected whole.
+bool longestPrefix(const std::string& bookCachePath, const std::string& text, std::string& outBase,
+                   std::string& outReadings);
+
+// In-memory key of a base of at least two characters: its hash (hashText) and length in
+// characters. The word-lookup scan tests page text against these without reading the file.
+struct SpanKey {
+  uint32_t hash;
+  uint8_t chars;
+};
+uint32_t hashText(const char* data, size_t len);
+size_t charCount(std::string_view utf8);
+
+// Keys of every base of at least two characters, sorted by hash. Returns the file's record count
+// (0 when there is no glossary, or when the heap cannot hold the keys).
+uint16_t loadSpanKeys(const std::string& bookCachePath, std::vector<SpanKey>& out);
 
 }  // namespace RubyGlossary

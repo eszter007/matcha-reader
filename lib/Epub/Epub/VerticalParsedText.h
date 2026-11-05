@@ -1,6 +1,10 @@
 #pragma once
 
+#include <EpdFontFamily.h>
+
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -65,29 +69,37 @@ struct VerticalGlyph {
   //                      codepoint holds the character.
   enum RenderKind : uint8_t { Upright = 0, RotatedRun = 1, RotatedPunct = 2, SmallKanaCorner = 3, UprightRun = 4 };
 
-  uint32_t codepoint = 0;
-  uint16_t column = 0;  // 0 = rightmost column on the page
-  uint16_t row = 0;     // 0 = topmost cell in the column
-  uint16_t x = 0;       // logical screen-space draw position
-  uint16_t y = 0;       // logical screen-space draw position
-  uint32_t paragraphIndex = 0;
-  uint32_t byteOffset = 0;  // UTF-8 byte offset into that paragraph's text
-  uint8_t renderKind = Upright;
-  uint8_t style = 0;      // EpdFontFamily::Style flags (BOLD, ITALIC, etc.)
-  bool emphasis = false;  // text-emphasis (sesame dots beside character)
+  // Packed to 20 bytes: every page buffer, page read and lookup copy holds hundreds of
+  // these. The on-disk record is unchanged; visitGlyphFields() in VerticalSection.cpp widens the
+  // fields when writing and narrows them when reading.
+  uint32_t codepoint : 21 = 0;  // up to U+10FFFF
+  uint32_t style : 7 = 0;       // EpdFontFamily::Style flags (BOLD, ITALIC, etc.)
+  uint32_t renderKind : 3 = Upright;
+  uint32_t emphasis : 1 = 0;  // text-emphasis (sesame dots beside character)
+  uint32_t paragraphIndex : 31 = 0;
   // Opening bracket starting its column: set flush to the line head (tentsuki), the half em
   // before it deleted. Decided in layout, which knows where columns start (indents included).
-  uint8_t lineHeadFlush = 0;
+  uint32_t lineHeadFlush : 1 = 0;
+  uint32_t byteOffset = 0;  // UTF-8 byte offset into that paragraph's text
+  uint16_t x = 0;           // logical screen-space draw position
+  uint16_t y = 0;           // logical screen-space draw position
   // Index into the owning VerticalPage's texts pool: the run string for
   // RotatedRun/UprightRun glyphs, the furigana/ruby annotation (UTF-8) for
   // every other kind. NO_TEXT = none. An id instead of inline std::strings
-  // keeps the glyph a ~28-byte POD -- two always-present strings cost ~48
+  // keeps the glyph a small POD -- two always-present strings cost ~48
   // bytes per glyph even when empty, tripling every page buffer, reserve and
   // grow-copy on the heap-tight X3. The id travels WITH the glyph through
   // oikomi moves and drop paths, so there is no side table to desync.
   static constexpr uint16_t NO_TEXT = 0xFFFF;
   uint16_t textId = NO_TEXT;
+  // Layout caps both at MAX_GRID_CELLS (see VerticalParsedText::layoutPages()).
+  uint8_t column = 0;  // 0 = rightmost column on the page
+  uint8_t row = 0;     // 0 = topmost cell in the column
+  static constexpr uint16_t MAX_GRID_CELLS = std::numeric_limits<uint8_t>::max();
 };
+static_assert(sizeof(VerticalGlyph) == 20, "VerticalGlyph packing");
+static_assert(VerticalGlyph::UprightRun < (1u << 3), "renderKind bit-field too narrow");
+static_assert((EpdFontFamily::RUBY_CONTINUE << 1) - 1 < (1u << 7), "style bit-field too narrow");
 
 // One screen's worth of vertically laid out text, ready to hand to
 // VerticalTextBlock::render(). Glyph records are fixed-size; the variable-length
@@ -117,13 +129,35 @@ struct VerticalBoxRect {
 // Distilled block-level layout parameters for the vertical engine (from CSS via
 // CssParser::collectVerticalStyles; plain floats here to avoid a CssParser include).
 struct VerticalBlockParams {
-  float startEm = 0;   // every column of the block starts this many cells down
-  float beforeEm = 0;  // extra gap before the block's first column
-  float afterEm = 0;   // extra gap after the block's last column
-  float hangEm = 0;    // hanging indent: wrapped (non-paragraph-start) columns start this much lower
-  bool alignCenter = false;
-  uint8_t borderEdges = 0;  // CSS physical TOP/RIGHT/BOTTOM/LEFT bits (match DRAW_* order)
+  float startEm = 0;         // every column of the block starts this many cells down
+  float beforeEm = 0;        // extra gap before the block's first column
+  float afterEm = 0;         // extra gap after the block's last column
+  float hangEm = 0;          // hanging indent: wrapped (non-paragraph-start) columns start this much lower
+  bool alignCenter = false;  // each column centred along its length
+  bool alignEnd = false;     // each column ends at the foot
+  enum class BlockAlign : uint8_t { None, Center, End };
+  BlockAlign blockAlign = BlockAlign::None;  // the block as a whole, its columns starting together
+  uint8_t borderEdges = 0;                   // CSS physical TOP/RIGHT/BOTTOM/LEFT bits (match DRAW_* order)
+  [[nodiscard]] bool aligns() const { return alignCenter || alignEnd || blockAlign != BlockAlign::None; }
+  [[nodiscard]] bool any() const {
+    return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || aligns() || borderEdges != 0;
+  }
 };
+
+// Joins a nested styled element's params to its block's: indents add up as nested margins do, and
+// the border edges and gaps combine.
+inline void mergeBlockParams(VerticalBlockParams& into, const VerticalBlockParams& nested) {
+  into.startEm += nested.startEm;
+  into.beforeEm = std::max(into.beforeEm, nested.beforeEm);
+  into.afterEm = std::max(into.afterEm, nested.afterEm);
+  if (nested.hangEm > 0) into.hangEm = nested.hangEm;
+  if (nested.alignCenter || nested.alignEnd) {  // the inner text-align wins, as in CSS
+    into.alignCenter = nested.alignCenter;
+    into.alignEnd = nested.alignEnd;
+  }
+  if (nested.blockAlign != VerticalBlockParams::BlockAlign::None) into.blockAlign = nested.blockAlign;
+  into.borderEdges = static_cast<uint8_t>(into.borderEdges | nested.borderEdges);
+}
 
 struct VerticalPage {
   // Codepoint index, within the chapter's visible character data, of this page's first
@@ -162,6 +196,19 @@ struct VerticalPage {
   int16_t imageHeight = 0;
   bool imageRotated = false;  // true = landscape image rotated 90° CW to fill portrait screen
   bool isImagePage() const { return !imagePath.empty(); }
+  // Back to an empty page, keeping the vectors' capacity so the next page fills without allocating.
+  void clearKeepingCapacity() {
+    auto g = std::move(glyphs);
+    auto b = std::move(boxes);
+    auto t = std::move(texts);
+    *this = VerticalPage{};
+    g.clear();
+    b.clear();
+    t.clear();
+    glyphs = std::move(g);
+    boxes = std::move(b);
+    texts = std::move(t);
+  }
 };
 
 // Lays out one or more paragraphs of Japanese (or any CJK) text into
@@ -207,6 +254,8 @@ class VerticalParsedText {
     // layouts -- that shared meaning is the whole point: it is what lets a reading position
     // survive a vertical/horizontal switch. See VerticalPage::visibleTextOffset.
     uint32_t visibleTextOffset = 0;
+    // The book's text-indent (CSS) for a paragraph that starts in this run, in quarter ems.
+    uint8_t indentQuarters = 0;
   };
 
   // continuesPreviousParagraph: pass true when this call carries the NEXT CHUNK of a paragraph
@@ -222,7 +271,8 @@ class VerticalParsedText {
   // Called for a page as soon as it's confirmed safe to write -- i.e. one page has already been
   // completed after it, so the "oikomi" pull-back check (which only ever looks at the single most
   // recently completed page) can no longer touch it. ctx is caller-supplied context.
-  using PageReadyCallback = void (*)(void* ctx, VerticalPage&& page);
+  // Read only: the layout reuses the page's buffers once the callback returns.
+  using PageReadyCallback = void (*)(void* ctx, const VerticalPage& page);
 
   // Runs the column-fill layout algorithm over everything added since the last layoutPages() call
   // (i.e. since construction, or since the most recent call) and returns one VerticalPage per
@@ -254,6 +304,14 @@ class VerticalParsedText {
   // trailing page if isFinalFlush) -- callers must still write those, same as before.
   std::vector<VerticalPage> layoutPages(void* ctx = nullptr, PageReadyCallback onPageReady = nullptr,
                                         bool isFinalFlush = true);
+
+  // Hands a written page back so its buffers serve the next page (see recycledPage_). Keeps the
+  // larger of the two when one is already held.
+  void recyclePage(VerticalPage&& page) {
+    if (page.glyphs.capacity() > recycledPage_.glyphs.capacity()) recycledPage_ = std::move(page);
+  }
+  // Frees the held buffers, for a caller about to need one large block (an image extraction).
+  void releaseRecycledPage() { recycledPage_ = VerticalPage{}; }
 
   // Detach and return the in-progress page (the one held across isFinalFlush=false calls) so a
   // caller can splice a standalone page -- an image -- into the page sequence in document order.
@@ -296,8 +354,32 @@ class VerticalParsedText {
   void markBlockStart(const VerticalBlockParams& params) {
     boxStartsBeforeIndex_.push_back(stream_.size());
     blockParamsQueue_.push_back(params);
+    blockOpen_ = true;
   }
-  void markBlockEnd() { boxEndsBeforeIndex_.push_back(stream_.size()); }
+  // Replaces the params of the open block, still queued because it has no text yet: a nested
+  // styled element merged into it, or that merge undone when the element closed empty.
+  // ponytail: one block at a time, so two bordered blocks nested draw one after the other rather
+  // than one inside the other; that needs a block stack here, if a book ever needs it.
+  void setOpenBlockParams(const VerticalBlockParams& params) {
+    if (!blockOpen_ || blockParamsQueue_.empty()) return;
+    blockParamsQueue_.back() = params;
+  }
+  void markBlockEnd() {
+    // A block that holds no text (a figure with only a page image) ends where it starts. The
+    // layout loop reads ends before starts at one index, so it would open the block and never
+    // close it, and every later block start -- a bordered box included -- would be ignored.
+    const bool startHere = !boxStartsBeforeIndex_.empty() && boxStartsBeforeIndex_.back() == stream_.size();
+    const bool startCarried = boxStartsBeforeIndex_.empty() && boxStartCarry_ && stream_.empty();
+    if (blockOpen_ && (startHere || startCarried)) {
+      if (startHere) boxStartsBeforeIndex_.pop_back();
+      boxStartCarry_ = false;
+      if (!blockParamsQueue_.empty()) blockParamsQueue_.pop_back();
+      blockOpen_ = false;
+      return;
+    }
+    boxEndsBeforeIndex_.push_back(stream_.size());
+    blockOpen_ = false;
+  }
   // Whether ANY char/glyph was dropped for lack of heap across the whole build. Unlike oom_
   // this is never cleared by reset(): the section build reads it at the end, because a build
   // that dropped content produced sparse pages and must not be persisted as a VALID cache --
@@ -329,9 +411,14 @@ class VerticalParsedText {
   // Horizontal distance between two column origins, for sizing an inline image in columns.
   int columnAdvancePx() const;
   void setColumnGapPx(int gapPx) { columnGapPx_ = gapPx; }
+  // The reader's Character Spacing setting, in px: added to the one-em step between characters
+  // down a column (字間). 0 is solid setting (ベタ組み).
+  void setCharacterSpacingPx(int spacingPx) { characterSpacingPx_ = spacingPx; }
   // Extra right-side padding (in pixels) reserved for vertical ruby so it
   // doesn't clip against the right edge.
   void setRightPaddingPx(int padPx) { rightPaddingPx_ = (padPx < 0) ? 0 : padPx; }
+  // Furigana is drawn: a reading longer than its base spaces the base out (JLREQ 3.3.8).
+  void setRubyShown(const bool shown) { rubyShown_ = shown; }
 
  private:
   const GfxRenderer& renderer_;
@@ -339,14 +426,18 @@ class VerticalParsedText {
   uint16_t viewportWidth_;
   uint16_t viewportHeight_;
   int columnGapPx_ = 0;
+  int characterSpacingPx_ = 0;
   int rightPaddingPx_ = 0;
+  bool rubyShown_ = false;
 
   struct PendingChar {
     uint32_t codepoint;
     uint32_t paragraphIndex;
     uint32_t byteOffset;
     uint8_t style;
-    bool emphasis;
+    uint8_t emphasis : 1;
+    // The book's text-indent for a paragraph starting at this character, in quarter ems.
+    uint8_t indentQuarters : 7;
     // This character's share of its ruby, as a span of rubyPool_ (0 = none). A span rather than a
     // std::string keeps the entry at 24 bytes instead of 44: stream_ reserves 512 of them for the
     // whole build.
@@ -403,29 +494,36 @@ class VerticalParsedText {
   bool inBox_ = false;
   uint16_t boxStartCol_ = 0;
   std::vector<VerticalBlockParams> blockParamsQueue_;  // FIFO, one entry per markBlockStart
+  bool blockOpen_ = false;                             // a markBlockStart with no markBlockEnd yet
   VerticalBlockParams activeBlock_;                    // valid while inBox_
   bool blockContinuationColumn_ = false;               // current column wraps mid-paragraph
   // Geometry snapshot from the last layoutPages() call so finalizePendingPage() (called outside
   // layoutPages) can still close an open box rect on the final page.
   int boxGeomCellPx_ = 0;
+  int boxGeomRowPitchPx_ = 0;
   int boxGeomColumnAdvancePx_ = 0;
   int boxGeomUsableWidthPx_ = 0;
   // Rows a column INSIDE a box may use: short of a full column by boxFootReservePx_, so the
   // bottom rule has its inset below the last character without crossing the text area's foot.
   uint16_t boxGeomRowsInBox_ = 0;
+  uint16_t boxGeomRowsFull_ = 0;  // rows of a column with no foot reserve
   int boxFootReservePx_ = 0;
   // 0.25em: the inset between the text and the rule, the same on all four sides (1px floor).
   // Open-coded rather than std::max so this header needs no <algorithm>.
   [[nodiscard]] int boxPadPx() const { return boxGeomCellPx_ / 4 > 1 ? boxGeomCellPx_ / 4 : 1; }
   bool boxContinuedFromPrevPage_ = false;
   void appendBoxRectToPage(VerticalPage& p, uint16_t startCol, uint16_t endCol, bool openLeft, bool openRight) const;
-  void centerBlockColumns(VerticalPage& p, uint16_t startCol, uint16_t endCol) const;
+  void alignBlockColumns(VerticalPage& p, uint16_t startCol, uint16_t endCol) const;
+  static uint16_t lastBlockColumn(const VerticalPage& p, uint16_t startCol);
 
   // The page currently being filled by layoutPages(), plus its fill position -- persists ACROSS
   // layoutPages() calls (when isFinalFlush=false) so a batch boundary landing mid-page continues
   // the same page on the next call instead of finalizing it early and starting a fresh one. See
   // layoutPages()'s isFinalFlush doc comment for the full rationale.
   VerticalPage pendingPage_;
+  // A page already handed to onPageReady, kept for its buffers: the next page reuses them instead
+  // of allocating and growing a glyph vector between the build's other allocations.
+  VerticalPage recycledPage_;
   // A paragraph break recorded at exactly the end of a batch's stream (trailing newline) --
   // carried across reset() and re-recorded at the start of the next batch. See layoutPages().
   // A rotated Latin run that reaches the end of a non-final batch is NOT placed: the layout
@@ -436,6 +534,13 @@ class VerticalParsedText {
   bool pendingTrailingBreak_ = false;
   uint16_t pendingColumn_ = 0;
   uint16_t pendingRow_ = 0;
+  // The current column's slide (see layoutPages()): carried like the row, or a batch boundary
+  // inside a slid column drops it and the next glyph lands on the one before (#415).
+  int pendingColumnYShift_ = 0;
+  uint16_t pendingShiftColumn_ = UINT16_MAX;
+  // Columns of the pending page that oidashi pushed characters out of, by column index. They end
+  // short mid-paragraph and are justified to the foot however much is missing.
+  uint64_t oidashiColumns_ = 0;
   bool pendingPageValid_ = false;  // false until the first layoutPages() call initializes pendingPage_
   // True once any page (streamed via callback or returned) has been produced across the whole
   // chapter, i.e. across every layoutPages() call since construction. Used only at the final flush

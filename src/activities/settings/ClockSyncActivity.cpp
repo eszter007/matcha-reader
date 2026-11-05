@@ -1,5 +1,6 @@
 #include "ClockSyncActivity.h"
 
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <I18n.h>
@@ -26,6 +27,11 @@ void ClockSyncActivity::onEnter() {
   }
 
   shouldTearDownWifiOnExit = true;
+  if (returnToReader) {
+    // The book underneath stays loaded; its glyph caches are the largest thing Wi-Fi can have
+    // back. The restart on the way out rebuilds them.
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  }
   launchWifiSelection();
 }
 
@@ -35,7 +41,11 @@ void ClockSyncActivity::onExit() {
   if (shouldTearDownWifiOnExit && WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
     delay(30);
-    silentRestart();
+    if (returnToReader) {
+      silentRestartToReader();
+    } else {
+      silentRestart();
+    }
   }
 }
 
@@ -56,6 +66,16 @@ void ClockSyncActivity::onWifiSelectionComplete(const bool connected) {
   requestUpdate();
 }
 
+bool ClockSyncActivity::syncAndRecord() {
+  if (!halClock.syncFromNTP()) return false;
+  // Stops the auto-sync hook firing on later Wi-Fi connects; written once, not on every sync.
+  if (!SETTINGS.clockHasBeenSynced) {
+    SETTINGS.clockHasBeenSynced = 1;
+    SETTINGS.saveToFile();
+  }
+  return true;
+}
+
 void ClockSyncActivity::runSync() {
   if (WiFi.status() != WL_CONNECTED) {
     LOG_INF("CLK", "Manual sync requested but WiFi is not connected after selection");
@@ -64,16 +84,11 @@ void ClockSyncActivity::runSync() {
     return;
   }
 
-  const bool ok = halClock.syncFromNTP();
-  if (!ok) {
+  if (!syncAndRecord()) {
     state = FAILED;
     requestUpdate();
     return;
   }
-
-  // Mark as synced so the auto-sync hook stops firing on future WiFi connects.
-  SETTINGS.clockHasBeenSynced = 1;
-  SETTINGS.saveToFile();
 
   // Read the freshly synced time back for the user-facing confirmation.
   char buf[9];

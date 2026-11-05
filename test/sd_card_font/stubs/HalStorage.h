@@ -37,6 +37,7 @@ class HalFile {
   }
   // The fork keeps the font file open across reads and asks before reusing the handle.
   bool isOpen() const { return opened_; }
+  size_t fileSize() const { return sdFontTestFile.size(); }
 
  private:
   size_t position_ = 0;

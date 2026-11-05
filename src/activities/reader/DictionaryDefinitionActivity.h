@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Epub/Page.h>
+#include <I18n.h>
 
 #include <cstdint>
 #include <memory>
@@ -8,8 +9,9 @@
 #include <vector>
 
 #include "activities/Activity.h"
+#include "clippings/LookupClipHandles.h"
+#include "components/DictionaryPanel.h"
 #include "components/PanelTextPages.h"
-#include "util/ButtonNavigator.h"
 #include "util/SentenceMining.h"
 
 // Paged viewer for the definitions of one word, one entry per dictionary that has it, read as a
@@ -27,29 +29,60 @@ class DictionaryDefinitionActivity final : public Activity {
     // Enables sentence mining for this entry: Select (and the + button on touch boards) saves it
     // with this entry as its definition. Invalid = no saving.
     sentencemining::Draft draft;
+    uint8_t dictSlot = 0;  // which of the lookup's dictionaries gave it: two can share a title
+  };
+
+  // Supplies further entries while the view is up (a touch selection's other words). next() puts
+  // one more word's entries in `fresh`, reading `shown` to skip repeats, and returns false once
+  // nothing is left.
+  struct MoreEntries {
+    void* ctx = nullptr;
+    bool (*next)(void* ctx, const std::vector<Entry>& shown, std::vector<Entry>& fresh) = nullptr;
+    // What to say when every word has been looked up and nothing was found.
+    StrId (*failure)(void* ctx) = nullptr;
   };
 
   explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         std::vector<Entry> entries);
 
+  // Handles on the looked-up word behind the panel; a drag on one finishes with ClipStartResult.
+  void setClipHandles(const LookupClipHandles& handles) { clipHandles = handles; }
+  void setMoreEntries(const MoreEntries& source) { more = source; }
+  bool skipLoopDelay() override { return more.next != nullptr; }
+
+  // The book behind the panel reverses its page turns (Reversed Page Turn in a vertical book).
+  void setPageTurnReversed(const bool reversed) { pageTurnReversed = reversed; }
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
 
  private:
-  enum class MiningStatus : uint8_t { None, Saved, Failed };
-  MiningStatus miningStatus_ = MiningStatus::None;
+  bool pageTurnReversed = false;
+  LookupClipHandles clipHandles;
+  MoreEntries more;
+  // Past the last entry while more are coming: a Loading page the reader can step onto, which the
+  // next entry takes over. Also the only page while nothing has been found yet.
+  bool onLoadingPage = false;
+  StrId emptyMessage = StrId::STR_NO_MATCH;
+  void fetchMoreEntries();
+  static void prepareDraft(Entry& entry);
+  DictionaryPanel::MiningFeedback miningFeedback_;
   void saveSentence();
-  const sentencemining::Draft& miningDraft() const { return entries[currentEntry].draft; }
+  bool showingEntry() const { return !onLoadingPage && currentEntry < entries.size(); }
+  bool miningAvailable() const { return showingEntry() && entries[currentEntry].draft.valid(); }
 
   // Lays out entries[index] and shows its first page, or its last when stepping back into it.
   void showEntry(size_t index, bool atLastPage);
   // One page forward (+1) or back (-1) through the whole flow. False at either end.
   bool stepPage(int direction);
+  // Straight to the neighbouring entry's first page, whatever page of this one is showing.
+  bool skipEntry(int direction);
 
   // Usable body-text area: the panel's inner rectangle.
   struct BodyArea {
+    int x;
+    int y;
     int width;
     int height;
   };
@@ -75,12 +108,11 @@ class DictionaryDefinitionActivity final : public Activity {
   // multi-type separators) normalized to newlines so C-string APIs see the whole text.
   std::string definition;
   // Footer title: the dictionary name, plus the entry's place when there are several.
-  std::string dictLabel;
+  std::string footerLabel() const;
   // Styled path: reader-identical Pages laid out from the HTML definition.
   // Empty means the plain-text span path below is active.
   std::vector<std::unique_ptr<Page>> pages;
   PanelTextPages textPages;  // plain-text path: wrapped spans of `definition`
   int currentPage = 0;
   int totalPages = 1;
-  ButtonNavigator buttonNavigator;
 };

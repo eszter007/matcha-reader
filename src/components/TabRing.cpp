@@ -1,5 +1,6 @@
 #include "TabRing.h"
 
+#include "HapticFeedback.h"
 #include "MappedInputManager.h"
 
 void TabRing::Host::ringActivateBottomTab(const HomeTab tab) { HomeTabBar::activate(tab, ringBottomTab()); }
@@ -91,7 +92,10 @@ TabRing::Result TabRing::handleInput(Host& host, const MappedInputManager& input
     bool tapped = false;
     const int hit = HomeTabBar::hitTest(input, renderer, tapped);
     if (hit >= 0) {
-      if (tapped) host.ringActivateBottomTab(static_cast<HomeTab>(hit));
+      if (tapped) {
+        if (static_cast<HomeTab>(hit) != host.ringBottomTab()) haptic_feedback::touchAction();
+        host.ringActivateBottomTab(static_cast<HomeTab>(hit));
+      }
       return Result::Handled;
     }
   }

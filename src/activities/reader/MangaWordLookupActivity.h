@@ -7,7 +7,7 @@
 
 #include "WordSelectionScan.h"
 #include "activities/Activity.h"
-#include "util/ButtonNavigator.h"
+#include "components/DictionaryPanel.h"
 #include "util/SentenceMining.h"
 
 struct Rect;
@@ -28,6 +28,8 @@ class MangaWordLookupActivity final : public Activity {
   // The book, so a looked-up word can be saved for sentence mining (the sentence is the bubble's).
   void setMiningContext(sentencemining::BookContext context) { mining_ = std::move(context); }
 
+  // The book behind the panel reverses its page turns (Reversed Page Turn in a vertical book).
+  void setPageTurnReversed(const bool reversed) { pageTurnReversed = reversed; }
   void onEnter() override;
   void onExit() override;
   void loop() override;
@@ -36,6 +38,7 @@ class MangaWordLookupActivity final : public Activity {
   bool skipLoopDelay() override { return !scan.isDone(); }
 
  private:
+  bool pageTurnReversed = false;
   WordSelectionScan scan;
 
   int cursorIndex = 0;
@@ -56,8 +59,6 @@ class MangaWordLookupActivity final : public Activity {
   // Body lines that fit at once, from the last render: the step a swipe scrolls by.
   int visibleCapacity = 1;
 
-  ButtonNavigator buttonNavigator;
-
   // Scan-result persistence (empty path = disabled).
   std::string scanCachePath;
   uint16_t scanPage = 0;
@@ -66,10 +67,11 @@ class MangaWordLookupActivity final : public Activity {
   void initScanFromCacheOrBurst();
   void runInitialBurst();
   void moveCursor(int delta);
+  // A screenful through the definition, then onto the neighbouring word at its end.
+  void readOn(int delta);
   // Sentence mining: saves the shown entry with the sentence from its speech bubble.
-  enum class MiningStatus : uint8_t { None, Saved, Failed };
   sentencemining::BookContext mining_;
-  MiningStatus miningStatus_ = MiningStatus::None;
+  DictionaryPanel::MiningFeedback miningFeedback_;
   // Hashes of the headwords shown this session, so browsing back and forth counts each word
   // once; the total goes to BookStats in one write on exit.
   static constexpr size_t MAX_COUNTED_LOOKUPS = 256;
@@ -89,6 +91,7 @@ class MangaWordLookupActivity final : public Activity {
   // Which dictionary the shown entry came from, for the panel footer. Literals, not tr()
   // strings: these are the dictionaries' own names. Null until a lookup lands.
   const char* resultSource = nullptr;
+  uint8_t resultDict = 0;  // DictIndex::DICT_* slot the entry came from (0 = none)
   std::string resultDictionaryLabel;
   const char* dictionaryLabel() const {
     return resultDictionaryLabel.empty() ? resultSource : resultDictionaryLabel.c_str();

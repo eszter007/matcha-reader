@@ -14,24 +14,25 @@
 #include "FontDownloadActivity.h"
 #include "MappedInputManager.h"
 #include "ReaderFontSizes.h"
+#include "ReaderLineSpacing.h"
 #include "SdCardFontSystem.h"
 #include "TextSettingsPreview.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 #include "fontIds.h"
+#include "util/TextProfiles.h"
 
 namespace fui = freeink::ui;
 
 namespace {
-// Tab labels for Font | Size | Layout | Style.
-constexpr StrId TAB_NAME_IDS[] = {StrId::STR_FONT, StrId::STR_SIZE, StrId::STR_LAYOUT, StrId::STR_STYLE};
-
 // Indexed by LayoutRow / StyleRow; rebuildRowItems() asserts the lengths match.
 constexpr StrId LAYOUT_ROW_NAME_IDS[] = {
-    StrId::STR_LINE_SPACING, StrId::STR_WORD_SPACING,  StrId::STR_CHARACTER_SPACING, StrId::STR_EXTRA_SPACING,
-    StrId::STR_ALIGNMENT,    StrId::STR_SCREEN_MARGIN, StrId::STR_BOOK_CSS_MARGINS};
-constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION, StrId::STR_EMBEDDED_STYLE,
-                                        StrId::STR_TEXT_AA};
+    StrId::STR_LINE_SPACING,  StrId::STR_WORD_SPACING,          StrId::STR_CHARACTER_SPACING,
+    StrId::STR_EXTRA_SPACING, StrId::STR_PARAGRAPH_INDENTATION, StrId::STR_ALIGNMENT,
+    StrId::STR_SCREEN_MARGIN, StrId::STR_BOOK_CSS_MARGINS,      StrId::STR_TATEGAKI};
+// Only Focus Reading shows in the preview; the other Style rows say so in their label.
+constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION_NO_PREVIEW,
+                                        StrId::STR_EMBEDDED_STYLE_NO_PREVIEW, StrId::STR_TEXT_AA_NO_PREVIEW};
 
 // Position of the active family within the DISPLAYED list. The list hides the JP
 // extension families, so a registry index is not a list index -- match by name.
@@ -53,7 +54,6 @@ int findCurrentFontIndex(const std::vector<TextSettingsActivity::FontEntry>& fon
   return entry != fonts.end() ? static_cast<int>(entry - fonts.begin()) : 0;
 }
 
-constexpr StrId LINE_SPACING_IDS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE};
 constexpr StrId WORD_SPACING_IDS[] = {StrId::STR_SPACING_50_PERCENT,  StrId::STR_SPACING_75_PERCENT,
                                       StrId::STR_SPACING_100_PERCENT, StrId::STR_SPACING_125_PERCENT,
                                       StrId::STR_SPACING_150_PERCENT, StrId::STR_SPACING_175_PERCENT,
@@ -61,6 +61,7 @@ constexpr StrId WORD_SPACING_IDS[] = {StrId::STR_SPACING_50_PERCENT,  StrId::STR
 constexpr StrId CHARACTER_SPACING_IDS[] = {StrId::STR_SPACING_MINUS_2, StrId::STR_SPACING_MINUS_1,
                                            StrId::STR_SPACING_ZERO, StrId::STR_SPACING_PLUS_1,
                                            StrId::STR_SPACING_PLUS_2};
+constexpr StrId VERTICAL_TEXT_IDS[] = {StrId::STR_VERTICAL_AUTOMATIC, StrId::STR_STATE_ON, StrId::STR_STATE_OFF};
 constexpr StrId ALIGNMENT_IDS[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
                                    StrId::STR_BOOK_S_STYLE};
 constexpr int MARGIN_MIN = CrossPointSettings::SCREEN_MARGIN_MIN;
@@ -70,74 +71,134 @@ constexpr int WORD_SPACING_MIN = CrossPointSettings::WORD_SPACING_MIN;
 constexpr int WORD_SPACING_MAX = CrossPointSettings::WORD_SPACING_MAX;
 constexpr int WORD_SPACING_STEP = CrossPointSettings::WORD_SPACING_STEP;
 static_assert(std::size(WORD_SPACING_IDS) == (WORD_SPACING_MAX - WORD_SPACING_MIN) / WORD_SPACING_STEP + 1);
+
+// Heading text for the LAYOUT and STYLE sections: the label in capitals (ASCII only; scripts
+// without case keep theirs).
+std::string upperHeading(const char* label) {
+  std::string out(label);
+  std::transform(out.begin(), out.end(), out.begin(),
+                 [](const char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 32) : c; });
+  return out;
+}
+
+// Space between the preview box's border and the sample.
+constexpr int PREVIEW_INNER_PADDING = 16;
+
+// Latin for a UI language written in CJK, whose own sample would not be in the Latin profile's script.
+// Not a UI string: a typographic sample.
+constexpr const char* LATIN_SAMPLE = "The quick brown fox jumps over the lazy dog.";
+
+// The preview sample in the edited profile's script.
+const char* previewSample(const CrossPointSettings::TextProfileId profile, const CjkScript script) {
+  switch (script) {
+    case CjkScript::Japanese:
+      return tr(STR_FONT_PREVIEW_TEXT_CJK);
+    case CjkScript::SimplifiedChinese:
+      return tr(STR_FONT_PREVIEW_TEXT_ZH_HANS);
+    case CjkScript::TraditionalChinese:
+      return tr(STR_FONT_PREVIEW_TEXT_ZH_HANT);
+    case CjkScript::None:
+      break;
+  }
+  if (profile == CrossPointSettings::TextProfileId::Korean) return tr(STR_FONT_PREVIEW_TEXT_KO);
+  const Language ui = I18N.getLanguage();
+  if (ui == Language::JA || ui == Language::ZHS || ui == Language::ZHT) return LATIN_SAMPLE;
+  return tr(STR_FONT_PREVIEW_TEXT);
+}
 }  // namespace
 
 TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                           const SdCardFontRegistry* registry, Tab initialTab, const bool japaneseBook,
-                                           const bool verticalText)
-    : UiTabListActivity("TextSettings", renderer, mappedInput),
-      registry_(registry),
-      tab_(initialTab),
-      japaneseBook_(japaneseBook),
-      verticalText_(verticalText) {}
-
-const char* TextSettingsActivity::tabLabel(const int index) const { return I18N.get(TAB_NAME_IDS[index]); }
+                                           const SdCardFontRegistry* registry,
+                                           const CrossPointSettings::TextProfileId profile, const CjkScript bookScript,
+                                           const bool verticalText, const bool editStoredProfile)
+    : UiListActivity("TextSettings", renderer, mappedInput),
+      profile_(profile),
+      bookScript_(bookScript),
+      cjkBook_(bookScript != CjkScript::None),
+      verticalText_(verticalText),
+      editStoredProfile_(editStoredProfile),
+      registry_(registry) {}
 
 void TextSettingsActivity::onEnter() {
-  UiTabListActivity::onEnter();
+  // From Settings, a profile other than Latin is edited in the live fields, as a book would read it.
+  if (editStoredProfile_ && profile_ != CrossPointSettings::TextProfileId::Latin) {
+    RenderLock lock;
+    SETTINGS.holdLatinTextProfile(SETTINGS.liveTextProfile());
+    SETTINGS.setLiveTextProfile(SETTINGS.textProfile(profile_));
+    swappedIn_ = true;
+    sdFontSystem.ensureLoaded(renderer);
+  }
+  UiListActivity::onEnter();
 
   metrics_ = UITheme::getInstance().getMetrics();
-  afterHeader = metrics_.topPadding + metrics_.headerHeight + metrics_.verticalSpacing;
-  bottomReserved = metrics_.buttonHintsHeight + metrics_.verticalSpacing;
-  usableHeight = renderer.getScreenHeight() - afterHeader - bottomReserved;
+  const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int safeBottom = safeArea.y + safeArea.height;
+  afterHeader = safeArea.y + metrics_.topPadding + metrics_.headerHeight + metrics_.verticalSpacing;
+  const int usableHeight = safeBottom - afterHeader - metrics_.verticalSpacing;
   previewHeight = usableHeight * metrics_.previewHeightPercent / 100;
+  boxHeight_ = previewHeight;
 
+  layoutHeading_ = upperHeading(tr(STR_LAYOUT));
+  styleHeading_ = upperHeading(tr(STR_STYLE));
   rebuildFamilyList();
-
   rebuildSizeList();
-
   currentFamilyIndex_ = findCurrentFontIndex(fonts_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
-  // Per-tab ring positions (0 = tab bar, 1..N = row). The base reset each
-  // tab's nav with followOnBuild armed, so each tab's first build shows its
-  // remembered selection (Family/Size open on the current item).
-  for (auto& n : tabNavs) n.selected = 1;  // default to the first list row
-  tabNavs[static_cast<int>(Tab::Family)].selected = currentFamilyIndex_ + 1;
-  tabNavs[static_cast<int>(Tab::Size)].selected = currentSizeIndex_ + 1;
-  tabNavs[static_cast<int>(tab_)].selected = 0;  // screen opens with the tab bar focused, not a list row
-
   rebuildRowItems();
+}
+
+// Leaving a swapped-in profile: its values go back to it and the Latin ones, which are the live
+// settings everywhere else, come back.
+void TextSettingsActivity::onExit() {
+  if (swappedIn_) {
+    RenderLock lock;
+    auto edited = SETTINGS.liveTextProfile();
+    // A font that failed to load is cleared from the live fields. That is not a choice, so the
+    // profile keeps its font unless one was picked here.
+    if (!familyChosen_) {
+      const auto stored = SETTINGS.textProfile(profile_);
+      edited.fontFamily = stored.fontFamily;
+      memcpy(edited.sdFontFamilyName, stored.sdFontFamilyName, sizeof(edited.sdFontFamilyName));
+    }
+    SETTINGS.setTextProfile(profile_, edited);
+    SETTINGS.setLiveTextProfile(SETTINGS.releaseLatinTextProfile());
+    swappedIn_ = false;
+    sdFontSystem.ensureLoaded(renderer);
+  }
+  UiListActivity::onExit();
 }
 
 void TextSettingsActivity::rebuildFamilyList() {
   fonts_.clear();
   fonts_.reserve(CrossPointSettings::BUILTIN_FONT_COUNT + (registry_ ? registry_->getFamilyCount() : 0) + 1);
   fonts_.push_back({I18N.get(StrId::STR_NOTO_SERIF), true, static_cast<uint8_t>(CrossPointSettings::NOTOSERIF)});
-  fonts_.push_back({I18N.get(StrId::STR_NOTO_SANS), true, static_cast<uint8_t>(CrossPointSettings::NOTOSANS)});
   if (registry_) {
     const auto& families = registry_->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
-      // The JP extension families (NotoSansJP/NotoSerifJP) are the Japanese half of
-      // the built-in Noto Serif/Sans entries, not fonts in their own right: listing
-      // them would show four Noto rows instead of two, and selecting one directly
-      // makes it the reader font for Latin books too, bypassing the coverage-driven
-      // companion logic in SdCardFontSystem::ensureJpFallback(). Hidden here for the
-      // same reason the settings picker hides them -- see isBuiltinJpExtension.
-      if (SdCardFontSystem::isBuiltinJpExtension(families[i].name)) continue;
+      // The CJK extension families (NotoSansJP/SC/TC and the serifs) are the CJK half of
+      // the Noto Serif/Sans rows, not fonts in their own right: listing them would show
+      // many Noto rows instead of two, and selecting one directly makes it the reader font
+      // for Latin books too, bypassing the coverage-driven companion logic in
+      // SdCardFontSystem::ensureCjkFallback(). One sans cut stands in for a missing NotoSans
+      // family so the Noto Sans row stays -- see isHiddenCjkExtension.
+      if (SdCardFontSystem::isHiddenCjkExtension(families[i].name, registry_)) continue;
       // Same reasoning for a wider-coverage cut of a family already on this list
       // (NotoSerifExtended over Noto Serif): one typeface is one row, and the base row's
       // selection resolves to whichever of the two suits the book being opened.
       if (SdCardFontSystem::isCoverageVariant(families[i].name, registry_)) continue;
       // settingIndex stays the REGISTRY index (what sdFontFamilyName resolves against);
       // the list position is separate now that the list is filtered.
-      fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i)});
+      fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i),
+                        SdCardFontSystem::pickerLabel(families[i].name, registry_)});
     }
   }
+  // Built-in and SD families sort together by the label shown; Manage Fonts stays last.
+  std::sort(fonts_.begin(), fonts_.end(),
+            [](const FontEntry& a, const FontEntry& b) { return strcasecmp(a.displayName(), b.displayName()) < 0; });
   fonts_.push_back({I18N.get(StrId::STR_MANAGE_FONTS), false, MANAGE_FONTS_ROW});
 }
 
-// Rebuilds rowItems_ (label + actionValue) for the active tab. Structural —
-// call only when tab_ or its backing data (fonts_/sizes_) changes, never from
-// buildScreen(), which just refreshes rowValues_/rowItems_[].value in place.
+// Structural: call only when its backing data (fonts_/sizes_) changes, never from
+// buildScreen(), which just refreshes rowValues_ in place.
 void TextSettingsActivity::rebuildRowItems() {
   static_assert(std::size(LAYOUT_ROW_NAME_IDS) == static_cast<size_t>(LayoutRow::Count),
                 "LAYOUT_ROW_NAME_IDS must have one label per LayoutRow");
@@ -147,41 +208,37 @@ void TextSettingsActivity::rebuildRowItems() {
   rowValues_.assign(count, std::string());
   rowItems_.clear();
   rowItems_.reserve(count);
+  const int layoutCount = visibleLayoutRows(nullptr);
   for (int i = 0; i < count; i++) {
     fui::ListItem item;
-    switch (tab_) {
-      case Tab::Family:
-        item.label = fonts_[i].name.c_str();
-        break;
-      case Tab::Size:
-        item.label = sizes_[i].name.c_str();
-        break;
-      case Tab::Layout:
-        // Visible position -> LayoutRow: not every row is shown for every book, so `i` is not
-        // the enum value (see visibleLayoutRows()).
-        item.label = I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(layoutRowAt(i))]);
-        break;
-      case Tab::Style:
-        item.label = I18N.get(STYLE_ROW_NAME_IDS[static_cast<int>(styleRowAt(i))]);
-        break;
-      default:
-        break;
-    }
     item.actionValue = static_cast<int16_t>(i);
+    if (i == FONT_ROW) {
+      item.label = tr(STR_FONT);
+    } else if (i == SIZE_ROW) {
+      item.label = tr(STR_SIZE);
+    } else if (i < LAYOUT_FIRST_ROW + layoutCount) {
+      // Visible position -> LayoutRow: not every row is shown for every book.
+      const int layoutIndex = i - LAYOUT_FIRST_ROW;
+      const LayoutRow row = layoutRowAt(layoutIndex);
+      item.label = row == LayoutRow::VerticalText && profile_ != CrossPointSettings::TextProfileId::Japanese
+                       ? tr(STR_ZHIPAI)
+                       : I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(row)]);
+      if (layoutIndex == 0) item.sectionHeading = layoutHeading_.c_str();
+    } else {
+      const int styleIndex = i - LAYOUT_FIRST_ROW - layoutCount;
+      item.label = I18N.get(STYLE_ROW_NAME_IDS[static_cast<int>(styleRowAt(styleIndex))]);
+      if (styleIndex == 0) item.sectionHeading = styleHeading_.c_str();
+    }
     rowItems_.push_back(item);
   }
 }
 
-// The selectable sizes belong to the active family, so this runs on entry and
-// again after every family change. A family change goes through ensureLoaded(),
+// The selectable sizes belong to the active family (in a book, to the cut that book renders
+// with), so this runs on entry and again after every family change. A family change goes through ensureLoaded(),
 // which snaps SETTINGS.fontPointSize into the new family's set — but entry does
 // not, so the highlight is resolved by snapping rather than by exact match.
 void TextSettingsActivity::rebuildSizeList() {
-  const SdCardFontFamilyInfo* standIns[SdCardFontSystem::MAX_STAND_INS];
-  const uint8_t standInCount = SdCardFontSystem::readerStandInFamilies(
-      registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily, standIns, SdCardFontSystem::MAX_STAND_INS);
-  const std::vector<uint8_t> points =
-      readerFontPointSizes(registry_, SETTINGS.sdFontFamilyName, standIns, standInCount);
+  const std::vector<uint8_t> points = SdCardFontSystem::selectablePointSizes(registry_, bookScript_);
 
   // The stored size can still sit outside this family's set — e.g. the family
   // was deleted while selected, or the card was swapped. Highlight the size the
@@ -201,19 +258,8 @@ void TextSettingsActivity::rebuildSizeList() {
   }
 }
 
-void TextSettingsActivity::onTabAction(const int index) {
-  if (optionPopup_.isActive()) return;
-  if (tab_ != static_cast<Tab>(index)) {
-    tab_ = static_cast<Tab>(index);
-    rebuildRowItems();
-    auto& n = activeNav();
-    n.selected = 0;          // tab taps land with the tab bar focused (legacy tap behavior)
-    n.followOnBuild = true;  // pull the new tab's viewport to its remembered selection
-    requestUpdate();
-  }
-  // The switched-to tab repaints as the selected pill; a flash overlay on top
-  // of it just repaints the pill in the focused style.
-  app.clearTapFlash();
+bool TextSettingsActivity::handleCustomInput() {
+  return optionPopup_.handleInput(mappedInput, [this] { requestUpdate(); });
 }
 
 void TextSettingsActivity::activateIndex(const int index) {
@@ -221,68 +267,71 @@ void TextSettingsActivity::activateIndex(const int index) {
   // Most rows repaint a different surface (popup, preview, new value);
   // a lingering tap flash would gray an unrelated element.
   app.clearTapFlash();
-  activateRow(index);
-}
-
-bool TextSettingsActivity::handleCustomInput() {
-  return optionPopup_.handleInput(mappedInput, [this] { requestUpdate(); });
-}
-
-bool TextSettingsActivity::handleButtons() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finish();
-    return true;
+  if (index == FONT_ROW) {
+    std::vector<std::string> options;
+    options.reserve(fonts_.size());
+    std::transform(fonts_.begin(), fonts_.end(), std::back_inserter(options),
+                   [](const FontEntry& font) { return std::string(font.displayName()); });
+    optionPopup_.show(StrId::STR_FONT, std::move(options), currentFamilyIndex_, [this](const int idx) {
+      if (isManageFontsRow(idx)) {
+        startActivityForResult(
+            std::make_unique<FontDownloadActivity>(renderer, mappedInput), [this](const ActivityResult&) {
+              // Fonts may have been installed or deleted while we were away.
+              rebuildFamilyList();
+              currentFamilyIndex_ = findCurrentFontIndex(fonts_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
+              rebuildSizeList();
+              requestUpdate();
+            });
+      } else if (idx != currentFamilyIndex_) {
+        applyFamily(idx);
+      }
+    });
+    requestUpdate();
+  } else if (index == SIZE_ROW) {
+    std::vector<std::string> options;
+    options.reserve(sizes_.size());
+    std::transform(sizes_.begin(), sizes_.end(), std::back_inserter(options),
+                   [](const SizeEntry& size) { return size.name; });
+    optionPopup_.show(StrId::STR_SIZE, std::move(options), currentSizeIndex_, [this](const int idx) {
+      if (idx != currentSizeIndex_) applySize(idx);
+    });
+    requestUpdate();
+  } else if (index < LAYOUT_FIRST_ROW + visibleLayoutRows(nullptr)) {
+    confirmLayoutRow(static_cast<int>(layoutRowAt(index - LAYOUT_FIRST_ROW)));
+  } else {
+    confirmStyleRow(static_cast<int>(styleRowAt(index - LAYOUT_FIRST_ROW - visibleLayoutRows(nullptr))));
   }
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    // Confirm on the tab band is TabRing's (handleTabBarInput runs first).
-    if (ringPos() != 0) activateRow(ringPos() - 1);
-    return true;
-  }
-
-  return false;
 }
 
 void TextSettingsActivity::buildScreen(UiScreen& screen) {
-  // Content sits below the preview pane (render() draws header + preview
-  // directly) and above the caption band + button hints.
-  const int tabTop = afterHeader + previewHeight;
-  const int captionHeight = renderer.getTextHeight(UI_10_FONT_ID) + metrics_.verticalSpacing;
-  screen.setContentMarginFromScreen(
-      fui::Insets{static_cast<int16_t>(tabTop), 0, static_cast<int16_t>(bottomReserved + captionHeight), 0});
+  const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  // drawChrome() runs first in every render and sizes the box.
+  const int listTop = afterHeader + boxHeight_ + metrics_.verticalSpacing;
+  const int rightInset = renderer.getScreenWidth() - (safeArea.x + safeArea.width);
+  const int bottomInset = renderer.getScreenHeight() - (safeArea.y + safeArea.height);
+  screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(listTop), static_cast<int16_t>(rightInset),
+                                                static_cast<int16_t>(bottomInset), static_cast<int16_t>(safeArea.x)});
 
-  buildTabBar(screen);
-
-  // rowItems_ (label/actionValue) was built by rebuildRowItems() when the tab
-  // was last switched; only the live value text needs refreshing here, by
-  // assigning into the existing rowValues_ strings (no vector growth) rather
-  // than building a new items/values vector on every render.
+  // rowItems_ was built by rebuildRowItems(); only the live value text is refreshed here, by
+  // assigning into the existing rowValues_ strings (no vector growth).
   const int count = listCount();
+  const int layoutCount = visibleLayoutRows(nullptr);
   for (int i = 0; i < count; i++) {
     bool checked = false;
     rowItems_[i].toggle = false;
-    // Cleared up front so a row that sets no value can't keep the previous tab's text.
     rowValues_[i].clear();
-    switch (tab_) {
-      case Tab::Family:
-        rowValues_[i] = (i == currentFamilyIndex_) ? tr(STR_SELECTED) : "";
-        break;
-      case Tab::Size:
-        rowValues_[i] = (i == currentSizeIndex_) ? tr(STR_SELECTED) : "";
-        break;
-      case Tab::Layout: {
-        // Visible position -> LayoutRow, as the labels do (see visibleLayoutRows()).
-        const int layoutRow = static_cast<int>(layoutRowAt(i));
-        rowItems_[i].toggle = layoutRowIsSwitch(layoutRow, checked);
-        if (!rowItems_[i].toggle) rowValues_[i] = layoutValueText(layoutRow);
-        break;
+    if (i == FONT_ROW) {
+      if (currentFamilyIndex_ < static_cast<int>(fonts_.size())) {
+        rowValues_[i] = fonts_[currentFamilyIndex_].displayName();
       }
-      case Tab::Style:
-        // Every visible Style row is on/off, so this tab is all switches and has no value text.
-        rowItems_[i].toggle = styleRowIsSwitch(static_cast<int>(styleRowAt(i)), checked);
-        break;
-      default:
-        break;
+    } else if (i == SIZE_ROW) {
+      if (currentSizeIndex_ < static_cast<int>(sizes_.size())) rowValues_[i] = sizes_[currentSizeIndex_].name;
+    } else if (i < LAYOUT_FIRST_ROW + layoutCount) {
+      const int layoutRow = static_cast<int>(layoutRowAt(i - LAYOUT_FIRST_ROW));
+      rowItems_[i].toggle = layoutRowIsSwitch(layoutRow, checked);
+      if (!rowItems_[i].toggle) rowValues_[i] = layoutValueText(layoutRow);
+    } else {
+      rowItems_[i].toggle = styleRowIsSwitch(static_cast<int>(styleRowAt(i - LAYOUT_FIRST_ROW - layoutCount)), checked);
     }
     if (rowItems_[i].toggle) rowItems_[i].toggleChecked = checked;
     rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
@@ -297,60 +346,60 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
   applySwitchStyle(props);
   // Titles match the value's font size (smallText) so both sides of a row
   // read as one unit; labels that still don't fit wrap onto a second line.
-  // maxLines=2 also marks the style explicitly set (see SettingsActivity).
   props.labelText = screen.theme().smallText;
   props.labelText.maxLines = 2;
-  syncTabListViewport(screen, props);
+  props.headerText = screen.theme().smallText;
+  props.headerText.font = fui::GfxRendererTarget::FONT_LABEL;  // the 8 pt UI font
+  props.headerUnderline = 0;
+  // The heading sits on its first row (no band under it) with room above, so it reads as that row's.
+  props.headerRowHeight = static_cast<int16_t>(screen.target().lineHeight(props.headerText.font));
+  props.sectionGap = 28;
+  syncListViewport(screen, props);
   screen.list(props);
 }
 
 const char* TextSettingsActivity::confirmLabelText() const {
-  if (ringPos() == 0) {
-    // Confirm on the tab bar advances to the next tab.
-    return I18N.get(TAB_NAME_IDS[(static_cast<int>(tab_) + 1) % tabCount()]);
+  const int index = nav.selected;
+  const int layoutCount = visibleLayoutRows(nullptr);
+  if (index >= LAYOUT_FIRST_ROW + layoutCount) return tr(STR_TOGGLE);
+  if (index >= LAYOUT_FIRST_ROW) {
+    // The two booleans toggle in place; every other row opens a picker.
+    const LayoutRow row = layoutRowAt(index - LAYOUT_FIRST_ROW);
+    if (row == LayoutRow::ParaSpacing || row == LayoutRow::BookSideMargins) return tr(STR_TOGGLE);
   }
-  switch (tab_) {
-    case Tab::Layout: {
-      // The two booleans toggle in place; every other row opens a picker.
-      const LayoutRow row = layoutRowAt(ringPos() - 1);
-      return (row == LayoutRow::ParaSpacing || row == LayoutRow::BookSideMargins) ? tr(STR_TOGGLE) : tr(STR_SELECT);
-    }
-    case Tab::Style:
-      return tr(STR_TOGGLE);
-    default:
-      return tr(STR_SELECT);
-  }
+  return tr(STR_SELECT);
 }
 
 void TextSettingsActivity::drawChrome() {
-  const auto pageWidth = renderer.getScreenWidth();
+  GUI.drawHeader(renderer, UITheme::getInstance().getHeaderRect(renderer, true, false), textprofile::title(profile_));
 
-  GUI.drawHeader(renderer, Rect{0, metrics_.topPadding, pageWidth, metrics_.headerHeight}, tr(STR_TEXT_SETTINGS));
-
-  const char* familyName = (currentFamilyIndex_ >= 0 && currentFamilyIndex_ < static_cast<int>(fonts_.size()))
-                               ? fonts_[currentFamilyIndex_].name.c_str()
-                               : "";
-  const char* sizeName = (currentSizeIndex_ >= 0 && currentSizeIndex_ < static_cast<int>(sizes_.size()))
-                             ? sizes_[currentSizeIndex_].name.c_str()
-                             : "";
-  // The two flags are independent: a Japanese book read horizontally is (true, false), and the
-  // reader passes isJapaneseBook() and useVerticalText() separately. cppcheck sees only ctor
-  // sites where they happen to agree and calls the operands the same value.
-  // cppcheck-suppress knownConditionTrueFalse
-  const bool japaneseFace = japaneseBook_ || verticalText_;
-  textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing, afterHeader,
-                              previewHeight, familyName, sizeName, sdFontSystem.effectiveReaderFontId(japaneseFace));
+  // The two inputs are independent: a Japanese book read horizontally is (Japanese, false). A
+  // forced-vertical book with no CJK tag previews in the Japanese face, the face the page renders with.
+  const CjkScript previewScript =
+      bookScript_ != CjkScript::None ? bookScript_ : (verticalText_ ? CjkScript::Japanese : CjkScript::None);
+  const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int side = metrics_.contentSidePadding;
+  // previewHeight is the most the box may take; it shrinks to the lines the sample fills.
+  const Rect box{safeArea.x + side, afterHeader, safeArea.width - 2 * side, previewHeight};
+  // Inside the 1px border, so the sample cannot draw over it.
+  const Rect previewBounds{box.x + 1, box.y + 1, box.width - 2, box.height - 2};
+  const auto [savedX, savedY, savedWidth, savedHeight] = renderer.getClipRect();
+  const int clipLeft = std::max(previewBounds.x, savedX);
+  const int clipTop = std::max(previewBounds.y, savedY);
+  const int clipRight = std::min(previewBounds.x + previewBounds.width, savedX + savedWidth);
+  const int clipBottom = std::min(previewBounds.y + previewBounds.height, savedY + savedHeight);
+  renderer.setClipRect(clipLeft, clipTop, std::max(0, clipRight - clipLeft), std::max(0, clipBottom - clipTop));
+  const int textBottom = textsettings::renderPreview(
+      renderer, previewLayout_, PREVIEW_INNER_PADDING, metrics_.verticalSpacing, previewBounds, nullptr,
+      sdFontSystem.effectiveReaderFontId(previewScript), previewSample(profile_, previewScript));
+  renderer.setClipRect(savedX, savedY, savedWidth, savedHeight);
+  boxHeight_ = std::min(previewHeight, textBottom + PREVIEW_INNER_PADDING + 1 - box.y);
+  renderer.drawRect(box.x, box.y, box.width, boxHeight_, true);
 }
 
 // Button hints live here rather than at the end of drawChrome(): UiListActivity draws the footer
 // separately, so the hints repaint without redrawing the preview.
 void TextSettingsActivity::drawFooter() {
-  if (focusedRowHasNoPreview()) {
-    const int captionHeight = renderer.getTextHeight(UI_10_FONT_ID) + metrics_.verticalSpacing;
-    const int capY = afterHeader + usableHeight - captionHeight + metrics_.verticalSpacing;
-    renderer.drawText(UI_10_FONT_ID, metrics_.previewPadding, capY, tr(STR_NOT_IN_PREVIEW));
-  }
-
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabelText(), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
@@ -372,7 +421,6 @@ void TextSettingsActivity::applyFamily(int listIndex) {
     SETTINGS.fontFamily = font.settingIndex;
     SETTINGS.sdFontFamilyName[0] = '\0';
     sdFontSystem.ensureLoaded(renderer);  // unloads the previously resident SD font
-    currentFamilyIndex_ = listIndex;
   } else if (registry_) {
     const int sdIdx = font.settingIndex - CrossPointSettings::BUILTIN_FONT_COUNT;
     const auto& families = registry_->getFamilies();
@@ -380,51 +428,19 @@ void TextSettingsActivity::applyFamily(int listIndex) {
       strncpy(SETTINGS.sdFontFamilyName, families[sdIdx].name.c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);
       SETTINGS.sdFontFamilyName[sizeof(SETTINGS.sdFontFamilyName) - 1] = '\0';
       sdFontSystem.ensureLoaded(renderer);
-      currentFamilyIndex_ = listIndex;
     }
   }
-
-  if (currentFamilyIndex_ != listIndex) return;  // switch failed — keep the old size list
+  // A failed load clears the selection, so read back what is loaded rather than assume the pick.
+  currentFamilyIndex_ = findCurrentFontIndex(fonts_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
+  if (currentFamilyIndex_ != listIndex) {
+    rebuildSizeList();
+    return;
+  }
+  familyChosen_ = true;
 
   // The new family ships its own set of point sizes, and ensureLoaded() may have
-  // snapped the selection into it, so the Size tab's list and its nav position
-  // both have to be rebuilt.
+  // snapped the selection into it.
   rebuildSizeList();
-  tabNavs[static_cast<int>(Tab::Size)].selected = currentSizeIndex_ + 1;
-}
-
-void TextSettingsActivity::activateRow(int row) {
-  switch (tab_) {
-    case Tab::Family:
-      if (isManageFontsRow(row)) {
-        startActivityForResult(
-            std::make_unique<FontDownloadActivity>(renderer, mappedInput), [this](const ActivityResult&) {
-              // Fonts may have been installed or deleted while we were away.
-              rebuildFamilyList();
-              currentFamilyIndex_ = findCurrentFontIndex(fonts_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
-              rebuildSizeList();
-              requestUpdate();
-            });
-      } else if (row != currentFamilyIndex_) {
-        applyFamily(row);
-        requestUpdate();
-      }
-      break;
-    case Tab::Size:
-      if (row != currentSizeIndex_) {
-        applySize(row);
-        requestUpdate();
-      }
-      break;
-    case Tab::Layout:
-      confirmLayoutRow(static_cast<int>(layoutRowAt(row)));
-      break;
-    case Tab::Style:
-      confirmStyleRow(static_cast<int>(styleRowAt(row)));
-      break;
-    default:
-      break;
-  }
 }
 
 // Same RenderLock rationale as applyFamily(): a size change reloads the SD font
@@ -447,6 +463,18 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
       SETTINGS.bookCssMargins = !SETTINGS.bookCssMargins;
       requestUpdate();
       break;
+    case LayoutRow::ParaIndentation: {
+      std::vector<std::string> options;
+      options.reserve(6);
+      options.push_back(tr(STR_STATE_OFF));
+      for (int spaces = 1; spaces <= 5; ++spaces) options.push_back(std::to_string(spaces));
+      optionPopup_.show(StrId::STR_PARAGRAPH_INDENTATION, options, SETTINGS.paragraphIndentSpaces, [](int idx) {
+        SETTINGS.paragraphIndentSpaces = static_cast<uint8_t>(idx);
+        SETTINGS.saveToFile();
+      });
+      requestUpdate();
+      break;
+    }
     case LayoutRow::LineSpacing:
       optionPopup_.show(StrId::STR_LINE_SPACING, LINE_SPACING_IDS, static_cast<int>(std::size(LINE_SPACING_IDS)),
                         SETTINGS.lineSpacing, [](int idx) { SETTINGS.lineSpacing = static_cast<uint8_t>(idx); });
@@ -477,6 +505,16 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
                         });
       requestUpdate();
       break;
+    case LayoutRow::VerticalText: {
+      uint8_t* setting = verticalTextSetting();
+      if (!setting) break;
+      const StrId title =
+          profile_ == CrossPointSettings::TextProfileId::Japanese ? StrId::STR_TATEGAKI : StrId::STR_ZHIPAI;
+      optionPopup_.show(title, VERTICAL_TEXT_IDS, static_cast<int>(std::size(VERTICAL_TEXT_IDS)), *setting,
+                        [setting](int idx) { *setting = static_cast<uint8_t>(idx); });
+      requestUpdate();
+      break;
+    }
     case LayoutRow::ScreenMargin: {
       std::vector<std::string> options;
       options.reserve((MARGIN_MAX - MARGIN_MIN) / MARGIN_STEP + 1);
@@ -529,7 +567,11 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
   switch (static_cast<LayoutRow>(row)) {
     case LayoutRow::LineSpacing: {
       const uint8_t v = SETTINGS.lineSpacing;
-      return v < std::size(LINE_SPACING_IDS) ? I18N.get(LINE_SPACING_IDS[v]) : I18N.get(StrId::STR_NORMAL);
+      return I18N.get(LINE_SPACING_IDS[v < std::size(LINE_SPACING_IDS) ? v : CrossPointSettings::LINE_SPACING_120]);
+    }
+    case LayoutRow::ParaIndentation: {
+      const int spaces = std::clamp<int>(SETTINGS.paragraphIndentSpaces, 0, 5);
+      return spaces == 0 ? tr(STR_STATE_OFF) : std::to_string(spaces);
     }
     case LayoutRow::Alignment: {
       const uint8_t v = SETTINGS.paragraphAlignment;
@@ -544,6 +586,11 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
     }
     case LayoutRow::ScreenMargin:
       return std::to_string(SETTINGS.screenMargin);
+    case LayoutRow::VerticalText: {
+      const uint8_t* setting = verticalTextSetting();
+      const uint8_t v = setting ? *setting : 0;
+      return I18N.get(VERTICAL_TEXT_IDS[v < std::size(VERTICAL_TEXT_IDS) ? v : 0]);
+    }
 
     // ParaSpacing and BookSideMargins draw switches -- see layoutRowIsSwitch().
     default:
@@ -572,53 +619,35 @@ void TextSettingsActivity::confirmStyleRow(int row) {
   requestUpdate();
 }
 
-// Only Focus Reading shows in the preview (bold prefixes); the other Style rows
-// have no distinct preview.
-bool TextSettingsActivity::focusedRowHasNoPreview() const {
-  if (ringPos() == 0 || tab_ != Tab::Style) return false;
-  const StyleRow row = styleRowAt(ringPos() - 1);
-  return row == StyleRow::Hyphenation || row == StyleRow::EmbeddedStyle || row == StyleRow::AntiAliasing;
-}
-
-void TextSettingsActivity::switchTab(const int direction) {
-  const bool onTabBar = ringPos() == 0;
-  const int count = tabCount();
-  tab_ = static_cast<Tab>((static_cast<int>(tab_) + direction + count) % count);
-  rebuildRowItems();
-  auto& n = activeNav();
-  if (onTabBar) n.selected = 0;
-  n.followOnBuild = true;  // pull the new tab's viewport to its remembered selection
-  requestUpdate();
-}
-
-int TextSettingsActivity::listCount() const {
-  switch (tab_) {
-    case Tab::Family:
-      return static_cast<int>(fonts_.size());
-    case Tab::Size:
-      return static_cast<int>(sizes_.size());
-    case Tab::Layout:
-      return visibleLayoutRows(nullptr);
-    case Tab::Style:
-      // Japanese books keep Embedded Style and Anti-Aliasing; vertical text renders both too.
-      return japaneseBook_ ? 2 : static_cast<int>(StyleRow::Count);
-    default:
-      return 0;
-  }
-}
-
-int TextSettingsActivity::tabCount() const { return static_cast<int>(Tab::Count); }
+int TextSettingsActivity::listCount() const { return LAYOUT_FIRST_ROW + visibleLayoutRows(nullptr) + styleRowCount(); }
 
 // Only the rows the book's layout engine reads, so a hidden row never keeps changing the page.
-// Vertical text uses line spacing and the screen margin alone; horizontal text -- Japanese
-// included -- applies every row.
+// Vertical text uses line spacing, character spacing (the step down a column) and the screen
+// margin; horizontal text -- Japanese included -- applies every row.
 int TextSettingsActivity::visibleLayoutRows(LayoutRow* out) const {
-  static constexpr LayoutRow VERTICAL[] = {LayoutRow::LineSpacing, LayoutRow::ScreenMargin};
-  const int count = verticalText_ ? static_cast<int>(std::size(VERTICAL)) : static_cast<int>(LayoutRow::Count);
-  if (out) {
-    for (int i = 0; i < count; i++) out[i] = verticalText_ ? VERTICAL[i] : static_cast<LayoutRow>(i);
+  static constexpr LayoutRow VERTICAL[] = {LayoutRow::LineSpacing, LayoutRow::CharacterSpacing,
+                                           LayoutRow::ScreenMargin};
+  int count = 0;
+  const auto add = [&](const LayoutRow row) {
+    if (out) out[count] = row;
+    count++;
+  };
+  if (verticalTextSetting()) add(LayoutRow::VerticalText);
+  if (verticalText_) {
+    for (const LayoutRow row : VERTICAL) add(row);
+  } else {
+    for (int i = 0; i < static_cast<int>(LayoutRow::VerticalText); i++) add(static_cast<LayoutRow>(i));
   }
   return count;
+}
+
+// Only from Settings: in a book, a change of direction would need the open chapter laid out again.
+uint8_t* TextSettingsActivity::verticalTextSetting() const {
+  if (!editStoredProfile_) return nullptr;
+  if (profile_ == CrossPointSettings::TextProfileId::Japanese) return &SETTINGS.tategaki;
+  if (profile_ == CrossPointSettings::TextProfileId::TraditionalChinese) return &SETTINGS.zhipai;
+  if (profile_ == CrossPointSettings::TextProfileId::SimplifiedChinese) return &SETTINGS.zhipaiSimplified;
+  return nullptr;
 }
 
 TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int visibleIndex) const {
@@ -628,6 +657,6 @@ TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int visi
 }
 
 TextSettingsActivity::StyleRow TextSettingsActivity::styleRowAt(const int visibleIndex) const {
-  if (!japaneseBook_) return static_cast<StyleRow>(visibleIndex);
+  if (!cjkBook_) return static_cast<StyleRow>(visibleIndex);
   return visibleIndex == 0 ? StyleRow::EmbeddedStyle : StyleRow::AntiAliasing;
 }

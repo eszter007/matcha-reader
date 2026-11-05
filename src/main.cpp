@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <BlePageTurner.h>
 #include <BoardConfig.h>
 #include <Epub.h>
 #include <FontCacheManager.h>
@@ -15,26 +16,39 @@
 #include <HalTiltSensor.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <SPI.h>
+#include <TrustedTime.h>
 #include <VectorFontSupport.h>
 #include <WiFi.h>
 #include <XteinkDetect.h>
 #include <builtinFonts/all.h>
+#include <esp_heap_caps.h>
 #include <esp_sntp.h>
+#include <esp_wifi.h>
+#include <time.h>
 
+#include <atomic>
+#include <cstdarg>
 #include <cstring>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
+#include "LcpPassphraseStore.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
+#include "OpdsTokenStore.h"
+#include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
+#include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/home/StatsSyncActivity.h"
 #include "activities/reader/EpubReaderTranslationActivity.h"
+#include "activities/settings/ClockSyncActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/HomeTabBar.h"
 #include "components/LibraryTabs.h"
@@ -42,7 +56,9 @@
 #include "fontIds.h"
 #include "platform/UsbSerialJtagHandoff.h"
 #include "util/ButtonNavigator.h"
+#include "util/PluginEvents.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SlideSwitch.h"
 #include "util/Timezones.h"
 
 #if CROSSPOINT_VECTOR_FONTS
@@ -78,79 +94,42 @@ EpdFont notoserif14RegularFont(&notoserif_14_regular);
 EpdFont notoserif14BoldFont(&notoserif_14_bold);
 EpdFont notoserif14ItalicFont(&notoserif_14_italic);
 EpdFont notoserif14BoldItalicFont(&notoserif_14_bolditalic);
-EpdFontFamily notoserif14FontFamily(&notoserif14RegularFont, &notoserif14BoldFont, &notoserif14ItalicFont,
+EpdFontFamily notoserif14FontFamily(14, &notoserif14RegularFont, &notoserif14BoldFont, &notoserif14ItalicFont,
                                     &notoserif14BoldItalicFont);
 #ifndef OMIT_FONTS
 EpdFont notoserif12RegularFont(&notoserif_12_regular);
 EpdFont notoserif12BoldFont(&notoserif_12_bold);
 EpdFont notoserif12ItalicFont(&notoserif_12_italic);
 EpdFont notoserif12BoldItalicFont(&notoserif_12_bolditalic);
-EpdFontFamily notoserif12FontFamily(&notoserif12RegularFont, &notoserif12BoldFont, &notoserif12ItalicFont,
+EpdFontFamily notoserif12FontFamily(12, &notoserif12RegularFont, &notoserif12BoldFont, &notoserif12ItalicFont,
                                     &notoserif12BoldItalicFont);
-// No bold-italic at 16/18pt: the two largest reader sizes cost ~298KB of flash for a style
-// combination books use rarely, and that flash carries the 8pt CJK subset the UI needs at
-// every screen plus the headroom diagnostics builds need. Restoring them fits (release goes
-// to 98.6%, debug to 99.4%) but leaves no room to work in. EpdFontFamily::getFont falls back
-// to bold when boldItalic is null.
-EpdFont notoserif16RegularFont(&notoserif_16_regular);
-EpdFont notoserif16BoldFont(&notoserif_16_bold);
-EpdFont notoserif16ItalicFont(&notoserif_16_italic);
-EpdFontFamily notoserif16FontFamily(&notoserif16RegularFont, &notoserif16BoldFont, &notoserif16ItalicFont);
-// 18pt ships regular only: its bold and italic cuts cost ~304 KB of flash between the two
-// families, and this is the one size where the C3 build has no room for them. EpdFontFamily::
-// getFont() resolves a missing style to regular, so emphasis flattens rather than breaking; an
-// installed SD family carries all four styles and restores it.
-EpdFont notoserif18RegularFont(&notoserif_18_regular);
-EpdFontFamily notoserif18FontFamily(&notoserif18RegularFont);
-
-EpdFont notosans12RegularFont(&notosans_12_regular);
-EpdFont notosans12BoldFont(&notosans_12_bold);
-EpdFont notosans12ItalicFont(&notosans_12_italic);
-EpdFont notosans12BoldItalicFont(&notosans_12_bolditalic);
-EpdFontFamily notosans12FontFamily(&notosans12RegularFont, &notosans12BoldFont, &notosans12ItalicFont,
-                                   &notosans12BoldItalicFont);
-EpdFont notosans14RegularFont(&notosans_14_regular);
-EpdFont notosans14BoldFont(&notosans_14_bold);
-EpdFont notosans14ItalicFont(&notosans_14_italic);
-EpdFont notosans14BoldItalicFont(&notosans_14_bolditalic);
-EpdFontFamily notosans14FontFamily(&notosans14RegularFont, &notosans14BoldFont, &notosans14ItalicFont,
-                                   &notosans14BoldItalicFont);
-EpdFont notosans16RegularFont(&notosans_16_regular);
-EpdFont notosans16BoldFont(&notosans_16_bold);
-EpdFont notosans16ItalicFont(&notosans_16_italic);
-EpdFontFamily notosans16FontFamily(&notosans16RegularFont, &notosans16BoldFont, &notosans16ItalicFont);
-// Regular only, for the same reason as Noto Serif 18 above.
-EpdFont notosans18RegularFont(&notosans_18_regular);
-EpdFontFamily notosans18FontFamily(&notosans18RegularFont);
+// No 16 or 18pt faces are compiled in: those sizes draw the 14pt face enlarged (FaceScale, set
+// up in setupDisplayAndFonts()), freeing ~470 KB of flash. An SD family carries real cuts.
 
 #endif  // OMIT_FONTS
-
-EpdFont smallFont(&notosans_8_regular);
-EpdFontFamily smallFontFamily(&smallFont);
 
 // Curated Joyo-kanji + kana + CJK punctuation subset (not the full CJK Unified
 // Ideographs block) -- see docs for why: the full block doesn't fit in flash
 // alongside everything else. No bold variant; EpdFontFamily::getFont() falls
 // back to regular when bold is null, which is fine for an occasional-use
 // fallback font.
-// Two built-in CJK subsets, 8pt and 12pt. The SD font system would rather use the card's own
-// font at UI sizes, but no .cpfont ships 8 or 10pt (sd-fonts.yaml generates 12/14/16/18), so
-// these built-ins are what EVERY device renders UI Japanese with -- not just the ones without
-// an SD font. 8pt serves both the 8pt rows (library titles, list subtitles) and the 10pt ones
-// (the Continue Reading author): a hair small there, where 12pt was glaringly large.
+// Two built-in CJK subsets: 8pt for the UI's small and 10pt rows, 12pt for the 12pt row and
+// the reader. No .cpfont ships a UI size, so these are what every device renders UI Japanese
+// with -- not just the ones without an SD font.
 EpdFont cjk8RegularFont(&notosansjp_joyo_8_regular);
-EpdFontFamily cjk8FontFamily(&cjk8RegularFont);
-
+EpdFontFamily cjk8FontFamily(8, &cjk8RegularFont);
 EpdFont cjk12RegularFont(&notosansjp_joyo_12_regular);
-EpdFontFamily cjk12FontFamily(&cjk12RegularFont);
+EpdFontFamily cjk12FontFamily(12, &cjk12RegularFont);
 
 EpdFont ui10RegularFont(&ubuntu_10_regular);
 EpdFont ui10BoldFont(&ubuntu_10_bold);
-EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
+EpdFontFamily ui10FontFamily(10, &ui10RegularFont, &ui10BoldFont);
+EpdFont smallRegularFont(&ubuntu_8_regular);
+EpdFontFamily smallFontFamily(8, &smallRegularFont);
 
 EpdFont ui12RegularFont(&ubuntu_12_regular);
 EpdFont ui12BoldFont(&ubuntu_12_bold);
-EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
+EpdFontFamily ui12FontFamily(12, &ui12RegularFont, &ui12BoldFont);
 
 // Definitions for SilentRestart.h. RTC_NOINIT survives ESP.restart() but not power loss.
 RTC_NOINIT_ATTR uint32_t silentRebootMagic;
@@ -166,7 +145,9 @@ constexpr uint32_t SILENT_REBOOT_TARGET_TRANSLATE = 2;
 constexpr uint32_t SILENT_REBOOT_TARGET_SETTINGS = 3;
 // A Cover Grid tab screen; which one rides in silentRebootPayload's second byte.
 constexpr uint32_t SILENT_REBOOT_TARGET_TAB = 4;
-constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_TAB;  // bounds the setup() range check
+// File Transfer > Join Network, entered through a reboot for a fresh heap (upstream's 3).
+constexpr uint32_t SILENT_REBOOT_TARGET_JOIN_NETWORK = 5;
+constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_JOIN_NETWORK;  // bounds the setup() range check
 // Bit in silentRebootPayload, which is a separate word from the target above -- the two
 // never share bits.
 constexpr uint32_t SILENT_REBOOT_LIGHT_ON = 1U << 0;
@@ -193,9 +174,18 @@ enum class BootResume : uint8_t {
 // startDeepSleep() does not return, so a set latch only ends at the wakeup reset.
 static bool deepSleepInProgress = false;
 
+// False on boards that end a Wi-Fi session in place instead of rebooting (silentRestartTo).
+static bool wifiSessionEndsInRestart() {
+#if FREEINK_CAP_TOUCH
+  return !BoardConfig::hasTouch();
+#else
+  return true;
+#endif
+}
+
 #if FREEINK_CAP_TOUCH
 static bool finishWifiSessionWithoutRestart() {
-  if (!BoardConfig::hasTouch()) return false;
+  if (wifiSessionEndsInRestart()) return false;
 
   // A software reset does not cycle externally powered touch/frontlight rails.
   // Shut down the network stack in place so those peripherals retain state.
@@ -248,7 +238,25 @@ void silentRestart() { silentRestartTo(SILENT_REBOOT_TARGET_HOME, "home"); }
 
 void silentRestartToReader() { silentRestartTo(SILENT_REBOOT_TARGET_READER, "reader"); }
 
-void silentRestartToSettings() { silentRestartTo(SILENT_REBOOT_TARGET_SETTINGS, "settings"); }
+// The section rides in the tab byte, plus one: 0 is Connectivity.
+void silentRestartToSettings(const int section) {
+  silentRestartTo(SILENT_REBOOT_TARGET_SETTINGS, "settings", static_cast<uint32_t>(section + 1));
+}
+
+void silentRestartToJoinNetwork() {
+  if (deepSleepInProgress) return;
+#if FREEINK_CAP_TOUCH
+  // A software reset would cycle touch/frontlight rails; those boards proceed
+  // into Join Network without the fresh-heap reboot (return, don't stop WiFi —
+  // this runs on the way *in*, unlike the exit-time silentRestart()).
+  if (BoardConfig::hasTouch()) return;
+#endif
+  armSilentReboot(SILENT_REBOOT_TARGET_JOIN_NETWORK);
+  LOG_DBG("MAIN", "Silent restart (target=join-network)");
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  delay(50);
+  ESP.restart();
+}
 
 void silentRestartToHomeTab(const int homeTab) {
   silentRestartTo(SILENT_REBOOT_TARGET_TAB, "tab", static_cast<uint32_t>(homeTab));
@@ -288,6 +296,41 @@ void toggleFrontlight() {
   LOG_INF("LIGHT", "Frontlight toggled %s", lightOn ? "on" : "off");
 }
 
+// Applies the slide switch's position to the bound function at boot, on each
+// change, and when its binding changes; the physical position stays the source
+// of truth, as on stock.
+void handleSlideSwitch() {
+  static int appliedAction = -1;
+  static int appliedOn = -1;
+  if (!gpio.hasToggleSwitch()) return;
+  // Compare the position, not the change edge: transfer loops poll input and
+  // clear the edge before this runs.
+  const bool on = gpio.isToggleSwitchOn();
+  if (appliedAction == SETTINGS.slideSwitchAction && appliedOn == static_cast<int>(on)) return;
+  appliedAction = SETTINGS.slideSwitchAction;
+  appliedOn = on;
+  switch (SETTINGS.slideSwitchAction) {
+    case CrossPointSettings::SLIDE_SWITCH_NIGHT_MODE:
+      if ((SETTINGS.screenInverted != 0) == on) return;
+      SETTINGS.screenInverted = on ? 1 : 0;
+      break;
+    case CrossPointSettings::SLIDE_SWITCH_TOUCH_CONTROLS:
+      if ((SETTINGS.touchReaderControls != CrossPointSettings::TOUCH_READER_OFF) == on) return;
+      SETTINGS.touchReaderControls = on ? CrossPointSettings::TOUCH_READER_ON : CrossPointSettings::TOUCH_READER_OFF;
+      break;
+    default:
+      // Also compare the saved state: setup() lit the light from the switch
+      // without updating it.
+      if (!Frontlight.present() || (Frontlight.isOn() == on && (SETTINGS.frontlightOn != 0) == on)) return;
+      Frontlight.setOn(on);
+      SETTINGS.frontlightOn = on ? 1 : 0;
+      break;
+  }
+  SETTINGS.saveToFile();
+  activityManager.requestUpdate();
+  LOG_INF("SWITCH", "Slide switch %s", on ? "on" : "off");
+}
+
 bool handleX4ProFrontlightDoubleClick() {
   if (!BoardConfig::isX4Pro() || !SETTINGS.doubleClickPwrLight || !gpio.wasReleased(HalGPIO::BTN_POWER)) {
     return false;
@@ -317,6 +360,76 @@ void waitForPowerRelease() {
   }
 }
 
+// Bluetooth page turner (lib/BlePageTurner): what the module may ask of this firmware. The module
+// owns the radio; loop() tells it what is on screen, and the screen changes and sleep ask it to stop.
+namespace pageturner {
+std::atomic<bool> holdsCpu{false};
+
+bleturner::Heap heap() {
+  const auto h = HalMemory::getInternalHeap();
+  return {h.freeBytes, h.largestBlockBytes};
+}
+
+// Runs on the radio's start task. Only TRIES the render lock: the render task can hold it through a
+// chapter build that is waiting for this very radio.
+bool releaseCaches() {
+  RenderLock lock{RenderLock::Try{}};
+  if (!lock.held()) return false;
+  fontCacheManager.releaseAllFontMemory();
+  return true;
+}
+
+bool deliver(const bleturner::Action action) {
+  switch (action) {
+    case bleturner::Action::NextPage:
+      return activityManager.remoteTurn(true, false);
+    case bleturner::Action::PrevPage:
+      return activityManager.remoteTurn(false, false);
+    case bleturner::Action::NextChapter:
+      return activityManager.remoteTurn(true, true);
+    case bleturner::Action::PrevChapter:
+      return activityManager.remoteTurn(false, true);
+    case bleturner::Action::Confirm:
+      return activityManager.remoteClick(RemoteButton::Confirm);
+    case bleturner::Action::Back:
+      return activityManager.remoteClick(RemoteButton::Back);
+    case bleturner::Action::ReaderMenu:
+      return activityManager.remoteShortcut(true);
+    case bleturner::Action::SaveQuote:
+      return activityManager.remoteShortcut(false);
+    case bleturner::Action::None:
+      return false;
+  }
+  return false;
+}
+
+bool yieldForRadio() { return true; }        // the reader keeps no parser alive between pages
+bool fileTransferActive() { return false; }  // file transfer is a screen of its own: the radio is off there
+void restartIntoBook() { silentRestartToReader(); }
+
+// The radio needs a steady clock while it is up or changing state.
+void holdFullSpeed(const bool hold) {
+  holdsCpu.store(hold);
+  if (hold) powerManager.setPowerSaving(false);
+}
+
+void log(const bool error, const char* format, va_list args) {
+#ifdef ENABLE_SERIAL_LOG
+  if (!error && LOG_LEVEL < 1) return;
+  char line[160];
+  vsnprintf(line, sizeof(line), format, args);
+  logPrintf(error ? "ERR" : "INF", "BLE", "%s", line);
+#else
+  (void)error;
+  (void)format;
+  (void)args;
+#endif
+}
+
+const bleturner::Host host{heap,          releaseCaches, deliver, yieldForRadio, fileTransferActive, restartIntoBook,
+                           holdFullSpeed, log,           nullptr};
+}  // namespace pageturner
+
 constexpr char SLEEP_FRAME_FILE[] = "/.crosspoint/sleep_frame.bin";
 
 static void saveSleepFrameBuffer() {
@@ -340,10 +453,118 @@ static bool loadSleepFrameBuffer() {
   return true;
 }
 
+// Plugin-event delivery on the way into deep sleep. sleep.enter is delivered
+// now — over the live connection, or by bringing WiFi up when a plugin
+// subscribes (e.g. fetching a fresh /sleep.bmp so THIS sleep shows it — the
+// drain runs before goToSleep() renders the sleep screen). The connect path
+// is bounded (join deadline + drain event budget), skipped on low battery,
+// and sleep is never blocked on the network: a failed join or delivery just
+// sleeps with the previous image and the queued events retry on the next
+// drain (at-least-once). The caller's WiFi shutdown tears the radio down
+// either way. Deferrable events already queued (reader.exit) ride along in
+// the same drain.
+static void deliverSleepPluginEvents(const bool allowNetwork) {
+  // Activity-owned state must be queued before sleep.enter and before this
+  // same-sleep drain. The hook is idempotent with ordinary activity teardown.
+  activityManager.prepareForSleep();
+
+  // Sleeping straight out of a book is the common flow, but the reader's own
+  // reader.exit only fires later, inside goToSleep() — after this drain. Carry
+  // the book and progress on sleep.enter itself so a sync handler bound to it
+  // pushes current progress on THIS connection, not the next one.
+  pluginevents::Var vars[3];
+  size_t varCount = 0;
+  char percent[8];
+  char endPercent[8];
+  const ScreenshotInfo info = activityManager.getScreenshotInfo();
+  if (info.readerType != ScreenshotInfo::ReaderType::None && !APP_STATE.openEpubPath.empty()) {
+    snprintf(percent, sizeof(percent), "%d", info.progressPercent);
+    snprintf(endPercent, sizeof(endPercent), "%d", info.endProgressPercent);
+    vars[varCount++] = {"book", APP_STATE.openEpubPath.c_str()};
+    vars[varCount++] = {"percent", percent};
+    vars[varCount++] = {"end_percent", endPercent};
+  }
+  pluginevents::emit(pluginevents::Event::SleepEnter, vars, varCount);
+  if (!allowNetwork) return;
+  if (WiFi.status() == WL_CONNECTED) {
+    pluginevents::drain(&renderer);
+    return;
+  }
+  // Any connect-flagged queued event justifies the join, not only
+  // sleep.enter: reader.session is queued while reading and delivered on this
+  // same sleep, and a progress-sync plugin usually subscribes to it alone.
+  if (!pluginevents::wantsConnectAny()) return;
+  if (powerManager.getBatteryPercentage() < 20) return;
+  // Sleep can be the first WiFi use since boot or deep-sleep wake.
+  WIFI_STORE.loadFromFile();
+  const auto cred = WIFI_STORE.findCredential(WIFI_STORE.getLastConnectedSsid());
+  if (!cred) return;
+
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(cred->ssid.c_str(), cred->password.c_str());
+  const unsigned long joinDeadline = millis() + 10000;
+  while (WiFi.status() != WL_CONNECTED && millis() < joinDeadline) {
+    delay(100);
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    trustedtime::startSync();  // snap the clock floor while the network is up
+    pluginevents::drain(&renderer);
+  } else {
+    LOG_DBG("MAIN", "Sleep-event WiFi join timed out; deferring delivery");
+  }
+}
+
+#if FREEINK_DEVICE_PICCO
+// Charge strip along the bottom of the retained sleep screen.
+static void drawSleepChargeStrip(const bool charging, const uint16_t percent) {
+  RenderLock lock;
+  const int h = renderer.getLineHeight(SMALL_FONT_ID) + 12;
+  const int y = renderer.getScreenHeight() - h;
+  renderer.fillRect(0, y, renderer.getScreenWidth(), h, false);
+  char text[48];
+  snprintf(text, sizeof(text), "%s  %u%%", charging ? tr(STR_CHARGING) : tr(STR_CHARGED), percent);
+  renderer.drawCenteredText(SMALL_FONT_ID, y + 6, text);
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
+// Shows the charge strip while the power HAL holds sleep on USB power, and
+// removes it again if USB goes away. Returns true when the power button ended
+// the hold.
+static bool holdSleepWhileUsbPowered() {
+  if (!gpio.isUsbConnected()) return false;
+  // Keep the sleep frame so unplugging can remove the strip. 48 KB of PSRAM,
+  // freed when the hold ends.
+  const size_t frameSize = renderer.getBufferSize();
+  auto* const sleepFrame = static_cast<uint8_t*>(heap_caps_malloc(frameSize, MALLOC_CAP_SPIRAM));
+  if (sleepFrame) memcpy(sleepFrame, renderer.getFrameBuffer(), frameSize);
+  const bool buttonPressed = powerManager.holdWhileUsbPowered(gpio, drawSleepChargeStrip);
+  if (sleepFrame) {
+    if (!buttonPressed) {
+      RenderLock lock;
+      memcpy(renderer.getFrameBuffer(), sleepFrame, frameSize);
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    }
+    heap_caps_free(sleepFrame);
+  }
+  return buttonPressed;
+}
+#endif
+
 // Enter deep sleep mode
 void enterDeepSleep(bool fromTimeout = false) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
+
+  // Sleep may end in a power-off (battery death, latch); persist the clock
+  // floor now so a later cold boot resumes from it.
+  trustedtime::note();
+
+  // Stop Bluetooth before plugin delivery can start WiFi; a timeout defers delivery.
+  deepSleepInProgress = true;
+  const bool bluetoothStopped = bleturner::beforeSleep(2000);
+  if (!bluetoothStopped) LOG_ERR("SLP", "Bluetooth did not stop; deferring sleep-event delivery");
+  deliverSleepPluginEvents(bluetoothStopped);
 
   const bool isQuickResumeSleep =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
@@ -359,9 +580,6 @@ void enterDeepSleep(bool fromTimeout = false) {
   // the clock ticking; this covers the power-loss case.
   halClock.persistSystemTime();
 
-  // Commit to sleeping before goToSleep() runs the outgoing activity's onExit():
-  // a WiFi activity would otherwise silentRestart() here and reboot instead.
-  deepSleepInProgress = true;
   activityManager.goToSleep(fromTimeout);
 
   if (isQuickResumeSleep) {
@@ -378,12 +596,21 @@ void enterDeepSleep(bool fromTimeout = false) {
     WiFi.mode(WIFI_OFF);
   }
 
+#if FREEINK_DEVICE_PICCO
+  // The I2C LED driver keeps its state through deep sleep; switch it off here
+  // (SETTINGS.frontlightOn keeps the preference for restore-on-wake).
+  Frontlight.setOn(false);
+  const bool wakeOnHeldButton = holdSleepWhileUsbPowered();
+#else
+  const bool wakeOnHeldButton = false;
+#endif
+
   halTiltSensor.deepSleep();
   display.deepSleep();
   Storage.prepareForDeepSleep();
   LOG_DBG("MAIN", "Entering deep sleep");
 
-  powerManager.startDeepSleep(gpio);
+  powerManager.startDeepSleep(gpio, wakeOnHeldButton);
 }
 
 void setupDisplayAndFonts(bool seamless = false) {
@@ -415,20 +642,14 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(NOTOSERIF_14_FONT_ID, notoserif14FontFamily);
 #ifndef OMIT_FONTS
   notoserif12FontFamily.setFallback(&cjk12FontFamily);
-  notoserif16FontFamily.setFallback(&cjk12FontFamily);
-  notoserif18FontFamily.setFallback(&cjk12FontFamily);
   renderer.insertFont(NOTOSERIF_12_FONT_ID, notoserif12FontFamily);
-  renderer.insertFont(NOTOSERIF_16_FONT_ID, notoserif16FontFamily);
-  renderer.insertFont(NOTOSERIF_18_FONT_ID, notoserif18FontFamily);
+  // 16 and 18pt are the 14pt face enlarged; its CJK fallback stays at 12pt, as it was beside
+  // the real 16/18pt cuts.
+  renderer.insertFont(NOTOSERIF_16_FONT_ID, notoserif14FontFamily);
+  renderer.insertFont(NOTOSERIF_18_FONT_ID, notoserif14FontFamily);
+  renderer.setFaceScale(NOTOSERIF_16_FONT_ID, 16 * 256 / 14, 256);
+  renderer.setFaceScale(NOTOSERIF_18_FONT_ID, 18 * 256 / 14, 256);
 
-  notosans12FontFamily.setFallback(&cjk12FontFamily);
-  notosans14FontFamily.setFallback(&cjk12FontFamily);
-  notosans16FontFamily.setFallback(&cjk12FontFamily);
-  notosans18FontFamily.setFallback(&cjk12FontFamily);
-  renderer.insertFont(NOTOSANS_12_FONT_ID, notosans12FontFamily);
-  renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
-  renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
-  renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
 #endif  // OMIT_FONTS
   ui10FontFamily.setFallback(&cjk8FontFamily);
   ui12FontFamily.setFallback(&cjk12FontFamily);
@@ -436,11 +657,15 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
+  // Native cuts, but a glyph from an SD font at another size is still drawn at the row's size.
+  renderer.setFaceScale(UI_10_FONT_ID, 256, 256, /*sizeFallbacks=*/true);
+  renderer.setFaceScale(SMALL_FONT_ID, 256, 256, /*sizeFallbacks=*/true);
 
   // Set the CJK built-in font as the global last-resort fallback so SD card
   // fonts (and any other font without a per-family fallback) can still render
   // symbols that are in the built-in CJK font but not in the .cpfont file.
   EpdFontFamily::setGlobalFallback(&cjk12FontFamily);
+  EpdFontFamily::setBuiltinFallback(&cjk12FontFamily);
 
   // Discover and load SD card fonts
   sdFontSystem.begin(renderer);
@@ -483,19 +708,34 @@ void setup() {
   gpio.begin();
   powerManager.begin();
 
+  // Board TX-power ceiling. It can only be set once WiFi has started, so it is
+  // applied on every STA/AP start rather than at each place that brings WiFi up.
+  if (BoardConfig::ACTIVE.wifiMaxTxPower != 0) {
+    const auto applyTxCap = [](arduino_event_id_t, arduino_event_info_t) {
+      const esp_err_t err = esp_wifi_set_max_tx_power(static_cast<int8_t>(BoardConfig::ACTIVE.wifiMaxTxPower));
+      if (err != ESP_OK) LOG_ERR("WIFI", "TX power cap failed: %d", err);
+    };
+    WiFi.onEvent(applyTxCap, ARDUINO_EVENT_WIFI_STA_START);
+    WiFi.onEvent(applyTxCap, ARDUINO_EVENT_WIFI_AP_START);
+  }
+
   const auto wakeupReason = gpio.getWakeupReason();
   // Sample the wake hold now — a click wake is released within milliseconds of
   // boot — but defer the sleep-or-boot decision until SETTINGS is loaded below:
   // click-to-wake is a setting, and an X4 battery power-off cuts all power, so
   // only SD state survives to the next boot.
-  const bool wakeHoldVerified = wakeupReason != HalGPIO::WakeupReason::PowerButton || gpio.verifyPowerButtonWakeup();
+  // The Metalio's power-switch chip already demanded a real press, and the board usually boots after
+  // the button is released: a hold check there would power it straight back off.
+  const bool wakeHoldVerified = wakeupReason != HalGPIO::WakeupReason::PowerButton || BoardConfig::isMetalioEInk4() ||
+                                gpio.verifyPowerButtonWakeup();
 
   // X4 Pro and X4 Classic both map BTN_UP to GPIO0 — an ESP32-S3 boot strap — so
   // gate recovery on the non-strap Down key (GPIO7) to avoid a stuck-in-recovery loop.
   const auto recoveryButton = (BoardConfig::isX4Pro() || BoardConfig::isX4Classic()) ? MappedInputManager::Button::Down
                                                                                      : MappedInputManager::Button::Up;
+  // The Picco has no second app slot to flash into (partitions_picco.csv).
   const bool recoveryFirmwareMode = wakeupReason == HalGPIO::WakeupReason::PowerButton && !BoardConfig::isPaperMono() &&
-                                    mappedInputManager.isPressed(recoveryButton);
+                                    !BoardConfig::isPicco() && mappedInputManager.isPressed(recoveryButton);
 
   halTiltSensor.begin();
   halClock.begin();
@@ -518,6 +758,8 @@ void setup() {
   HalSystem::checkPanic();
 
   APP_STATE.loadFromFile();
+  // Fold the reading-stats journal in while the heap is still whole; see ReadingStatsStore::record().
+  READING_STATS_STORE.compact();
   const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
   const bool isPersistedSleepWake = isSleepWake && !APP_STATE.showBootScreen;
 
@@ -552,22 +794,46 @@ void setup() {
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
+  OPDS_TOKENS.loadFromFile();
+  LCP_PASSPHRASES.loadFromFile();
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
+  pluginevents::refreshSubscriptions();
+  // Seed the system clock from the battery-backed RTC: on RTC boards it is the
+  // only real clock across power-off, and time() is what plugin event
+  // timestamps, TLS and file dates read. Placed before trustedtime::init(),
+  // whose floor restore vetoes a lagging RTC and restores the floor instead.
+  struct tm rtcLocal;
+  if (halClock.localTime(rtcLocal)) {
+    // localTime() renders the RTC's UTC epoch under the TZ rule applied above,
+    // so mktime() inverts it exactly (tm_isdst included).
+    trustedtime::adopt(static_cast<int64_t>(mktime(&rtcLocal)));
+    LOG_INF("CLK", "RTC clock read: %04d-%02d-%02d %02d:%02d", rtcLocal.tm_year + 1900, rtcLocal.tm_mon + 1,
+            rtcLocal.tm_mday, rtcLocal.tm_hour, rtcLocal.tm_min);
+  }
+  // Restore the monotonic clock floor before anything reads time() (event
+  // timestamps, loan-expiry checks).
+  trustedtime::init();
+  bleturner::begin(pageturner::host, SETTINGS.ble);
 
   // Brightness and warmth are always restored. A normal wake starts with the
   // light off unless Restore Light on Wake is enabled; silent maintenance
   // reboots replay the live state captured at restart, so they neither go dark
-  // nor light up against the user's wake preference.
-  const bool restoreLightOn =
-      isSilentReboot ? silentRebootLightOn : (SETTINGS.frontlightOn != 0 && SETTINGS.frontlightRestoreOnWake != 0);
+  // nor light up against the user's wake preference. A slide switch bound to
+  // the light decides it from its position instead.
+  const bool restoreLightOn = isSilentReboot ? silentRebootLightOn
+                              : slideSwitchOwnsLight()
+                                  ? gpio.isToggleSwitchOn()
+                                  : (SETTINGS.frontlightOn != 0 && SETTINGS.frontlightRestoreOnWake != 0);
   Frontlight.begin(SETTINGS.frontlightBrightness, SETTINGS.frontlightWarmth, restoreLightOn);
 
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
       // With Short Power Button Press = Sleep, a single click wakes on any
       // device; otherwise the button must still be held (ghost-wake debounce).
-      if (!wakeHoldVerified && SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::SLEEP) {
+      // Picco: plugging in USB pulses the wake line; power on, as stock does.
+      if (!wakeHoldVerified && SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::SLEEP &&
+          !(FREEINK_DEVICE_PICCO && gpio.isUsbConnected())) {
         LOG_DBG("MAIN", "Power-button wake not held through verification, sleeping");
         Storage.prepareForDeepSleep();
         powerManager.startDeepSleep(gpio);
@@ -577,10 +843,12 @@ void setup() {
     case HalGPIO::WakeupReason::AfterUSBPower:
       // Most devices return to sleep after a USB-powered cold boot.
       LOG_DBG("MAIN", "Wakeup reason: After USB Power");
-#if FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_EEGO_A4
+#if FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_EEGO_A4 || \
+    FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_PICCO
       // X4 Pro must stay awake so USB Serial/JTAG remains available after leaving
       // USB Drive and reconnecting the cable. Paper Mono has no armable GPIO wake
-      // (its button is behind the PMIC). EEGO A4's post-flash reset reads as
+      // (its button is behind the PMIC). Metalio also needs native USB available
+      // after a USB-powered boot, as does the Picco. EEGO A4's post-flash reset reads as
       // POWERON (native-USB), so a flash would otherwise be misclassified as a
       // USB-power cold boot and sleep. Sleeping any of these here would strand
       // the device in a USB-replug boot loop (or sleep right after a flash).
@@ -598,6 +866,10 @@ void setup() {
   }
 
   LOG_DBG("MAIN", "Starting CrossPoint version " CROSSPOINT_VERSION);
+
+  // Apply a switch moved during sleep before the first paint, so the wake
+  // screen does not draw in the old night mode and then repaint.
+  handleSlideSwitch();
 
   // Resolve the single boot-presentation decision. Skipping the splash also
   // skips the panel-clearing pass and the X3 initial-full-sync arming (see
@@ -683,9 +955,15 @@ void setup() {
     } else {
       activityManager.goHome();
     }
+  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_JOIN_NETWORK) {
+    // Rebooted on the way *into* File Transfer > Join Network for a fresh heap;
+    // resume that flow directly instead of landing on home.
+    activityManager.goToJoinNetwork();
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_SETTINGS) {
-    // Back out of the WiFi rows and the user is where they left off, not on Home.
-    activityManager.goToSettings();
+    // Back out of the WiFi rows (or Sync Stats) and the user is where they left off, not on Home.
+    const bool known = silentRebootTab >= 1 && silentRebootTab <= SETTINGS_SECTION_COUNT;
+    activityManager.goToSettings(known ? static_cast<SettingsSection>(silentRebootTab - 1)
+                                       : SettingsSection::Connectivity);
   } else if (resume == BootResume::Silent) {
     // target == home (or reader with no open book): land on home — don't fall
     // through to the sleep-wake "resume reader" logic, which fires on stale
@@ -725,6 +1003,106 @@ void setup() {
   allowSleepAt = millis() + 2000;
 }
 
+// A two-button shortcut: Power held together with a side button. The action runs once per
+// press, and both releases that end it are swallowed so neither also runs its own action.
+struct PowerCombo {
+  bool armed = true;
+  bool active = false;
+};
+
+// True while the combination owns this loop tick.
+static bool pollPowerCombo(PowerCombo& combo, const uint8_t otherButton, void (*action)()) {
+  if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(otherButton)) {
+    combo.active = true;
+    if (combo.armed) {
+      combo.armed = false;
+      action();
+    }
+    return true;
+  }
+  if (!combo.active) return false;
+  // Held until both are up, so neither release reaches the screen underneath as a press of its own.
+  // The Power + Up reader action (setComboAction) relies on this: the book's next tick is its only one.
+  if (gpio.isPressed(HalGPIO::BTN_POWER) || gpio.isPressed(otherButton)) return true;
+  const bool released = gpio.wasReleased(HalGPIO::BTN_POWER) || gpio.wasReleased(otherButton);
+  combo.armed = true;
+  combo.active = false;
+  return released;
+}
+
+static void startClockSyncFromCombo() {
+  if (ClockSyncActivity::isRunning()) return;
+  // From a book the sync returns to the book; from anywhere else it ends as the Settings row does.
+  auto sync = makeUniqueNoThrow<ClockSyncActivity>(renderer, mappedInputManager, activityManager.isReaderActivity());
+  if (!sync) {
+    LOG_ERR("MAIN", "OOM: ClockSyncActivity");
+    return;
+  }
+  activityManager.pushActivity(std::move(sync));
+}
+
+// Sync Insights & Clock from a button shortcut on any screen. Wi-Fi plus TLS need the heap that Home
+// or an open book holds, so that screen is replaced when the sync's restart will bring it back. Any
+// other screen stays underneath: it may reboot on exit (File Transfer, OPDS, KOReader sync, even after
+// its Wi-Fi stopped), and a board that ends Wi-Fi in place must return to it.
+static void startStatsSyncFromShortcut() {
+  if (StatsSyncActivity::isRunning() || ClockSyncActivity::isRunning()) return;
+  // Over a book with a sync account, its progress sync carries the clock and Insights too.
+  if (activityManager.startShortcutSync()) return;
+  const auto origin = activityManager.isReaderActivity() ? StatsSyncActivity::Origin::ShortcutInReader
+                                                         : StatsSyncActivity::Origin::Shortcut;
+  auto sync = makeUniqueNoThrow<StatsSyncActivity>(renderer, mappedInputManager, origin, /*syncClock=*/true);
+  if (!sync) {
+    LOG_ERR("MAIN", "OOM: StatsSyncActivity");
+    return;
+  }
+  if (wifiSessionEndsInRestart() && activityManager.isOnlyHomeOrReader()) {
+    activityManager.replaceActivity(std::move(sync));
+  } else {
+    activityManager.pushActivity(std::move(sync));
+  }
+}
+
+static void forceScreenRefresh() {
+  LOG_DBG("MAIN", "Manual screen refresh triggered");
+  if (!activityManager.handleForcedRefresh()) {
+    RenderLock lock;
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  }
+}
+
+// Runs a sync for a shortcut that carries one; false for every other action.
+static bool runSyncShortcut(const uint8_t action) {
+  switch (action) {
+    case CrossPointSettings::SIDE_BTN_SYNC_STATS_CLOCK:
+      startStatsSyncFromShortcut();
+      return true;
+    case CrossPointSettings::SIDE_BTN_SYNC_CLOCK:
+      if (!StatsSyncActivity::isRunning()) startClockSyncFromCombo();
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Power + Up. Sleep, Refresh and the syncs run here on any screen; the reader actions are handed
+// to the open book, which reads them as a side-button press once the combination is released.
+static void runPowerUpAction() {
+  const uint8_t action = SETTINGS.powerUpAction;
+  if (runSyncShortcut(action)) return;
+  switch (action) {
+    case CrossPointSettings::SIDE_BTN_SLEEP:
+      enterDeepSleep();
+      return;
+    case CrossPointSettings::SIDE_BTN_REFRESH:
+      forceScreenRefresh();
+      return;
+    default:
+      if (activityManager.isReaderActivity()) mappedInputManager.setComboAction(action);
+      return;
+  }
+}
+
 void loop() {
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
@@ -738,6 +1116,21 @@ void loop() {
   // and the same physical buttons must go back to list navigation the moment the reader is gone.
   // The word-lookup panel sits on the reader's stack, so it counts as reader too.
   mappedInputManager.setSideActionsActive(activityManager.isReaderActivity());
+
+  // Bluetooth page turner, before the USB drive's early return: a card handed to USB stops the radio
+  // before anything else.
+  bleturner::Scene scene{};
+  // Home counts only for builds whose radio may start there (the S3 profile, RadioPolicy.h).
+  const bool homeShown = activityManager.isForegroundHomeShown();
+  const bool remoteContext = activityManager.isRemoteReaderContext();
+  scene.where = remoteContext ? bleturner::Where::Reader
+                : homeShown   ? bleturner::Where::Home
+                              : bleturner::Where::Elsewhere;
+  scene.visit = activityManager.visit();
+  scene.pageShown = homeShown || remoteContext;
+  scene.storageBusy = activityManager.requiresExclusiveStorageLoop();
+  scene.wifiOn = WiFi.getMode() != WIFI_MODE_NULL;
+  const bool remoteActed = bleturner::tick(scene) | activityManager.applyQueuedRemoteInput();
 
   if (activityManager.requiresExclusiveStorageLoop()) {
     // USB Drive handed the raw SD card to the host. Do not run screenshots,
@@ -755,7 +1148,16 @@ void loop() {
     return;
   }
 
+  // After the exclusive-storage return: it saves settings to the SD card.
+  handleSlideSwitch();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
+
+  // Under the render lock, so a step never overlaps the themes' gauge reads.
+  static bool gaugeCapacityPending = true;
+  if (gaugeCapacityPending) {
+    RenderLock lock(RenderLock::Try{});
+    if (lock.held()) gaugeCapacityPending = BatteryMonitor::loadDesignCapacity();
+  }
 
   // The sunlight workaround was designed for X4. On X3, powering the panel off after
   // every update forces the stronger wake waveform on the next refresh and causes severe
@@ -818,6 +1220,16 @@ void loop() {
       } else if (cmd == "HOME") {
         LOG_INF("CMD", "home");
         activityManager.goHome();
+      } else if (cmd == "MEM") {
+        // The heap now, rather than at the next ten-second tick: for measuring one screen.
+        const auto heap = HalMemory::getInternalHeap();
+        LOG_INF("CMD", "mem free=%zu min=%zu maxAlloc=%zu", heap.freeBytes, heap.minFreeBytes, heap.largestBlockBytes);
+      } else if (cmd == "CLOCKSYNC") {
+        // The Power + Up action; injected presses are queued one at a time, so the combination
+        // itself cannot be sent.
+        LOG_INF("CMD", "clock sync");
+        powerManager.setPowerSaving(false);  // as the button press would: Wi-Fi cannot start throttled
+        startClockSyncFromCombo();
       } else if (cmd.startsWith("PRESS:") || cmd.startsWith("HOLD:")) {
         // PRESS:<BTN> is a tap; HOLD:<BTN>:<ms> keeps the button down that long (long presses,
         // key repeat). Hardware button index, not the logical (remappable) one.
@@ -852,7 +1264,7 @@ void loop() {
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
   if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity() ||
-      activityManager.preventAutoSleep()) {
+      remoteActed || activityManager.preventAutoSleep()) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }
@@ -865,29 +1277,17 @@ void loop() {
     return;
   }
 
-  static bool screenshotButtonsReleased = true;
-  static bool screenshotComboActive = false;
-  if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(HalGPIO::BTN_DOWN)) {
-    screenshotComboActive = true;
-    if (screenshotButtonsReleased) {
-      screenshotButtonsReleased = false;
-      {
+  // Power + Down: screenshot. Power + Up: the action chosen in Shortcuts.
+  static PowerCombo screenshotCombo;
+  static PowerCombo powerUpCombo;
+  if (pollPowerCombo(screenshotCombo, HalGPIO::BTN_DOWN, [] {
         RenderLock lock;
         ScreenshotUtil::takeScreenshot(renderer);
-      }
-    }
+      })) {
     return;
   }
-  if (screenshotComboActive) {
-    if (gpio.isPressed(HalGPIO::BTN_POWER)) return;
-    if (gpio.wasReleased(HalGPIO::BTN_POWER)) {
-      screenshotButtonsReleased = true;
-      screenshotComboActive = false;
-      return;
-    }
-    screenshotButtonsReleased = true;
-    screenshotComboActive = false;
-  }
+  const bool powerUpOn = SETTINGS.powerUpAction != CrossPointSettings::SIDE_BTN_NONE;
+  if (powerUpOn && pollPowerCombo(powerUpCombo, HalGPIO::BTN_UP, runPowerUpAction)) return;
 
   // Consume the second X4 Pro power-button release so it does not also run a
   // configured short-power action after toggling the frontlight.
@@ -951,8 +1351,8 @@ void loop() {
 
   if (!x4ProAwaitingClickWindow && powerReleasedSinceWake && millis() >= allowSleepAt &&
       gpio.isPressed(HalGPIO::BTN_POWER) && gpio.getPowerButtonHeldTime() > SETTINGS.getPowerButtonDuration()) {
-    // If the screenshot combination is potentially being pressed, don't sleep
-    if (gpio.isPressed(HalGPIO::BTN_DOWN)) {
+    // If a power-button combination is potentially being pressed, don't sleep
+    if (gpio.isPressed(HalGPIO::BTN_DOWN) || (powerUpOn && gpio.isPressed(HalGPIO::BTN_UP))) {
       return;
     }
     LOG_DBG("MAIN", "Power button held %lums, sleeping", gpio.getPowerButtonHeldTime());
@@ -991,11 +1391,18 @@ void loop() {
       (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
        mappedInputManager.wasReleased(MappedInputManager::Button::Power)) ||
       sideRefresh) {
-    LOG_DBG("MAIN", "Manual screen refresh triggered");
-    if (!activityManager.handleForcedRefresh()) {
-      RenderLock lock;
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-    }
+    forceScreenRefresh();
+  }
+
+  // Sync shortcuts: a short power click or the Home key (both arrive as a home action), or a side
+  // button in a book -- outside one the side buttons navigate lists.
+  const bool inBook = activityManager.isReaderActivity();
+  if (mappedInputManager.homeButtonAction() == HomeButtonAction::SyncStatsClock ||
+      (inBook && mappedInputManager.sideActionFired(CrossPointSettings::SIDE_BTN_SYNC_STATS_CLOCK))) {
+    runSyncShortcut(CrossPointSettings::SIDE_BTN_SYNC_STATS_CLOCK);
+  } else if (mappedInputManager.homeButtonAction() == HomeButtonAction::SyncClock ||
+             (inBook && mappedInputManager.sideActionFired(CrossPointSettings::SIDE_BTN_SYNC_CLOCK))) {
+    runSyncShortcut(CrossPointSettings::SIDE_BTN_SYNC_CLOCK);
   }
 
   // Refresh the battery icon when USB is plugged or unplugged.
@@ -1011,6 +1418,8 @@ void loop() {
   const unsigned long activityStartTime = millis();
   activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;
+  // A Power + Up reader action lives for exactly one activity tick.
+  mappedInputManager.clearComboAction();
 
   const unsigned long loopDuration = millis() - loopStartTime;
   if (loopDuration > maxLoopDuration) {
@@ -1038,7 +1447,7 @@ void loop() {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
-    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
+    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS && !pageturner::holdsCpu.load()) {
       // If we've been inactive for a while, increase the delay to save power
       powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
       // Sleep in short slices and wake the poll as soon as a button contact closes.
@@ -1047,7 +1456,12 @@ void loop() {
       const unsigned long idleStart = millis();
       while (millis() - idleStart < 50) {
         delay(10);
-        if (gpio.rawInputActive()) break;
+        if (gpio.rawInputActive()) {
+          // Back to full clock before the press is even debounced: the poll, the activity's
+          // handler and the render that follows would otherwise all start at 10 MHz.
+          powerManager.setPowerSaving(false);
+          break;
+        }
       }
     } else {
       // Short delay to prevent tight loop while still being responsive

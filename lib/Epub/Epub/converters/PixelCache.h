@@ -1,5 +1,6 @@
 #pragma once
 
+#include <HalMemory.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <stdint.h>
@@ -53,6 +54,9 @@ class Reader {
 
  private:
   HalFile file;
+  // With PSRAM the whole body is read once at open(), and every pass draws from it instead of
+  // re-reading the card. Null without PSRAM (or when it is full): passes stream as before.
+  HalMemory::PsramBuffer body_;
   int width_ = 0;
   int height_ = 0;
 };
@@ -212,7 +216,11 @@ struct PixelCache {
         return false;
       }
     }
-    file.close();
+    if (!file.close()) {
+      LOG_ERR("IMG", "Failed to close cache: %s", cachePathStr.c_str());
+      abort();
+      return false;
+    }
     LOG_DBG("IMG", "Cache written: %s (%dx%d, %d bytes)", cachePathStr.c_str(), width, height,
             4 + bytesPerRow * height);
     ok = false;  // file handed off; nothing left to clean up

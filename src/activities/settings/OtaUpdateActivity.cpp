@@ -5,6 +5,7 @@
 #include <WiFi.h>
 
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
@@ -74,6 +75,14 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
 
 void OtaUpdateActivity::onEnter() {
   Activity::onEnter();
+
+  // The TLS handshake to GitHub needs a ~20KB block. With a Japanese title on Home the resident SD
+  // fonts left 12KB, and the check failed with MEMORY_E after a minute. Leaving this screen
+  // restarts the device whenever Wi-Fi was on, which loads the fonts again.
+  {
+    RenderLock lock(*this);
+    sdFontSystem.releaseAllResidentFonts(renderer);
+  }
 
   // Turn on WiFi immediately
   LOG_DBG("OTA", "Turning on WiFi...");

@@ -21,6 +21,9 @@ struct UiScreen {
     nav.syncToProps({0, 0, 200, height}, 20, 0, count, props, offset);
   }
 };
+struct MappedInputManager {
+  static bool buttonCursorShown() { return true; }
+};
 struct TabRing {
   enum class Focus { TopTabs, Content, BottomBar };
 };

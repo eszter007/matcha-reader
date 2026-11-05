@@ -9,7 +9,11 @@
 #include <Xtc.h>
 
 #include <algorithm>
+#include <cstring>
 
+#include "RemoteProgress.h"
+#include "SyncedPosition.h"
+#include "activities/home/EpubProgressUtil.h"
 #include "activities/reader/ProgressFile.h"
 
 namespace {
@@ -23,11 +27,18 @@ void writeLe32(uint8_t* p, const uint32_t value) {
   p[2] = (value >> 16) & 0xFF;
   p[3] = (value >> 24) & 0xFF;
 }
+
+// The reader's saved link back-stack (EpubReaderActivity::saveLinkStack()). After a reset, Back
+// must not return to a page from before it.
+void removeLinkStack(const std::string& cachePath) {
+  const std::string linksPath = cachePath + "/links.bin";
+  if (Storage.exists(linksPath.c_str())) Storage.remove(linksPath.c_str());
+}
 }  // namespace
 
 int mangaProgressPercent(const std::string& path) {
   if (!manga::MangaBook::isMangaFolder(path)) return -1;
-  const std::string cachePath = "/.crosspoint/manga_" + std::to_string(std::hash<std::string>{}(path));
+  const std::string cachePath = manga::MangaBook::cachePathFor(path);
   HalFile progressFile;
   uint8_t data[4];
   if (!Storage.openFileForRead("PROG", cachePath + "/progress.bin", progressFile) || progressFile.read(data, 4) != 4) {
@@ -49,16 +60,50 @@ std::string bookCachePath(const std::string& path) {
   // TXT and Markdown are read through the EPUB pipeline, so their cache is an epub_ one too.
   if (FsHelpers::hasReflowableBookExtension(path)) return "/.crosspoint/epub_" + hash;
   if (FsHelpers::hasXtcExtension(path)) return "/.crosspoint/xtc_" + hash;
-  if (manga::MangaBook::isMangaFolder(path)) return "/.crosspoint/manga_" + hash;
+  if (manga::MangaBook::isMangaFolder(path)) return manga::MangaBook::cachePathFor(path);
   return {};
 }
 
-bool markBookRead(const std::string& path) {
+bool writePageProgress(const std::string& path, const uint32_t page) {
   const std::string cachePath = bookCachePath(path);
-  if (cachePath.empty() || !Storage.exists(cachePath.c_str())) {
-    LOG_ERR("PROG", "No cache to mark read: %s", path.c_str());
+  if (cachePath.empty()) return false;
+  if (FsHelpers::hasXtcExtension(path)) {
+    uint8_t data[4];
+    writeLe32(data, page);
+    return ProgressFile::writeAtomic(cachePath, data, sizeof(data));
+  }
+  if (!manga::MangaBook::isMangaFolder(path)) return false;
+  // MangaReaderActivity's record: page, panel (-1, the full page), panels-only flag (kept).
+  uint8_t data[7] = {};
+  {
+    HalFile f;
+    if (Storage.openFileForRead("PROG", cachePath + "/progress.bin", f)) f.read(data, sizeof(data));
+  }
+  writeLe32(data, page);
+  const int16_t fullPage = -1;
+  memcpy(data + 4, &fullPage, sizeof(fullPage));
+  if (!Storage.exists(cachePath.c_str()) && !Storage.mkdir(cachePath.c_str())) return false;
+  return ProgressFile::writeAtomic(cachePath, data, sizeof(data));
+}
+
+bool readPageProgress(const std::string& path, uint32_t& page) {
+  const std::string cachePath = bookCachePath(path);
+  if (cachePath.empty() || (!FsHelpers::hasXtcExtension(path) && !manga::MangaBook::isMangaFolder(path))) return false;
+  HalFile f;
+  uint8_t data[4];
+  if (!Storage.openFileForRead("PROG", cachePath + "/progress.bin", f) || f.read(data, sizeof(data)) != sizeof(data)) {
     return false;
   }
+  page = static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8) |
+         (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
+  return true;
+}
+
+namespace {
+// The progress record every reader and both grids read as 100%. False when the book's cache cannot say
+// where its end is: never opened, or laid out by an older firmware.
+bool writeFinishedProgress(const std::string& path, const std::string& cachePath) {
+  if (!Storage.exists(cachePath.c_str())) return false;
 
   if (manga::MangaBook::isMangaFolder(path)) {
     // Manga progress is the current page; the last page is the finished state.
@@ -110,41 +155,35 @@ bool markBookRead(const std::string& path) {
   writeLe32(data, lastPage);
   return ProgressFile::writeAtomic(cachePath, data, sizeof(data));
 }
+}  // namespace
+
+bool markBookRead(const std::string& path) {
+  const std::string cachePath = bookCachePath(path);
+  if (cachePath.empty()) return false;
+  removeLinkStack(cachePath);
+  syncedPosition::dismiss(path);  // a position from elsewhere must not undo the choice on the next open
+  // Without a record to write, the progress index holds it.
+  return writeFinishedProgress(path, cachePath) || remoteProgress::markRead(path);
+}
 
 bool markBookUnread(const std::string& path) {
   const std::string cachePath = bookCachePath(path);
   if (cachePath.empty()) return false;
+  remoteProgress::forget(path);
+  syncedPosition::dismiss(path);
+  removeLinkStack(cachePath);
   const std::string progressPath = cachePath + "/progress.bin";
   // Absent already counts as unread, so a book that was never opened is not an error.
   if (!Storage.exists(progressPath.c_str())) return true;
   return Storage.remove(progressPath.c_str());
 }
 
-int loadBookProgress(const std::string& path) {
-  uint8_t data[10]{};
+int loadOwnBookProgress(const std::string& path) {
   if (FsHelpers::hasReflowableBookExtension(path)) {
-    // Metadata objects exceed the stack budget; only the featured book is loaded, once per entry.
-    auto epub = makeUniqueNoThrow<Epub>(path, "/.crosspoint");
-    if (!epub) {
-      LOG_ERR("HOME", "OOM: progress metadata");
-      return -1;
-    }
-    if (!epub->load(false, true)) return -1;
-    HalFile file;
-    if (!Storage.openFileForRead("HOME", epub->getCachePath() + "/progress.bin", file)) return -1;
-    const int size = file.read(data, sizeof(data));
-    if (size < 4) return -1;
-    // Byte 8 is the reader's own page-based percent (0xFF = unknown). Records that carry it are
-    // authoritative -- the computation below is the fallback for the older 4/6-byte layout.
-    if (size >= 9 && data[8] <= 100) return data[8];
-    const int spine = data[0] | (data[1] << 8);
-    const int page = data[2] | (data[3] << 8);
-    const int total = size >= 6 ? data[4] | (data[5] << 8) : 0;
-    if (epub->getSpineItemsCount() <= 0 || epub->getBookSize() == 0) return -1;
-    if (spine == epub->getSpineItemsCount()) return 100;
-    if (spine > epub->getSpineItemsCount()) return -1;
-    const float fraction = total > 0 && page != UINT16_MAX ? std::clamp(float(page) / total, 0.0f, 1.0f) : 0;
-    return std::clamp(static_cast<int>(epub->calculateProgress(spine, fraction) * 100 + 0.5f), 0, 100);
+    // From the cache alone, as the Library reads it. Opening the book for this ran once per
+    // cover on Home, on the loop task: every open re-reads the metadata cache, and a book whose
+    // content takes seconds to open stalled the screen for that long on each visit.
+    return EpubProgress::percentFromCache(bookCachePath(path), "HOME");
   }
   if (FsHelpers::hasXtcExtension(path)) {
     auto xtc = makeUniqueNoThrow<Xtc>(path, "/.crosspoint");
@@ -154,6 +193,7 @@ int loadBookProgress(const std::string& path) {
     }
     if (!xtc->load()) return -1;
     HalFile file;
+    uint8_t data[4]{};
     if (!Storage.openFileForRead("HOME", xtc->getCachePath() + "/progress.bin", file) || file.read(data, 4) != 4)
       return -1;
     const uint32_t page = readLe32(data);
@@ -162,4 +202,9 @@ int loadBookProgress(const std::string& path) {
     return xtc->calculateProgress(page);
   }
   return mangaProgressPercent(path);
+}
+
+int loadBookProgress(const std::string& path) {
+  const int percent = loadOwnBookProgress(path);
+  return std::max(percent, remoteProgress::percent(path));
 }

@@ -10,10 +10,13 @@
 
 #include <cctype>
 #include <ctime>
+#include <mutex>
 #include <string>
 #include <string_view>
 
 #include "BookStats.h"
+#include "HapticFeedback.h"
+#include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
 #include "activities/ActivityManager.h"
@@ -22,6 +25,16 @@ namespace ReaderUtils {
 
 constexpr unsigned long GO_HOME_MS = 1000;
 constexpr unsigned long GO_BACK_OR_HOME_MS = GO_HOME_MS;
+
+// The page-based readers' (XTC, manga) share of Long-Press Menu: with it set to KOSync, true once
+// Confirm has been held long enough to start a sync. Same hold and conditions as the EPUB reader.
+inline bool confirmHoldStartsSync(MappedInputManager& input) {
+  if (BoardConfig::hasTouch() || SETTINGS.longPressMenuFunction != CrossPointSettings::LP_MENU_KOSYNC ||
+      !KOREADER_STORE.hasCredentials()) {
+    return false;
+  }
+  return input.wasLongPressed(MappedInputManager::Button::Confirm, GO_HOME_MS);
+}
 constexpr unsigned long SKIP_HOLD_MS = 700;
 constexpr unsigned long BOOKMARK_HOLD_MS = 400;
 constexpr unsigned long BOOKMARK_MESSAGE_DURATION_MS = 2500;
@@ -49,13 +62,21 @@ constexpr unsigned long READING_STATS_FLUSH_MS = 5UL * 60UL * 1000UL;
 // Both are optional: an empty bookPath records only the per-day total, and an empty language is
 // the normal case for books that declare none (TXT/XTC, manga converted before meta.bin carried
 // a language tag) -- it is filled in on a later flush if the book ever starts declaring one.
-inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = false, const char* bookPath = nullptr,
-                              const char* language = nullptr) {
-  if (sessionStartMs == 0) return;
+// True when no whole minute is left pending: none had accrued, or they were recorded. pause: the time
+// from here on is not reading (the end-of-book screen), so the session restarts once nothing is
+// pending. The render task flushes too, before it builds the end-of-book stamp, hence the lock.
+inline bool flushReadingStats(unsigned long& sessionStartMs, const bool force = false, const char* bookPath = nullptr,
+                              const char* language = nullptr, const bool pause = false) {
+  static std::mutex flushMutex;
+  std::lock_guard<std::mutex> lock(flushMutex);
+  if (sessionStartMs == 0) return true;
   const unsigned long elapsed = millis() - sessionStartMs;
-  if (!force && elapsed < READING_STATS_FLUSH_MS) return;
+  if (!force && elapsed < READING_STATS_FLUSH_MS) return false;
   const uint16_t minutes = static_cast<uint16_t>(elapsed / 60000UL);
-  if (minutes == 0) return;
+  if (minutes == 0) {
+    if (pause) sessionStartMs = millis();
+    return true;
+  }
   // Local-midnight day boundary, so an evening session doesn't get logged against
   // "tomorrow" (UTC midnight is 9am in Japan). Reads the process TZ rule that
   // timezones::applyToClock() installs, which is DST-aware and follows the zone the
@@ -65,28 +86,22 @@ inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = 
   const time_t now = time(nullptr);
   struct tm t = {};
   localtime_r(&now, &t);
-  const bool loadOk = READING_STATS_STORE.loadFromFile();
-  READING_STATS_STORE.addMinutes(static_cast<uint16_t>(t.tm_year + 1900), static_cast<uint8_t>(t.tm_mon + 1),
-                                 static_cast<uint8_t>(t.tm_mday), minutes);
-  READING_STATS_STORE.addBookMinutes(bookPath, language, minutes, static_cast<uint16_t>(t.tm_year + 1900),
-                                     static_cast<uint8_t>(t.tm_mon + 1), static_cast<uint8_t>(t.tm_mday));
-  READING_STATS_STORE.addLanguageMinutes(language, minutes, static_cast<uint16_t>(t.tm_year + 1900),
-                                         static_cast<uint8_t>(t.tm_mon + 1), static_cast<uint8_t>(t.tm_mday));
-  if (!READING_STATS_STORE.saveToFile()) {
-    LOG_ERR("STATS", "saveToFile failed (load=%d, %u min lost from file)", loadOk, minutes);
-  }
+  ReadingStatsStore::Change update;
+  update.year = static_cast<uint16_t>(t.tm_year + 1900);
+  update.month = static_cast<uint8_t>(t.tm_mon + 1);
+  update.day = static_cast<uint8_t>(t.tm_mday);
+  update.minutes = minutes;
+  if (update.year >= 2020) update.timeOfDay = ReadingStatsStore::timeOfDay(t.tm_hour);  // an unset clock has no hour
+  update.bookPath = bookPath;
+  update.language = language;
+  // Not written: keep the minutes pending (sessionStartMs unchanged) for the next flush.
+  if (!READING_STATS_STORE.record(update)) return false;
   // Per-book day history (see BookStats). Loaded and dropped here: nothing stays in DRAM.
-  if (bookPath && *bookPath) {
-    BookStats bookStats;
-    if (!bookStats.load(bookPath)) {
-      LOG_ERR("STATS", "book stats load failed (%u min not attributed)", minutes);
-    } else {
-      bookStats.recordMinutes(static_cast<uint16_t>(t.tm_year + 1900), static_cast<uint8_t>(t.tm_mon + 1),
-                              static_cast<uint8_t>(t.tm_mday), minutes);
-      if (!bookStats.save()) LOG_ERR("STATS", "book stats save failed (%u min not attributed)", minutes);
-    }
+  if (bookPath && *bookPath && !BookStats::addMinutes(bookPath, update.year, update.month, update.day, minutes)) {
+    LOG_ERR("STATS", "book stats update failed (%u min not attributed)", minutes);
   }
-  sessionStartMs += static_cast<unsigned long>(minutes) * 60000UL;
+  sessionStartMs = pause ? millis() : sessionStartMs + static_cast<unsigned long>(minutes) * 60000UL;
+  return true;
 }
 enum ReaderTouchAction : freeink::ui::ActionId {
   READER_TOUCH_PREV = 1,
@@ -106,6 +121,13 @@ inline bool gestureInvertsSwipe(const uint8_t gesture) { return gesture == Cross
 inline bool gestureAllowsTap(const uint8_t gesture) {
   return gesture == CrossPointSettings::TAP_AND_SWIPE || gesture == CrossPointSettings::TAP_ONLY ||
          gesture == CrossPointSettings::INVERTED_TAP;
+}
+
+// No page-turn gesture uses taps, so a short tap on a word is free: it looks the word up and a hold
+// starts a clipping. A tap on empty space keeps the reader menu.
+inline bool tapLooksUp(const MappedInputManager& input) {
+  return input.hasTouch() && SETTINGS.touchReaderControls && !gestureAllowsTap(SETTINGS.pageTurnGesture) &&
+         !gestureAllowsTap(SETTINGS.previousPageGesture);
 }
 
 inline bool isRtlBookLanguage(std::string_view tag) {
@@ -241,6 +263,30 @@ inline PanelStep lookupPanelStep(const MappedInputManager& input) {
   return PanelStep::None;
 }
 
+// Every lookup screen reads a button the same way: a short press moves on, a hold skips. The hold
+// is the reader's own chapter-skip hold, and wasLongPressed() swallows the release that follows,
+// so a hold never also counts as a press.
+enum class LookupPress : uint8_t { None, Press, Hold };
+
+inline LookupPress lookupPress(const MappedInputManager& input, const MappedInputManager::Button button) {
+  if (input.wasLongPressed(button, SKIP_HOLD_MS)) return LookupPress::Hold;
+  return input.wasReleased(button) ? LookupPress::Press : LookupPress::None;
+}
+
+// The lookup screens where every pair does the same: the first button pressed or held, with
+// `delta` +1 for Down/Right and -1 for Up/Left.
+inline LookupPress lookupPressAny(const MappedInputManager& input, int& delta) {
+  using Button = MappedInputManager::Button;
+  for (const Button button : {Button::ScreenDown, Button::ScreenRight, Button::ScreenUp, Button::ScreenLeft}) {
+    const LookupPress press = lookupPress(input, button);
+    if (press != LookupPress::None) {
+      delta = button == Button::ScreenDown || button == Button::ScreenRight ? 1 : -1;
+      return press;
+    }
+  }
+  return LookupPress::None;
+}
+
 // A side button bound to Word Lookup: it opens the panel from the reader and closes it from
 // inside, so the one button toggles.
 inline bool wordLookupSideToggle(const MappedInputManager& input) {
@@ -253,8 +299,10 @@ struct TouchPageTurn {
   unsigned long heldMs;
 };
 
+// `reversed` is the Reversed Page Turn toggle in effect for this book: it reverses taps and swipes
+// outright, so an Inverted Tap or Inverted Swipe gesture cannot cancel it out.
 inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const MappedInputManager& input,
-                                         const bool rtlBook = false) {
+                                         const bool rtlBook = false, const bool reversed = false) {
   TouchPageTurn result{false, false, 0};
   if (!SETTINGS.touchReaderControls || !input.hasTouch()) {
     return result;
@@ -265,8 +313,8 @@ inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const Mapp
   // rtlBook the same way the tap zones below do.
   const auto dir = input.wasSwipe();
   if (dir != MappedInputManager::SwipeDir::None) {
-    const bool nextInverted = gestureInvertsSwipe(SETTINGS.pageTurnGesture) != rtlBook;
-    const bool prevInverted = gestureInvertsSwipe(SETTINGS.previousPageGesture) != rtlBook;
+    const bool nextInverted = reversed || (gestureInvertsSwipe(SETTINGS.pageTurnGesture) != rtlBook);
+    const bool prevInverted = reversed || (gestureInvertsSwipe(SETTINGS.previousPageGesture) != rtlBook);
     result.next = dir == (nextInverted ? MappedInputManager::SwipeDir::Right : MappedInputManager::SwipeDir::Left) &&
                   gestureAllowsSwipe(SETTINGS.pageTurnGesture);
     result.prev = dir == (prevInverted ? MappedInputManager::SwipeDir::Left : MappedInputManager::SwipeDir::Right) &&
@@ -298,8 +346,8 @@ inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const Mapp
   // Give the whole page to the sole tap-enabled direction. When both accept
   // taps, split at the left third. RTL books and Inverted Tap each reverse
   // the shared zones.
-  const bool inverted = (SETTINGS.pageTurnGesture == CrossPointSettings::INVERTED_TAP ||
-                         SETTINGS.previousPageGesture == CrossPointSettings::INVERTED_TAP) != rtlBook;
+  const bool inverted = reversed || ((SETTINGS.pageTurnGesture == CrossPointSettings::INVERTED_TAP ||
+                                      SETTINGS.previousPageGesture == CrossPointSettings::INVERTED_TAP) != rtlBook);
   const bool nextZone = inverted ? x < (width * 2) / 3 : x >= width / 3;
   result.next = nextTaps && (!prevTaps || nextZone);
   result.prev = prevTaps && (!nextTaps || !nextZone);

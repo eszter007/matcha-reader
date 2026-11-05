@@ -8,11 +8,13 @@
  * The algorithm reads 1024 bytes at specific offsets and computes the MD5 hash
  * of the concatenated data.
  *
- * Offsets are calculated as: 1024 << (2*i) for i = -1 to 10
- * Producing: 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304,
- *            16777216, 67108864, 268435456, 1073741824 bytes
+ * Offsets are calculated as: 1024 << (2*i) for i = -1 to 10. For i = -1,
+ * LuaJIT's bit.lshift(1024, -2) is 1024 << 30, which overflows 32 bits to 0,
+ * so the first offset is 0, not 256.
+ * Offsets: 0, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304,
+ *          16777216, 67108864, 268435456, 1073741824 bytes
  *
- * If an offset is beyond the file size, it is skipped.
+ * An offset at or beyond the file size is skipped; a chunk near the end is truncated.
  */
 class KOReaderDocumentId {
  public:
@@ -33,6 +35,18 @@ class KOReaderDocumentId {
    */
   static std::string calculateFromFilename(const std::string& filePath);
 
+  // Copies of one manga carry its title with different extensions: the folder or .matcha "Title"
+  // here, "Title.cbz" or "Title.epub" on another device. MAX_TWINS bounds what twinFilenameHashes
+  // writes.
+  static constexpr size_t MAX_TWINS = 5;
+
+  /**
+   * Filename hashes of the book's twins: for a manga (folder or .matcha), "Title" with each of
+   * .epub, .cbz, .pdf, .xtc, .xtch; for a file with one of those extensions, the bare "Title".
+   * Returns how many were written; 0 for any other book.
+   */
+  static size_t twinFilenameHashes(const std::string& filePath, std::string (&hashes)[MAX_TWINS]);
+
  private:
   // Size of each chunk to read at each offset
   static constexpr size_t CHUNK_SIZE = 1024;
@@ -40,6 +54,6 @@ class KOReaderDocumentId {
   // Number of offsets to try (i = -1 to 10, so 12 offsets)
   static constexpr int OFFSET_COUNT = 12;
 
-  // Calculate offset for index i: 1024 << (2*i)
+  // Offset for index i: 1024 << (2*i), or 0 for i = -1
   static size_t getOffset(int i);
 };

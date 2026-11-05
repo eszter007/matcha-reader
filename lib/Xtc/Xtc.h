@@ -94,12 +94,13 @@ class Xtc {
    * @param pageIndex Page index
    * @param callback Callback for each chunk
    * @param chunkSize Chunk size
+   * @param startOffset, length Byte range of the page bitmap to read (default: all)
    * @return Error code
    */
   xtc::XtcError loadPageStreaming(uint32_t pageIndex,
                                   std::function<void(const uint8_t* data, size_t size, size_t offset)> callback,
-                                  size_t chunkSize = 1024, CancelFn shouldCancel = nullptr,
-                                  void* cancelCtx = nullptr) const;
+                                  size_t chunkSize = 1024, CancelFn shouldCancel = nullptr, void* cancelCtx = nullptr,
+                                  size_t startOffset = 0, size_t length = SIZE_MAX) const;
 
   // Progress calculation
   uint8_t calculateProgress(uint32_t currentPage) const;

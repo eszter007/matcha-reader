@@ -1,6 +1,7 @@
 #pragma once
 
 #include <HalStorage.h>
+#include <ResidentFiles.h>
 
 #include <cstdint>
 #include <string>
@@ -60,7 +61,7 @@ class Dictionary {
   // missing or stale — call buildIndex() first so the UI can show an
   // "Indexing…" message for the slow first pass.
 
-  // True when the .ifo declares sametypesequence=h — definitions are HTML and
+  // True when the .ifo declares sametypesequence=h or x (HTML or XDXF) and
   // the viewer may lay them out through the EPUB rendering pipeline.
   bool definitionsAreHtml() const { return htmlDefinitions; }
 
@@ -145,6 +146,10 @@ class Dictionary {
     // so a miss is an unfinished search rather than a verdict. Distinct from
     // "this dictionary has no .syn", which is a legitimate miss.
     bool synFailed = false;
+    // The .idx and its sample offsets resident in PSRAM (PSRAM boards, ResidentFiles):
+    // locate() then searches memory instead of the SD card. Invalid otherwise.
+    ResidentFiles::Ref residentIdx;
+    ResidentFiles::Ref residentSamples;
   };
 
   // Open .idx (required) and .qidx (optional — locate() falls back to a full
@@ -202,8 +207,16 @@ class Dictionary {
   bool hasPlainDict = false;
   bool hasSyn = false;  // a <stem>.syn synonym index exists next to the .idx
   bool htmlDefinitions = false;
+  bool inlineTypes = false;  // .ifo without sametypesequence (see decodeInlineFields)
   // The .ifo's bookname=, or the folder name when the .ifo does not declare one.
   std::string bookName;
+
+  // Further .idx entries filed under the headword of the last locate() hit: a .idx may list a
+  // headword once per part of speech, and the sorted index keeps them adjacent. Fixed, so a
+  // lookup allocates no container; a longer run is cut short.
+  static constexpr uint8_t MAX_SAME_HEADWORD = 8;
+  DictLocation sameHeadword[MAX_SAME_HEADWORD - 1];
+  uint8_t sameHeadwordCount = 0;
 
   // Shared scan buffer: lookups are single-threaded and this avoids a
   // 256-byte array on the stack of every locate() call.

@@ -2,6 +2,7 @@
 
 #include <SentenceMiningCsv.h>
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -34,10 +35,13 @@ struct Draft {
   bool valid() const { return !card.word.empty(); }
 };
 
-// Appends one card to the file for `language` (the dictionary's language code, e.g. "ja" or
-// "en"), writing Anki's header lines first when that file is new. One file per language, so each
-// imports into its own deck. False on any SD failure; a file is only ever extended.
-bool append(const Card& card, std::string_view language);
+enum class SaveResult : uint8_t { Saved, AlreadySaved, Failed };
+
+// Appends `card` to the file for `language` (the dictionary's language code, e.g. "ja" or "en")
+// unless that file already has a row for the same word and sentence (the GUID); the same word
+// in another sentence is a new card. Anki's header lines go first when the file is new. One file
+// per language, so each imports into its own deck. A file is only ever extended.
+SaveResult saveOnce(const Card& card, std::string_view language);
 
 // Today's date as YYYY-MM-DD, or empty when the device has no idea what day it is.
 std::string today();

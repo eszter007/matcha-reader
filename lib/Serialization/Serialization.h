@@ -3,6 +3,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <limits>
 
 namespace serialization {
 // Bounded RAM sink: batches many small writePod/writeString calls into one
@@ -59,6 +60,11 @@ constexpr uint32_t MAX_SERIALIZED_STRING = 64 * 1024;
 
 // Returns false on a short read, having left `value` zeroed rather than holding stack garbage.
 template <typename T>
+bool tryWritePod(HalFile& file, const T& value) {
+  return file.write(reinterpret_cast<const uint8_t*>(&value), sizeof(T)) == sizeof(T);
+}
+
+template <typename T>
 bool readPod(std::istream& is, T& value) {
   value = T{};
   is.read(reinterpret_cast<char*>(&value), sizeof(T));
@@ -71,6 +77,11 @@ bool readPod(HalFile& file, T& value) {
   return file.read(reinterpret_cast<uint8_t*>(&value), sizeof(T)) == static_cast<int>(sizeof(T));
 }
 
+template <typename T>
+bool tryReadPod(HalFile& file, T& value) {
+  return file.read(reinterpret_cast<uint8_t*>(&value), sizeof(T)) == sizeof(T);
+}
+
 inline void writeString(std::ostream& os, const std::string& s) {
   const uint32_t len = s.size();
   writePod(os, len);
@@ -81,6 +92,11 @@ inline void writeString(HalFile& file, const std::string& s) {
   const uint32_t len = s.size();
   writePod(file, len);
   file.write(reinterpret_cast<const uint8_t*>(s.data()), len);
+}
+
+inline bool tryWriteString(HalFile& file, const std::string& s) {
+  const uint32_t len = s.size();
+  return tryWritePod(file, len) && (len == 0 || file.write(reinterpret_cast<const uint8_t*>(s.data()), len) == len);
 }
 
 inline bool readString(std::istream& is, std::string& s) {
@@ -103,5 +119,18 @@ inline bool readString(HalFile& file, std::string& s) {
   s.resize(len);
   if (len == 0) return true;
   return file.read(&s[0], len) == static_cast<int>(len);
+}
+
+inline bool tryReadString(HalFile& file, std::string& s, const size_t maxLength) {
+  uint32_t len = 0;
+  if (!tryReadPod(file, len)) return false;
+  const int remaining = file.available();
+  if (static_cast<size_t>(len) > maxLength || static_cast<size_t>(len) > s.max_size() ||
+      len > static_cast<uint32_t>(std::numeric_limits<int>::max()) || remaining < 0 ||
+      len > static_cast<uint32_t>(remaining)) {
+    return false;
+  }
+  s.resize(len);
+  return len == 0 || file.read(&s[0], len) == static_cast<int>(len);
 }
 }  // namespace serialization

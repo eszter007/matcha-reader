@@ -3,6 +3,8 @@
 #include <HalGPIO.h>
 
 #include "util/HomeButtonInput.h"
+#include "util/RemoteButtonInput.h"
+#include "util/SideButtonActions.h"
 
 class GfxRenderer;
 namespace freeink {
@@ -45,11 +47,16 @@ class MappedInputManager {
   // Home-key actions so the next main-loop pass can dispatch them, while the
   // current action remains available for immediate Home cancellation.
   void update(bool deferHomeButtonAction = false) const;
+  // Touch boards draw a button cursor (list row, bottom bar slot) only while buttons are in use:
+  // a button press shows it, a touch hides it again. Always true on boards without touch.
+  static bool buttonCursorShown();
 #if FREEINK_CAP_TOUCH
   // X4 Pro delays a single power click until its frontlight double-click window
   // expires. The main loop supplies that one-frame event here.
   void setPowerConfirmClickFrame(const bool clicked) { powerConfirmClickFrame = clicked; }
 #endif
+  bool injectRemoteClick(RemoteButton button);
+  bool hasRemoteClick() const { return remoteInput.button != RemoteButton::None; }
   bool wasPressed(Button button) const;
   bool wasReleased(Button button) const;
   // One-shot threshold event while the button is down; consumes its release.
@@ -58,6 +65,8 @@ class MappedInputManager {
   bool isPressed(Button button) const;
   bool hasTouch() const;
   bool wasScreenTapped(int& x, int& y) const;
+  // Immediate press edge for drag handles, without the row-selection dwell.
+  bool wasScreenTouchPressed(int& x, int& y) const;
   bool wasScreenTouchDown(int& x, int& y) const;
   // One-shot long-press from the SDK touch classifier, fired WHILE the finger
   // is still down (stationary contact held past the SDK threshold). Consuming
@@ -71,7 +80,6 @@ class MappedInputManager {
   // (which wasScreenTapped never reports). InputSnapshot builders forward it
   // off-target so FreeInkUI routing clears its pressed-element state.
   bool wasScreenTouchReleased() const;
-  bool wasTapInRect(int x, int y, int width, int height) const;
 
   // Combined touch interaction for a band of equal rows with caller-supplied
   // geometry — the shared hit-test for lists the theme helpers above do not
@@ -85,7 +93,7 @@ class MappedInputManager {
   // Horizontal variant for side-by-side button pairs (confirmation prompts).
   RowTouch colTouch(int& col, int left, int colStep, int colCount, int yStart, int yEnd, int colWidth = 0) const;
 
-  SwipeDir wasSwipe() const;
+  SwipeDir wasSwipe(int* startX = nullptr, int* startY = nullptr) const;
   // Back = left-to-right swipe anchored at the left edge. Public so swipe-mode
   // page turns (reader) can exclude it from a plain SwipeDir::Right.
   bool wasBackGesture() const;
@@ -100,13 +108,17 @@ class MappedInputManager {
     deferredHomeAction = HomeButtonAction::Ignore;
   }
   bool wasMenuGesture() const;
+  // Capacitive page keys (the Metalio cover keys) arrive as the side Up/Down bits, so Button-based
+  // code cannot tell them from the side keys. prevPage picks the key the reader turns back with;
+  // onRelease picks the edge.
+  bool wasCoverPageKey(bool prevPage, bool onRelease) const;
   // Bottom-edge up-swipe as the reader-menu gesture (SHOW_READER_MENU's Swipe
   // Up option). Only meaningful on home-key boards, where Home lives on the
   // key and the bottom edge is free; elsewhere the same swipe is the Home
   // gesture and this returns false.
   bool wasReaderMenuSwipeUp() const;
-  // Top-edge down-swipe opens the light panel when the active board actually
-  // has a frontlight. ActivityManager consumes it before activity input.
+  // Top-edge down-swipe opens the control center on touch boards.
+  // ActivityManager consumes it before activity input.
   bool wasLightPanelGesture() const;
   bool wasAnyPressed() const;
   // True when a side-button edge right now is plausibly deliberate: no front
@@ -121,8 +133,14 @@ class MappedInputManager {
   // shared logical names (Up/Down and everything that resolves to them). Set from the main loop,
   // so leaving the reader restores ordinary list navigation on both side buttons.
   void setSideActionsActive(const bool active) const { sideActionsActive = active; }
+  // Power + Up carrying a reader action: sideActionFired(action) answers true until the main loop
+  // clears it after the next activity tick, which runs only once the combination is released.
+  void setComboAction(const uint8_t action) const { comboAction = action; }
+  void clearComboAction() const { comboAction = static_cast<uint8_t>(SideButtonAction::None); }
   // See HalGPIO::anyButtonDownRaw() -- for cancelling long background work.
   bool anyButtonDownRaw() const { return gpio.anyButtonDownRaw(); }
+  // A touch edge this frame, including the capacitive Home key (not counted by wasAnyPressed()).
+  bool wasTouchActivity() const { return gpio.wasTouchActivity(); }
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;
   const GfxRenderer& getRenderer() const { return renderer; }
@@ -187,8 +205,11 @@ class MappedInputManager {
   // in the first milliseconds after boot is not misread as a ghost.
   static constexpr unsigned long SIDE_GHOST_WINDOW_MS = 150;
   mutable unsigned long lastFrontActivityMs = static_cast<unsigned long>(-1000);
+  static inline bool buttonsInUse = false;
   mutable bool sideActionsActive = false;
+  mutable uint8_t comboAction = static_cast<uint8_t>(SideButtonAction::None);
   bool sideRoleSuppressed(uint8_t physical) const;
+  mutable RemoteButtonInput remoteInput;
   mutable HomeButtonInput homeButtonInput;
   mutable HomeButtonAction homeAction = HomeButtonAction::Ignore;
   mutable HomeButtonAction deferredHomeAction = HomeButtonAction::Ignore;

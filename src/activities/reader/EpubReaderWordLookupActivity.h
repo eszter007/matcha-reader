@@ -14,7 +14,8 @@ class Page;
 
 #include "WordSelectionScan.h"
 #include "activities/Activity.h"
-#include "util/ButtonNavigator.h"
+#include "clippings/LookupClipHandles.h"
+#include "components/DictionaryPanel.h"
 #include "util/SentenceMining.h"
 
 // What the vertical reader hands the panel so the word cursor can be shown ON the page (select
@@ -24,7 +25,7 @@ class Page;
 // which is the same headroom the scan and the dictionary caches need. It works from the page
 // geometry below plus the pixels the reader already left in the framebuffer, and when those
 // pixels are gone (returning from a definition) it asks the reader to paint them again.
-struct VerticalSelectContext {
+struct WordSelectContext {
   int marginLeft = 0;
   int marginTop = 0;
   // Kihon-hanmen cell, measured by the reader while its fonts were still resident. Measuring it
@@ -45,6 +46,13 @@ struct VerticalSelectContext {
   // which is what a hold means on the glass (#278).
   int lookupAtX = -1;
   int lookupAtY = -1;
+  // The page is set in horizontal lines rather than vertical columns. A glyph's "column" is then
+  // its line and its "row" its x, cellPx is the line's height, and each glyph brings its own
+  // width; the cursor steps along the line and jumps between lines.
+  bool lines = false;
+  // Text of a touch selection the panel was opened from. Its words follow the opened word as further
+  // pages, looked up on their own whatever the page's segmentation made of them.
+  std::string selectionText;
   bool valid() const { return repaintPage != nullptr && cellPx > 0; }
 };
 
@@ -56,42 +64,51 @@ class EpubReaderWordLookupActivity final : public Activity {
   // later re-open of the same unchanged page loads it back and skips scanning entirely.
   // Vertical (tategaki) reading mode. With a valid selectContext the panel opens in SELECT mode:
   // the page stays on screen with the current word highlighted, and the definition view is only
-  // entered on Confirm. Without one it opens straight into the definition view (the horizontal
-  // and manga behaviour).
+  // entered on Confirm. Without one it opens straight into the definition view (the manga
+  // behaviour).
   explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         const VerticalPage& page, std::string scanCachePath = "",
                                         uint16_t spineIndex = 0, uint16_t pageIndex = 0,
-                                        const VerticalSelectContext& selectContext = {},
+                                        const WordSelectContext& selectContext = {},
                                         // Start of the next page, so a word split across the page
                                         // boundary still resolves. See appendLookupContext().
                                         const std::string& lookupContext = "", uint32_t lookupContextParagraph = 0);
-  // Horizontal (yokogaki) reading mode.
+  // Horizontal (yokogaki) reading mode. Select mode as above, given a selectContext with
+  // lines set and the geometry that places the page's glyphs.
   explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const Page& page,
                                         std::string scanCachePath = "", uint16_t spineIndex = 0, uint16_t pageIndex = 0,
                                         // See the vertical constructor: start of the next page, so
                                         // a word split across the boundary still resolves.
-                                        const std::string& lookupContext = "");
+                                        const std::string& lookupContext = "",
+                                        const WordSelectContext& selectContext = {},
+                                        const WordSelectionScan::LineGeometry* geometry = nullptr);
 
   // What a saved sentence-mining card needs from the reader; see sentencemining::BookContext.
   using MiningContext = sentencemining::BookContext;
   void setMiningContext(MiningContext context) { mining_ = std::move(context); }
 
+  // The book behind the panel reverses its page turns (Reversed Page Turn in a vertical book).
+  void setPageTurnReversed(const bool reversed) { pageTurnReversed = reversed; }
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
   // Full CPU + fast main-loop ticks while the progressive scan is running, so the between-poll
   // scan slices stay short enough that button presses are never missed.
-  bool skipLoopDelay() override { return !scan.isDone(); }
+  bool skipLoopDelay() override { return !scan.isDone() || selectionWalk == SelectionWalk::Running; }
+  // No glyph slab while the panel is up: its 24KB is the contiguous heap the dictionary caches and
+  // the definition renderer compete for.
+  bool wantsGlyphSlab() const override { return false; }
 
  private:
+  bool pageTurnReversed = false;
   WordSelectionScan scan;
 
   // Select: the page with a highlight box on the current word. Definition: the full-screen
   // dictionary entry. Confirm moves Select -> Definition, Back moves back.
   enum class Mode : uint8_t { Select, Definition };
   Mode mode = Mode::Definition;
-  VerticalSelectContext selectCtx;
+  WordSelectContext selectCtx;
 
   // --- Select mode state -------------------------------------------------------------------
   // The framebuffer holds the page, so a cursor move only has to XOR two boxes.
@@ -143,6 +160,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   // inverted debris on the page.
   HighlightBox drawnBoxes[kMaxHighlightBoxes];
   int drawnBoxCount = 0;
+  // Handles on the word behind the definition card (touch boards): written by the render task
+  // under boxMux, read by the loop's hit test. They are opaque, so moving them repaints the page.
+  LookupClipHandles clipHandles;
 
   // The reader opens the panel on a long press, so the Confirm release that follows belongs to
   // that press, not to a selection. Ignore it until a fresh press is seen.
@@ -191,6 +211,8 @@ class EpubReaderWordLookupActivity final : public Activity {
   // highlight and the tap hit-test go through it, so they cannot drift apart. Main task only
   // (it reads the scan vectors).
   int buildBoxesFor(int selectableIndex, HighlightBox* out) const;
+  // Width of one glyph's cursor box: its own advance on a page set in lines, else the cell.
+  int glyphWidth(const WordSelectionScan::GlyphRef& glyph) const;
   // Selectable index whose word covers the screen point, or -1 for a tap that missed every word
   // (a gutter, a margin, unscanned text). Main task only.
   int selectableIndexAtPoint(int x, int y) const;
@@ -232,6 +254,13 @@ class EpubReaderWordLookupActivity final : public Activity {
   // Middle column/row of the page and the allGlyphs index that column starts at -- where the
   // wrapped walk begins. False when the page has no glyphs. Layout data only, no dictionary work.
   bool middleTarget(uint16_t& outColumn, uint16_t& outRow, size_t& outFirstGlyph) const;
+  // Nearest on-page glyph to a screen point, mapped or not: where to aim the scan for a hold.
+  bool nearestGlyphToPoint(int x, int y, size_t& outGlyph) const;
+  // The cells the held word can occupy -- its own and kMaxLookupChars on along its column -- are
+  // all segmented, so a snap to the nearest word cannot pick a neighbour the walk has simply not
+  // reached yet. Cells before the aim point are context only (see WordSelectionScan::aimAtGlyph).
+  bool heldNeighbourhoodMapped() const;
+  size_t openAimGlyph = SIZE_MAX;  // glyph under the opening hold the scan was aimed at
 
   int cursorIndex = 0;
 
@@ -240,6 +269,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   // string: these are the dictionaries' own names, the same way the English panel shows the
   // .ifo's bookname. Null until a lookup lands.
   const char* resultSource = nullptr;
+  uint8_t resultDict = 0;  // DictIndex::DICT_* slot the entry came from (0 = none)
   std::string resultDictionaryLabel;
   const char* dictionaryLabel() const {
     return resultDictionaryLabel.empty() ? resultSource : resultDictionaryLabel.c_str();
@@ -271,9 +301,16 @@ class EpubReaderWordLookupActivity final : public Activity {
   // answers with a pattern of its own (なんて for a lookup of なんて言う), and naming it in the
   // panel header is clearer than repeating the surface word above an entry about the pattern.
   std::vector<std::string> sectionHead;
+  // Headword of the dictionary entries kept under a book-annotated name (東京 of 東京太郎).
+  std::string retainedPrefixHead;
   int currentSection = 0;
-  void splitDefinitionIntoSections();
+  // appendDict != 0: resultDefinition holds one further entry from that dictionary; its pages go
+  // after the existing ones instead of replacing them.
+  void splitDefinitionIntoSections(uint8_t appendDict = 0);
   void moveSection(int delta);
+  // A screenful through the entry, then onto the neighbouring page at its end.
+  void readOn(int delta);
+  void skipPage(int delta);
   // Text and footer label for what is on screen: the current section in tategaki, the whole
   // merged definition otherwise.
   const std::string& visibleDefinition() const;
@@ -293,8 +330,6 @@ class EpubReaderWordLookupActivity final : public Activity {
   // is still the source of truth -- paging just quantizes it to whole screenfuls.
   bool pagedDefinition() const { return selectCtx.valid(); }
 
-  ButtonNavigator buttonNavigator;
-
   // Scan-result persistence (empty path = disabled).
   std::string scanCachePath;
   uint16_t scanSpine = 0;
@@ -306,8 +341,22 @@ class EpubReaderWordLookupActivity final : public Activity {
   // glossary has an entry for the selected surface text (see RubyGlossary). Books
   // typically annotate a name's reading only on first appearance -- this surfaces it
   // on every later occurrence too. No entry -> no line.
-  void prependBookReading(const std::string& surface);
+  void prependBookReading(const std::string& surface, bool name = false);
+  // After a number written in digits (６月): put the dictionary's counter sense first and give it
+  // the whole reading (ろくがつ) from CounterReading.
+  void readAsCounter(const std::string& digits, const std::string& counter);
+  // Moves the dictionary entry whose reading starts with the book's furigana for `surface` (or
+  // for its leading kanji) to the front, so 謀反 shows むほん, not the higher-ranked むへん.
+  void promoteBookReading(const std::string& surface, bool name = false);
+  // Moves the dictionary entry whose reading starts with `reading` (kana folded: small kana and
+  // katakana match their full-size hiragana) to the front. True when it is now first.
+  bool promoteEntryReading(std::string_view reading);
+  // promoteEntryReading with the furigana printed over the matched glyphs [start, start + chars).
+  // False when the page does not annotate the word.
+  bool promotePageReading(size_t start, size_t chars);
 
+  // Open on the page with a word cursor when the reader supplied a select context.
+  void beginSelectMode();
   void reclaimFontHeap();
   void initScanFromCacheOrBurst(const char* label);
   void runInitialBurst(const char* label);
@@ -315,13 +364,14 @@ class EpubReaderWordLookupActivity final : public Activity {
   // really has), release the font caches once and restart the walk over the intact glyph list,
   // so a fragmented first open self-heals instead of the user having to reopen via the menu.
   bool stepScan(uint32_t budgetMs);
+  // Moves a provisional cursor onto the scanned word at (or after) its cell.
+  void settleProvisionalCursor();
   bool scanHealAttempted = false;
   void moveCursor(int delta);
   // Sentence mining: saves the visible entry with its sentence (Select, or the panel's + button).
-  // The footer shows the outcome until the next move, so no timed repaint is needed.
-  enum class MiningStatus : uint8_t { None, Saved, Failed };
+  // The corner turns into a check once it is saved, and a short popup reports each save.
   MiningContext mining_;
-  MiningStatus miningStatus_ = MiningStatus::None;
+  DictionaryPanel::MiningFeedback miningFeedback_;
   // Hashes of the headwords shown this session, so browsing back and forth counts each word
   // once; the total goes to BookStats in one write on exit.
   static constexpr size_t MAX_COUNTED_LOOKUPS = 256;
@@ -334,6 +384,39 @@ class EpubReaderWordLookupActivity final : public Activity {
   // True while performLookup() is executing; render() shows "Loading..." instead of
   // "No match found" so fast navigation never flashes a false negative.
   bool lookupInFlight = false;
+  // Pages for the words of a touch selection (selectCtx.selectionText), found a few at a time from
+  // loop() so the panel stays responsive; a "Loading..." page ends the list until the walk is done.
+  // Same caps as the StarDict path: a sentence's worth of words, and the text their pages keep in
+  // RAM while the panel is open.
+  static constexpr uint8_t MAX_SELECTION_WORDS = 10;
+  static constexpr size_t MAX_SELECTION_BYTES = 16 * 1024;
+  static constexpr uint32_t SELECTION_STEP_MS = 30;
+  static constexpr size_t MAX_SELECTION_SCAN_BYTES = 240;  // 80 CJK characters
+  enum class SelectionWalk : uint8_t { NotStarted, Running, Done };
+  SelectionWalk selectionWalk = SelectionWalk::NotStarted;
+  size_t selectionPos = 0;
+  uint8_t selectionWords = 0;
+  size_t selectionHeldBytes = 0;
+  bool selectionFull() const {
+    return selectionWords >= MAX_SELECTION_WORDS || selectionHeldBytes >= MAX_SELECTION_BYTES;
+  }
+  std::vector<std::string> selectionSeen;  // headwords already shown
+  void stepSelectionWalk();
+  // Where in the selection text the word of the pages from firstSection on was found.
+  struct SelectionSpan {
+    uint16_t firstSection;
+    uint16_t offset;
+    uint16_t length;
+  };
+  std::vector<SelectionSpan> selectionSpans;
+  void appendSelectionEntry(DictEntry&& entry, size_t textOffset, size_t matchBytes);
+  void countSelectionWord(size_t firstNew);
+  std::string selectionMiningSentence() const;
+  // While the walk runs, one page past the last entry says more is coming. It holds no section:
+  // the section vectors only ever hold entries.
+  bool loadingPageShown() const { return selectionWalk == SelectionWalk::Running && !sectionText.empty(); }
+  bool onLoadingPage() const { return loadingPageShown() && currentSection >= static_cast<int>(sectionText.size()); }
+  int pageCount() const { return static_cast<int>(sectionText.size()) + (loadingPageShown() ? 1 : 0); }
   std::atomic<bool> noMatchPopupPending{false};
   size_t currentAllGlyphIndex() const;
   std::string buildLookupText() const;

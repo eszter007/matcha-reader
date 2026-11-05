@@ -43,8 +43,15 @@ bool isAlwaysUpright(uint32_t codepoint);
 bool isRotatedRunCharacter(uint32_t codepoint);
 
 // Returns a shift category for vertical punctuation positioning:
-// 0 = no shift, 1 = comma/period (shift up+right)
+// 0 = no shift, 1 = comma/period (shift up+right), 2 = closing bracket, 3 = opening bracket,
+// 4 = dash-like (rotated), 5 = comma/period centred in a full em (see setCentredPunctuation).
 int verticalShiftType(uint32_t codepoint);
+
+// Traditional Chinese typesetting (Taiwan, Hong Kong) centres 。，、． in their em instead of
+// setting them half-em at the cell's upper right as Japanese does. While on, those marks report
+// shift type 5. Set per book by the reader before any vertical layout runs.
+void setCentredPunctuation(bool centred);
+bool centredPunctuation();
 
 // True for paired brackets/parens and dashes that should be rotated 90° in
 // vertical text rather than drawn upright (they need to open/close or run
@@ -54,5 +61,10 @@ bool needsVerticalRotation(uint32_t codepoint);
 // True for small (yoon/sokuon) kana, which in tategaki are shifted toward the
 // upper-right of their cell relative to a centered position.
 bool isSmallKana(uint32_t codepoint);
+
+// Traditional Chinese sets “ ” and ‘ ’ as the vertical corner brackets ﹁ ﹂ and ﹃ ﹄ (CJK
+// Compatibility Forms, drawn upright and full-em). Returns the vertical form for those four
+// while centred punctuation is on, the codepoint itself otherwise.
+uint32_t verticalFormOf(uint32_t codepoint);
 
 }  // namespace Kinsoku

@@ -1,5 +1,7 @@
 #include "EpdFontFamily.h"
 
+#include <Utf8.h>
+
 const EpdFont* EpdFontFamily::getFont(const Style style) const {
   // Extract font style bits; render-time overlay bits do not affect font selection.
   const bool hasBold = (style & BOLD) != 0;
@@ -24,7 +26,50 @@ void EpdFontFamily::getTextDimensions(const char* string, int* w, int* h, const 
 
 const EpdFontData* EpdFontFamily::getData(const Style style) const { return getFont(style)->data; }
 
-const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style) const {
+namespace {
+// The 2010 jōyō list made these the standard forms, and books print either member of each pair.
+// The built-in subset carries 叱 塡 剥 頰; SD fonts may lack the Ext B 𠮟 too.
+constexpr uint32_t JOYO_VARIANTS[][2] = {{0x20B9F, 0x53F1}, {0x5861, 0x586B}, {0x525D, 0x5265}, {0x9830, 0x982C}};
+
+uint32_t joyoVariant(const uint32_t cp) {
+  for (const auto& pair : JOYO_VARIANTS) {
+    if (pair[0] == cp) return pair[1];
+    if (pair[1] == cp) return pair[0];
+  }
+  return 0;
+}
+}  // namespace
+
+const EpdFont* EpdFontFamily::nonCjkFallbackFont(const uint32_t cp, const Style style) const {
+  if (!fallbackFirstForNonCjk || utf8IsCjkCodepoint(cp)) return nullptr;
+  const EpdFont* fbFont = fallbackFamily->getFont(style);
+  return fbFont->hasGlyph(cp) ? fbFont : nullptr;
+}
+
+// The last stops, after the global fallback: the variant cut (Chinese forms, loaded only for a
+// Chinese dictionary session), then the built-in Japanese subset. The variant loads a glyph it covers
+// but has not got resident, even for getGlyphResident(): it exists only during a lookup, for a few
+// characters, and pricing them at zero width would overlap the entry's text.
+const EpdFont* EpdFontFamily::lastResortFont(const uint32_t cp, const Style style, const EpdGlyph** glyph) const {
+  for (const EpdFontFamily* b : {variantFallback_, builtinFallback_}) {
+    if (b == nullptr || b == this || b == fallbackFamily || b == globalFallback_) continue;
+    const EpdFont* bf = b->getFont(style);
+    if (bf->hasGlyph(cp)) {
+      *glyph = bf->getGlyph(cp);
+      return bf;
+    }
+    if (bf->data->glyphMissHandler) {
+      if (const EpdGlyph* loaded = bf->data->glyphMissHandler(bf->data->glyphMissCtx, cp)) {
+        *glyph = loaded;
+        return bf;
+      }
+    }
+  }
+  return nullptr;
+}
+
+const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style, const bool tryVariant) const {
+  if (const EpdFont* first = nonCjkFallbackFont(cp, style)) return first->getGlyph(cp);
   const EpdFont* f = getFont(style);
   if (f->hasGlyph(cp)) return f->getGlyph(cp);
   // The requested font may cover cp without it being RAM-resident: SD fonts keep only the
@@ -51,10 +96,23 @@ const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style) co
       if (loaded) return loaded;
     }
   }
-  return f->getGlyph(cp);
+  const EpdGlyph* lastResort = nullptr;
+  if (lastResortFont(cp, style, &lastResort)) return lastResort;
+  if (const uint32_t variant = tryVariant ? joyoVariant(cp) : 0) return getGlyph(variant, style, false);
+  if (const EpdGlyph* own = f->getGlyph(cp)) return own;
+  return missingCjkGlyph(f, cp);
 }
 
-const EpdGlyph* EpdFontFamily::getGlyphResident(const uint32_t cp, const Style style) const {
+// A hanzi or kana nothing can draw (a Chinese UI with no SD font on the card) and a font with no
+// replacement glyph of its own: stand a question mark in for it, so the label reads as missing
+// characters instead of as a shorter, different word. Only CJK: the other codepoints that reach
+// this point are mostly ones that are meant to draw nothing (joiners, selectors, soft hyphens).
+const EpdGlyph* EpdFontFamily::missingCjkGlyph(const EpdFont* f, const uint32_t cp) {
+  return utf8IsCjkCodepoint(cp) && f->hasGlyph('?') ? f->getGlyph('?') : nullptr;
+}
+
+const EpdGlyph* EpdFontFamily::getGlyphResident(const uint32_t cp, const Style style, const bool tryVariant) const {
+  if (const EpdFont* first = nonCjkFallbackFont(cp, style)) return first->getGlyph(cp);
   const EpdFont* f = getFont(style);
   if (f->hasGlyph(cp)) return f->getGlyph(cp);
   if (fallbackFamily) {
@@ -65,11 +123,21 @@ const EpdGlyph* EpdFontFamily::getGlyphResident(const uint32_t cp, const Style s
     const EpdFont* gf = globalFallback_->getFont(style);
     if (gf->hasGlyph(cp)) return gf->getGlyph(cp);
     // Deliberately NO glyphMissHandler here.
+    // Covered but not in RAM: the caller prices it from the companion's advance table.
+    if (gf->hasCodepoint(cp)) return nullptr;
   }
-  return nullptr;
+  if (f->hasCodepoint(cp)) return nullptr;
+  const EpdGlyph* lastResort = nullptr;
+  if (lastResortFont(cp, style, &lastResort)) return lastResort;
+  if (const uint32_t variant = tryVariant ? joyoVariant(cp) : 0) return getGlyphResident(variant, style, false);
+  // Nothing anywhere can draw cp, so getGlyph() will hand back this font's replacement glyph:
+  // measure that, or a title of undrawable characters is centred as if it were empty.
+  if (const EpdGlyph* own = f->getGlyph(cp)) return own;
+  return missingCjkGlyph(f, cp);
 }
 
-const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style style) const {
+const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style style, const bool tryVariant) const {
+  if (const EpdFont* first = nonCjkFallbackFont(cp, style)) return first->data;  // mirrors getGlyph()
   const EpdFont* f = getFont(style);
   if (f->hasGlyph(cp)) return f->data;
   // Mirrors getGlyph()'s own-font on-demand step above -- the pair must resolve to the same
@@ -97,6 +165,9 @@ const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style
       if (loaded) return gf->data;
     }
   }
+  const EpdGlyph* lastResort = nullptr;
+  if (const EpdFont* bf = lastResortFont(cp, style, &lastResort)) return bf->data;
+  if (const uint32_t variant = tryVariant ? joyoVariant(cp) : 0) return getDataForGlyph(variant, style, false);
   // Mirror getGlyph()'s last resort exactly: it returns f->getGlyph(cp) (f's replacement
   // glyph), so the data MUST be f's too. Returning fallbackFamily's data here was the one
   // step of the pair that was never mirrored -- it hands the caller a glyph from f paired

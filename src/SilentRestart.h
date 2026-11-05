@@ -11,9 +11,10 @@
 // comes back exactly as it was, regardless of the Restore Light on Wake
 // preference.
 
-void silentRestart();            // home screen
-void silentRestartToReader();    // currently-open EPUB (APP_STATE.openEpubPath)
-void silentRestartToSettings();  // settings screen
+void silentRestart();          // home screen
+void silentRestartToReader();  // currently-open EPUB (APP_STATE.openEpubPath)
+// Settings, opened on a SettingsSection value; -1 is Connectivity, where the Wi-Fi rows are.
+void silentRestartToSettings(int section = -1);
 // A tab screen of the Cover Grid theme: a bottom-bar tab, or one of the Library's own tabs.
 void silentRestartToHomeTab(int homeTab);        // HomeTab value
 void silentRestartToLibraryTab(int libraryTab);  // LibraryTabs::Tab value
@@ -32,6 +33,11 @@ void silentRestartToTranslation();
 // A function, not a constant: the folder is "/.system" or "/system" depending on the card,
 // and that is only known once it is mounted.
 inline std::string translateStashPath() { return sdsystem::path("translate_pending.txt"); }
+// Reboot into the File Transfer > Join Network flow on a pristine heap, so the
+// WiFi + TLS working set has the contiguous RAM it needs on tight boards. A
+// no-op on touch boards (a soft reset would cycle their externally-powered
+// rails); the caller then proceeds without a reboot.
+void silentRestartToJoinNetwork();
 
 // Reboots immediately after an activity releases exclusive raw storage. The
 // RTC target ensures setup() lands on Home instead of resuming a reader.

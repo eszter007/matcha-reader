@@ -5,23 +5,13 @@ set -e
 cd "$(dirname "$0")"
 
 READER_FONT_STYLES=("Regular" "Italic" "Bold" "BoldItalic")
-NOTOSERIF_FONT_SIZES=(12 14 16 18)
-NOTOSANS_FONT_SIZES=(12 14 16 18)
+# 16 and 18pt draw the 14pt face enlarged (FaceScale in main.cpp); no cuts are generated.
+NOTOSERIF_FONT_SIZES=(12 14)
 
 for size in ${NOTOSERIF_FONT_SIZES[@]}; do
   for style in ${READER_FONT_STYLES[@]}; do
     font_name="notoserif_${size}_$(echo $style | tr '[:upper:]' '[:lower:]')"
     font_path="../builtinFonts/source/NotoSerif/NotoSerif-${style}.ttf"
-    output_path="../builtinFonts/${font_name}.h"
-    python fontconvert.py $font_name $size $font_path --2bit --compress --pnum --zopfli > $output_path
-    echo "Generated $output_path"
-  done
-done
-
-for size in ${NOTOSANS_FONT_SIZES[@]}; do
-  for style in ${READER_FONT_STYLES[@]}; do
-    font_name="notosans_${size}_$(echo $style | tr '[:upper:]' '[:lower:]')"
-    font_path="../builtinFonts/source/NotoSans/NotoSans-${style}.ttf"
     output_path="../builtinFonts/${font_name}.h"
     python fontconvert.py $font_name $size $font_path --2bit --compress --pnum --zopfli > $output_path
     echo "Generated $output_path"
@@ -65,6 +55,7 @@ for size in ${UI_FONT_SIZES[@]}; do
   for style in ${UI_FONT_STYLES[@]}; do
     font_name="ubuntu_${size}_$(echo $style | tr '[:upper:]' '[:lower:]')"
     font_path="../builtinFonts/source/Ubuntu/Ubuntu-${style}.ttf"
+    latin_fallback_path="../builtinFonts/source/NotoSans/NotoSans-${style}.ttf"
     hebrew_path="../builtinFonts/source/NotoSansHebrew/NotoSansHebrew-${style}.ttf"
     arabic_path="../builtinFonts/source/NotoSansArabic/NotoSansArabic-${style}.ttf"
     # Ubuntu lacks the Latin Extended Additional block (U+1EA0-U+1EF9) used for
@@ -73,18 +64,27 @@ for size in ${UI_FONT_SIZES[@]}; do
     # (fontstack is ordered by descending priority).
     viet_path="../builtinFonts/source/Ubuntu/Ubuntu-Vietnamese-${style}.ttf"
     output_path="../builtinFonts/${font_name}.h"
-    python fontconvert.py $font_name $size $font_path $hebrew_path $arabic_path $viet_path \
-      --additional-intervals 0x05D0,0x05EA "${ARABIC_INTERVALS[@]}" > $output_path
+    python fontconvert.py $font_name $size $font_path $latin_fallback_path $hebrew_path $arabic_path $viet_path \
+      --compress --zopfli --additional-intervals 0x05D0,0x05EA "${ARABIC_INTERVALS[@]}" > $output_path
     echo "Generated $output_path"
   done
 done
 
-python fontconvert.py notosans_8_regular 8 \
+# The small UI face is Ubuntu too, so UI text stays in one family at every size. Its stems stay at
+# an even 2 px (a lower threshold rounds only the digits up to 3, which reads as bold); widening
+# the outlines by 5/16 px fills out curves and horizontal strokes, so the text reads clearly
+# without looking heavier.
+python fontconvert.py ubuntu_8_regular 8 \
+  ../builtinFonts/source/Ubuntu/Ubuntu-Regular.ttf \
   ../builtinFonts/source/NotoSans/NotoSans-Regular.ttf \
   ../builtinFonts/source/NotoSansHebrew/NotoSansHebrew-Regular.ttf \
   ../builtinFonts/source/NotoSansArabic/NotoSansArabic-Regular.ttf \
-  --additional-intervals 0x05D0,0x05EA "${ARABIC_INTERVALS[@]}" > ../builtinFonts/notosans_8_regular.h
+  ../builtinFonts/source/Ubuntu/Ubuntu-Vietnamese-Regular.ttf \
+  --compress --zopfli --bw-threshold 6 --embolden-x 20 --embolden-y 20 --additional-intervals 0x05D0,0x05EA "${ARABIC_INTERVALS[@]}" \
+  > ../builtinFonts/ubuntu_8_regular.h
 
 echo ""
+python dedupe_font_tables.py ../builtinFonts/
+
 echo "Running compression verification..."
 python verify_compression.py ../builtinFonts/

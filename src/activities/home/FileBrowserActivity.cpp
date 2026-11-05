@@ -12,10 +12,12 @@
 #include <functional>
 #include <iterator>  // std::back_inserter, in the recency sort
 
+#include "ClippingStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include "SdCardFontSystem.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
@@ -190,6 +192,9 @@ void FileBrowserActivity::loadFiles() {
   std::move(folders.begin(), folders.end(), std::back_inserter(files));
   std::move(recentFiles.begin(), recentFiles.end(), std::back_inserter(files));
   std::move(otherFiles.begin(), otherFiles.end(), std::back_inserter(files));
+  // A listed name with a character the built-in CJK subset lacks (a Chinese title) wants the SD
+  // companion for the UI, as Home does; a Latin folder pays nothing.
+  sdFontSystem.setUiCjkNeededForTitles(renderer, files, [](const std::string& name) { return name.c_str(); });
 }
 
 // fui::ListProps::rowProvider — formats row `index` from files[index] into the
@@ -297,8 +302,7 @@ bool FileBrowserActivity::removeDirFile(const std::string& fullPath) {
 
   if (!file.isDirectory()) {
     file.close();
-    clearBookCache(fullPath);
-    return Storage.remove(fullPath.c_str());
+    return removeBookFile(fullPath);
   }
   file.close();
 
@@ -355,8 +359,7 @@ bool FileBrowserActivity::removeDirFile(const std::string& fullPath) {
       if (isDir) {
         stack.push_back({std::move(entryPath), false});
       } else {
-        clearBookCache(entryPath);
-        if (!Storage.remove(entryPath.c_str())) {
+        if (!removeBookFile(entryPath)) {
           LOG_ERR("FileBrowser", "Failed to remove file: %s", entryPath.c_str());
           return false;
         }
@@ -384,6 +387,13 @@ void FileBrowserActivity::onRowLongPress(const int index) {
     activateSelected();
   }
 }
+
+#if FREEINK_CAP_TOUCH
+void FileBrowserActivity::swipeDelete(const int index) {
+  nav.selected = index;
+  deleteSelected();
+}
+#endif
 
 void FileBrowserActivity::activateSelected() {
   if (files.empty()) return;
@@ -486,8 +496,8 @@ void FileBrowserActivity::deleteSelected() {
     requestUpdate(true);
   };
 
-  const std::string heading = tr(STR_DELETE) + std::string("? ");
-  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, heading, utf8ComposeNfc(entry));
+  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_DELETE_ITEM_CONFIRM),
+                                                              utf8ComposeNfc(entry));
   if (!confirmation) {
     LOG_ERR("FileBrowser", "OOM: delete confirmation");
     return;
@@ -726,6 +736,9 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   // follow/clamping to nav.top) before the list resolves rows through the
   // provider.
   prewarmRowGlyphs(nav.top);
+#if FREEINK_CAP_TOUCH
+  if (mode == Mode::Books) configureSwipeDelete(screen, props);
+#endif
   screen.list(props);
 }
 

@@ -1,5 +1,6 @@
 #include "CrossPointSettings.h"
 
+#include <BlePageTurnerJson.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <ObfuscationUtils.h>
@@ -12,8 +13,11 @@
 
 #include "I18nKeys.h"
 #include "ReaderFontSizes.h"
+#include "ReaderLineSpacing.h"
 #include "SettingsList.h"
 #include "fontIds.h"
+#include "util/ParagraphIndentMigration.h"
+#include "util/PluginLocations.h"
 
 namespace {
 
@@ -27,7 +31,60 @@ void copyToField(char* dest, const char* src, const size_t maxLen) {
   dest[maxLen - 1] = '\0';
 }
 
+// settings.json keys of textProfiles, indexed by TextProfileId. Latin is stored in the top-level
+// fields, so its entry is never written.
+constexpr const char* TEXT_PROFILE_KEYS[] = {"latin", "ja", "zh-Hant", "zh-Hans", "ko"};
+static_assert(std::size(TEXT_PROFILE_KEYS) == static_cast<size_t>(CrossPointSettings::TextProfileId::Count));
+
+// Pre-percentage saves: Tight/Normal/Wide/Extra Wide (0..3) become 1.1..1.45.
+uint8_t legacyLineSpacing(JsonVariantConst value) {
+  const int legacy = value.as<uint8_t>();
+  return legacy + 1 < CrossPointSettings::LINE_COMPRESSION_COUNT ? static_cast<uint8_t>(legacy + 1)
+                                                                 : CrossPointSettings::LINE_SPACING_120;
+}
+
 }  // namespace
+
+CrossPointSettings::TextProfile CrossPointSettings::liveTextProfile() const {
+  TextProfile p{fontPointSize, lineSpacing, characterSpacing, wordSpacing, fontFamily, {}};
+  copyToField(p.sdFontFamilyName, sdFontFamilyName, sizeof(p.sdFontFamilyName));
+  return p;
+}
+
+void CrossPointSettings::setLiveTextProfile(const TextProfile& p) {
+  fontPointSize = p.fontPointSize;
+  lineSpacing = p.lineSpacing;
+  characterSpacing = p.characterSpacing;
+  wordSpacing = p.wordSpacing;
+  fontFamily = p.fontFamily;
+  copyToField(sdFontFamilyName, p.sdFontFamilyName, sizeof(sdFontFamilyName));
+}
+
+void CrossPointSettings::holdLatinTextProfile(const TextProfile& latin) {
+  if (latinIsHeld) {
+    LOG_ERR("CPS", "Latin text profile already held; keeping the first");
+    return;
+  }
+  latinHeld = latin;
+  latinIsHeld = true;
+}
+
+CrossPointSettings::TextProfile CrossPointSettings::textProfile(const TextProfileId id) const {
+  if (id != TextProfileId::Latin) return scriptTextProfiles[static_cast<int>(id) - 1];
+  return latinIsHeld ? latinHeld : liveTextProfile();
+}
+
+void CrossPointSettings::setTextProfile(const TextProfileId id, const TextProfile& p) {
+  if (id == TextProfileId::Latin) {
+    if (latinIsHeld) {
+      latinHeld = p;
+    } else {
+      setLiveTextProfile(p);
+    }
+  } else {
+    scriptTextProfiles[static_cast<int>(id) - 1] = p;
+  }
+}
 
 void CrossPointSettings::validateFrontButtonMapping(CrossPointSettings& settings) {
   const uint8_t mapping[] = {settings.frontButtonBack, settings.frontButtonConfirm, settings.frontButtonLeft,
@@ -99,10 +156,38 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   if (sdFontFamilyName[0] != '\0') {
     doc["sdFontFamilyName"] = sdFontFamilyName;
   }
+  // A swapped-in profile is in the live fields; the Latin settings are the held ones.
+  if (latinIsHeld) {
+    doc["fontFamily"] = latinHeld.fontFamily;
+    doc["fontSize"] = latinHeld.fontPointSize;
+    doc["lineHeight"] = latinHeld.lineSpacing;
+    doc["characterSpacing"] = latinHeld.characterSpacing;
+    doc["wordSpacing"] = latinHeld.wordSpacing;
+    if (latinHeld.sdFontFamilyName[0] != '\0') {
+      doc["sdFontFamilyName"] = latinHeld.sdFontFamilyName;
+    } else {
+      doc.remove("sdFontFamilyName");
+    }
+  }
+  JsonObject profiles = doc["textProfiles"].to<JsonObject>();
+  for (int i = 1; i < static_cast<int>(TextProfileId::Count); i++) {
+    const TextProfile& p = scriptTextProfiles[i - 1];
+    JsonObject o = profiles[TEXT_PROFILE_KEYS[i]].to<JsonObject>();
+    o["fontSize"] = p.fontPointSize;
+    o["lineHeight"] = p.lineSpacing;
+    o["characterSpacing"] = p.characterSpacing;
+    o["wordSpacing"] = p.wordSpacing;
+    o["fontFamily"] = p.fontFamily;
+    if (p.sdFontFamilyName[0] != '\0') o["sdFontFamilyName"] = p.sdFontFamilyName;
+  }
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, save manually
   if (dictionaryName[0] != '\0') {
     doc["dictionaryName"] = dictionaryName;
   }
+  // The displayed option list varies by board, so this setting uses a dynamic
+  // display-index mapping and is skipped by the generic persistence loop.
+  doc["longPressMenuFunction"] = longPressMenuFunction;
+  doc["shortPwrBtn"] = shortPwrBtn;
 
   // Language -- managed by LanguageSelectActivity, not in SettingsList.
   // Stored as ISO code string ("EN", "DE", ...) for stability across enum reorders.
@@ -113,6 +198,8 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   if (keyboardLayouts != 0) {
     doc["keyboardLayouts"] = keyboardLayouts;
   }
+
+  bleturner::writeJson(ble, doc);
 }
 
 bool CrossPointSettings::fromJson(JsonVariantConst doc) {
@@ -185,6 +272,20 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     }
   });
 
+  // Plugin System did not exist in older settings files. Preserve the behavior
+  // of users who already have SD plugins installed, while keeping the new
+  // default disabled on clean installs.
+  if (doc["pluginsEnabled"].isNull()) {
+    pluginsEnabled = PluginLocations::anyPluginInstalledOnDisk() ? 1 : 0;
+    needsResave = true;
+  }
+
+  const auto indentSpaces = doc["paragraphIndentSpaces"];
+  const bool hasSavedWidth = indentSpaces.is<int>();
+  const int savedWidth = hasSavedWidth ? indentSpaces.as<int>() : 0;
+  paragraphIndentSpaces = migrateParagraphIndentSpaces(hasSavedWidth, savedWidth, extraParagraphSpacing != 0);
+  if (!hasSavedWidth || savedWidth < 0 || savedWidth > 5) needsResave = true;
+
   // Older files stored one combined touch mode under "touchReaderControls": 0=off, 1=tap,
   // 2=swipe, 3=inverted tap, 4=inverted swipe (Matcha-only, for right-to-left vertical text).
   // Split it into the master toggle plus the per-direction gesture pair (the generic loop above
@@ -219,6 +320,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     sleepTimeoutMinutes = sleepTimeoutEnumToMinutes(legacyValue);
     needsResave = true;
   }
+  // The Power + Up on/off toggle became an action; on meant Sync Clock.
+  if (doc["powerUpAction"].isNull() && (doc["powerUpClockSync"] | (uint8_t)0) != 0) {
+    powerUpAction = SIDE_BTN_SYNC_CLOCK;
+    needsResave = true;
+  }
   // Pre-1.5 "Side Button Layout" -> the per-button actions. Only when the new keys are absent,
   // so a device that has already been through the new screen is never overwritten. Prev/Next was
   // the default and needs nothing; Next/Prev becomes an explicit swap, Disabled becomes Off on
@@ -243,6 +349,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     }
   }
 
+  // "lineSpacing" saves predate the 1.0 option: Tight/Normal/Wide/Extra Wide (0..3) become 1.1..1.45.
+  if (doc["lineHeight"].isNull() && doc["lineSpacing"].is<uint8_t>()) {
+    lineSpacing = legacyLineSpacing(doc["lineSpacing"]);
+    needsResave = true;
+  }
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
   frontButtonBack = clamp(doc["frontButtonBack"] | (uint8_t)FRONT_HW_BACK, FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_BACK);
   frontButtonConfirm =
@@ -266,11 +377,16 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // Font family — uses dynamic getter/setter in SettingsList so the generic loop skips it.
   const uint8_t storedFontFamily = doc["fontFamily"] | (uint8_t)0;
   fontFamily = clamp(storedFontFamily, BUILTIN_FONT_COUNT, 0);
+  // These controls use board-specific display-index mappings and are skipped by
+  // the generic settings loop. Persisted action IDs remain stable across boards.
+  longPressMenuFunction = clamp(doc["longPressMenuFunction"] | (uint8_t)LP_MENU_DISABLED,
+                                (uint8_t)LONG_PRESS_MENU_FUNCTION_COUNT, (uint8_t)LP_MENU_DISABLED);
+  shortPwrBtn = clamp(doc["shortPwrBtn"] | (uint8_t)IGNORE, (uint8_t)SHORT_PWRBTN_COUNT, (uint8_t)IGNORE);
   if (BoardConfig::hasHomeKey() && doc["homeButtonLongPressAction"].isNull() &&
       !doc["longPressMenuFunction"].isNull()) {
-    static constexpr HomeButtonAction LEGACY[] = {HomeButtonAction::Sync, HomeButtonAction::Ignore,
-                                                  HomeButtonAction::Bookmark, HomeButtonAction::Dictionary,
-                                                  HomeButtonAction::ReaderMenu};
+    static constexpr HomeButtonAction LEGACY[] = {HomeButtonAction::Sync,       HomeButtonAction::Ignore,
+                                                  HomeButtonAction::Bookmark,   HomeButtonAction::Dictionary,
+                                                  HomeButtonAction::ReaderMenu, HomeButtonAction::CreateClipping};
     if (s.longPressMenuFunction < sizeof(LEGACY) / sizeof(LEGACY[0])) {
       s.homeButtonLongPressAction = static_cast<uint8_t>(LEGACY[s.longPressMenuFunction]);
       needsResave = true;
@@ -281,17 +397,57 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   const char* sfn = doc["sdFontFamilyName"] | "";
   strncpy(sdFontFamilyName, sfn, sizeof(sdFontFamilyName) - 1);
   sdFontFamilyName[sizeof(sdFontFamilyName) - 1] = '\0';
-  if (storedFontFamily == LEGACY_OPENDYSLEXIC && sdFontFamilyName[0] == '\0') {
-    fontFamily = NOTOSERIF;
-    strncpy(sdFontFamilyName, "OpenDyslexic", sizeof(sdFontFamilyName) - 1);
-    sdFontFamilyName[sizeof(sdFontFamilyName) - 1] = '\0';
-    needsResave = true;
-  } else if (storedFontFamily >= BUILTIN_FONT_COUNT) {
-    needsResave = true;
+  if (sdFontFamilyName[0] == '\0') {
+    switch (storedFontFamily) {
+      case LEGACY_NOTOSANS:
+        copyToField(sdFontFamilyName, "NotoSans", sizeof(sdFontFamilyName));
+        break;
+      case LEGACY_OPENDYSLEXIC:
+        copyToField(sdFontFamilyName, "OpenDyslexic", sizeof(sdFontFamilyName));
+        break;
+    }
   }
+  if (storedFontFamily >= BUILTIN_FONT_COUNT) needsResave = true;
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, load manually
   copyToField(dictionaryName, doc["dictionaryName"] | "", sizeof(dictionaryName));
 
+  // Text profiles. Before there were five, Japanese and Chinese shared one CJK profile without a
+  // font: those three start from it with the current font, Korean from the Latin settings.
+  {
+    const TextProfile latin = liveTextProfile();
+    TextProfile cjk = latin;
+    if (!doc["cjkFontPointSize"].isNull()) {
+      cjk.fontPointSize = doc["cjkFontPointSize"] | latin.fontPointSize;
+      // Saved before the 1.0 option, so one slot up, as for "lineSpacing" above.
+      if (doc["cjkLineSpacing"].is<uint8_t>()) cjk.lineSpacing = legacyLineSpacing(doc["cjkLineSpacing"]);
+      cjk.characterSpacing = doc["cjkCharacterSpacing"] | latin.characterSpacing;
+      cjk.wordSpacing = doc["cjkWordSpacing"] | latin.wordSpacing;
+    }
+    const JsonVariantConst profiles = doc["textProfiles"];
+    if (profiles.isNull()) needsResave = true;
+    for (int i = 1; i < static_cast<int>(TextProfileId::Count); i++) {
+      const auto id = static_cast<TextProfileId>(i);
+      TextProfile p = id == TextProfileId::Korean ? latin : cjk;
+      const JsonVariantConst o = profiles[TEXT_PROFILE_KEYS[i]];
+      if (!o.isNull()) {
+        const uint8_t size = o["fontSize"] | p.fontPointSize;
+        if (size >= 6 && size <= 72) p.fontPointSize = size;
+        if (o["lineHeight"].is<uint8_t>()) {
+          p.lineSpacing = clamp(o["lineHeight"].as<uint8_t>(), (uint8_t)LINE_COMPRESSION_COUNT, p.lineSpacing);
+        } else if (o["lineSpacing"].is<uint8_t>()) {
+          p.lineSpacing = legacyLineSpacing(o["lineSpacing"]);
+          needsResave = true;
+        }
+        p.characterSpacing = clamp(o["characterSpacing"] | p.characterSpacing,
+                                   (uint8_t)(2 * CHARACTER_SPACING_OFFSET + 1), p.characterSpacing);
+        const uint8_t words = o["wordSpacing"] | p.wordSpacing;
+        if (words >= WORD_SPACING_MIN && words <= WORD_SPACING_MAX) p.wordSpacing = words;
+        p.fontFamily = clamp(o["fontFamily"] | p.fontFamily, BUILTIN_FONT_COUNT, (uint8_t)0);
+        copyToField(p.sdFontFamilyName, o["sdFontFamilyName"] | "", sizeof(p.sdFontFamilyName));
+      }
+      scriptTextProfiles[i - 1] = p;
+    }
+  }
   // Language -- stored as code string for stability across enum reorders.
   if (doc["language"].is<const char*>()) {
     language = static_cast<uint8_t>(I18n::languageFromCode(doc["language"].as<const char*>()));
@@ -300,6 +456,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // Absent means unconfigured, which is the default.
   if (doc["keyboardLayouts"].is<uint16_t>()) {
     keyboardLayouts = doc["keyboardLayouts"].as<uint16_t>();
+  }
+
+  if (!bleturner::readJson(ble, doc)) {
+    needsResave = true;
   }
 
   if (needsResave) {
@@ -325,6 +485,7 @@ CrossPointSettings::StatusBarSpec CrossPointSettings::statusBarSpec() const {
   spec.progressBarHeightPx =
       statusBarProgressBar != HIDE_PROGRESS ? static_cast<uint8_t>((statusBarProgressBarThickness + 1) * 2) : 0;
   spec.xtcMode = xtcStatusBarMode;
+  spec.timeLeftMode = statusBarTimeLeft;
   return spec;
 }
 
@@ -333,67 +494,26 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   ReaderRenderSpec spec;
   spec.fontId = getReaderFontId();
   spec.lineCompression = getReaderLineCompression();
+  // Vertical keeps its three column gaps: 100-110% tight, 120% normal, 130% and up wide.
+  spec.lineSpacingLevel = static_cast<uint8_t>(std::clamp(lineSpacing - 1, 0, 2));
   spec.characterSpacing = getCharacterSpacing();
   spec.wordSpacingPercent = wordSpacing;
   spec.extraParagraphSpacing = extraParagraphSpacing != 0;
+  spec.paragraphIndentSpaces = paragraphIndentSpaces;
   spec.paragraphAlignment = paragraphAlignment;
   spec.viewportWidth = viewportWidth;
   spec.viewportHeight = viewportHeight;
   spec.hyphenationEnabled = hyphenationEnabled != 0;
   spec.embeddedStyle = embeddedStyle != 0;
-  spec.imageRendering = imageRendering;
+  // Same layout as Display, so switching between them keeps the section cache.
+  spec.imageRendering = imageRendering == IMAGES_DISPLAY_BW ? static_cast<uint8_t>(IMAGES_DISPLAY) : imageRendering;
   spec.focusReadingEnabled = focusReadingEnabled != 0;
   spec.honorBookInsets = bookCssMargins != 0;
   return spec;
 }
 
 float CrossPointSettings::getReaderLineCompression() const {
-  // SD card and vector fonts get a wider scale than the built-ins: their
-  // faces carry their own (often generous) natural line height, so the old
-  // Bookerly-tuned 1.1/1.2 steps were visually near-indistinguishable. At
-  // 12pt in portrait (~760px viewport) this scale spans ~26/24/19/15 lines
-  // per page — each step reads as a clearly different density.
-  if (sdFontFamilyName[0] != '\0') {
-    switch (lineSpacing) {
-      case TIGHT:
-        return 0.95f;
-      case NORMAL:
-      default:
-        return 1.0f;
-      case WIDE:
-        return 1.3f;
-      case EXTRA_WIDE:
-        return 1.6f;
-    }
-  }
-
-  switch (fontFamily) {
-    case NOTOSERIF:
-    default:
-      switch (lineSpacing) {
-        case TIGHT:
-          return 0.95f;
-        case NORMAL:
-        default:
-          return 1.0f;
-        case WIDE:
-          return 1.1f;
-        case EXTRA_WIDE:
-          return 1.2f;
-      }
-    case NOTOSANS:
-      switch (lineSpacing) {
-        case TIGHT:
-          return 0.90f;
-        case NORMAL:
-        default:
-          return 0.95f;
-        case WIDE:
-          return 1.0f;
-        case EXTRA_WIDE:
-          return 1.05f;
-      }
-  }
+  return LINE_SPACING_MULTIPLIERS[lineSpacing < LINE_COMPRESSION_COUNT ? lineSpacing : LINE_SPACING_120];
 }
 
 unsigned long CrossPointSettings::getSleepTimeoutMs() const {
@@ -428,26 +548,7 @@ void CrossPointSettings::clearSdFontFamily() {
   saveToFile();
 }
 
-int CrossPointSettings::getBuiltinReaderFontId() const {
-  // A built-in family only exists at BUILTIN_READER_POINT_SIZES, so a size
-  // carried over from an SD family may not be one of them. ensureLoaded()
-  // normally persists the snap; snap again here (without allocating — this runs
-  // in the page render loop) so rendering is correct even before it has run.
-  const uint8_t pt =
-      snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES), fontPointSize);
-  const bool sans = (fontFamily == NOTOSANS);
-  switch (pt) {
-    case 12:
-      return sans ? NOTOSANS_12_FONT_ID : NOTOSERIF_12_FONT_ID;
-    case 16:
-      return sans ? NOTOSANS_16_FONT_ID : NOTOSERIF_16_FONT_ID;
-    case 18:
-      return sans ? NOTOSANS_18_FONT_ID : NOTOSERIF_18_FONT_ID;
-    case 14:
-    default:
-      return sans ? NOTOSANS_14_FONT_ID : NOTOSERIF_14_FONT_ID;
-  }
-}
+int CrossPointSettings::getBuiltinReaderFontId() const { return getBuiltinSerifReaderFontId(); }
 
 int CrossPointSettings::getBuiltinSerifReaderFontId() const {
   const uint8_t pt =

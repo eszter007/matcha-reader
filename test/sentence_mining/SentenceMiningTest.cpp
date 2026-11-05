@@ -21,6 +21,25 @@ TEST(SentenceMiningCsv, GuidIsStableAndSeparatesWordFromSentence) {
   EXPECT_EQ(makeGuid("x", "y")[0], 'm');
 }
 
+TEST(SentenceMiningCsv, GuidFinderSeesARowAcrossChunkBoundaries) {
+  const std::string guid = makeGuid("漏らす", "秘密を漏らした。");
+  const std::string file = headerLines() + "mffff,a\n" + guid + ",漏らす,もらす\n";
+  for (size_t step = 1; step <= file.size(); ++step) {
+    GuidFinder finder(guid);
+    bool found = false;
+    for (size_t i = 0; i < file.size(); i += step) found = finder.feed(std::string_view(file).substr(i, step));
+    EXPECT_TRUE(found) << "chunk size " << step;
+  }
+}
+
+TEST(SentenceMiningCsv, GuidFinderNeedsTheGuidAsARowsFirstField) {
+  const std::string guid = makeGuid("x", "y");
+  GuidFinder inField(guid);
+  EXPECT_FALSE(inField.feed(headerLines() + "mffff,\"" + guid + ",\"\n"));
+  GuidFinder otherSentence(guid);
+  EXPECT_FALSE(otherSentence.feed(headerLines() + makeGuid("x", "z") + ",x\n"));
+}
+
 TEST(SentenceMiningCsv, TitleTagHasNoSpaces) {
   EXPECT_EQ(tagFromTitle("The Brothers Karamazov"), "The_Brothers_Karamazov");
   EXPECT_EQ(tagFromTitle("銀河　鉄道 "), "銀河_鉄道");

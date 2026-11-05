@@ -1,10 +1,11 @@
 #pragma once
 
-#include <ContentAccess.h>
+#include <ContentProtection.h>
 #include <JpegToBmpConverter.h>  // BmpConvertCancelFn
 #include <Print.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -15,6 +16,15 @@
 class ZipFile;
 
 class Epub {
+ public:
+  struct SyncMetadata {
+    std::string isbn;
+    std::string asin;
+    std::string series;
+    std::optional<float> seriesIndex;
+  };
+
+ private:
   // the ncx file (EPUB 2)
   std::string tocNcxItem;
   // the nav file (EPUB 3)
@@ -31,11 +41,11 @@ class Epub {
   std::unique_ptr<CssParser> cssParser;
   // CSS files
   std::vector<std::string> cssFiles;
-  // Optional alternative item source, set in load(). Null unless a build
-  // provides one, in which case every item is read from the ZIP.
-  contentaccess::HandlePtr itemSource;
-  // User-presentable reason load() refused the book (empty otherwise).
-  std::string accessError;
+  // Optional encrypted-entry accessor. Entries are decoded in memory and stay
+  // encrypted at rest. Null when the accessor is not needed or unavailable.
+  std::unique_ptr<freeink::content::ContentDecryptor> decryptor;
+  // User-presentable reason the encrypted-entry accessor could not be opened.
+  std::string protectionError;
   // Set by generateThumbBmp() via the converter's outUnsupported flag; see coverUnsupported().
   mutable bool coverUnsupported_ = false;
 
@@ -54,6 +64,7 @@ class Epub {
   // decode, and partial files are removed on cancel.
   bool generateThumbBmpForCover(int height, const std::string& coverImageHref,
                                 BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
+  bool openProtection();
   void discoverCssFilesFromZip();
   void parseCssFiles() const;
 
@@ -64,12 +75,13 @@ class Epub {
   bool load(bool buildIfMissing = true, bool skipLoadingCss = false, BmpConvertCancelFn shouldCancel = nullptr,
             void* cancelCtx = nullptr);
   bool loadMetadata(std::string& title, std::string& author);
+  bool loadSyncMetadata(SyncMetadata& metadata);
   bool clearCache() const;
   void setupCacheDir() const;
   const std::string& getCachePath() const;
   const std::string& getPath() const;
-  // Empty unless load() refused the book because its content is not readable here.
-  const std::string& getAccessError() const { return accessError; }
+  // Empty unless the encrypted-entry accessor failed to open.
+  const std::string& getProtectionError() const { return protectionError; }
   // True when the last generateThumbBmp() failed because the cover image itself can never be
   // converted by this build (currently: beyond the JPEG decoder's dimension limits) -- as
   // opposed to a low-heap moment, a cancellation, or a decode error, which are all retryable.
@@ -78,6 +90,9 @@ class Epub {
   const std::string& getTitle() const;
   const std::string& getAuthor() const;
   const std::string& getLanguage() const;
+  // True when the OPF spine declares page-progression-direction="rtl": the publisher's layout
+  // is right-to-left, i.e. vertical columns for a CJK book.
+  bool pageProgressionRtl() const;
   std::string getCoverBmpPath(bool cropped = false, bool originalThresholds = false) const;
   bool generateCoverBmp(bool cropped = false, bool originalThresholds = false) const;
   std::string getThumbBmpPath() const;
@@ -98,7 +113,8 @@ class Epub {
   // Content-access read honouring allowEarlyStop the way the zip path does.
   bool readProtectedItemToStream(const std::string& path, Print& out, bool allowEarlyStop) const;
   // Extract an item to a file on SD. On failure the partial file is removed.
-  bool extractItemToFile(const std::string& itemHref, const std::string& destPath) const;
+  bool extractItemToFile(const std::string& itemHref, const std::string& destPath,
+                         BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   bool getItemSize(const std::string& itemHref, size_t* size) const;
   BookMetadataCache::SpineEntry getSpineItem(int spineIndex) const;
   BookMetadataCache::TocEntry getTocItem(int tocIndex) const;
@@ -107,11 +123,16 @@ class Epub {
   int getSpineIndexForTocIndex(int tocIndex) const;
   int getTocIndexForSpineIndex(int spineIndex) const;
   size_t getCumulativeSpineItemSize(int spineIndex) const;
+  // First spine index whose cumulative size reaches `bytes`, or -1 past the end.
+  int getSpineIndexForSize(size_t bytes) const;
   int getSpineIndexForTextReference() const;
 
   size_t getBookSize() const;
   float calculateProgress(int currentSpineIndex, float currentSpineRead) const;
   CssParser* getCssParser() const { return cssParser.get(); }
+  // The stylesheets the chapter at chapterHref links, read from its HTML already extracted to
+  // htmlPath, as a filter for the CSS cache loads (see CssParser::StylesheetFilter).
+  CssParser::StylesheetFilter stylesheetFilterFor(const std::string& htmlPath, const std::string& chapterHref) const;
   // Whether the parsed-CSS cache exists (always true for TXT/MD, which have none to build);
   // load() rebuilds it when missing.
   bool hasCssCache() const;

@@ -68,7 +68,38 @@ class CssParser {
   //      leave drop caps off with no way to notice.
   // v23: the CSS 2.1 one-colon spelling `X:first-letter` is accepted too. Framing is unchanged;
   //      same reason as v22 -- a v22 cache was written by a parser that dropped those rules.
-  static constexpr uint8_t CSS_CACHE_VERSION = 23;
+  // v24: each record leads with the index of the stylesheet it came from, and the header lists the
+  //      stylesheets (path + the index whose rules an identical copy shares), so a chapter applies
+  //      only the stylesheets it links.
+  // v25: white-space (pre / pre-wrap / break-spaces) is stored: defined bit 29, value in textFlags.
+  //      Records are written in source order (selector-pool position), which the cascade uses
+  //      to break specificity ties; a v24 cache holds them in selector order.
+  // v26: each border side keeps its own style and width: four spec bytes after textFlags. The
+  //      stylesheet table is followed by one u64 per stylesheet: the stylesheets it @imports, so a
+  //      chapter linking only an EBPAJ book-style.css also applies the sheets it imports.
+  // v27: upstream merge (their v19): `font-weight: inherit` and `font-style: inherit` are stored
+  //      as a third value instead of falling back to normal. Framing is unchanged.
+  // v28: a margin's `auto` is stored as CssUnit::Auto instead of 0px (vertical block alignment).
+  //      Framing is unchanged.
+  static constexpr uint8_t CSS_CACHE_VERSION = 28;
+
+  // The stylesheets one chapter links, as indices into the book's stylesheet list. A record from a
+  // stylesheet the chapter does not link is skipped on load: an image-page stylesheet's
+  // `body { text-align: center }` must not centre every text chapter. Records with no recorded
+  // source, and stylesheets past the tracked range, always apply. Default: everything applies.
+  struct StylesheetFilter {
+    static constexpr size_t MAX_TRACKED = 64;
+    uint64_t linked = 0;
+    bool all = true;
+    void link(const size_t index) {
+      all = false;
+      if (index < MAX_TRACKED) linked |= uint64_t{1} << index;
+    }
+    [[nodiscard]] bool allows(const uint8_t source) const {
+      return all || source >= MAX_TRACKED || ((linked >> source) & 1u) != 0;
+    }
+  };
+  static constexpr uint8_t SOURCE_UNKNOWN = 0xFF;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -158,7 +189,7 @@ class CssParser {
     clear();
     entries_.reset();
     selectorPool_.reset();
-    stylePool_.reset();
+    for (auto& chunk : styleChunks_) chunk.reset();
     styleHashes_.reset();
     entryCapacity_ = 0;
     selectorPoolCapacity_ = 0;
@@ -209,7 +240,8 @@ class CssParser {
    * a few dozen. Tag-type selectors are always loaded.
    * @return true if cache was loaded successfully
    */
-  bool loadFromCache(const std::vector<std::string>* usedClasses = nullptr);
+  bool loadFromCache(const std::vector<std::string>* usedClasses = nullptr,
+                     const StylesheetFilter* stylesheets = nullptr);
 
   /**
    * Structurally validate the cache file WITHOUT materializing the rule map. Book open only
@@ -229,10 +261,24 @@ class CssParser {
    * Duplicate selectors across files are resolved at load time (loadFromCache merges like the
    * parser does).
    */
-  bool beginCacheAppend();
+  // sources: the book's stylesheet paths, in the order setSource() indexes them. aliases[i] is the
+  // stylesheet whose rules stylesheet i shares: itself, or the original it is an identical copy of
+  // (copies are parsed once). Both may be null for a cache that records no sources.
+  bool beginCacheAppend(const std::vector<std::string>* sources = nullptr, const uint8_t* aliases = nullptr);
+  // Tags the rules appended next with the stylesheet they came from.
+  void setSource(const size_t index) {
+    currentSource_ = index < StylesheetFilter::MAX_TRACKED ? static_cast<uint8_t>(index) : SOURCE_UNKNOWN;
+  }
   bool appendRulesToCache();
+
+  // The filter for a chapter that links `linkedPaths` (resolved archive paths). A chapter that
+  // links no stylesheet, or none the cache knows, gets every rule -- as before this existed.
+  [[nodiscard]] StylesheetFilter stylesheetFilterFor(const std::vector<std::string>& linkedPaths) const;
   bool endCacheAppend(bool discard);
 
+  // VerticalBlockStyle::blockAlign values.
+  static constexpr uint8_t VERTICAL_BLOCK_CENTER = 1;
+  static constexpr uint8_t VERTICAL_BLOCK_END = 2;
   /**
    * Distilled per-block layout parameters the VERTICAL engine consumes, in em units (the
    * layout converts em -> cells). Populated from unscoped rules plus the EBPAJ "v|" scope.
@@ -243,20 +289,38 @@ class CssParser {
     float afterEm = 0;         // v margin-left: extra gap after the block's last column
     float hangEm = 0;          // v padding-top + negative text-indent: hanging indent for wrapped lines
     bool alignCenter = false;  // text-align: center -> column content vertically centered
+    bool alignEnd = false;     // text-align: right/end -> each column ends at the foot
+    uint8_t blockAlign = 0;    // VERTICAL_BLOCK_*: auto head/foot margins place the whole block
     uint8_t borderEdges = 0;   // CssStyle::BORDER_* edge mask; vertical rendering stays solid
+    float indentEm = -1;       // text-indent: a paragraph's first column starts this far down; -1 = not set
     [[nodiscard]] bool any() const {
-      return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || borderEdges != 0;
+      return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || alignEnd || blockAlign != 0 ||
+             borderEdges != 0 || indentEm >= 0;
     }
   };
 
   // One styled-block rule, keyed by hashes rather than the selector text: the vertical engine only
   // matches "tag", ".class" and "tag.class", so a tag hash (0 = any tag) and a class hash (0 = no
-  // class) say everything a selector string did, in 28 bytes and without a heap string per rule.
+  // class) say everything a selector string did, in 32 bytes and without a heap string per rule.
   struct VerticalBlockRule {
     uint32_t tagHash = 0;
     uint32_t classHash = 0;
     VerticalBlockStyle style;
   };
+
+  // What the vertical engine takes from a style: its block indents, hanging indent, text-indent,
+  // centring and borders, in em. The rules in the cache and a style="" attribute map the same way.
+  [[nodiscard]] static VerticalBlockStyle verticalBlockStyleOf(const CssStyle& css);
+
+  // A chapter's own <style> blocks: the stylesheets inside its HTML, which the book's CSS cache does
+  // not hold. Capped, so one chapter cannot take the heap.
+  static constexpr size_t MAX_CHAPTER_STYLE_BYTES = 16 * 1024;
+  // Adds the rules of htmlPath's <style> blocks to the loaded table (a horizontal chapter build),
+  // after the book's stylesheets so they win ties as they would in a browser. False when there are none.
+  bool loadStyleBlocks(const std::string& htmlPath);
+  // The same rules for the vertical engine, merged into `out` within its reserved capacity. Uses and
+  // then frees this parser's table: the vertical build keeps none. Returns how many were added.
+  size_t appendChapterVerticalStyles(const std::string& htmlPath, std::vector<VerticalBlockRule>& out);
   // Case-insensitive FNV-1a over a selector piece (tag name or class token). Never 0.
   static uint32_t blockSelectorHash(const char* s, size_t len);
 
@@ -265,7 +329,8 @@ class CssParser {
    * least one vertical-relevant property, without materializing the rule map. Returns the number
    * collected (bounded by maxOut).
    */
-  size_t collectVerticalStyles(std::vector<VerticalBlockRule>& out, size_t maxOut = 256) const;
+  size_t collectVerticalStyles(std::vector<VerticalBlockRule>& out, size_t maxOut = 256,
+                               const StylesheetFilter* stylesheets = nullptr) const;
 
  private:
   // Lookup key for a multi-piece selector: the pieces are hashed and compared as if
@@ -281,7 +346,7 @@ class CssParser {
   // Selectors are stored ASCII-lowercased, which is what makes matching case-insensitive.
   struct SelectorEntry {
     uint32_t offset;      // into selectorPool_
-    uint16_t styleIndex;  // into stylePool_
+    uint16_t styleIndex;  // into the style chunks (styleRef)
     uint16_t length;
   };
   static_assert(sizeof(SelectorEntry) == 8);
@@ -291,7 +356,13 @@ class CssParser {
 
   std::unique_ptr<SelectorEntry[]> entries_;
   std::unique_ptr<char[]> selectorPool_;
-  std::unique_ptr<CssStyle[]> stylePool_;
+  // Style bodies in fixed chunks rather than one array: growing never copies the pool or needs
+  // one large block.
+  static constexpr size_t STYLE_CHUNK = 32;
+  static constexpr size_t STYLE_CHUNK_COUNT = 8;  // STYLE_CHUNK * STYLE_CHUNK_COUNT = MAX_UNIQUE_STYLES
+  std::unique_ptr<CssStyle[]> styleChunks_[STYLE_CHUNK_COUNT];
+  CssStyle& styleRef(const size_t i) { return styleChunks_[i / STYLE_CHUNK][i % STYLE_CHUNK]; }
+  const CssStyle& styleRef(const size_t i) const { return styleChunks_[i / STYLE_CHUNK][i % STYLE_CHUNK]; }
   // Style bodies are deduplicated: a template that repeats one declaration block across
   // hundreds of utility classes stores it once and points every entry at it.
   std::unique_ptr<uint32_t[]> styleHashes_;  // cheap reject before the byte compare
@@ -312,6 +383,11 @@ class CssParser {
   [[nodiscard]] size_t lowerBound(const std::string_view* pieces, size_t count, bool& exact) const;
   // Lookup over a run of pieces (a simple selector is a run of one).
   [[nodiscard]] const CssStyle* findStyle(const std::string_view* pieces, size_t count) const;
+  [[nodiscard]] std::unique_ptr<uint16_t[]> sourceOrder() const;
+  // One rule into the vertical engine's table: v|-scoped or unscoped, tag/class selectors only.
+  static void addVerticalRule(std::vector<VerticalBlockRule>& out, std::string_view selector, const CssStyle& css);
+  // Copies every <style> block's contents from the HTML into cssPath. False when there is none.
+  static bool extractStyleBlocks(const std::string& htmlPath, const std::string& cssPath);
   [[nodiscard]] std::string_view selectorAt(size_t index) const;
   [[nodiscard]] const CssStyle& styleAt(size_t index) const;
   PoolResult ensureEntryCapacity(size_t needed);
@@ -342,8 +418,23 @@ class CssParser {
   HalFile cacheAppendFile_;
   uint16_t appendedRuleCount_ = 0;
   bool cacheAppendActive_ = false;
+  uint8_t currentSource_ = SOURCE_UNKNOWN;
+  // Which stylesheets each one @imports, as stylesheet bit masks, collected while the cache is
+  // built and patched into its imports block (at importsOffset_) when it is finished.
+  const std::vector<std::string>* appendSources_ = nullptr;
+  std::unique_ptr<uint64_t[]> appendImports_;
+  uint8_t appendSourceCount_ = 0;
+  size_t importsOffset_ = 0;
+  void recordImport(std::string_view target);
 
-  static void writeRuleRecord(HalFile& file, std::string_view selector, const CssStyle& style);
+  static void writeRuleRecord(HalFile& file, uint8_t source, std::string_view selector, const CssStyle& style);
+  // Reads the header's stylesheet table and returns `requested` widened to the stylesheets its
+  // linked ones @import (transitively) and share rules with. The file must be positioned just
+  // after the rule count.
+  // `heapShort`, when given, is set and false returned if the import masks could not be
+  // allocated; without it the table falls back to applying every stylesheet.
+  static bool readStylesheetTable(HalFile& file, const StylesheetFilter* requested, StylesheetFilter& effective,
+                                  bool* heapShort = nullptr);
   // Fixed-size style body in the cache record's byte order; `out` must hold RULE_FIXED_BYTES.
   static void encodeStyleWire(const CssStyle& style, uint8_t* out);
 
@@ -377,6 +468,8 @@ class CssParser {
   static CssTextEmphasis interpretTextEmphasis(std::string_view val);
   static CssListStyleType interpretListStyleType(std::string_view val);
   static CssLength interpretLength(std::string_view val);
+  // interpretLength, but `auto` is kept as CssUnit::Auto (margins only).
+  static CssLength interpretMargin(std::string_view val);
   /** Returns true only when a numeric length was parsed (e.g. 2em, 50%). False for auto/inherit/initial. */
   static bool tryInterpretLength(std::string_view val, CssLength& out);
 };

@@ -224,6 +224,11 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
     stats.getBitmapTimeUs += micros() - tStart;
     return &fontData->bitmap[glyph->dataOffset];
   }
+  // An empty glyph (a space) has nothing to draw; do not inflate a group for it.
+  if (glyph->dataLength == 0) {
+    stats.getBitmapTimeUs += micros() - tStart;
+    return nullptr;
+  }
 
   // Check page buffer slots (populated by prewarmCache — one slot per font style)
   for (uint8_t s = 0; s < pageSlotCount; s++) {
@@ -268,9 +273,13 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
   // past the end of that glyph. Everything the caller needs therefore sits in the first
   // `neededBytes`, which lets a heap too small for a whole 16KB group still serve a glyph near its
   // start -- the difference between a dictionary entry that renders and one with holes in it.
-  const uint32_t alignedOff = getAlignedOffset(fontData, groupIndex, glyphIndex);
-  const uint32_t glyphAlignedBytes =
-      (glyph->width > 0 && glyph->height > 0) ? ((glyph->width + 3) / 4) * glyph->height : 0;
+  // 2-bit groups pad each row to a byte; 1-bit groups hold the packed glyphs at their dataOffset.
+  uint32_t alignedOff = glyph->dataOffset;
+  uint32_t glyphAlignedBytes = glyph->dataLength;
+  if (fontData->is2Bit) {
+    alignedOff = getAlignedOffset(fontData, groupIndex, glyphIndex);
+    glyphAlignedBytes = (glyph->width > 0 && glyph->height > 0) ? ((glyph->width + 3) / 4) * glyph->height : 0;
+  }
   const uint32_t neededBytes = alignedOff + glyphAlignedBytes;
 
   // Check if hot group already has this glyph's data decompressed — if not, decompress it
@@ -359,7 +368,7 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
   }
 
   // Compact just the requested glyph from byte-aligned data into scratch buffer
-  if (!ensureCapacity(hotGlyphBuf, hotGlyphBufCapacity, glyph->dataLength)) {
+  if (fontData->is2Bit && !ensureCapacity(hotGlyphBuf, hotGlyphBufCapacity, glyph->dataLength)) {
     LOG_ERR("FDC", "Failed to allocate %u bytes for glyph scratch", (unsigned)glyph->dataLength);
     stats.getBitmapTimeUs += micros() - tStart;
     return nullptr;
@@ -376,6 +385,12 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
     return nullptr;
   }
 
+  // 1-bit groups already contain packed glyphs; no compaction scratch is needed.
+  if (!fontData->is2Bit) {
+    stats.getBitmapTimeUs += micros() - tStart;
+    return &hotGroup[alignedOff];
+  }
+
   compactSingleGlyph(&hotGroup[alignedOff], hotGlyphBuf, glyph->width, glyph->height);
   stats.getBitmapTimeUs += micros() - tStart;
   // Remember the compacted glyph so the NEXT render of this label costs a RAM lookup instead of
@@ -389,33 +404,13 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
 // --- Prewarm: pre-decompress glyph bitmaps for a page of text ---
 
 int32_t FontDecompressor::findGlyphIndex(const EpdFontData* fontData, uint32_t codepoint) {
-  const EpdUnicodeInterval* intervals = fontData->intervals;
-  const int count = fontData->intervalCount;
-
-  if (count == 0) return -1;
-
-  // Binary search
-  int left = 0;
-  int right = count - 1;
-
-  while (left <= right) {
-    const int mid = left + (right - left) / 2;
-    const EpdUnicodeInterval* interval = &intervals[mid];
-
-    if (codepoint < interval->first) {
-      right = mid - 1;
-    } else if (codepoint > interval->last) {
-      left = mid + 1;
-    } else {
-      return static_cast<int32_t>(interval->offset + (codepoint - interval->first));
-    }
-  }
-
-  return -1;
+  return epdGlyphIndex(fontData, codepoint);
 }
 
 int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8Text) {
   if (!fontData || !fontData->groups || !utf8Text) return 0;
+  // Packed UI fonts use the bounded hot group, preserving page slots for reader styles.
+  if (!fontData->is2Bit) return 0;
 
   // One slot per font, enforced here: getBitmap() consults only the FIRST slot whose fontData
   // matches and stops there ("don't check other slots"), so a second slot for the same font is

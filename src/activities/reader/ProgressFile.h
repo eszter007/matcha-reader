@@ -9,6 +9,13 @@
 
 namespace ProgressFile {
 
+// Two layouts share progress.bin. Stock CrossPoint writes 4, 6 or 10 bytes: spine, page,
+// chapter page count, then the visible-text offset at [6-9]. The fork keeps its own bytes
+// right after the count -- [6] vertical, [7] furigana, [8] percent -- and the offset at
+// [9-12], so its files are 8, 9 or 13 bytes. The size is the only thing that tells them
+// apart; a card that saw both firmwares carries both kinds.
+inline constexpr bool isStockLayout(const int size) { return size == 4 || size == 6 || size == 10; }
+
 // Writes `len` bytes of reader progress to `<cachePath>/progress.bin` without
 // ever leaving the canonical file half-written.
 //

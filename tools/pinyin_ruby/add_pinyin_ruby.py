@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""Annotate a Chinese EPUB with pinyin ruby, so the reader shows it above the text like furigana.
+
+The device renders <ruby> from the book itself and lets the Furigana toggle hide it, so pinyin
+is added here, once, on a computer: every run of hanzi is segmented against CC-CEDICT by longest
+match and each character gets its syllable as <rt>. Doing this on the device would compete with
+page layout for the little RAM there is.
+
+Usage:
+    python3 add_pinyin_ruby.py --cedict cedict_1_0_ts_utf-8_mdbg.txt book.epub out.epub
+    python3 add_pinyin_ruby.py --cedict cedict.u8 --frequency dict.txt --skip-top 1500 book.epub out.epub
+    python3 add_pinyin_ruby.py --cedict cedict.u8 --zhuyin book.epub out.epub
+
+--skip-top N leaves the N commonest words (by the --frequency list) bare, so only the words a
+learner is likely to need are annotated. --zhuyin writes bopomofo instead of pinyin.
+
+--ai reads each passage in context with Gemini (GEMINI_API_KEY, or --gemini-key-file) to pick the
+reading of a character that has several: 石 is shí in 石頭 and dàn as a measure, 了 is le or liǎo.
+Without it a word takes its everyday reading (the lowercase entry with the most senses, so 東西
+is dōngxi "thing", not dōngxī "east and west"), and a particle standing on its own takes its
+neutral tone (了 le, 着 zhe, 得 de). A reading the model gives is used only when CC-CEDICT lists
+it for that character; anything else falls back to the dictionary's.
+
+Readings are written as spoken: 一 and 不 change tone before another syllable (一个 yí gè,
+不是 bú shì), and an erhua 儿 joins the syllable before it (哪儿 nǎr). --citation-tones keeps
+every character's dictionary tone instead.
+"""
+
+import argparse
+import html
+import os
+import re
+import sys
+
+_TOOLS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+sys.path.insert(0, os.path.join(_TOOLS, "dict_convert"))
+sys.path.insert(0, os.path.join(_TOOLS, "ruby_common"))
+import convert_jmdict as conv  # noqa: E402
+import ruby_epub  # noqa: E402
+from ruby_epub import text_pieces  # noqa: E402
+
+HAN = re.compile(r"[㐀-䶿一-鿿\U00020000-\U0003134f]")
+MAX_WORD = 8
+
+
+# Particles whose own entry lists a full-tone reading first (着 zhāo, 得 dé), but which in running
+# text, standing alone, are almost always read in the neutral tone.
+NEUTRAL_PARTICLES = {"了": "le5", "着": "zhe5", "著": "zhe5", "得": "de5", "的": "de5", "么": "me5", "麼": "me5",
+                     "们": "men5", "們": "men5", "吗": "ma5", "嗎": "ma5", "呢": "ne5", "吧": "ba5"}
+
+
+def load_cedict(path: str, char_readings: dict = None) -> dict:
+    """{headword: [syllable, ...]} for both scripts; the everyday reading of a word wins.
+    char_readings, when given, collects every reading CC-CEDICT has for each character, in any
+    word: {char: {"shi2", "dan4"}}. It is what a model's answer is checked against."""
+    words = {}
+    opener = __import__("gzip").open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if line.startswith("#"):
+                continue
+            m = conv._CEDICT_LINE_RE.match(line.rstrip("\n"))
+            if not m:
+                continue
+            trad, simp, pinyin = m.group(1), m.group(2), m.group(3)
+            syllables = [p for p in pinyin.split(" ") if p]
+            if len(syllables) != len(trad):
+                continue  # 儿化 and odd entries: one syllable per character is what ruby needs
+            proper = conv.is_proper_noun_pinyin(pinyin)
+            if char_readings is not None:
+                for hw in (trad, simp):
+                    for ch, syl in zip(hw, syllables):
+                        char_readings.setdefault(ch, set()).add(normalize_syllable(syl))
+            senses = m.group(5).count("/") + 1
+            for hw in (trad, simp):
+                # The everyday reading wins over a surname's or place's (長 cháng, not Zhǎng), and
+                # among everyday readings the one with more senses (東西 dōngxi "thing").
+                held = words.get(hw)
+                if held is None or (not proper and (held[1] or senses > held[2])):
+                    words[hw] = (syllables, proper, senses)
+    for ch, syl in NEUTRAL_PARTICLES.items():
+        if ch in words:
+            words[ch] = ([syl],)
+    return {hw: held[0] for hw, held in words.items()}
+
+
+def normalize_syllable(syl: str) -> str:
+    """One spelling per reading: lowercase, ü as "u:" (CC-CEDICT's), neutral tone as 5."""
+    syl = syl.strip().lower().replace("ü", "u:").replace("v", "u:")
+    if syl and not syl[-1].isdigit():
+        syl += "5"
+    return syl
+
+
+# ── Readings in context (--ai) ─────────────────────────────────
+
+AI_BATCH_HANZI = 600  # per request
+AI_PROMPT = (
+    "For each numbered passage of Chinese below, give the Hanyu Pinyin of every Chinese character "
+    "as it is read in this context, in order. Write each syllable with a tone number 1-5 after it "
+    "(5 for the neutral tone) and u: for ü, for example ni3 hao3, lu:4. One syllable per Chinese "
+    "character; skip punctuation, digits and Latin letters. Answer with a JSON array holding one "
+    "array of syllables per passage, in the order given, and nothing else.\n\n"
+)
+
+
+def contextual_readings(passages: list, char_readings: dict, ask) -> dict:
+    """{passage: {index of a hanzi in it: syllable}} for the readings a model gave AND the
+    dictionary knows for that character. ask(sentences) -> list of syllable lists, or None.
+
+    Passages are asked about sentence by sentence. A sentence whose answer has the wrong number
+    of syllables is dropped whole: once the count is off there is no telling which syllable
+    belongs to which character."""
+    sentences = {}  # sentence -> [(passage, start), ...]
+    for passage in dict.fromkeys(passages):
+        for start, sentence in ruby_epub.split_sentences(passage):
+            if HAN.search(sentence):
+                sentences.setdefault(sentence, []).append((passage, start))
+    out = {}
+    for batch in ruby_epub.batches(list(sentences), lambda t: len(HAN.findall(t)), AI_BATCH_HANZI):
+        answer = ask(batch)
+        if answer is None:
+            print(f"  No usable answer for {len(batch)} sentence(s); dictionary readings kept", file=sys.stderr)
+            continue
+        for sentence, syllables in zip(batch, answer):
+            positions = [i for i, ch in enumerate(sentence) if HAN.match(ch)]
+            if len(syllables) != len(positions):
+                continue
+            for pos, syl in zip(positions, syllables):
+                syl = normalize_syllable(str(syl))
+                if syl in char_readings.get(sentence[pos], ()):
+                    for passage, start in sentences[sentence]:
+                        out.setdefault(passage, {})[start + pos] = syl
+    return out
+
+
+def segment(text: str, words: dict):
+    """Yield (chunk, syllables or None) over text, longest dictionary match first."""
+    i = 0
+    n = len(text)
+    while i < n:
+        if not HAN.match(text[i]):
+            j = i
+            while j < n and not HAN.match(text[j]):
+                j += 1
+            yield text[i:j], None
+            i = j
+            continue
+        best = 0
+        for length in range(min(MAX_WORD, n - i), 0, -1):
+            if text[i:i + length] in words:
+                best = length
+                break
+        if best == 0:
+            yield text[i], None
+            i += 1
+        else:
+            yield text[i:i + best], words[text[i:i + best]]
+            i += best
+
+
+def _tone(syl: str) -> int:
+    return int(syl[-1]) if syl and syl[-1].isdigit() else 5
+
+
+def spoken_tones(text: str, readings: list, word_start: list = None) -> list:
+    """readings: one syllable or None per character of text. 一 and 不 take the tone they are
+    spoken with before the next syllable: 4th -> 2nd for both, else 一 -> 4th. 一 keeps its 1st
+    tone as a number (第一, 十一, 一月, 一 alone or last, before another numeral) and inside a word
+    it does not begin (统一, 星期一). word_start: True where a dictionary word begins."""
+    out = list(readings)
+    numerals = set("〇零一二三四五六七八九十百千万萬亿億两兩第")
+    for i, syl in enumerate(readings):
+        if syl is None or i + 1 >= len(text) or readings[i + 1] is None:
+            continue
+        ch, after = text[i], readings[i + 1]
+        if ch == "不" and syl.lower() == "bu4" and _tone(after) == 4:
+            out[i] = "bu2"
+        elif (ch == "一" and syl.lower() == "yi1" and (word_start is None or word_start[i])
+              and text[i + 1] not in numerals and text[i + 1] not in "月号號日"
+              and (i == 0 or text[i - 1] not in numerals)):
+            out[i] = "yi2" if _tone(after) == 4 else "yi4"
+    return out
+
+
+def ruby_for(chunk: str, syllables: list, zhuyin: bool) -> str:
+    groups = []  # [characters, reading]
+    for ch, syl in zip(chunk, syllables):
+        syl = syl.lower()  # CC-CEDICT capitalises proper nouns; ruby does not
+        reading = conv.pinyin_syllable_to_zhuyin(syl) if zhuyin else conv.pinyin_syllable_to_marks(syl)
+        if syl == "r5" and ch in "儿兒" and groups and not zhuyin:
+            groups[-1][0] += ch  # erhua: 哪儿 under one nǎr
+            groups[-1][1] += "r"
+            continue
+        groups.append([ch, reading])
+    return "".join(f"<ruby>{html.escape(chars)}<rt>{html.escape(reading)}</rt></ruby>" for chars, reading in groups)
+
+
+# Tags that stay inside a phrase: the tone of 不 in 不<em>是</em> depends on the next word all the same.
+INLINE_TAGS = {"a", "abbr", "b", "bdi", "bdo", "big", "cite", "code", "dfn", "em", "font", "i", "kbd", "mark", "q",
+               "s", "samp", "small", "span", "strike", "strong", "sub", "sup", "tt", "u", "var"}
+_TAG_NAME = re.compile(r"<\s*/?\s*([A-Za-z][\w:.-]*)")
+
+
+def _is_inline_tag(piece: str) -> bool:
+    m = _TAG_NAME.match(piece)
+    return bool(m) and m.group(1).lower().split(":")[-1] in INLINE_TAGS
+
+
+def annotate_xhtml(doc: str, words: dict, skip: set, zhuyin: bool, contextual: dict = None,
+                   citation: bool = False) -> str:
+    """contextual: {text: {index: syllable}} from contextual_readings(), overriding the
+    dictionary's reading character by character. citation keeps dictionary tones (no 一/不
+    sandhi). Readings are decided over a phrase: text joined across inline tags, up to a block
+    tag or existing ruby."""
+    pieces = list(text_pieces(doc))
+    plans = {}  # piece index -> [text, chunks, readings, word_start, word_len]
+    run = []
+
+    def finish_run():
+        if not run:
+            return
+        text = "".join(plans[k][0] for k in run)
+        readings = [r for k in run for r in plans[k][2]]
+        starts = [w for k in run for w in plans[k][3]]
+        lengths = [n for k in run for n in plans[k][4]]
+        # 地 standing alone after a doubled adjective is the adverb marker: 慢慢地 mànmàn de, not dì.
+        for i in range(2, len(text)):
+            if (text[i] == "地" and lengths[i] == 1 and text[i - 1] == text[i - 2] and HAN.match(text[i - 1])
+                    and readings[i] == "di4"):
+                readings[i] = "de5"
+        if not citation:
+            readings = spoken_tones(text, readings, starts)
+        offset = 0
+        for k in run:
+            n = len(plans[k][0])
+            plans[k][2] = readings[offset:offset + n]
+            offset += n
+        run.clear()
+
+    for k, (piece, is_text) in enumerate(pieces):
+        if not is_text:
+            if not _is_inline_tag(piece):
+                finish_run()
+            continue
+        text = html.unescape(piece)
+        override = (contextual or {}).get(text, {})
+        chunks = list(segment(text, words))
+        readings, starts, lengths = [], [], []
+        for chunk, syllables in chunks:
+            for c in range(len(chunk)):
+                pos = len(readings)
+                readings.append(override.get(pos, syllables[c] if syllables else None))
+                starts.append(c == 0)
+                lengths.append(len(chunk))
+        plans[k] = [text, chunks, readings, starts, lengths]
+        run.append(k)
+    finish_run()
+
+    out = []
+    for k, (piece, is_text) in enumerate(pieces):
+        if not is_text or not HAN.search(plans[k][0]):
+            out.append(piece)
+            continue
+        _, chunks, readings, _, _ = plans[k]
+        built = []
+        offset = 0
+        for chunk, _ in chunks:
+            mine = readings[offset:offset + len(chunk)]
+            if chunk in skip or any(r is None for r in mine):
+                built.append(html.escape(chunk, quote=False))
+            else:
+                built.append(ruby_for(chunk, mine, zhuyin))
+            offset += len(chunk)
+        out.append("".join(built))
+    return "".join(out)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("epub")
+    ap.add_argument("output")
+    ap.add_argument("--cedict", required=True, help="CC-CEDICT text file (.u8/.txt, optionally .gz)")
+    ap.add_argument("--frequency", help="word list for --skip-top (jieba dict.txt, BCC, SUBTLEX)")
+    ap.add_argument("--skip-top", type=int, default=0, help="leave the N commonest words unannotated")
+    ap.add_argument("--zhuyin", action="store_true", help="bopomofo instead of pinyin")
+    ap.add_argument("--citation-tones", action="store_true",
+                    help="dictionary tones only: no 一/不 tone change in context")
+    ruby_epub.add_ai_arguments(ap, "pick each character's reading in context")
+    args = ap.parse_args()
+    api_key = ruby_epub.api_key_from(args, ap) if args.ai else ""
+
+    char_readings = {} if args.ai else None
+    words = load_cedict(args.cedict, char_readings)
+    print(f"CC-CEDICT: {len(words):,} headwords")
+    skip = set()
+    if args.skip_top > 0:
+        if not args.frequency:
+            ap.error("--skip-top needs --frequency")
+        ranked = sorted(conv.load_frequency(args.frequency).items(), key=lambda kv: -kv[1])
+        skip = {w for w, _ in ranked[: args.skip_top]}
+        print(f"Skipping the {len(skip):,} commonest words")
+
+    def annotate(name: str, doc: str) -> str:
+        contextual = None
+        if args.ai:
+            passages = [html.unescape(p) for p, is_text in text_pieces(doc) if is_text]
+            contextual = contextual_readings(
+                passages, char_readings, lambda batch: ruby_epub.ask_per_passage(batch, AI_PROMPT, api_key))
+            print(f"  {name}: {sum(len(v) for v in contextual.values()):,} readings confirmed in context")
+        return annotate_xhtml(doc, words, skip, args.zhuyin, contextual, args.citation_tones)
+
+    annotated = ruby_epub.rewrite_epub(args.epub, args.output, annotate)
+    print(f"Wrote {args.output}: {annotated} document(s) annotated")
+
+
+if __name__ == "__main__":
+    main()

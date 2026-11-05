@@ -2,15 +2,22 @@
 // streak boundaries, session counting, per-language independence, and the save/load round trip.
 #include <HalStorage.h>  // the stub: provides testRoot()
 #include <I18n.h>
+#include <SdSystemDir.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
+#include "BookActivity.h"
 #include "BookStats.h"
+#include "BookStatsDownload.h"
 #include "ReadingStatsStore.h"
+#include "util/DateFormat.h"
 
 namespace {
 
@@ -104,6 +111,20 @@ TEST_F(StatsTest, WeekMinutesSaturateInsteadOfWrapping) {
   auto& s = READING_STATS_STORE;
   for (uint8_t d = 3; d <= 8; d++) s.addMinutes(Y, M, d, UINT16_MAX);
   EXPECT_EQ(s.getMinutesThisWeek(Y, M, 8), UINT16_MAX);
+}
+
+// The week runs Monday to today. 2026-10-04 is a Sunday, so all seven days count; the weekday
+// was once computed a day late, which made Sunday a Monday and the week a single day.
+TEST_F(StatsTest, WeekMinutesCoverMondayThroughToday) {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(2026, 9, 27, 100);  // the Sunday before: last week
+  for (uint8_t d = 28; d <= 30; d++) s.addMinutes(2026, 9, d, 10);
+  for (uint8_t d = 1; d <= 4; d++) s.addMinutes(2026, 10, d, 10);
+  EXPECT_EQ(s.getMinutesThisWeek(2026, 10, 4), 70);
+  EXPECT_EQ(s.getMinutesThisWeek(2026, 9, 28), 10);  // a Monday: itself only
+  s.addLanguageMinutes("zh", 5, 2026, 9, 28);
+  s.addLanguageMinutes("zh", 5, 2026, 10, 4);
+  EXPECT_EQ(s.getMinutesThisWeek("zh", 2026, 10, 4), 10);
 }
 
 // The history used to be a 365-entry ring, which silently forgot the year before last.
@@ -246,7 +267,11 @@ TEST_F(StatsTest, LanguageNameIgnoresRegionSubtagAndCase) {
   EXPECT_STREQ(I18n::languageNameForCode("JA"), I18n::languageNameForCode("ja"));
   EXPECT_STREQ(I18n::languageNameForCode("pt_BR"), I18n::languageNameForCode("pt"));
   // A language with no shipped UI must report a miss, not fall back to English.
-  EXPECT_EQ(I18n::languageNameForCode("zh"), nullptr);
+  EXPECT_EQ(I18n::languageNameForCode("xx"), nullptr);
+  // Chinese has two script UIs but one stats bucket: a shared endonym rather than a miss.
+  EXPECT_STREQ(I18n::languageNameForCode("zh-Hant"), I18n::languageNameForCode("zh"));
+  EXPECT_STRNE(I18n::languageNameForCode("zh"), nullptr);
+  EXPECT_STRNE(I18n::languageNameForCode("yue"), nullptr);
   EXPECT_EQ(I18n::languageNameForCode(""), nullptr);
 }
 
@@ -415,14 +440,829 @@ TEST_F(StatsTest, Version2FileLoadsWithZeroCounters) {
   EXPECT_EQ(b.getSentencesSaved(), 0u);
 }
 
-TEST_F(StatsTest, DaySpanCountsCalendarDaysFirstToLast) {
+// The stamp tells how long the read took: its time and its reading days up to the finish. A reopening
+// after the finish day adds nothing to it.
+TEST_F(StatsTest, ReadUntilTheFinish) {
   BookStats b;
   ASSERT_TRUE(b.load("/Japanese/span.epub"));
-  EXPECT_EQ(b.getDaySpan(), 0);
-  b.recordMinutes(2026, 2, 27, 5);
-  EXPECT_EQ(b.getDaySpan(), 1) << "one reading day is a one-day read";
-  b.recordMinutes(2026, 3, 2, 5);
-  EXPECT_EQ(b.getDaySpan(), 4) << "Feb 27 to Mar 2, across a non-leap February";
-  b.recordMinutes(2027, 3, 2, 5);
-  EXPECT_EQ(b.getDaySpan(), 369);
+  uint32_t minutes = 1;
+  int days = 1;
+  b.readUntil(2026, 10, 24, minutes, days);
+  EXPECT_EQ(minutes, 0u);
+  EXPECT_EQ(days, 0);
+  b.recordMinutes(2026, 10, 20, 300);
+  b.recordMinutes(2026, 10, 22, 400);
+  b.recordMinutes(2026, 10, 24, 635);
+  b.recordMinutes(2026, 10, 27, 3);  // reopened after finishing
+  b.readUntil(2026, 10, 24, minutes, days);
+  EXPECT_EQ(minutes, 1335u);
+  EXPECT_EQ(days, 3) << "the 20th, 22nd and 24th: days read, not the span";
+  b.readUntil(2027, 3, 2, minutes, days);
+  EXPECT_EQ(days, 4);
+}
+
+// Every device's history (bookactivity) shows on top of this card's: the server's earlier start, another
+// device's opens as reading days, the larger time per day. It is never saved into this card's file.
+TEST_F(StatsTest, EveryDeviceHistoryShowsButIsNeverSaved) {
+  const std::string path = "/Japanese/everywhere.epub";
+  {
+    BookStats b;
+    ASSERT_TRUE(b.load(path.c_str()));
+    b.recordMinutes(2026, 10, 23, 3);
+    b.recordMinutes(2026, 10, 24, 8);
+    ASSERT_TRUE(b.save());
+  }
+  const auto fileBefore = std::filesystem::file_size(testRoot() + BookStats::filePathFor(path.c_str()));
+
+  bookactivity::Writer w;
+  ASSERT_TRUE(w.begin());
+  const BookDay other[] = {{2026, 5, 24, 0}, {2026, 7, 1, 0}, {2026, 10, 24, 20}};
+  ASSERT_TRUE(w.addBook({bookNameHash("x.epub", 6), {2026, 1, 1, 0}, {}}, other, 1));  // another book
+  ASSERT_TRUE(w.addBook({bookNameHash(path.data(), path.size()), {2026, 5, 24, 0}, {2026, 11, 3, 0}}, other, 3));
+  ASSERT_TRUE(w.commit());
+
+  bookactivity::Book book;
+  std::vector<BookDay> days;
+  ASSERT_TRUE(bookactivity::find(path, book, days));
+  EXPECT_EQ(book.started.month, 5);
+  EXPECT_EQ(book.finished.day, 3);
+  ASSERT_EQ(days.size(), 3u);
+  EXPECT_FALSE(bookactivity::find("/Japanese/never-synced.epub", book, days));
+
+  BookStats b;
+  ASSERT_TRUE(b.load(path.c_str()));
+  ASSERT_TRUE(bookactivity::find(path, book, days));
+  b.showEveryDevice(book.started, days);
+  uint32_t minutes = 0;
+  int read = 0;
+  b.readUntil(2026, 11, 3, minutes, read);
+  EXPECT_EQ(read, 4) << "24 May and 1 Jul (opened elsewhere), 23 and 24 Oct";
+  EXPECT_EQ(minutes, 23u) << "3 + max(8, 20)";
+  EXPECT_EQ(b.getDays().front().month, 5) << "started when another device first opened it";
+
+  EXPECT_FALSE(b.save());
+  EXPECT_EQ(std::filesystem::file_size(testRoot() + BookStats::filePathFor(path.c_str())), fileBefore);
+}
+
+// What the reader records goes to the journal; a load replays it, and compact() folds it into the
+// stats file. Either way the result must equal applying the same changes in memory.
+TEST_F(StatsTest, JournalReplaysAndCompactsLikeInMemoryUpdates) {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(Y, M, 1, 10);
+  s.addBookMinutes("/a.epub", "ja", 10, Y, M, 1);
+  s.addLanguageMinutes("ja", 10, Y, M, 1);
+  ASSERT_TRUE(s.saveToFile());
+
+  std::vector<ReadingStatsStore::Change> changes(4);
+  changes[0] = {Y, M, 3, 5, "/b.epub", "en", nullptr};
+  changes[1] = {Y, M, 2, 7, "/c.epub", "ja-JP", nullptr};  // an earlier day than the last
+  changes[2].finishedPath = "/b.epub";
+  changes[3] = {Y, M, 3, 4, "/a.epub", "", "/a.epub"};
+
+  // Reference: the same changes applied in memory.
+  ReadingStatsStore ref;
+  ASSERT_TRUE(ref.loadFromFile());
+  for (const auto& c : changes) {
+    if (c.minutes) {
+      ref.addMinutes(c.year, c.month, c.day, c.minutes);
+      ref.addBookMinutes(c.bookPath, c.language, c.minutes, c.year, c.month, c.day);
+      ref.addLanguageMinutes(c.language, c.minutes, c.year, c.month, c.day);
+    }
+    if (c.finishedPath) ref.markBookFinished(c.finishedPath);
+  }
+
+  READING_STATS_STORE = ReadingStatsStore{};
+  for (const auto& c : changes) ASSERT_TRUE(s.record(c));
+  const auto same = [&ref](const ReadingStatsStore& st) {
+    EXPECT_EQ(st.getTotalMinutes(), ref.getTotalMinutes());
+    EXPECT_EQ(st.getDaysRead(), ref.getDaysRead());
+    EXPECT_EQ(st.getBooksFinished(), ref.getBooksFinished());
+    EXPECT_EQ(st.getTotalMinutes("ja"), ref.getTotalMinutes("ja"));
+    EXPECT_EQ(st.getTotalMinutes("en"), ref.getTotalMinutes("en"));
+    EXPECT_EQ(st.getBooks().size(), ref.getBooks().size());
+  };
+  ASSERT_TRUE(s.loadFromFile());  // file + journal replay
+  same(s);
+  s.release();
+
+  ASSERT_TRUE(s.compact());
+  EXPECT_FALSE(std::filesystem::exists(testRoot() + sdsystem::path("reading_stats.log")));
+  ASSERT_TRUE(s.loadFromFile());  // file alone now
+  same(s);
+}
+
+// A record cut short by a power loss is ignored; the ones before it still count.
+TEST_F(StatsTest, TornJournalTailIsIgnored) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.record({Y, M, 5, 12, "/a.epub", "ja", nullptr}));
+  {
+    std::ofstream log(testRoot() + sdsystem::path("reading_stats.log"), std::ios::binary | std::ios::app);
+    const char torn[] = {static_cast<char>(0xA5), 0x07, 0x00};
+    log.write(torn, sizeof(torn));
+  }
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 12u);
+}
+
+// An empty stats file (a save cut off before its first byte) is no history, not a reason to stop
+// recording.
+TEST_F(StatsTest, EmptyStatsFileStillTakesTheJournal) {
+  auto& s = READING_STATS_STORE;
+  {
+    std::ofstream(testRoot() + sdsystem::path("reading_stats.bin"), std::ios::binary);
+  }
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/a.epub", "en", nullptr}));
+  ASSERT_TRUE(s.compact());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 9u);
+}
+
+// ja, then en, then ja again on one day is one ja record, not two.
+TEST_F(StatsTest, SameDayLanguageReturnMergesIntoItsRecord) {
+  auto& s = READING_STATS_STORE;
+  s.addLanguageMinutes("ja", 10, Y, M, 5);
+  s.addLanguageMinutes("en", 5, Y, M, 5);
+  s.addLanguageMinutes("ja", 3, Y, M, 5);
+  EXPECT_EQ(s.getLanguageDays().size(), 2u);
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 5), 13);
+}
+
+// summarize() streams the file and journal; it must agree with the getters over the loaded tables.
+TEST_F(StatsTest, SummaryMatchesTheLoadedTables) {
+  auto& s = READING_STATS_STORE;
+  for (uint8_t d = 1; d <= 6; d++) s.addMinutes(Y, M, d, 10);
+  s.addBookMinutes("/a.epub", "ja", 30, Y, M, 3);
+  s.addBookMinutes("/b.epub", "en", 30, Y, M, 6);
+  s.addLanguageMinutes("ja", 30, Y, M, 3);
+  s.addLanguageMinutes("en", 30, Y, M, 6);
+  s.markBookFinished("/a.epub");
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.record({Y, M, 7, 15, "/b.epub", "en", nullptr}));
+  ASSERT_TRUE(s.record({Y, M, 8, 20, "/c.epub", "ja-JP", "/c.epub"}));
+  ASSERT_TRUE(s.record({Y, M, 8, 0, nullptr, nullptr, "/b.epub"}));
+
+  const ReadingStatsStore::Summary sum = s.summarize(Y, M, 8, "ja");
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(sum.streak, s.getStreak(Y, M, 8));
+  EXPECT_EQ(sum.booksFinished, s.getBooksFinished());
+  EXPECT_EQ(sum.languageBooksFinished, s.getBooksFinished("ja"));
+  EXPECT_EQ(sum.streak, 8);
+  EXPECT_EQ(sum.booksFinished, 3);
+  EXPECT_EQ(sum.languageBooksFinished, 2);
+}
+
+// A fold whose journal removal never happened (power loss) must not count the journal again, and
+// a new journal that starts with the same record must still count.
+TEST_F(StatsTest, FoldedJournalIsNotCountedTwice) {
+  auto& s = READING_STATS_STORE;
+  const std::string log = testRoot() + sdsystem::path("reading_stats.log");
+  ASSERT_TRUE(s.record({Y, M, 5, 10, "/a.epub", "ja", nullptr}));
+  std::filesystem::copy_file(log, log + ".keep");
+  ASSERT_TRUE(s.compact());
+  std::filesystem::rename(log + ".keep", log);  // as if the removal was cut off
+  ASSERT_TRUE(s.compact());
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 10u);
+  s.release();
+
+  std::filesystem::remove(log);
+  ASSERT_TRUE(s.record({Y, M, 5, 10, "/a.epub", "ja", nullptr}));  // identical record, new journal
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 20u);
+}
+
+// A save interrupted between removing the old file and renaming the new one leaves only the
+// complete temp file; it is adopted, not overwritten.
+TEST_F(StatsTest, InterruptedSaveTempIsAdopted) {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(Y, M, 1, 30);
+  ASSERT_TRUE(s.saveToFile());
+  const std::string bin = testRoot() + sdsystem::path("reading_stats.bin");
+  std::filesystem::rename(bin, bin + ".tmp");
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.record({Y, M, 2, 5, "/a.epub", "en", nullptr}));
+  ASSERT_TRUE(s.compact());
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 35u);
+}
+
+// A file shorter than its header is no history; recording carries on.
+TEST_F(StatsTest, TruncatedHeaderIsNoHistory) {
+  auto& s = READING_STATS_STORE;
+  {
+    std::ofstream bin(testRoot() + sdsystem::path("reading_stats.bin"), std::ios::binary);
+    bin.write("\x04\x01", 2);
+  }
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/a.epub", "en", nullptr}));
+  ASSERT_TRUE(s.compact());
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 9u);
+}
+
+// A stats file whose bytes are another file's text (cross-linked clusters) is not stats: it is
+// neither read as history nor rewritten, and the summary claims nothing from it.
+TEST_F(StatsTest, TextFilledStatsFileIsLeftAlone) {
+  auto& s = READING_STATS_STORE;
+  const std::string text = R"({"openEpubPath":"/a.epub","pe":1})";
+  const std::string path = testRoot() + sdsystem::path("reading_stats.bin");
+  {
+    std::ofstream bin(path, std::ios::binary);
+    bin << text;
+  }
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/a.epub", "en", "/a.epub"}));
+  EXPECT_FALSE(s.compact());
+  const auto summary = s.summarize(Y, M, 5, "en");
+  EXPECT_LT(summary.booksFinished, 2u) << "header bytes must not be read as a count";
+  std::ifstream in(path, std::ios::binary);
+  EXPECT_EQ(std::string(std::istreambuf_iterator<char>(in), {}), text) << "the file must not be rewritten";
+}
+
+// A journal header cut short by a power loss is started over, so the records after it count.
+TEST_F(StatsTest, TornJournalHeaderIsStartedOver) {
+  auto& s = READING_STATS_STORE;
+  {
+    std::ofstream log(testRoot() + sdsystem::path("reading_stats.log"), std::ios::binary);
+    log.write("\x5A\x01\x02", 3);
+  }
+  ASSERT_TRUE(s.record({Y, M, 5, 7, "/a.epub", "en", nullptr}));
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 7u);
+}
+
+// Server minutes raise a day to their value and never lower it: merging the same download twice,
+// or one older than what the device recorded since, changes nothing.
+TEST_F(StatsTest, MergeMinutesTakesTheLargerValue) {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(Y, M, 5, 20);
+  s.mergeMinutes(Y, M, 5, 30);
+  s.mergeMinutes(Y, M, 5, 10);
+  s.mergeMinutes(Y, M, 3, 15);  // a day the device never saw
+  s.mergeMinutes(Y, M, 3, 15);
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 5), 30);
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 3), 15);
+  EXPECT_EQ(s.getTotalMinutes(), 45u);
+}
+
+// A saved download is folded in by the next compact(), alongside the journal, and removed.
+TEST_F(StatsTest, CompactMergesSavedDownload) {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(Y, M, 1, 30);
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.record({Y, M, 2, 5, "/a.epub", "en", nullptr}));
+  ASSERT_TRUE(ReadingStatsStore::saveDownload({{Y, M, 1, 20}, {Y, M, 2, 12}, {Y, M, 4, 7}}));
+  ASSERT_TRUE(s.compact());
+  const std::string download = testRoot() + sdsystem::path("reading_stats_download.bin");
+  EXPECT_FALSE(std::filesystem::exists(download));
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 1), 30);  // the device's own larger value stays
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 2), 12);  // the journal's 5, raised
+  EXPECT_EQ(s.getMinutesForDay(Y, M, 4), 7);
+  EXPECT_EQ(s.getTotalMinutes(), 49u);
+  s.release();
+  ASSERT_TRUE(s.compact());  // nothing left to fold: the journal is not replayed twice
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTotalMinutes(), 49u);
+}
+
+namespace {
+// Writes a per-book download as Refresh Stats would, as the ".new" file the next boot folds in.
+void writeBookDownload(
+    const std::vector<std::tuple<std::string, bool, uint32_t, const char*, std::vector<BookDay>>>& books,
+    const bool increment = false) {
+  bookdownload::Writer w;
+  ASSERT_TRUE(w.begin(bookdownload::newPath(), increment));
+  for (const auto& [name, finished, sessions, language, days] : books) {
+    ASSERT_TRUE(w.beginBook(bookdownload::nameHash(name), finished, sessions, language));
+    for (const auto& d : days) ASSERT_TRUE(w.addDay(d));
+    ASSERT_TRUE(w.endBook());
+  }
+  ASSERT_TRUE(w.commit());
+}
+}  // namespace
+
+// Boot folds the download into what the stats keep across books: a language's day is the sum of its
+// books, and books finished elsewhere count, without being counted twice once finished here.
+TEST_F(StatsTest, CompactFoldsBookDownload) {
+  auto& s = READING_STATS_STORE;
+  s.addLanguageMinutes("ja", 10, Y, M, 1);
+  s.markBookFinished("/books/here.epub");
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  writeBookDownload({
+      {"a.epub", true, 3, "ja", {{Y, M, 1, 20}, {Y, M, 2, 5}}},
+      {"b.epub", false, 1, "ja-JP", {{Y, M, 1, 15}}},
+      {"here.epub", true, 2, "en", {}},            // already finished on this card
+      {"scan.xtc", false, 1, "", {{Y, M, 2, 8}}},  // no language: the Unknown tab
+  });
+  ASSERT_TRUE(s.compact());
+  EXPECT_FALSE(std::filesystem::exists(testRoot() + bookdownload::newPath()));
+  EXPECT_TRUE(std::filesystem::exists(testRoot() + bookdownload::path()));  // kept for BookStats
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 1), 35);  // 20 + 15, above the 10 recorded here
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 2), 5);
+  EXPECT_EQ(s.getMinutesForDay("", Y, M, 2), 8);
+  EXPECT_EQ(s.getBooksFinished(), 2);  // here.epub, and a.epub from elsewhere
+  // Finishing a.epub here replaces its stand-in rather than adding to it.
+  s.markBookFinished("/books/a.epub");
+  EXPECT_EQ(s.getBooksFinished(), 2);
+  EXPECT_TRUE(s.isFinished("/books/a.epub"));
+}
+
+// A book on the card takes in its server days when loaded, keeping the larger value per day, and its
+// first open since marks it finished if the server says so.
+TEST_F(StatsTest, BookStatsTakeInDownload) {
+  BookStats::recordOpen("/books/a.epub");  // one local session, no days yet
+  {
+    BookStats b;
+    ASSERT_TRUE(b.load("/books/a.epub"));
+    b.recordMinutes(Y, M, 1, 30);
+    ASSERT_TRUE(b.save());
+  }
+  writeBookDownload({{"a.epub", true, 4, "ja", {{Y, M, 1, 20}, {Y, M, 2, 12}}}});
+  ASSERT_TRUE(READING_STATS_STORE.compact());
+
+  BookStats plain;
+  ASSERT_TRUE(plain.load("/books/a.epub"));  // a save's load leaves the server copy alone
+  EXPECT_EQ(plain.getTotalMinutes(), 30u);
+  BookStats b;
+  ASSERT_TRUE(b.load("/books/a.epub", /*withServerCopy=*/true));
+  EXPECT_EQ(b.getSessions(), 4u);
+  EXPECT_EQ(b.getTotalMinutes(), 42u);  // 30 kept on the 1st, 12 added on the 2nd
+  BookStats other;
+  ASSERT_TRUE(other.load("/books/unknown.epub", /*withServerCopy=*/true));
+  EXPECT_EQ(other.getTotalMinutes(), 0u);
+
+  ASSERT_TRUE(BookStats::recordOpen("/books/a.epub"));
+  ASSERT_TRUE(READING_STATS_STORE.compact());
+  ASSERT_TRUE(READING_STATS_STORE.loadFromFile());
+  EXPECT_TRUE(READING_STATS_STORE.isFinished("/books/a.epub"));
+  EXPECT_EQ(READING_STATS_STORE.getBooksFinished(), 1);  // its stand-in went
+}
+
+// A download of only the changed books replaces those books in the list the card has; the language
+// tabs are rebuilt from the whole list, so an unchanged book's minutes still count.
+TEST_F(StatsTest, IncrementalBookDownloadCombines) {
+  auto& s = READING_STATS_STORE;
+  writeBookDownload({
+      {"a.epub", false, 1, "ja", {{Y, M, 1, 20}}},
+      {"b.epub", false, 1, "ja", {{Y, M, 1, 10}}},
+  });
+  ASSERT_TRUE(s.compact());
+  writeBookDownload({{"a.epub", true, 2, "ja", {{Y, M, 1, 25}, {Y, M, 2, 5}}}}, /*increment=*/true);
+  ASSERT_TRUE(s.compact());
+  EXPECT_FALSE(std::filesystem::exists(testRoot() + bookdownload::newPath()));
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 1), 35);  // a's new 25 plus b's 10, kept from the old list
+  EXPECT_EQ(s.getMinutesForDay("ja", Y, M, 2), 5);
+  EXPECT_EQ(s.getBooksFinished(), 1);
+  s.release();
+
+  bookdownload::Book book;
+  std::vector<BookDay> days;
+  ASSERT_TRUE(bookdownload::find(bookdownload::nameHash("a.epub"), book, days));
+  EXPECT_EQ(book.sessions, 2u);
+  EXPECT_EQ(days.size(), 2u);
+  EXPECT_TRUE(bookdownload::find(bookdownload::nameHash("b.epub"), book, days));
+}
+
+// The end-of-book screen records the finish, then asks whether it was a reopening of a finished book.
+TEST_F(StatsTest, SummaryTellsAReopenedFinishedBook) {
+  auto& s = READING_STATS_STORE;
+  EXPECT_FALSE(s.summarize(Y, M, 5, "en", "/a.epub").alreadyFinished);  // asked before the first finish
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/a.epub", "en", "/a.epub"}));
+  EXPECT_TRUE(s.summarize(Y, M, 6, "en", "/a.epub").alreadyFinished);  // in the journal
+
+  ASSERT_TRUE(s.compact());
+  EXPECT_TRUE(s.summarize(Y, M, 7, "en", "/a.epub").alreadyFinished);  // in the file
+
+  const auto b = s.summarize(Y, M, 7, "en", "/b.epub");
+  EXPECT_FALSE(b.alreadyFinished);
+  EXPECT_EQ(b.booksFinished, 1u);
+}
+
+// The stamp's lookups and sentences stop at the finish: looking words up in a finished book later adds
+// to the book's stats, not to its stamp.
+TEST_F(StatsTest, FinishCountsStayAtTheFinish) {
+  const char* path = "/Japanese/counted.epub";
+  ASSERT_TRUE(BookStats::addMinutes(path, Y, M, 6, 30));
+  ASSERT_TRUE(BookStats::addCounts(path, 40, 3));
+  BookStats b;
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 7, true, b));
+  ASSERT_TRUE(BookStats::addCounts(path, 5, 1));  // reopened later
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 9, false, b));
+  EXPECT_EQ(b.getLookups(), 45u);
+  EXPECT_EQ(b.getLookupsAtFinish(), 40u);
+  EXPECT_EQ(b.getSentencesAtFinish(), 3u);
+}
+
+// The 読了 stamp keeps the first finish day: later visits, flushes and counters must not move it.
+TEST_F(StatsTest, FinishDayIsKeptAcrossReopens) {
+  const char* path = "/Japanese/done.epub";
+  ASSERT_TRUE(BookStats::addMinutes(path, Y, M, 6, 30));
+  BookStats b;
+  uint16_t y = 0;
+  uint8_t m = 0, d = 0;
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 7, true, b));
+  ASSERT_TRUE(b.getFinishDay(y, m, d));
+  EXPECT_EQ(d, 7);
+
+  // Reopened the next day, after reading more and a dictionary lookup.
+  ASSERT_TRUE(BookStats::addMinutes(path, Y, M, 8, 5));
+  ASSERT_TRUE(BookStats::addCounts(path, 1, 0));
+  ASSERT_TRUE(BookStats::recordOpen(path));
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 8, false, b));
+  ASSERT_TRUE(b.getFinishDay(y, m, d));
+  EXPECT_EQ(d, 7);
+  EXPECT_EQ(b.getTotalMinutes(), 35u);
+  EXPECT_EQ(b.getLookups(), 1u);
+}
+
+// A book finished before dates were kept shows its last reading day before today, and nothing is stored.
+TEST_F(StatsTest, BookFinishedEarlierShowsItsLastReadingDayUnsaved) {
+  const char* path = "/Japanese/old.epub";
+  ASSERT_TRUE(BookStats::addMinutes(path, Y, M, 3, 20));
+  ASSERT_TRUE(BookStats::addMinutes(path, Y, M, 8, 5));  // read a little on reopening, before the end
+  BookStats b;
+  uint16_t y = 0;
+  uint8_t m = 0, d = 0;
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 8, false, b));
+  ASSERT_TRUE(b.getFinishDay(y, m, d));
+  EXPECT_EQ(d, 3);
+
+  ASSERT_TRUE(b.load(path));
+  EXPECT_FALSE(b.getFinishDay(y, m, d)) << "a guessed day must not be saved";
+}
+
+// ---- Date display ----
+
+TEST(DateFormat, PatternsPadAndCarryText) {
+  char out[32];
+  formatDate(out, sizeof(out), "DD.MM.YYYY", 2026, 3, 7);
+  EXPECT_STREQ(out, "07.03.2026");
+  formatDate(out, sizeof(out), "YYYY年M月D日", 2026, 3, 7);
+  EXPECT_STREQ(out, "2026年3月7日");
+  formatDate(out, sizeof(out), "N YYYY", 2026, 3, 1, "March");
+  EXPECT_STREQ(out, "March 2026");
+  formatDate(out, sizeof(out), "YYYY. N", 2026, 3, 1, "Március");
+  EXPECT_STREQ(out, "2026. március") << "a month name mid-phrase is lowercased";
+  formatDate(out, 6, "DD.MM.YYYY", 2026, 3, 7);
+  EXPECT_STREQ(out, "07.03") << "truncates to fit";
+}
+
+// Every language's patterns use only known tokens and fit the stamp's 24-byte buffers.
+TEST(DateFormat, EveryLanguageHasUsablePatterns) {
+  auto& i18n = I18n::getInstance();
+  for (uint8_t l = 0; l < static_cast<uint8_t>(Language::_COUNT); l++) {
+    ASSERT_TRUE(i18n.setLanguage(static_cast<Language>(l)));
+    char date[64], heading[64];
+    formatDate(date, sizeof(date), tr(STR_DATE_FORMAT), 2026, 12, 31);
+    formatDate(heading, sizeof(heading), tr(STR_MONTH_YEAR_FORMAT), 2026, 12, 1, tr(STR_MONTH_DEC));
+    const char* code = i18n.getLanguageName(static_cast<Language>(l));
+    EXPECT_NE(strstr(date, "2026"), nullptr) << code << ": " << date;
+    EXPECT_NE(strstr(date, "31"), nullptr) << code << ": " << date;
+    EXPECT_NE(strstr(date, "12"), nullptr) << code << ": " << date;
+    EXPECT_EQ(strpbrk(date, "YMDN"), nullptr) << code << " left a token: " << date;
+    EXPECT_LT(strlen(date), 24u) << code << ": " << date;
+    // The stamp's dates sit inside its ring: CJK languages use the dotted hanko form there.
+    char stamp[24];
+    formatDate(stamp, sizeof(stamp), tr(STR_STAMP_DATE_FORMAT), 2026, 12, 31);
+    EXPECT_EQ(strpbrk(stamp, "YMDN"), nullptr) << code << " left a token: " << stamp;
+    EXPECT_LE(strlen(stamp), 14u) << code << ": " << stamp << " is too wide for the stamp";
+    EXPECT_NE(strstr(heading, tr(STR_MONTH_DEC) + 1), nullptr)
+        << code << ": " << heading;  // case of the first letter may change
+    EXPECT_NE(strstr(heading, "2026"), nullptr) << code << ": " << heading;
+  }
+  i18n.setLanguage(Language::EN);
+}
+
+namespace {
+// A digest as the server's overview would give it, answered on 2026-08-07 (day 9715 since 2000).
+StatsDigest digest(const char* code, const std::vector<int>& readBack, const uint32_t readingDays,
+                   const uint16_t longest, const uint16_t finished, const uint32_t minutes, const uint32_t week) {
+  StatsDigest g{};
+  strncpy(g.code, code, sizeof(g.code) - 1);
+  g.anchorDay = 9715;
+  g.days = 730;
+  for (const int n : readBack) g.history[n >> 3] |= 1 << (n & 7);
+  g.readingDays = readingDays;
+  g.longestStreak = longest;
+  g.booksFinished = finished;
+  g.minutes = minutes;
+  g.weekMinutes = week;
+  return g;
+}
+
+constexpr uint32_t ACCOUNT = 0x1234567;
+
+// The sync on the 7th: this card had read 10 minutes of Japanese that day and finished four books,
+// uploaded them, then fetched the overview. Read on the 7th, 6th and 4th (bits 0, 1, 3) across
+// devices; German only elsewhere.
+void syncOnTheSeventh() {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(Y, M, 7, 10);
+  s.addLanguageMinutes("ja", 10, Y, M, 7);
+  for (const char* name : {"/a.epub", "/b.epub", "/c.epub", "/d.epub"}) s.markBookFinished(name);
+  std::vector<AccountBaseline> baselines;
+  s.accountBaselines(baselines);
+  std::vector<StatsDigest> digests = {digest("", {0, 1, 3}, 40, 9, 3, 600, 100),
+                                      digest("JA", {0, 1}, 10, 2, 1, 300, 50), digest("de", {3}, 5, 1, 0, 900, 0)};
+  ASSERT_TRUE(ReadingStatsStore::saveAccount(digests, baselines, ACCOUNT));
+}
+}  // namespace
+
+// With the account loaded, a day read on any device counts, and what this card reads after the sync
+// adds on top of the server's numbers; without it, this card's own numbers.
+TEST_F(StatsTest, AccountOverviewCountsEveryDevice) {
+  auto& s = READING_STATS_STORE;
+  syncOnTheSeventh();
+  // After the sync: 5 more minutes on the 8th, a fifth book finished, and an XTC file (no language).
+  s.addMinutes(Y, M, 8, 5);
+  s.addLanguageMinutes("ja", 5, Y, M, 8);
+  s.addLanguageMinutes("", 3, Y, M, 8);
+  s.markBookFinished("/e.epub");
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  {
+    const ReadingStatsStore::Loaded stats(ACCOUNT);
+    ASSERT_TRUE(stats.loaded());
+    EXPECT_EQ(s.getStreak(Y, M, 8), 3);  // 8th here, 7th both, 6th elsewhere
+    EXPECT_EQ(s.getStreak(Y, M, 9), 3);  // the 9th not read yet: the streak runs to yesterday
+    EXPECT_EQ(s.getDaysRead(), 41);      // the 8th is new to the server
+    EXPECT_EQ(s.getTotalMinutes(), 605u);
+    EXPECT_EQ(s.getMinutesThisWeek(Y, M, 8), 105);
+    EXPECT_EQ(s.getLongestStreak(), 9);
+    EXPECT_EQ(s.getBooksFinished(), 4);  // the server's three, and the one finished since
+    bool week[7];
+    s.getWeekStatus(Y, M, 8, 5, week);
+    const bool expected[7] = {false, true, false, true, true, true, false};
+    EXPECT_TRUE(std::equal(week, week + 7, expected));
+    EXPECT_EQ(s.getDaysReadInMonth(Y, M), 4);
+
+    EXPECT_EQ(s.getStreak("ja", Y, M, 8), 3);
+    EXPECT_EQ(s.getDaysRead("ja"), 11);
+    EXPECT_EQ(s.getTotalMinutes("ja"), 305u);
+    EXPECT_EQ(s.getMinutesThisWeek("ja", Y, M, 8), 55);
+    EXPECT_EQ(s.getLongestStreak("ja"), 3);  // the run since the sync outgrew the server's 2
+    std::vector<ReadingStatsStore::LanguageSummary> languages;
+    s.getLanguages(languages);
+    ASSERT_EQ(languages.size(), 3u);
+    EXPECT_STREQ(languages[0].code, "de");  // read elsewhere, and most
+    EXPECT_STREQ(languages[1].code, "ja");
+  }
+  const ReadingStatsStore::Loaded own;
+  ASSERT_TRUE(own.loaded());
+  EXPECT_EQ(s.getTotalMinutes(), 15u);
+  EXPECT_EQ(s.getStreak(Y, M, 8), 2);
+  EXPECT_EQ(s.getBooksFinished(), 5);
+}
+
+// Another account's overview is never shown.
+TEST_F(StatsTest, AccountOverviewOfAnotherAccountIgnored) {
+  auto& s = READING_STATS_STORE;
+  syncOnTheSeventh();
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  const ReadingStatsStore::Loaded stats(ACCOUNT + 2);
+  ASSERT_TRUE(stats.loaded());
+  EXPECT_EQ(s.getTotalMinutes(), 10u);
+  EXPECT_EQ(s.getBooksFinished(), 4);
+}
+
+// A refresh's download folded in at boot is the server's data, not reading done here since the sync:
+// the totals stay where they were.
+TEST_F(StatsTest, AccountOverviewIgnoresFoldedDownload) {
+  auto& s = READING_STATS_STORE;
+  syncOnTheSeventh();
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  // Another CrossPoint reader on the account read 20 minutes on the 6th; the server counted them.
+  ASSERT_TRUE(ReadingStatsStore::saveDownload({{Y, M, 6, 20}, {Y, M, 7, 10}}));
+  ASSERT_TRUE(s.compact());
+  const ReadingStatsStore::Loaded stats(ACCOUNT);
+  ASSERT_TRUE(stats.loaded());
+  EXPECT_EQ(s.getTotalMinutes(), 600u);
+  EXPECT_EQ(s.getMinutesThisWeek(Y, M, 8), 100);
+}
+
+// A reopened finished book keeps the stamp number it got when it was finished, both while the finishes
+// are still in the journal and once they are in the file: two Japanese books, an English one, a third
+// Japanese one.
+TEST_F(StatsTest, SummaryKeepsAReopenedBooksPlace) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/a.epub", "ja", "/a.epub"}));
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/b.epub", "ja", "/b.epub"}));
+  ASSERT_TRUE(s.record({Y, M, 6, 9, "/e.epub", "en", "/e.epub"}));
+  ASSERT_TRUE(s.record({Y, M, 7, 9, "/c.epub", "ja", "/c.epub"}));
+  for (int pass = 0; pass < 2; pass++) {
+    const auto newest = s.summarize(Y, M, 7, "ja", "/c.epub");
+    EXPECT_EQ(newest.booksFinished, 4);
+    EXPECT_EQ(newest.languageBooksFinished, 3);
+    ASSERT_TRUE(s.record({Y, M, 8, 0, nullptr, nullptr, "/b.epub"}));  // reopened at its end
+    const auto second = s.summarize(Y, M, 8, "ja", "/b.epub");
+    EXPECT_EQ(second.booksFinished, 2);
+    EXPECT_EQ(second.languageBooksFinished, 2);
+    const auto first = s.summarize(Y, M, 8, "ja", "/a.epub");
+    EXPECT_EQ(first.booksFinished, 1);
+    EXPECT_EQ(first.languageBooksFinished, 1);
+    ASSERT_TRUE(s.compact());  // the second pass reads the same from the file
+  }
+}
+
+// A book finished on another device and brought in by a refresh counts as finished when this card
+// reaches its end: no first finish is recorded, and it keeps the place its stand-in has.
+TEST_F(StatsTest, SummaryKnowsABookFinishedElsewhere) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.record({Y, M, 1, 9, "/here.epub", "ja", "/here.epub"}));
+  ASSERT_TRUE(s.compact());
+  writeBookDownload({{"elsewhere.epub", true, 2, "ja", {{Y, M, 2, 20}}}});
+  ASSERT_TRUE(s.compact());
+  ASSERT_TRUE(s.record({Y, M, 3, 9, "/later.epub", "ja", "/later.epub"}));
+  const auto sum = s.summarize(Y, M, 4, "ja", "/books/elsewhere.epub");
+  EXPECT_TRUE(sum.listRead);
+  EXPECT_TRUE(sum.alreadyFinished);
+  EXPECT_EQ(sum.booksFinished, 2);
+  EXPECT_EQ(sum.languageBooksFinished, 2);
+}
+
+// A book finished without any reading time still counts in its language: its finish carries it.
+TEST_F(StatsTest, FinishWithoutReadingCountsInItsLanguage) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.record({Y, M, 1, 1, "/a.epub", "ja", "/a.epub"}));
+  ReadingStatsStore::Change finishOnly{Y, M, 2, 0, "/b.epub", "ja", "/b.epub"};
+  ASSERT_TRUE(s.record(finishOnly));
+  for (int pass = 0; pass < 2; pass++) {
+    const auto sum = s.summarize(Y, M, 2, "ja", "/b.epub");
+    EXPECT_EQ(sum.booksFinished, 2);
+    EXPECT_EQ(sum.languageBooksFinished, 2);
+    ASSERT_TRUE(s.compact());  // the second pass reads the same from the file
+  }
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getBooksFinished("ja"), 2);
+  s.release();
+}
+
+// Mark as Unread takes a book off the finished list, from the journal and from the file, and its stand-in
+// with it when it was finished on another device.
+TEST_F(StatsTest, MarkedUnreadIsNoLongerFinished) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.record({Y, M, 1, 9, "/a.epub", "ja", "/a.epub"}));
+  ASSERT_TRUE(s.record({Y, M, 2, 9, "/b.epub", "ja", "/b.epub"}));
+  const ReadingStatsStore::Change unread{Y, M, 3, 0, "/a.epub", nullptr, "/a.epub", true};
+  ASSERT_TRUE(s.record(unread));
+  for (int pass = 0; pass < 2; pass++) {
+    const auto a = s.summarize(Y, M, 3, "ja", "/a.epub");
+    EXPECT_FALSE(a.alreadyFinished);
+    EXPECT_EQ(s.summarize(Y, M, 3, "ja", "/c.epub").booksFinished, 1);
+    ASSERT_TRUE(s.loadFromFile());
+    EXPECT_FALSE(s.isFinished("/a.epub"));
+    EXPECT_TRUE(s.isFinished("/b.epub"));
+    EXPECT_EQ(s.getBooksFinished(), 1);
+    EXPECT_EQ(s.getBooksFinished("ja"), 1);
+    s.release();
+    ASSERT_TRUE(s.compact());  // the second pass reads the same from the file
+  }
+
+  // Finished elsewhere, counted under its stand-in.
+  writeBookDownload({{"elsewhere.epub", true, 2, "ja", {{Y, M, 2, 20}}}});
+  ASSERT_TRUE(s.compact());
+  EXPECT_TRUE(s.summarize(Y, M, 4, "ja", "/books/elsewhere.epub").alreadyFinished);
+  const ReadingStatsStore::Change unreadElsewhere{
+      Y, M, 4, 0, "/books/elsewhere.epub", nullptr, "/books/elsewhere.epub", true};
+  ASSERT_TRUE(s.record(unreadElsewhere));
+  EXPECT_FALSE(s.summarize(Y, M, 4, "ja", "/books/elsewhere.epub").alreadyFinished);
+  EXPECT_EQ(s.summarize(Y, M, 4, "ja", "/c.epub").booksFinished, 1);
+  ASSERT_TRUE(s.compact());
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getBooksFinished(), 1);
+  s.release();
+}
+
+// Mark as Unread also forgets the book's finish day, so a later finish stores its own.
+TEST_F(StatsTest, MarkedUnreadForgetsTheFinishDay) {
+  const char* path = "/again.epub";
+  ASSERT_TRUE(BookStats::addMinutes(path, Y, M, 6, 30));
+  BookStats b;
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 7, true, b));
+  ASSERT_TRUE(BookStats::clearFinish(path));
+  ASSERT_TRUE(BookStats::recordFinish(path, Y, M, 9, true, b));
+  uint16_t y = 0;
+  uint8_t m = 0, d = 0;
+  ASSERT_TRUE(b.getFinishDay(y, m, d));
+  EXPECT_EQ(d, 9);
+}
+
+// Marked unread without a clock, the book still goes in the next stats upload: it takes the newest day.
+TEST_F(StatsTest, UnreadWithoutClockStillUploads) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.record({Y, M, 1, 9, "/old.epub", "ja", "/old.epub"}));
+  ASSERT_TRUE(s.record({Y, M, 5, 9, "/new.epub", "ja", nullptr}));
+  const ReadingStatsStore::Change unread{0, 0, 0, 0, "/old.epub", nullptr, "/old.epub", true};
+  ASSERT_TRUE(s.record(unread));
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_FALSE(s.isFinished("/old.epub"));
+  int32_t oldDay = 0, newDay = 0;
+  for (const auto& b : s.getBooks()) (b.path == "/old.epub" ? oldDay : newDay) = b.lastReadDay;
+  EXPECT_EQ(oldDay, newDay);
+  s.release();
+}
+
+// Minutes recorded with a time of day add up per bucket through the journal, survive compact(), and old
+// records without one still count everywhere else.
+TEST_F(StatsTest, TimeOfDayAddsUpThroughJournalAndCompact) {
+  EXPECT_EQ(ReadingStatsStore::timeOfDay(5), 3);
+  EXPECT_EQ(ReadingStatsStore::timeOfDay(6), 0);
+  EXPECT_EQ(ReadingStatsStore::timeOfDay(12), 1);
+  EXPECT_EQ(ReadingStatsStore::timeOfDay(18), 2);
+  EXPECT_EQ(ReadingStatsStore::timeOfDay(23), 2);
+  EXPECT_EQ(ReadingStatsStore::timeOfDay(0), 3);
+
+  auto& s = READING_STATS_STORE;
+  ReadingStatsStore::Change morning{Y, M, 5, 10, "/a.epub", "ja", nullptr};
+  morning.timeOfDay = 0;
+  ReadingStatsStore::Change night{Y, M, 5, 7, "/a.epub", "ja", nullptr};
+  night.timeOfDay = 3;
+  ASSERT_TRUE(s.record(morning));
+  ASSERT_TRUE(s.record({Y, M, 6, 4, "/a.epub", "ja", nullptr}));  // no hour: counted, but in no bucket
+  ASSERT_TRUE(s.record(night));
+  ASSERT_TRUE(s.record(morning));
+
+  const auto check = [&s] {
+    EXPECT_EQ(s.getTotalMinutes(), 31u);
+    EXPECT_EQ(s.getTimeOfDayMinutes(0), 20u);
+    EXPECT_EQ(s.getTimeOfDayMinutes(1), 0u);
+    EXPECT_EQ(s.getTimeOfDayMinutes(2), 0u);
+    EXPECT_EQ(s.getTimeOfDayMinutes(3), 7u);
+  };
+  ASSERT_TRUE(s.loadFromFile());
+  check();
+  s.release();
+  ASSERT_TRUE(s.compact());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  check();
+}
+
+// Refresh Insights brings the account's time of day back as a base the card's own minutes add to, so a reset card
+// neither uploads zeros over the history nor loses what it read before the refresh, and refreshing again or
+// uploading before the fold never counts a minute twice.
+TEST_F(StatsTest, DownloadedTimeOfDayBecomesTheBase) {
+  auto& s = READING_STATS_STORE;
+  ReadingStatsStore::Change morning{Y, M, 5, 10, "/a.epub", "ja", nullptr};
+  morning.timeOfDay = 0;
+  ASSERT_TRUE(s.record(morning));  // a reset card, nothing uploaded from it yet
+  const uint32_t server[4] = {100, 0, 0, 5};
+  const uint32_t nothing[4] = {};
+  ASSERT_TRUE(ReadingStatsStore::saveDownload({{Y, M, 4, 20}}, server, nothing));
+  const uint32_t own[4] = {10, 0, 0, 0};
+  uint32_t base[4] = {};
+  ASSERT_TRUE(ReadingStatsStore::pendingDownloadBase(own, base));  // what an upload before the fold uses
+  EXPECT_EQ(base[0] + own[0], 110u);
+  EXPECT_EQ(base[3], 5u);
+  ASSERT_TRUE(s.compact());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTimeOfDayMinutes(0), 10u) << "own minutes stay this card's";
+  EXPECT_EQ(s.getTimeOfDayBase(0), 100u);
+  EXPECT_EQ(s.getTimeOfDayBase(3), 5u);
+  s.release();
+
+  // That 110 was uploaded (own 10 in it); a second download, before or after the fold, finds the same base.
+  const uint32_t uploaded[4] = {110, 0, 0, 5};
+  ASSERT_TRUE(ReadingStatsStore::saveDownload({}, uploaded, own));
+  ASSERT_TRUE(s.compact());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTimeOfDayBase(0) + s.getTimeOfDayMinutes(0), 110u);
+}
+
+TEST_F(StatsTest, TimeOfDayBaseCountsEachMinuteOnce) {
+  constexpr uint32_t UNKNOWN = ReadingStatsStore::NO_UPLOAD_MARKER;
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(100, 0, 10), 100u);       // nothing uploaded: all own minutes new
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(110, 10, 10), 100u);      // own 10 already on the server
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(110, 10, 25), 100u);      // read 15 since the upload
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(80, 50, 50), 30u);        // another reader added 30
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(110, 110, 10), 110u);     // stats reset after an upload
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(110, UNKNOWN, 30), 80u);  // unknown: assume all on the server
+  EXPECT_EQ(ReadingStatsStore::timeOfDayBaseFrom(5, UNKNOWN, 30), 0u);
+}
+
+// A save cut off inside the time-of-day block is not adopted: the journal, still on the card, holds those minutes.
+TEST_F(StatsTest, TempFileWithoutItsTimeOfDayIsNotAdopted) {
+  auto& s = READING_STATS_STORE;
+  ReadingStatsStore::Change night{Y, M, 5, 7, "/a.epub", "ja", nullptr};
+  night.timeOfDay = 3;
+  ASSERT_TRUE(s.record(night));
+  ASSERT_TRUE(s.loadFromFile());
+  ASSERT_TRUE(s.saveToFile());
+  s.release();
+  const std::string bin = testRoot() + sdsystem::path("reading_stats.bin");
+  std::filesystem::rename(bin, bin + ".tmp");
+  std::filesystem::resize_file(bin + ".tmp", std::filesystem::file_size(bin + ".tmp") - 8);
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getTimeOfDayMinutes(3), 7u) << "replayed from the journal, not lost to the cut-off file";
+  EXPECT_EQ(s.getTotalMinutes(), 7u);
 }

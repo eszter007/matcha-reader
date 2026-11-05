@@ -2,7 +2,7 @@ name: CI (build)
 
 on:
   push:
-    branches: [master]
+    branches: [develop]
   pull_request:
   # Manual runs: build any branch on demand (e.g. to grab the firmware.bin
   # artifact for SD-card flashing without a local toolchain).
@@ -40,7 +40,8 @@ jobs:
           git diff --exit-code || (echo "Please run 'bin/clang-format-fix' to fix formatting issues" && exit 1)
 
   cppcheck:
-    runs-on: ubuntu-latest
+    # 24.04: pioarduino's cppcheck needs libpcre3, which ubuntu-latest (26.04) no longer ships.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:
@@ -77,14 +78,24 @@ jobs:
           # Bump the prefix whenever the Core pin moves: a ~/.platformio restored from a
           # run on a different Core carries that Core's tool-scons, which then fights the
           # platform's over the same package directory.
-          key: pio6119s481-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: pio6119s481-${{ runner.os }}-
+          key: pio6119s481v2-${{ runner.os }}-${{ hashFiles('platformio.ini', 'scripts/patch_pioarduino_cache.py') }}
+          restore-keys: pio6119s481v2-${{ runner.os }}-
 
       - name: Install cppcheck runtime dependency
         run: |
-          # pioarduino's Linux cppcheck binary links against libpcre.so.3.
+          # pioarduino's Linux cppcheck binary links against libpcre.so.3. Ubuntu 26.04 and later no
+          # longer ship libpcre3, so when the runner image lacks it, install Ubuntu 24.04's package
+          # (it depends on libc6 alone), checksum-verified, from the archive or, after 24.04's end
+          # of life, old-releases.
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libpcre3
+          if ! sudo apt-get install -y --no-install-recommends libpcre3; then
+            deb=libpcre3_8.39-15build1_amd64.deb
+            for base in http://archive.ubuntu.com/ubuntu http://old-releases.ubuntu.com/ubuntu; do
+              curl -fsSL -o "$deb" "$base/pool/universe/p/pcre3/$deb" && break
+            done
+            echo "62b2ea8d178a59495df00b777660377e0fb8d716be3fc552439796f77f515d43  $deb" | sha256sum -c -
+            sudo dpkg -i "$deb"
+          fi
 
       - name: Run cppcheck
         run: pio check --fail-on-defect low --fail-on-defect medium --fail-on-defect high
@@ -110,6 +121,12 @@ jobs:
             asset: firmware-x4c.bin
           - env: papermono
             asset: firmware-papermono.bin
+          - env: metalio_eink4
+            asset: firmware-metalio_eink4.bin
+          - env: eego_a4
+            asset: firmware-eego_a4.bin
+          - env: picco
+            asset: firmware-picco.bin
     steps:
       - uses: actions/checkout@v6
         with:
@@ -147,8 +164,8 @@ jobs:
           # run on a different Core carries that Core's tool-scons, which then fights the
           # platform's over the same package directory. Keyed per env as well, so one
           # environment's packages cannot mask another's.
-          key: pio6119s481-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: pio6119s481-${{ runner.os }}-${{ matrix.env }}-
+          key: pio6119s481v2-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini', 'scripts/patch_pioarduino_cache.py') }}
+          restore-keys: pio6119s481v2-${{ runner.os }}-${{ matrix.env }}-
 
       - name: Pin the Core inside the platform's penv
         run: |
@@ -250,7 +267,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build
+          sudo apt-get install -y cmake ninja-build zlib1g-dev
 
       - name: Cache googletest source
         uses: actions/cache@v4

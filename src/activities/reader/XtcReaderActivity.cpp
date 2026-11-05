@@ -20,6 +20,8 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "EpubReaderPercentSelectionActivity.h"
+#include "KOReaderCredentialStore.h"
+#include "KOReaderSyncActivity.h"
 #include "MangaBookmarksActivity.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
@@ -28,9 +30,11 @@
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookProgress.h"
 #include "util/BookmarkFile.h"
 #include "util/BookmarkUtil.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SyncedPosition.h"
 
 bool XtcReaderActivity::loadBook() {
   xtc = makeUniqueNoThrow<Xtc>(bookPath, "/.crosspoint");
@@ -39,7 +43,7 @@ bool XtcReaderActivity::loadBook() {
     return false;
   }
   if (xtc->load()) {
-    sdFontSystem.setJpFallbackNeeded(renderer, false);
+    sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
     return true;
   }
   LOG_ERR("READER", "Failed to load XTC");
@@ -52,6 +56,8 @@ void XtcReaderActivity::onReaderEnter() {
   ignoreNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
   xtc->setupCacheDir();
 
+  // Smart sync moves to another device's position without asking, before the saved one is read.
+  if (KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART) writeSyncedPosition();
   // Load saved progress
   loadProgress();
   loadCachedBookmarks();
@@ -60,6 +66,14 @@ void XtcReaderActivity::onReaderEnter() {
 void XtcReaderActivity::onReaderExit() {
   freePageBuffer();
   xtc.reset();
+}
+
+void XtcReaderActivity::jumpToPercent(const int percent) {
+  if (!xtc) return;
+  const uint32_t total = xtc->getPageCount();
+  uint32_t target = static_cast<uint32_t>(static_cast<float>(percent) / 100.0f * total);
+  if (target >= total && total > 0) target = total - 1;
+  currentPage = target;
 }
 
 void XtcReaderActivity::readerLoop() {
@@ -88,11 +102,16 @@ void XtcReaderActivity::readerLoop() {
 
   // Open the reader menu on Confirm (swallow the release that opened the book from the library),
   // or on the touch menu gesture.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-      ReaderUtils::isTouchMenuGesture(renderer, mappedInput)) {
+  if (!ignoreNextConfirmRelease && ReaderUtils::confirmHoldStartsSync(mappedInput)) {
+    onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SYNC);
+    return;
+  }
+  const bool touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || touchMenu) {
     if (ignoreNextConfirmRelease) {
       ignoreNextConfirmRelease = false;
     } else {
+      if (touchMenu) haptic_feedback::touchAction();
       launchMenu();
     }
     return;
@@ -116,20 +135,24 @@ void XtcReaderActivity::readerLoop() {
       !fromTilt && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP && heldMs >= ReaderUtils::SKIP_HOLD_MS;
   const int skipAmount = skipPages ? 10 : 1;
 
+  const uint32_t before = currentPage;
   if (prevTriggered) {
     if (currentPage >= static_cast<uint32_t>(skipAmount)) {
       currentPage -= skipAmount;
     } else {
       currentPage = 0;
     }
-    requestUpdate();
   } else if (nextTriggered) {
     currentPage += skipAmount;
     if (currentPage >= xtc->getPageCount()) {
       currentPage = xtc->getPageCount();  // Allow showing "End of book"
     }
-    requestUpdate();
   }
+  const bool changed = currentPage != before;
+  // A skip is navigation, not reading: it never counts toward session dwell.
+  notePageTurn(!skipPages && !prevTriggered, changed);
+  if (changed && (touch.prev || touch.next)) haptic_feedback::touchAction(skipPages);
+  requestUpdate();
 }
 
 bool XtcReaderActivity::isAtEndOfBook() const { return xtc && currentPage >= xtc->getPageCount(); }
@@ -162,11 +185,11 @@ void XtcReaderActivity::render(RenderLock&&) {
 
 void XtcReaderActivity::launchMenu() {
   if (!xtc) return;
-  // Free the ~104KB page buffer while the menu is on top: the reader doesn't render underneath a
+  // Free the ~50KB page buffer while the menu is on top: the reader doesn't render underneath a
   // pushed activity, and holding it left too little heap for the menu to load the (Japanese)
   // title glyphs -- the header rendered blank. render() re-allocates it on return. Take the
   // render lock so the render task can't be mid-use of the buffer when it's freed.
-  {
+  if (!psramPageBuffer) {  // a PSRAM buffer costs the menu nothing
     RenderLock lock;
     freePageBuffer();
   }
@@ -211,13 +234,7 @@ void XtcReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction a
       startActivityForResult(
           std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
           [this](const ActivityResult& result) {
-            if (!result.isCancelled && xtc) {
-              const int percent = std::get<PercentResult>(result.data).percent;
-              const uint32_t total = xtc->getPageCount();
-              uint32_t target = static_cast<uint32_t>(static_cast<float>(percent) / 100.0f * total);
-              if (target >= total && total > 0) target = total - 1;
-              currentPage = target;
-            }
+            if (!result.isCancelled) jumpToPercent(std::get<PercentResult>(result.data).percent);
             requestUpdate();
           });
       break;
@@ -244,6 +261,9 @@ void XtcReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction a
     case EpubReaderMenuActivity::MenuAction::SCREENSHOT:
       pendingScreenshot = true;
       requestUpdate();
+      break;
+    case EpubReaderMenuActivity::MenuAction::SYNC:
+      if (launchSync(false)) return;
       break;
     case EpubReaderMenuActivity::MenuAction::DELETE_CACHE: {
       if (xtc) {
@@ -386,16 +406,30 @@ void XtcReaderActivity::renderStatusBarOverlay(const StatusBarOverlayPosition po
 }
 
 void XtcReaderActivity::freePageBuffer() {
-  free(pageBuffer);
+  if (psramPageBuffer) {
+    psramPageBuffer.reset();
+  } else {
+    free(pageBuffer);
+  }
   pageBuffer = nullptr;
   pageBufferSize = 0;
 }
 
-// Allocate the page buffer once (or grow it if a later page is somehow larger). A full XTH 2-bit
-// page is ~104KB -- larger than the biggest free block once the library warmed the font caches
-// (device log: free 124K, maxAlloc 69K, so the malloc failed and showed a memory error). Reclaim
-// the font decompressor's hot-group + glyph slab first to coalesce the heap (same as the EPUB
-// build path); doing it once here, not per page turn, keeps turns fast. Fonts re-warm lazily.
+bool XtcReaderActivity::ensurePsramPageBuffer(const size_t needed) {
+  if (psramPageBuffer && pageBufferSize >= needed) return true;
+  auto buffer = HalMemory::allocatePsram(needed);  // null without PSRAM
+  if (!buffer) return false;
+  freePageBuffer();
+  psramPageBuffer = std::move(buffer);
+  pageBuffer = psramPageBuffer.get();
+  pageBufferSize = needed;
+  return true;
+}
+
+// Allocate the page buffer once (or grow it if a later page is somehow larger). After the library
+// warmed the font caches the biggest free block can be smaller than the buffer, so reclaim the
+// font decompressor's hot-group + glyph slab first to coalesce the heap (same as the EPUB build
+// path); doing it once here, not per page turn, keeps turns fast. Fonts re-warm lazily.
 bool XtcReaderActivity::ensurePageBuffer(size_t needed) {
   if (pageBuffer && pageBufferSize >= needed) return true;
   freePageBuffer();
@@ -417,20 +451,18 @@ void XtcReaderActivity::renderPage() {
   const uint16_t pageHeight = xtc->getPageHeight();
   const uint8_t bitDepth = xtc->getBitDepth();
 
-  // Calculate buffer size for one page
-  // XTG (1-bit): Row-major, ((width+7)/8) * height bytes
-  // XTH (2-bit): Two bit planes, column-major, width * ((height + 7) / 8) * 2 bytes
-  size_t neededSize;
-  if (bitDepth == 2) {
-    neededSize = static_cast<size_t>(pageWidth) * ((static_cast<size_t>(pageHeight) + 7) / 8) * 2;
-  } else {
-    neededSize = ((pageWidth + 7) / 8) * pageHeight;
-  }
+  // XTG (1-bit): Row-major, ((width+7)/8) * height bytes, held whole.
+  // XTH (2-bit): Two column-major bit planes of width * ((height + 7) / 8) bytes each. Only the
+  // first plane is held; the second is streamed from SD for each drawing pass, because the whole
+  // page is larger than the biggest free block on a warm heap. With PSRAM the whole page is held.
+  const size_t planeSize = static_cast<size_t>(pageWidth) * ((static_cast<size_t>(pageHeight) + 7) / 8);
+  const size_t pageSize = bitDepth == 2 ? 2 * planeSize : ((pageWidth + 7) / 8) * pageHeight;
 
-  // Reuse a single page buffer for the whole session (allocated on first render). See
-  // ensurePageBuffer(): it coalesces the heap once and grabs the ~104KB block, instead of a
-  // large malloc/free on every page turn.
-  if (!ensurePageBuffer(neededSize)) {
+  // Reuse a single page buffer for the whole session (allocated on first render, see
+  // ensurePageBuffer()) instead of a large malloc/free on every page turn.
+  const bool wholePage = ensurePsramPageBuffer(pageSize);
+  const size_t neededSize = wholePage || bitDepth != 2 ? pageSize : planeSize;
+  if (!wholePage && !ensurePageBuffer(neededSize)) {
     LOG_ERR("XTR", "Failed to allocate page buffer (%lu bytes, maxAlloc=%u)", neededSize, ESP.getMaxAllocHeap());
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_MEMORY_ERROR), true, EpdFontFamily::BOLD);
@@ -439,10 +471,18 @@ void XtcReaderActivity::renderPage() {
   }
 
   // Load page data
-  size_t bytesRead = xtc->loadPage(currentPage, pageBuffer, neededSize);
-  if (bytesRead == 0) {
+  size_t bytesRead = 0;
+  uint8_t* const buffer = pageBuffer;
+  const xtc::XtcError loadError = xtc->loadPageStreaming(
+      currentPage,
+      [buffer, &bytesRead](const uint8_t* data, size_t size, size_t offset) {
+        memcpy(buffer + offset, data, size);
+        bytesRead = offset + size;
+      },
+      2048, nullptr, nullptr, 0, neededSize);
+  if (loadError != xtc::XtcError::OK || bytesRead != neededSize) {
     LOG_ERR("XTR", "Failed to load page %lu: bufferSize=%lu bitDepth=%u error=%s", currentPage, neededSize, bitDepth,
-            xtc::errorToString(xtc->getLastError()));
+            xtc::errorToString(loadError));
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
@@ -457,91 +497,79 @@ void XtcReaderActivity::renderPage() {
   const uint16_t maxSrcY = pageHeight;
 
   if (bitDepth == 2) {
-    // XTH 2-bit mode: Two bit planes, column-major order
-    // - Columns scanned right to left (x = width-1 down to 0)
-    // - 8 vertical pixels per byte (MSB = topmost pixel in group)
-    // - First plane: Bit1, Second plane: Bit2
-    // - Pixel value = (bit1 << 1) | bit2
-    // - Grayscale: 0=White, 1=Dark Grey, 2=Light Grey, 3=Black
-
-    // width * colBytes, matching the column-major layout getPixelValue() indexes with.
-    const size_t planeSize = static_cast<size_t>(pageWidth) * ((static_cast<size_t>(pageHeight) + 7) / 8);
-    const uint8_t* plane1 = pageBuffer;              // Bit1 plane
-    const uint8_t* plane2 = pageBuffer + planeSize;  // Bit2 plane
-    const size_t colBytes = (pageHeight + 7) / 8;    // Bytes per column (100 for 800 height)
-
-    // Lambda to get pixel value at (x, y)
-    auto getPixelValue = [&](uint16_t x, uint16_t y) -> uint8_t {
-      const size_t colIndex = pageWidth - 1 - x;
-      const size_t byteInCol = y / 8;
-      const size_t bitInByte = 7 - (y % 8);
-      const size_t byteOffset = colIndex * colBytes + byteInCol;
-      const uint8_t bit1 = (plane1[byteOffset] >> bitInByte) & 1;
-      const uint8_t bit2 = (plane2[byteOffset] >> bitInByte) & 1;
-      return (bit1 << 1) | bit2;
+    // XTH 2-bit mode: pixel value = (bit1 << 1) | bit2, 0=White, 1=Dark Grey, 2=Light Grey,
+    // 3=Black. Columns run right to left, 8 vertical pixels per byte, MSB = topmost.
+    // Each pass takes plane 2 (held with PSRAM, else streamed) and combines it bytewise with plane 1:
+    //   any ink (value >= 1)    = bit1 | bit2
+    //   dark gray (value 1)     = ~bit1 & bit2
+    //   any gray (value 1 or 2) = bit1 ^ bit2
+    enum class Pass : uint8_t { Ink, DarkGray, AnyGray };
+    struct PassCtx {
+      GfxRenderer* renderer;
+      const uint8_t* plane1;
+      size_t planeSize;
+      size_t colBytes;
+      uint16_t pageWidth;
+      uint16_t pageHeight;
+      Pass pass;
+      bool state;
+    };
+    PassCtx ctx{&renderer, pageBuffer, planeSize, (pageHeight + 7u) / 8u, pageWidth, pageHeight, Pass::Ink, true};
+    const auto combine = [](PassCtx* c, const uint8_t* data, const size_t size, const size_t offset) {
+      for (size_t i = 0; i < size; i++) {
+        const size_t index = offset + i - c->planeSize;
+        const uint8_t bit1 = c->plane1[index], bit2 = data[i];
+        const uint8_t mask = c->pass == Pass::Ink        ? (bit1 | bit2)
+                             : c->pass == Pass::DarkGray ? static_cast<uint8_t>(~bit1 & bit2)
+                                                         : static_cast<uint8_t>(bit1 ^ bit2);
+        if (!mask) continue;
+        const uint16_t x = c->pageWidth - 1 - index / c->colBytes;
+        const uint16_t y0 = (index % c->colBytes) * 8;
+        for (uint8_t bit = 0; bit < 8; bit++) {
+          if ((mask & (0x80 >> bit)) && y0 + bit < c->pageHeight) c->renderer->drawPixel(x, y0 + bit, c->state);
+        }
+      }
+    };
+    const auto drawPass = [&](const Pass pass, const bool state) -> bool {
+      ctx.pass = pass;
+      ctx.state = state;
+      if (wholePage) {
+        combine(&ctx, pageBuffer + planeSize, planeSize, planeSize);
+        return true;
+      }
+      const xtc::XtcError err = xtc->loadPageStreaming(
+          currentPage,
+          [c = &ctx, &combine](const uint8_t* data, size_t size, size_t offset) { combine(c, data, size, offset); },
+          2048, nullptr, nullptr, planeSize, planeSize);
+      if (err != xtc::XtcError::OK) LOG_ERR("XTR", "Plane 2 stream failed: %s", xtc::errorToString(err));
+      return err == xtc::XtcError::OK;
     };
 
     // Optimized grayscale rendering without storeBwBuffer (saves 48KB peak memory)
     // Flow: BW display → LSB/MSB passes → grayscale display → re-render BW for next frame
-
-    // Count pixel distribution for debugging
-    uint32_t pixelCounts[4] = {0, 0, 0, 0};
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        pixelCounts[getPixelValue(x, y)]++;
-      }
+    // Once the base is on screen a later failed pass only leaves a gray layer incomplete, which
+    // the next page turn redraws.
+    if (!drawPass(Pass::Ink, true)) {
+      renderer.clearScreen();
+      renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+      renderer.displayBuffer();
+      return;
     }
-    LOG_DBG("XTR", "Pixel distribution: White=%lu, DarkGrey=%lu, LightGrey=%lu, Black=%lu", pixelCounts[0],
-            pixelCounts[1], pixelCounts[2], pixelCounts[3]);
-
-    // Pass 1: BW buffer - draw all non-white pixels as black
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        if (getPixelValue(x, y) >= 1) {
-          renderer.drawPixel(x, y, true);
-        }
-      }
-    }
-
     ReaderUtils::displayGrayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
-    // Pass 2: LSB buffer - mark DARK gray only (XTH value 1)
-    // In LUT: 0 bit = apply gray effect, 1 bit = untouched
+    // LSB buffer marks dark gray, MSB buffer marks both grays (in the LUT a 0 bit applies the
+    // gray effect).
     renderer.clearScreen(0x00);
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        if (getPixelValue(x, y) == 1) {  // Dark grey only
-          renderer.drawPixel(x, y, false);
-        }
-      }
-    }
+    drawPass(Pass::DarkGray, false);
     renderer.copyGrayscaleLsbBuffers();
-
-    // Pass 3: MSB buffer - mark LIGHT AND DARK gray (XTH value 1 or 2)
-    // In LUT: 0 bit = apply gray effect, 1 bit = untouched
     renderer.clearScreen(0x00);
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        const uint8_t pv = getPixelValue(x, y);
-        if (pv == 1 || pv == 2) {  // Dark grey or Light grey
-          renderer.drawPixel(x, y, false);
-        }
-      }
-    }
+    drawPass(Pass::AnyGray, false);
     renderer.copyGrayscaleMsbBuffers();
-
-    // Display grayscale overlay
     renderer.displayGrayBuffer();
 
-    // Pass 4: Re-render BW to framebuffer (restore for next frame, instead of restoreBwBuffer)
+    // Re-render BW to the framebuffer for the next frame, instead of restoreBwBuffer.
     renderer.clearScreen();
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        if (getPixelValue(x, y) >= 1) {
-          renderer.drawPixel(x, y, true);
-        }
-      }
-    }
+    drawPass(Pass::Ink, true);
 
     // Cleanup grayscale buffers with current frame buffer
     renderer.cleanupGrayscaleWithFrameBuffer();
@@ -628,9 +656,57 @@ ScreenshotInfo XtcReaderActivity::getScreenshotInfo() const {
     // Clamp to last valid page to avoid sentinel value (currentPage == pageCount)
     uint32_t clampedPage = (pageCount > 0 && currentPage >= pageCount) ? pageCount - 1 : currentPage;
     info.progressPercent = pageCount > 0 ? xtc->calculateProgress(clampedPage) : 0;
+    // XTC progress already counts the visible page as read.
+    info.endProgressPercent = info.progressPercent;
     info.currentPage = static_cast<int>(clampedPage) + 1;
   } else {
     info.currentPage = currentPage + 1;
   }
   return info;
+}
+
+bool XtcReaderActivity::writeSyncedPosition() {
+  syncedPosition::Position position;
+  const uint32_t count = xtc ? xtc->getPageCount() : 0;
+  if (syncedPositionPercent() < 0 || !syncedPosition::load(xtc->getPath(), position)) return false;
+  if (!writePageProgress(xtc->getPath(), syncedPosition::pageOf(position, count))) return false;
+  syncedPosition::dismiss(xtc->getPath());
+  // The page in memory too: leaving the reader saves it over the record otherwise.
+  RenderLock lock(*this);
+  loadProgress();
+  return true;
+}
+
+int XtcReaderActivity::syncedPositionPercent() {
+  syncedPosition::Position position;
+  const uint32_t count = xtc ? xtc->getPageCount() : 0;
+  if (count == 0 || !syncedPosition::load(xtc->getPath(), position)) return -1;
+  const uint32_t targetPage = syncedPosition::pageOf(position, count);
+  // Read past it here since it was fetched: going there would be going back. Pages, not the rounded
+  // percentages, which put neighbouring pages of a long book on the same whole number.
+  uint32_t ownPage = 0;
+  if (readPageProgress(xtc->getPath(), ownPage) && targetPage <= ownPage) {
+    syncedPosition::dismiss(xtc->getPath());
+    return -1;
+  }
+  return static_cast<int>(targetPage * 100 / count);
+}
+
+bool XtcReaderActivity::startShortcutSync() { return KOREADER_STORE.hasCredentials() && launchSync(true); }
+
+bool XtcReaderActivity::launchSync(const bool withClockAndInsights) {
+  if (!xtc) return false;
+  PagedSyncBook paged;
+  paged.page = currentPage;
+  paged.pageCount = xtc->getPageCount();
+  paged.title = xtc->getTitle();
+  paged.author = xtc->getAuthor();
+  auto sync = makeUniqueNoThrow<KOReaderSyncActivity>(renderer, mappedInput, xtc->getPath(), std::move(paged));
+  if (!sync) {
+    LOG_ERR("SYNC", "OOM: sync activity");
+    return false;
+  }
+  if (withClockAndInsights) sync->alsoSyncClockAndInsights();
+  activityManager.replaceActivity(std::move(sync));
+  return true;
 }

@@ -19,6 +19,12 @@ bool PersistableStoreBase::writeDocToFile(const char* path, const JsonDocument& 
   Storage.mkdir("/.crosspoint");
   String json;
   serializeJson(doc, json);
+  // A String that cannot grow stops short without an error, and the short document would replace
+  // a complete file. Write only what serialized in full.
+  if (json.length() != measureJson(doc)) {
+    LOG_ERR("PERSIST", "Serializing %s fell short on low heap; keeping the previous file", path);
+    return false;
+  }
   if (!Storage.writeFile(path, json)) {
     LOG_ERR("PERSIST", "Failed to write %s", path);
     return false;
@@ -27,10 +33,17 @@ bool PersistableStoreBase::writeDocToFile(const char* path, const JsonDocument& 
 }
 
 bool PersistableStoreBase::readDocFromFile(const char* path, JsonDocument& doc) {
-  if (!Storage.exists(path)) {
-    return false;  // Expected on first boot — not an error.
+  String json;
+  if (Storage.exists(path)) {
+    json = Storage.readFile(path);
+  } else {
+    // writeFile() swaps in a complete <path>.tmp by removing <path> and renaming; a stop between
+    // the two leaves only the copy.
+    const String tmp = String(path) + ".tmp";
+    if (!Storage.exists(tmp.c_str())) return false;  // Expected on first boot -- not an error.
+    LOG_INF("PERSIST", "Recovering %s from %s", path, tmp.c_str());
+    json = Storage.readFile(tmp.c_str());
   }
-  String json = Storage.readFile(path);
   if (json.isEmpty()) {
     LOG_ERR("PERSIST", "Failed to read %s (empty)", path);
     return false;

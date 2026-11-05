@@ -1,4 +1,5 @@
 # SD Card Font Families for CrossPoint Reader
+# Font licenses and copyright notices: licenses/fonts.txt.
 #
 # This file is the single source of truth for which fonts are generated,
 # how they're sourced, and how they're presented in the download manifest.
@@ -47,6 +48,17 @@ scriptGroups:
 
 families:
   # ── Serif ──────────────────────────────────────────────────────────────
+
+  - name: Libron
+    description: "Serif optimized for digital reading and e-readers (Latin)"
+    scripts: [latin]
+    intervals: latin-ext
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://raw.githubusercontent.com/nicoverbruggen/ebook-fonts/main/fonts/core/Libron-Regular.ttf"}
+      bold:       {url: "https://raw.githubusercontent.com/nicoverbruggen/ebook-fonts/main/fonts/core/Libron-Bold.ttf"}
+      italic:     {url: "https://raw.githubusercontent.com/nicoverbruggen/ebook-fonts/main/fonts/core/Libron-Italic.ttf"}
+      bolditalic: {url: "https://raw.githubusercontent.com/nicoverbruggen/ebook-fonts/main/fonts/core/Libron-BoldItalic.ttf"}
 
   - name: Literata
     description: "Screen-optimized serif (Latin, Greek, Cyrillic)"
@@ -187,6 +199,17 @@ families:
 
   # ── Sans-serif ─────────────────────────────────────────────────────────
 
+  - name: NotoSans
+    description: "Former built-in sans-serif (Latin, Cyrillic)"
+    scripts: [latin, cyrillic]
+    intervals: builtin,(0x018F-0x018F),(0x0259-0x0259)
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {path: "builtinFonts/source/NotoSans/NotoSans-Regular.ttf"}
+      bold:       {path: "builtinFonts/source/NotoSans/NotoSans-Bold.ttf"}
+      italic:     {path: "builtinFonts/source/NotoSans/NotoSans-Italic.ttf"}
+      bolditalic: {path: "builtinFonts/source/NotoSans/NotoSans-BoldItalic.ttf"}
+
   - name: NotoSansExtended
     description: "Sans-serif (Latin, Greek, Cyrillic, Georgian, Armenian, Ethiopic)"
     scripts: [latin, cyrillic, greek, georgian, armenian, ethiopic]
@@ -303,6 +326,47 @@ families:
     styles:
       regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/Japanese/NotoSerifCJKjp-Regular.otf"}
       bold:       {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/Japanese/NotoSerifCJKjp-Bold.otf"}
+
+  # ── Chinese ─────────────────────────────────────────────────────────────
+  # Region cuts of the same Noto CJK family as the Japanese ones above: identical repertoire,
+  # mainland (SC) or Taiwan/Hong Kong (TC) default glyph forms. Auto-hidden from font pickers and
+  # used as the companion for a Chinese book (SdCardFontSystem::extensionScript).
+
+  - name: NotoSansSC
+    description: "Simplified Chinese sans-serif (CJK, Latin)"
+    scripts: [cjk, latin]
+    intervals: latin-ext,cjk-zh
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf"}
+      bold:       {url: "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Bold.otf"}
+
+  - name: NotoSerifSC
+    description: "Simplified Chinese serif (CJK, Latin)"
+    scripts: [cjk, latin]
+    intervals: latin-ext,cjk-zh
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Regular.otf"}
+      bold:       {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Bold.otf"}
+
+  - name: NotoSansTC
+    description: "Traditional Chinese sans-serif (CJK, Latin)"
+    scripts: [cjk, latin]
+    intervals: latin-ext,cjk-zh
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"}
+      bold:       {url: "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Bold.otf"}
+
+  - name: NotoSerifTC
+    description: "Traditional Chinese serif (CJK, Latin)"
+    scripts: [cjk, latin]
+    intervals: latin-ext,cjk-zh
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/TraditionalChinese/NotoSerifCJKtc-Regular.otf"}
+      bold:       {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/TraditionalChinese/NotoSerifCJKtc-Bold.otf"}
 
   - name: UDDigiKyokasho
     description: "Japanese textbook font (CJK, Latin)"

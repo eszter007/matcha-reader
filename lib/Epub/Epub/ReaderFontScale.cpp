@@ -64,8 +64,6 @@ struct SizeStep {
 };
 constexpr SizeStep SERIF_LADDER[] = {
     {12, NOTOSERIF_12_FONT_ID}, {14, NOTOSERIF_14_FONT_ID}, {16, NOTOSERIF_16_FONT_ID}, {18, NOTOSERIF_18_FONT_ID}};
-constexpr SizeStep SANS_LADDER[] = {
-    {12, NOTOSANS_12_FONT_ID}, {14, NOTOSANS_14_FONT_ID}, {16, NOTOSANS_16_FONT_ID}, {18, NOTOSANS_18_FONT_ID}};
 
 // Ladder containing baseFontId, plus the base's point size. Null when the reader font is
 // not a built-in family (SD-card font, or the JP companion): those are resident at exactly
@@ -76,13 +74,6 @@ const SizeStep* ladderFor(const int baseFontId, size_t& count, uint8_t& basePt) 
       count = std::size(SERIF_LADDER);
       basePt = step.pt;
       return SERIF_LADDER;
-    }
-  }
-  for (const auto& step : SANS_LADDER) {
-    if (step.fontId == baseFontId) {
-      count = std::size(SANS_LADDER);
-      basePt = step.pt;
-      return SANS_LADDER;
     }
   }
   return nullptr;
@@ -164,9 +155,24 @@ int8_t cssLetterSpacingPx(const CssStyle& style, const float emPx) {
       std::clamp(rounded, static_cast<int>(CSS_LETTER_SPACING_MIN_PX), static_cast<int>(CSS_LETTER_SPACING_MAX_PX)));
 }
 
-int32_t cssFontScaleTag(const CssStyle& style) {
-  const float scale = cssFontSizeScale(style);
+int32_t cssFontScaleTag(const CssStyle& style) { return fontScaleTagForScale(cssFontSizeScale(style)); }
+
+int32_t cssBlockFontScaleTag(const CssStyle& style, const int baseFontId) {
+  size_t count = 0;
+  uint8_t basePt = 0;
+  if (ladderFor(baseFontId, count, basePt) != nullptr) return 0;
+  return cssFontScaleTag(style);
+}
+
+bool cssFontSizeIsParentRelative(const CssStyle& style) {
+  if (!style.hasFontSize()) return false;
+  const CssUnit unit = style.fontSize.unit;
+  return unit == CssUnit::Em || unit == CssUnit::Percent || unit == CssUnit::Number;
+}
+
+int32_t fontScaleTagForScale(float scale) {
   if (scale <= 0.0f) return 0;
+  scale = std::clamp(scale, MIN_SCALE, MAX_SCALE);
 
   constexpr int SCALE_ONE = 256;
   constexpr int SCALE_STEP = 32;  // 1/8 of the base size
@@ -177,8 +183,12 @@ int32_t cssFontScaleTag(const CssStyle& style) {
 }
 
 int cssBlockFontId(const CssStyle& style, const int baseFontId) {
-  const float scale = cssFontSizeScale(style);
+  return fontIdForScale(cssFontSizeScale(style), baseFontId);
+}
+
+int fontIdForScale(float scale, const int baseFontId) {
   if (scale <= 0.0f) return 0;
+  scale = std::clamp(scale, MIN_SCALE, MAX_SCALE);
 
   size_t count = 0;
   uint8_t basePt = 0;

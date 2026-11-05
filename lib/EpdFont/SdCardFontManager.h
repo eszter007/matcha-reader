@@ -38,6 +38,12 @@ class SdCardFontManager {
 
   // Unload everything, unregister from renderer.
   void unloadAll(GfxRenderer& renderer);
+  // unloadAll() without clearing the renderer's UI fallback mappings, for a manager whose fonts
+  // no mapping points at.
+  void unloadFonts(GfxRenderer& renderer);
+  // Unload every size but the family's reader size (loadFamilyExtraSize() loads the others).
+  void unloadExtras(GfxRenderer& renderer);
+  size_t extraCount() const { return loaded_.empty() ? 0 : loaded_.size() - 1; }
 
   // Look up the font ID for the loaded family. Returns 0 if nothing loaded
   // or familyName doesn't match.
@@ -61,9 +67,9 @@ class SdCardFontManager {
   };
   static int computeFontId(uint32_t contentHash, const char* familyName, uint8_t pointSize);
 
-  // Load+register a single .cpfont file and append it to loaded_.
+  // Load+register one .cpfont of `family` and append it to loaded_.
   // Returns the font id, or 0 on failure (allocation, read, or id collision).
-  int loadFile(const SdCardFontFileInfo& file, const char* familyName, GfxRenderer& renderer);
+  int loadFile(const SdCardFontFamilyInfo& family, const SdCardFontFileInfo& file, GfxRenderer& renderer);
 
   std::string loadedFamilyName_;
   uint8_t loadedPointSize_ = 0;

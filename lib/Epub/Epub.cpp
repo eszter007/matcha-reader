@@ -4,6 +4,9 @@
 #include <BufferedFile.h>
 #include <BuildScratch.h>
 #include <FsHelpers.h>
+#include <GifImageLayout.h>
+#include <GifLimitedWriter.h>
+#include <GifToBmpConverter.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
@@ -11,6 +14,15 @@
 #include <Txt.h>
 #include <Utf8.h>
 #include <ZipFile.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
+#include <string_view>
+#include <vector>
 
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
@@ -18,6 +30,78 @@
 #include "Epub/parsers/TocNcxParser.h"
 
 namespace {
+// Case-insensitive search for an ASCII needle in [from, end) of `text`.
+size_t findAsciiCaseless(const std::string_view text, const std::string_view needle, const size_t from = 0) {
+  if (needle.empty() || text.size() < needle.size()) return std::string_view::npos;
+  for (size_t i = from; i + needle.size() <= text.size(); ++i) {
+    if (std::equal(needle.begin(), needle.end(), text.begin() + static_cast<std::ptrdiff_t>(i),
+                   [](const char a, const char b) { return std::tolower(static_cast<unsigned char>(a)) == b; })) {
+      return i;
+    }
+  }
+  return std::string_view::npos;
+}
+
+// The value of attribute `name` (lowercase, with its '=') inside one tag's text, unquoted.
+std::string_view tagAttribute(const std::string_view tag, const std::string_view name) {
+  size_t at = 0;
+  while ((at = findAsciiCaseless(tag, name, at)) != std::string_view::npos) {
+    // Only a whole attribute name: `data-href=` must not answer for `href=`.
+    const bool wordStart = at == 0 || std::isspace(static_cast<unsigned char>(tag[at - 1]));
+    at += name.size();
+    if (!wordStart || at >= tag.size()) continue;
+    const char quote = tag[at];
+    if (quote == '"' || quote == '\'') {
+      const size_t end = tag.find(quote, at + 1);
+      if (end == std::string_view::npos) return {};
+      return tag.substr(at + 1, end - at - 1);
+    }
+    const size_t end = tag.find_first_of(" \t\r\n/>", at);
+    return tag.substr(at, end == std::string_view::npos ? std::string_view::npos : end - at);
+  }
+  return {};
+}
+
+// The archive paths of the stylesheets an (X)HTML file's head links. Only the head is read: links
+// that matter come before <body>, and a chapter is otherwise hundreds of KB.
+void collectLinkedStylesheets(const std::string& htmlPath, const std::string& chapterHref,
+                              std::vector<std::string>& out) {
+  out.clear();
+  constexpr size_t HEAD_BYTES = 4096;
+  constexpr size_t MAX_LINKS = 16;
+  HalFile file;
+  if (!Storage.openFileForRead("EBP", htmlPath, file)) return;
+  // Heap, not stack: far past the stack budget, and released before the build allocates.
+  auto buf = makeUniqueNoThrow<char[]>(HEAD_BYTES);
+  if (!buf) {
+    LOG_ERR("EBP", "OOM: %u bytes for stylesheet link scan", static_cast<unsigned>(HEAD_BYTES));
+    return;  // empty: the chapter gets every stylesheet, as before
+  }
+  const int n = file.read(reinterpret_cast<uint8_t*>(buf.get()), HEAD_BYTES);
+  if (n <= 0) return;
+  std::string_view head(buf.get(), static_cast<size_t>(n));
+  if (const size_t body = findAsciiCaseless(head, "<body"); body != std::string_view::npos) {
+    head = head.substr(0, body);
+  }
+  const size_t slash = chapterHref.find_last_of('/');
+  const std::string chapterDir = slash == std::string::npos ? "" : chapterHref.substr(0, slash + 1);
+  out.reserve(4);
+  size_t at = 0;
+  while (out.size() < MAX_LINKS && (at = findAsciiCaseless(head, "<link", at)) != std::string_view::npos) {
+    const size_t end = head.find('>', at);
+    if (end == std::string_view::npos) break;
+    const std::string_view tag = head.substr(at, end - at);
+    at = end;
+    if (findAsciiCaseless(tagAttribute(tag, "rel="), "stylesheet") == std::string_view::npos) continue;
+    std::string_view href = tagAttribute(tag, "href=");
+    href = href.substr(0, href.find_first_of("#?"));
+    if (href.empty() || findAsciiCaseless(href, "://") != std::string_view::npos) continue;
+    const std::string decoded = FsHelpers::decodeUriEscapes(std::string(href));
+    if (decoded.empty()) continue;
+    out.push_back(FsHelpers::normalisePath(decoded[0] == '/' ? decoded : chapterDir + decoded));
+  }
+}
+
 constexpr size_t COVER_WRITE_BUFFER_SIZE = 16 * 1024;
 
 class BufferedFilePrint final : public Print {
@@ -202,9 +286,9 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
           const auto endPos = coverPageHtml.find('"', pos);
           if (endPos != std::string::npos) {
             const auto ref = std::string_view{coverPageHtml}.substr(pos, endPos - pos);
-            // Cover BMP generation supports JPG/PNG only; skip GIF so an unsupported wrapper image
-            // does not block a later supported cover reference.
-            if (FsHelpers::hasPngExtension(ref) || FsHelpers::hasJpgExtension(ref)) {
+            // Cover BMP generation supports JPG/PNG/GIF. Skip unsupported wrappers so a later
+            // supported raster image can still be selected.
+            if (FsHelpers::hasPngExtension(ref) || FsHelpers::hasJpgExtension(ref) || FsHelpers::hasGifExtension(ref)) {
               imageRef = ref;
               break;
             }
@@ -222,6 +306,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   }
 
   bookMetadata.textReferenceHref = opfParser.textReferenceHref;
+  bookMetadata.pageProgressionRtl = opfParser.pageProgressionRtl;
 
   if (!opfParser.tocNcxPath.empty()) {
     tocNcxItem = opfParser.tocNcxPath;
@@ -395,7 +480,20 @@ void Epub::parseCssFiles() const {
   // partial -- was never written, re-triggering this whole parse at each book open.
   bool skippedFileForHeap = false;
   size_t totalRulesParsed = 0;
-  bool cacheOk = cssParser->beginCacheAppend();
+  // Each stylesheet's rules are tagged with its index, so a chapter can apply only the ones it
+  // links. An identical copy is not parsed again (below); its alias points chapters that link it
+  // at the original's rules. Paths are stored normalised, the form the chapter links resolve to.
+  std::vector<std::string> sourcePaths;
+  sourcePaths.reserve(std::min(cssFiles.size(), CssParser::StylesheetFilter::MAX_TRACKED));
+  uint8_t aliases[CssParser::StylesheetFilter::MAX_TRACKED];
+  for (size_t i = 0; i < cssFiles.size() && i < CssParser::StylesheetFilter::MAX_TRACKED; i++) {
+    sourcePaths.push_back(FsHelpers::normalisePath(cssFiles[i]));
+    aliases[i] = static_cast<uint8_t>(i);
+    if (dedupKeys[i] == 0) continue;
+    const auto first = std::find(dedupKeys.begin(), dedupKeys.begin() + static_cast<std::ptrdiff_t>(i), dedupKeys[i]);
+    aliases[i] = static_cast<uint8_t>(first - dedupKeys.begin());
+  }
+  bool cacheOk = cssParser->beginCacheAppend(&sourcePaths, aliases);
   if (!cacheOk) {
     LOG_ERR("EBP", "Could not open CSS cache for writing; parsing without caching");
   }
@@ -411,6 +509,7 @@ void Epub::parseCssFiles() const {
       seenKeys.push_back(dedupKey);
     }
     LOG_DBG("EBP", "Parsing CSS file: %s", cssPath.c_str());
+    cssParser->setSource(cssIndex);
 
     // Check heap before parsing - CSS parsing allocates heavily. The window check is the one that
     // matters: without it the extraction below is attempted, fails on exactly this block, and the
@@ -505,14 +604,30 @@ void Epub::parseCssFiles() const {
 // load in the meta data for the epub file
 bool Epub::hasCssCache() const { return Txt::isTxtOrMd(filepath) || CssParser::hasCacheAt(cachePath); }
 
+// Opens the optional encrypted-entry accessor. A null result without an error
+// means normal ZIP reads should be used. A hard error refuses the open with a
+// user-presentable reason.
+bool Epub::openProtection() {
+  std::string err;
+  decryptor = freeink::content::openProtectedBook(filepath, err);
+  if (!err.empty()) {
+    LOG_ERR("EBP", "protected content unavailable: %s", err.c_str());
+    protectionError = err;
+    return false;
+  }
+  if (decryptor) {
+    LOG_DBG("EBP", "protected content; on-read access path open");
+  }
+  return true;
+}
+
 bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, BmpConvertCancelFn shouldCancel,
                 void* cancelCtx) {
   LOG_DBG("EBP", "Loading ePub: %s", filepath.c_str());
   if (shouldCancel && shouldCancel(cancelCtx)) return false;
 
-  // Open the optional content accessor before any parsing. Ships as a no-op
-  // here, so this always succeeds with a null handle and costs one call.
-  if (!contentaccess::open(filepath, &itemSource, &accessError)) return false;
+  // Before any parsing: a protected book's entries are only readable through the accessor.
+  if (!openProtection()) return false;
 
   // Initialize spine/TOC cache
   bookMetadataCache = makeUniqueNoThrow<BookMetadataCache>(cachePath);
@@ -565,8 +680,10 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, BmpConvert
           LOG_ERR("EBP", "Failed to reload cache after CSS rebuild");
           return false;
         }
-        // Invalidate section caches so they are rebuilt with the new CSS
+        // Invalidate section caches so they are rebuilt with the new CSS -- vertical ones too,
+        // which apply the same rules through collectVerticalStyles().
         Storage.removeDir((cachePath + "/sections").c_str());
+        Storage.removeDir((cachePath + "/vsections").c_str());
       }
       // Nothing is kept resident here: validateCache never materializes rules, and
       // parseCssFiles clears the map after each per-file cache flush. Only horizontal section
@@ -734,6 +851,45 @@ bool Epub::loadMetadata(std::string& title, std::string& author) {
   return true;
 }
 
+bool Epub::loadSyncMetadata(SyncMetadata& metadata) {
+  metadata = {};
+
+  ZipFile zip(filepath);
+  if (!zip.open()) {
+    LOG_DBG("EBP", "Could not open ePub for sync metadata: %s", filepath.c_str());
+    return false;
+  }
+
+  std::string contentOpfFilePath;
+  if (!findContentOpfFile(&contentOpfFilePath, nullptr, nullptr, &zip)) {
+    zip.close();
+    return false;
+  }
+
+  size_t contentOpfSize;
+  if (!zip.getInflatedFileSize(contentOpfFilePath.c_str(), &contentOpfSize)) {
+    zip.close();
+    return false;
+  }
+
+  const std::string basePath = contentOpfFilePath.substr(0, contentOpfFilePath.find_last_of('/') + 1);
+  ContentOpfParser parser(cachePath, basePath, contentOpfSize, nullptr, true);
+  if (!parser.setup()) {
+    zip.close();
+    return false;
+  }
+
+  const bool read = zip.readFileToStream(contentOpfFilePath.c_str(), parser, 1024, true);
+  zip.close();
+  if (!read) return false;
+
+  metadata.isbn = std::move(parser.isbn);
+  metadata.asin = std::move(parser.asin);
+  metadata.series = std::move(parser.series);
+  metadata.seriesIndex = parser.seriesIndex;
+  return true;
+}
+
 bool Epub::clearCache() const {
   if (!Storage.exists(cachePath.c_str())) {
     LOG_DBG("EPB", "Cache does not exist, no action needed");
@@ -779,11 +935,87 @@ const std::string& Epub::getLanguage() const {
   return bookMetadataCache->coreMetadata.language;
 }
 
+bool Epub::pageProgressionRtl() const {
+  return bookMetadataCache && bookMetadataCache->isLoaded() && bookMetadataCache->coreMetadata.pageProgressionRtl;
+}
+
 std::string Epub::getCoverBmpPath(bool cropped, bool originalThresholds) const {
   const auto coverFileName =
       std::string("cover") + (originalThresholds ? "_original" : "_legacy_v2") + (cropped ? "_crop" : "");
   return cachePath + "/" + coverFileName + ".bmp";
 }
+
+namespace {
+StaticSemaphore_t gifGenerationMutexStorage;
+const SemaphoreHandle_t gifGenerationMutex = xSemaphoreCreateMutexStatic(&gifGenerationMutexStorage);
+
+void removeGifTemporaryFile(const std::string& path) {
+  if (!Storage.remove(path.c_str()) && Storage.exists(path.c_str())) {
+    LOG_ERR("EBP", "Failed to remove GIF temporary file: %s", path.c_str());
+  }
+}
+
+bool extractGifCover(const Epub& epub, const std::string& href, const std::string& path) {
+  HalFile file;
+  bool success = false;
+  const ScopedCleanup cleanup{[&]() {
+    file.close();
+    if (!success) removeGifTemporaryFile(path);
+  }};
+  if (!Storage.openFileForWrite("EBP", path, file)) {
+    LOG_ERR("EBP", "Failed to create GIF extraction file: %s", path.c_str());
+    return false;
+  }
+  GifLimitedWriter limited(file, GifCommon::MAX_FILE_BYTES);
+  success = epub.readItemContentsToStream(href, limited, 1024);
+  const bool closed = file.close();
+  success = success && closed;
+  if (!success) LOG_ERR("EBP", "GIF extraction failed, exceeded byte limit, or could not close: %s", path.c_str());
+  return success;
+}
+
+template <typename Convert>
+bool generateGifBmp(const Epub& epub, const std::string& href, const std::string& bmpPath, Convert convert) {
+  if (!gifGenerationMutex || xSemaphoreTake(gifGenerationMutex, portMAX_DELAY) != pdTRUE) {
+    LOG_ERR("EBP", "Failed to lock GIF cache generation");
+    return false;
+  }
+  const ScopedCleanup unlock{[]() { xSemaphoreGive(gifGenerationMutex); }};
+  // Another caller may have completed this cache while we waited.
+  if (Storage.exists(bmpPath.c_str())) return true;
+
+  const auto gifTempPath = epub.getCachePath() + "/.cover.gif";
+  const auto bmpTempPath = bmpPath + ".tmp";
+  if (!extractGifCover(epub, href, gifTempPath)) return false;
+
+  HalFile gifFile;
+  if (!Storage.openFileForRead("EBP", gifTempPath, gifFile)) {
+    LOG_ERR("EBP", "Failed to open extracted GIF: %s", gifTempPath.c_str());
+    removeGifTemporaryFile(gifTempPath);
+    return false;
+  }
+  HalFile bmpFile;
+  if (!Storage.openFileForWrite("EBP", bmpTempPath, bmpFile)) {
+    LOG_ERR("EBP", "Failed to create GIF BMP: %s", bmpPath.c_str());
+    gifFile.close();
+    removeGifTemporaryFile(gifTempPath);
+    removeGifTemporaryFile(bmpTempPath);
+    return false;
+  }
+
+  bool success = convert(gifFile, bmpFile);
+  const bool sourceClosed = gifFile.close();
+  const bool outputClosed = bmpFile.close();
+  success = success && sourceClosed && outputClosed;
+  removeGifTemporaryFile(gifTempPath);
+  if (success && !Storage.rename(bmpTempPath.c_str(), bmpPath.c_str())) {
+    LOG_ERR("EBP", "Failed to publish GIF BMP: %s", bmpPath.c_str());
+    success = false;
+  }
+  if (!success) removeGifTemporaryFile(bmpTempPath);
+  return success;
+}
+}  // namespace
 
 bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
   // Already generated, return true. Not exists(): openFileForWrite() creates the destination
@@ -814,15 +1046,9 @@ bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
     LOG_DBG("EBP", "Generating BMP from JPG cover image (%s mode%s)", cropped ? "cropped" : "fit",
             originalThresholds ? ", original thresholds" : "");
     const auto coverJpgTempPath = getCachePath() + "/.cover.jpg";
+    if (!extractItemToFile(coverImageHref, coverJpgTempPath)) return false;
 
     HalFile coverJpg;
-    if (!Storage.openFileForWrite("EBP", coverJpgTempPath, coverJpg)) {
-      return false;
-    }
-    readItemContentsToStream(coverImageHref, coverJpg, 1024);
-    // Explicitly close() file before reopening for reading
-    coverJpg.close();
-
     if (!Storage.openFileForRead("EBP", coverJpgTempPath, coverJpg)) {
       return false;
     }
@@ -849,15 +1075,9 @@ bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
     LOG_DBG("EBP", "Generating BMP from PNG cover image (%s mode%s)", cropped ? "cropped" : "fit",
             originalThresholds ? ", original thresholds" : "");
     const auto coverPngTempPath = getCachePath() + "/.cover.png";
+    if (!extractItemToFile(coverImageHref, coverPngTempPath)) return false;
 
     HalFile coverPng;
-    if (!Storage.openFileForWrite("EBP", coverPngTempPath, coverPng)) {
-      return false;
-    }
-    readItemContentsToStream(coverImageHref, coverPng, 1024);
-    // Explicitly close() file before reopening for reading
-    coverPng.close();
-
     if (!Storage.openFileForRead("EBP", coverPngTempPath, coverPng)) {
       return false;
     }
@@ -903,6 +1123,13 @@ bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
     }
 
     return true;
+  }
+
+  if (FsHelpers::hasGifExtension(coverImageHref)) {
+    return generateGifBmp(*this, coverImageHref, getCoverBmpPath(cropped, originalThresholds),
+                          [cropped, originalThresholds](HalFile& gif, Print& bmp) {
+                            return GifToBmpConverter::gifFileToBmpStream(gif, bmp, cropped, originalThresholds);
+                          });
   }
 
   LOG_ERR("EBP", "Cover image is not a supported format, skipping");
@@ -958,6 +1185,8 @@ bool Epub::generateThumbBmpFromSource(int height) {
     return false;
   }
   zip.reset();
+  // The cover of a protected book is encrypted like everything else.
+  if (!decryptor && !openProtection()) return false;
   setupCacheDir();
   return generateThumbBmpForCover(height, metadata->coverItemHref);
 }
@@ -976,25 +1205,9 @@ bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHre
   if (FsHelpers::hasJpgExtension(coverImageHref)) {
     LOG_DBG("EBP", "Generating thumb BMP from JPG cover image");
     const auto coverJpgTempPath = getCachePath() + "/.cover.jpg";
+    if (!extractItemToFile(coverImageHref, coverJpgTempPath, shouldCancel, cancelCtx)) return false;
 
     HalFile coverJpg;
-    if (!Storage.openFileForWrite("EBP", coverJpgTempPath, coverJpg)) {
-      return false;
-    }
-    bool extracted;
-    {
-      BufferedFilePrint bufferedCover(coverJpg);
-      extracted = readItemContentsToStream(coverImageHref, bufferedCover, 1024, false, shouldCancel, cancelCtx);
-      if (extracted) extracted = bufferedCover.finish();
-    }
-    if (!extracted) {
-      coverJpg.close();
-      Storage.remove(coverJpgTempPath.c_str());
-      return false;
-    }
-    // Explicitly close() file before reopening for reading
-    coverJpg.close();
-
     if (!Storage.openFileForRead("EBP", coverJpgTempPath, coverJpg)) {
       return false;
     }
@@ -1025,25 +1238,9 @@ bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHre
   } else if (FsHelpers::hasPngExtension(coverImageHref)) {
     LOG_DBG("EBP", "Generating thumb BMP from PNG cover image");
     const auto coverPngTempPath = getCachePath() + "/.cover.png";
+    if (!extractItemToFile(coverImageHref, coverPngTempPath, shouldCancel, cancelCtx)) return false;
 
     HalFile coverPng;
-    if (!Storage.openFileForWrite("EBP", coverPngTempPath, coverPng)) {
-      return false;
-    }
-    bool extracted;
-    {
-      BufferedFilePrint bufferedCover(coverPng);
-      extracted = readItemContentsToStream(coverImageHref, bufferedCover, 1024, false, shouldCancel, cancelCtx);
-      if (extracted) extracted = bufferedCover.finish();
-    }
-    if (!extracted) {
-      coverPng.close();
-      Storage.remove(coverPngTempPath.c_str());
-      return false;
-    }
-    // Explicitly close() file before reopening for reading
-    coverPng.close();
-
     if (!Storage.openFileForRead("EBP", coverPngTempPath, coverPng)) {
       return false;
     }
@@ -1120,6 +1317,11 @@ bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHre
     }
     Storage.remove(sourcePath.c_str());  // consumed
     return true;
+  } else if (FsHelpers::hasGifExtension(coverImageHref)) {
+    return generateGifBmp(*this, coverImageHref, getThumbBmpPath(height), [height](HalFile& gif, Print& bmp) {
+      // The 2:3 cover box the other formats fill; CoverWorker rejects a thumb of any other size.
+      return GifToBmpConverter::gifFileTo1BitBmpStreamWithSize(gif, bmp, (height * 2) / 3, height);
+    });
   } else {
     LOG_ERR("EBP", "Cover image is not a supported format, skipping thumbnail");
   }
@@ -1141,8 +1343,36 @@ uint8_t* Epub::readItemContentsToBytes(const std::string& itemHref, size_t* size
 
   const std::string path = FsHelpers::normalisePath(itemHref);
 
-  if (contentaccess::handles(itemSource, path)) {
-    return contentaccess::readToBytes(itemSource, path, size, trailingNullByte);
+  // Decode encrypted entries on demand in memory.
+  if (decryptor && decryptor->isEncrypted(path)) {
+    const size_t plainSize = decryptor->decryptedSize(path);
+    if (plainSize > SIZE_MAX - (trailingNullByte ? 1 : 0)) return nullptr;
+    const size_t total = plainSize + (trailingNullByte ? 1 : 0);
+    uint8_t* content = static_cast<uint8_t*>(malloc(total > 0 ? total : 1));
+    if (!content) {
+      LOG_ERR("EBP", "insufficient memory for %s (%u bytes)", path.c_str(), static_cast<unsigned>(total));
+      return nullptr;
+    }
+    struct BufferSink {
+      uint8_t* data;
+      size_t capacity;
+      size_t written;
+    } state{content, plainSize, 0};
+    auto append = [](void* context, const uint8_t* data, size_t size) {
+      auto* target = static_cast<BufferSink*>(context);
+      if (size > target->capacity - target->written) return false;
+      memcpy(target->data + target->written, data, size);
+      target->written += size;
+      return true;
+    };
+    if (!decryptor->decryptToSink(path, append, &state) || state.written != plainSize) {
+      free(content);
+      LOG_ERR("EBP", "content read failed for %s", path.c_str());
+      return nullptr;
+    }
+    if (trailingNullByte) content[plainSize] = 0;
+    if (size) *size = plainSize;
+    return content;
   }
 
   const auto content = ZipFile(filepath).readFileToMemory(path.c_str(), size, trailingNullByte);
@@ -1175,13 +1405,13 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
 
   if (shouldCancel) {
     CancellablePrint cancellable(out, shouldCancel, cancelCtx);
-    if (contentaccess::handles(itemSource, path)) {
+    if (decryptor && decryptor->isEncrypted(path)) {
       return readProtectedItemToStream(path, cancellable, allowEarlyStop);
     }
     return ZipFile(filepath).readFileToStream(path.c_str(), cancellable, chunkSize, allowEarlyStop);
   }
 
-  if (contentaccess::handles(itemSource, path)) {
+  if (decryptor && decryptor->isEncrypted(path)) {
     return readProtectedItemToStream(path, out, allowEarlyStop);
   }
 
@@ -1190,12 +1420,18 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
 
 bool Epub::readProtectedItemToStream(const std::string& path, Print& out, const bool allowEarlyStop) const {
   StopTrackingPrint tracked(out);
-  if (contentaccess::readToStream(itemSource, path, tracked)) return true;
+  auto append = [](void* context, const uint8_t* data, size_t size) {
+    return static_cast<Print*>(context)->write(data, size) == size;
+  };
+  if (decryptor->decryptToSink(path, append, static_cast<Print*>(&tracked))) return true;
   // Same contract as ZipFile::readFileToStream: a sink that stopped taking bytes has what it needs.
-  return allowEarlyStop && tracked.stopped;
+  if (allowEarlyStop && tracked.stopped) return true;
+  LOG_ERR("EBP", "content read failed for %s", path.c_str());
+  return false;
 }
 
-bool Epub::extractItemToFile(const std::string& itemHref, const std::string& destPath) const {
+bool Epub::extractItemToFile(const std::string& itemHref, const std::string& destPath, BmpConvertCancelFn shouldCancel,
+                             void* cancelCtx) const {
   HalFile out;
   if (!Storage.openFileForWrite("EBP", destPath, out)) {
     return false;
@@ -1205,7 +1441,7 @@ bool Epub::extractItemToFile(const std::string& itemHref, const std::string& des
   // 928KB illustration). 16KB chunks cut the round-trips 4x. readFileToStream allocates
   // 2x chunkSize transiently, so gate on the heap and keep 4KB as the tight-heap fallback.
   const size_t chunkSize = ESP.getMaxAllocHeap() >= 96 * 1024 ? 16384 : 4096;
-  const bool ok = readItemContentsToStream(itemHref, out, chunkSize);
+  const bool ok = readItemContentsToStream(itemHref, out, chunkSize, false, shouldCancel, cancelCtx);
   out.flush();
   out.close();
   if (!ok) {
@@ -1300,6 +1536,11 @@ int Epub::getSpineIndexForTocIndex(const int tocIndex) const {
 
 int Epub::getTocIndexForSpineIndex(const int spineIndex) const { return getSpineItem(spineIndex).tocIndex; }
 
+int Epub::getSpineIndexForSize(const size_t bytes) const {
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded() || static_cast<uint64_t>(bytes) > UINT32_MAX) return -1;
+  return bookMetadataCache->getSpineIndexForSize(static_cast<uint32_t>(bytes));
+}
+
 size_t Epub::getBookSize() const {
   if (!bookMetadataCache || !bookMetadataCache->isLoaded() || bookMetadataCache->getSpineCount() == 0) {
     return 0;
@@ -1373,4 +1614,12 @@ int Epub::resolveHrefToSpineIndex(const std::string& href) const {
     if (spineFilename == targetFilename) return i;
   }
   return -1;
+}
+
+CssParser::StylesheetFilter Epub::stylesheetFilterFor(const std::string& htmlPath,
+                                                      const std::string& chapterHref) const {
+  if (!cssParser) return {};
+  std::vector<std::string> linked;
+  collectLinkedStylesheets(htmlPath, chapterHref, linked);
+  return cssParser->stylesheetFilterFor(linked);
 }

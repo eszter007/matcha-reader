@@ -99,9 +99,14 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
     // isn't stored, but the interval table is sorted with contiguous offsets, so the last
     // interval gives it in O(1). Only reached for built-in compressed fonts, whose interval
     // table is always complete (SD fonts have groups == nullptr and never get here).
-    if (fontData->intervals && fontData->intervalCount > 0) {
+    uint32_t glyphCount = 0;
+    if (fontData->codepoints) {
+      glyphCount = fontData->codepointCount;
+    } else if (fontData->intervals && fontData->intervalCount > 0) {
       const EpdUnicodeInterval& lastIv = fontData->intervals[fontData->intervalCount - 1];
-      const uint32_t glyphCount = lastIv.offset + (lastIv.last - lastIv.first + 1);
+      glyphCount = lastIv.offset + (lastIv.last - lastIv.first + 1);
+    }
+    if (glyphCount > 0) {
       if (glyph < fontData->glyph || glyphIndex >= glyphCount) {
         LOG_ERR("GFX", "Glyph/fontData mismatch (index %u, count %u); dropping glyph", glyphIndex, glyphCount);
         return nullptr;
@@ -124,6 +129,9 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
       return sdFont->getOverflowBitmap(glyph);  // may be nullptr for zero-width glyphs
     }
   }
+  // An SD font whose page bitmaps could not be allocated (heap) has none: drop the glyph rather
+  // than index from a null base (device: load fault at 0x57b2c mid-chapter-build).
+  if (fontData->bitmap == nullptr) return nullptr;
   return &fontData->bitmap[glyph->dataOffset];
 }
 
@@ -245,6 +253,7 @@ void GfxRenderer::releaseFrameBufferForBuild() {
   uint8_t* scratch = display.lendFrameBufferStorage(&size);
   frameBuffer = nullptr;
   frameBufferContentsStale_ = true;  // the borrower writes over these bytes
+  frameBufferLoans++;
   if (scratch) {
     buildscratch::lend(scratch, size);
   }
@@ -340,7 +349,7 @@ void GfxRenderer::prewarmFallbackText(const int fontId, const TextGetter getter,
     return;
   }
   // Resolve the fallback id from the first string that actually redirects; a
-  // screen with no CJK strings resolves nothing and this is a no-op.
+  // screen with no non-Latin strings resolves nothing and this is a no-op.
   int fallbackFontId = fontId;
   for (uint32_t i = 0; i < textCount && fallbackFontId == fontId; i++) {
     const char* text = getter(ctx, i);
@@ -390,12 +399,12 @@ void GfxRenderer::ensureSdGlyphsResident(const int fontId, const char* text, con
   }
   // SUP/SUB bits don't select a distinct .cpfont style bitstream — mask to the
   // base style. resolveStyleMask() inside prewarm folds absent styles.
-  // loadKernLig=false: redirected fallback strings (CJK titles, filenames)
-  // have no useful kern pairs, and the ~3KB class-table load plus per-rebuild
-  // mini-matrix build cost heap and SD time exactly where these strings live
-  // (heap-tight UI screens). The reader's PrewarmScope path keeps kern; a
-  // kern-wanting request that subset-hits a kern-free mini tops the matrix up
-  // in prewarmStyle without re-reading glyphs.
+  // loadKernLig=false: redirected fallback strings (non-Latin titles,
+  // filenames) have no useful kern pairs, and the ~3KB class-table load plus
+  // per-rebuild mini-matrix build cost heap and SD time exactly where these
+  // strings live (heap-tight UI screens). The reader's PrewarmScope path keeps
+  // kern; a kern-wanting request that subset-hits a kern-free mini tops the
+  // matrix up in prewarmStyle without re-reading glyphs.
   const uint8_t styleMask = static_cast<uint8_t>(1u << (static_cast<uint8_t>(style) & 0x03));
   sdIt->second->prewarm(text, styleMask, metadataOnly, /*loadKernLig=*/false);
 }
@@ -589,7 +598,8 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
                            const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
                            const bool pixelState, const EpdFontFamily::Style style) {
   if (renderer.grayPlanesAreAbsolute()) renderMode = GfxRenderer::BW;
-  const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
+  EpdGlyph solidFallback;
+  const EpdGlyph* glyph = fontFamily.getGlyphMetrics(cp, solidFallback, style);
   if (!glyph) {
     // Deduplicated per codepoint: the same undrawable character is reached once per occurrence on
     // the page, and 26 identical lines say no more than one does. Render-task only, so the static
@@ -634,6 +644,14 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     }
   }
 
+  if (glyph == &solidFallback) {
+    if constexpr (rotation == TextRotation::Rotated90CW) {
+      renderer.fillRect(cursorX + fontData->ascender - top, cursorY - left - width + 1, height, width, pixelState);
+    } else {
+      renderer.fillRect(cursorX + left, cursorY - top, width, height, pixelState);
+    }
+    return;
+  }
   const uint8_t* bitmap = renderer.getGlyphBitmap(fontData, glyph);
   if (bitmap == nullptr) return;
 
@@ -809,8 +827,23 @@ static inline uint8_t sampleGlyphInk(const uint8_t* bitmap, const bool is2Bit, c
   return static_cast<uint8_t>((top * (65536 - fy) + bottom * fy + 32768) >> 16);
 }
 
+// Mean ink over the block of source texels [x0, x1) x [y0, y1) that one destination pixel covers
+// when a glyph is drawn smaller. A point sample takes one texel of that block and drops the rest,
+// so a one-texel stroke of a hanzi falls between samples and the character loses a line.
+static inline uint8_t averageGlyphInk(const uint8_t* bitmap, const bool is2Bit, const bool binarize, const int gw,
+                                      const int x0, const int y0, const int x1, const int y1) {
+  uint32_t sum = 0;
+  for (int y = y0; y < y1; ++y) {
+    for (int x = x0; x < x1; ++x) sum += glyphTexelInk(bitmap, is2Bit, binarize, y * gw + x);
+  }
+  const int count = (x1 - x0) * (y1 - y0);
+  return count > 0 ? static_cast<uint8_t>(sum / static_cast<uint32_t>(count)) : 0;
+}
+
 // Word Lookup needs a few larger sizes, but the built-in small font is the only one that has
 // the desired CJK fallback. Scale its bitmap directly instead of adding another font family.
+// Rotation turns the scaled grid the way renderCharImpl turns the unscaled one.
+template <TextRotation Rotation = TextRotation::None>
 static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::RenderMode renderMode,
                               const EpdFontFamily& fontFamily, const uint32_t cp, const int cursorX, const int cursorY,
                               const bool pixelState, const EpdFontFamily::Style style, const uint16_t scale) {
@@ -822,13 +855,37 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
 
   const int width = scalePositive(glyph->width, scale);
   const int height = scalePositive(glyph->height, scale);
-  const int baseX = cursorX + scaleSigned(glyph->left, scale);
-  const int baseY = cursorY - scaleSigned(glyph->top, scale);
-  if (!renderer.glyphIntersectsStrip(baseX, baseY, baseX + width - 1, baseY + height - 1)) return;
+  const int left = scaleSigned(glyph->left, scale);
+  const int top = scaleSigned(glyph->top, scale);
+  // dstX/dstY index the scaled glyph grid; plot() maps them to the screen for the rotation.
+  int outerBase;
+  int innerBase;
+  if constexpr (Rotation == TextRotation::Rotated90CW) {
+    // cursorX is the line's top: the glyph's own font places it, as in renderCharImpl.
+    outerBase = cursorX + scaleSigned(fontData->ascender, scale) - top;  // screenX = outerBase + dstY
+    innerBase = cursorY - left;                                          // screenY = innerBase - dstX
+    if (!renderer.glyphIntersectsStrip(outerBase, innerBase - (width - 1), outerBase + height - 1, innerBase)) return;
+  } else if constexpr (Rotation == TextRotation::Rotated90CCW) {
+    outerBase = cursorX + top;   // screenX = outerBase - dstY
+    innerBase = cursorY + left;  // screenY = innerBase + dstX
+    if (!renderer.glyphIntersectsStrip(outerBase - (height - 1), innerBase, outerBase, innerBase + width - 1)) return;
+  } else {
+    outerBase = cursorY - top;   // screenY = outerBase + dstY
+    innerBase = cursorX + left;  // screenX = innerBase + dstX
+    if (!renderer.glyphIntersectsStrip(innerBase, outerBase, innerBase + width - 1, outerBase + height - 1)) return;
+  }
+  const auto plot = [&](const int dstX, const int dstY, const bool state) {
+    if constexpr (Rotation == TextRotation::Rotated90CW) {
+      renderer.drawPixel(outerBase + dstY, innerBase - dstX, state);
+    } else if constexpr (Rotation == TextRotation::Rotated90CCW) {
+      renderer.drawPixel(outerBase - dstY, innerBase + dstX, state);
+    } else {
+      renderer.drawPixel(innerBase + dstX, outerBase + dstY, state);
+    }
+  };
 
-  // Enlarging only. Shrinking keeps the old point sample: it needs the opposite filter (average the
-  // texels a destination pixel covers, so thin stems cannot fall between samples), which is its own
-  // change. At 1:1 drawTextScaled() has already returned above.
+  // Enlarging interpolates between texels; shrinking averages the texels a destination pixel
+  // covers. At 1:1 drawTextScaled() has already returned above.
   const bool interpolate = scale > 256;
   // Guarded by interpolate: scale is caller-supplied and drawTextScaled does not reject 0, which
   // would divide by zero here even though the loops below would not run.
@@ -849,6 +906,7 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
     // Each branch divides only for the coordinate it uses; the other value is never read.
     const int32_t syFP = interpolate ? ((2 * dstY + 1) * stepFP) / 2 - 32768 : 0;
     const int srcY = interpolate ? 0 : std::min<int>(glyph->height - 1, (dstY * 256) / scale);
+    const int srcYEnd = interpolate ? 0 : std::clamp<int>(((dstY + 1) * 256) / scale, srcY + 1, glyph->height);
     for (int dstX = 0; dstX < width; ++dstX) {
       // The BW pass reads the glyph as a solid shape; the grayscale passes need the real tones.
       const bool binarize = renderMode == GfxRenderer::BW && !crispEnlarge;
@@ -858,7 +916,8 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
         ink = sampleGlyphInk(bitmap, fontData->is2Bit, binarize, glyph->width, glyph->height, sxFP, syFP);
       } else {
         const int srcX = std::min<int>(glyph->width - 1, (dstX * 256) / scale);
-        ink = glyphTexelInk(bitmap, fontData->is2Bit, binarize, srcY * glyph->width + srcX);
+        const int srcXEnd = std::clamp<int>(((dstX + 1) * 256) / scale, srcX + 1, glyph->width);
+        ink = averageGlyphInk(bitmap, fontData->is2Bit, binarize, glyph->width, srcX, srcY, srcXEnd, srcYEnd);
       }
       if (renderMode == GfxRenderer::BW) {
         // Half coverage or more takes the pixel. The panel has one bit here, so this cannot be a
@@ -867,13 +926,15 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
         //
         // ink is binarized here, so this is coverage of the shape the old renderer drew, and a
         // point sample is 0 or 255 either way -- an unenlarged glyph renders exactly as before.
-        const bool inked = interpolate ? ink >= 128 : ink > 0;
-        if (inked) renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+        // Shrunk: a third of the block. A stroke one texel wide fills half of a two-texel block
+        // and a third of a three-texel one, and it must survive both.
+        const bool inked = interpolate ? ink >= 128 : ink >= 80;
+        if (inked) plot(dstX, dstY, pixelState);
         continue;
       }
       if (!fontData->is2Bit) {
         // A 1-bit glyph has no tones to separate into planes: it draws in every pass, as before.
-        if (ink >= 128) renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+        if (ink >= 128) plot(dstX, dstY, pixelState);
         continue;
       }
       // Back to the 4 levels the planes encode. Round-trips exactly for a point sample (85 per
@@ -881,9 +942,9 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
       const uint8_t raw = static_cast<uint8_t>((ink * 3 + 127) / 255);
       const uint8_t bmpVal = 3 - raw;
       if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
-        renderer.drawPixel(baseX + dstX, baseY + dstY, false);
+        plot(dstX, dstY, false);
       } else if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal == 1) {
-        renderer.drawPixel(baseX + dstX, baseY + dstY, false);
+        plot(dstX, dstY, false);
       }
     }
   }
@@ -930,6 +991,16 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
   }
 }
 
+bool GfxRenderer::readPixel(const int x, const int y) const {
+  if (_stripActive) return false;
+  int phyX = 0;
+  int phyY = 0;
+  rotateCoordinates(orientation, x, y, &phyX, &phyY, panelWidth, panelHeight);
+  if (phyX < 0 || phyX >= panelWidth || phyY < 0 || phyY >= panelHeight) return false;
+  const uint8_t byte = frameBuffer[static_cast<uint32_t>(phyY) * panelWidthBytes + (phyX / 8)];
+  return ((byte >> (7 - (phyX % 8))) & 1) == 0;  // a cleared bit is ink, as drawPixel writes it
+}
+
 int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontFamily::Style style,
                               const BidiUtils::BidiBaseDir baseDir, const int8_t letterSpacing) const {
   if (text == nullptr || *text == '\0') {
@@ -937,7 +1008,7 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
   }
 
   // Measure with the same font drawText would render with (see resolveTextFontId)
-  // so wrapping, truncation and centering of CJK strings stay consistent.
+  // so wrapping, truncation and centering of non-Latin strings stay consistent.
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
   const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) {
@@ -951,6 +1022,14 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
   // Redirected SD fallback: batch-load before either advance-based or bounds-based measurement.
   if (resolvedFontId != fontId) ensureSdGlyphsResident(resolvedFontId, renderedText, style, true);
 
+  if (const FallbackScale redirected = redirectScale(fontId, resolvedFontId); !redirected.identity()) {
+    return layoutTextScaled(resolvedFontId, 0, 0, renderedText, redirected.cjk, redirected.nonCjk, /*draw=*/false, true,
+                            style, letterSpacing);
+  }
+  if (const FaceScale face = faceScaleFor(resolvedFontId); !face.identity()) {
+    return layoutTextScaled(resolvedFontId, 0, 0, renderedText, face.own, face.fallback, /*draw=*/false, true, style,
+                            letterSpacing);
+  }
   if (fontIt->second.getFallback() || letterSpacing != 0) {
     return getTextAdvanceX(fontId, renderedText, style, letterSpacing);
   }
@@ -963,7 +1042,18 @@ int GfxRenderer::getTextWidthScaled(const int fontId, const char* text, const ui
                                     const EpdFontFamily::Style style, const BidiUtils::BidiBaseDir baseDir,
                                     const int8_t letterSpacing) const {
   if (scale == 256) return getTextWidth(fontId, text, style, baseDir, letterSpacing);
-  return scalePositive(getTextWidth(fontId, text, style, baseDir, letterSpacing), scale);
+  if (text == nullptr || *text == '\0') return 0;
+  // The same walk drawTextScaled() draws with, measuring only, so the two cannot disagree.
+  const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  const FallbackScale redirected = redirectScale(fontId, resolvedFontId);
+  const FaceScale face = resolvedFontId == fontId ? faceScaleFor(fontId) : FaceScale{};
+  const auto compose = [scale](const uint32_t other) {
+    return static_cast<uint16_t>((static_cast<uint32_t>(scale) * other) >> 8);
+  };
+  std::string visual;
+  return layoutTextScaled(resolvedFontId, 0, 0, resolveVisualText(text, visual, baseDir),
+                          compose(redirected.cjk * face.own >> 8), compose(redirected.nonCjk * face.fallback >> 8),
+                          /*draw=*/false, true, style, letterSpacing);
 }
 
 void GfxRenderer::drawCenteredText(const int fontId, const int y, const char* text, const bool black,
@@ -980,9 +1070,24 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     return;
   }
 
-  // Route CJK-bearing strings to the fallback font when the requested font
+  // Route non-Latin strings to the fallback font when the requested font
   // lacks the glyphs (e.g. Chinese book titles drawn with a Latin UI font).
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  if (const FallbackScale redirected = redirectScale(fontId, resolvedFontId); !redirected.identity()) {
+    // A fallback of another size, drawn at the requested font's: its scaled line box centred in
+    // the one the caller laid out for.
+    const int top = y + (getLineHeight(fontId) - scalePositive(getLineHeight(resolvedFontId), redirected.cjk)) / 2;
+    std::string visual;
+    layoutTextScaled(resolvedFontId, x, top, resolveVisualText(text, visual, baseDir), redirected.cjk,
+                     redirected.nonCjk, /*draw=*/true, black, style, letterSpacing);
+    return;
+  }
+  if (const FaceScale face = faceScaleFor(resolvedFontId); !face.identity()) {
+    std::string visual;
+    layoutTextScaled(resolvedFontId, x, y, resolveVisualText(text, visual, baseDir), face.own, face.fallback,
+                     /*draw=*/true, black, style, letterSpacing);
+    return;
+  }
 
   std::string visual;
   const char* renderedText = resolveVisualText(text, visual, baseDir);
@@ -1053,7 +1158,8 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
       lastBaseX += textAdvance::withLetterSpacing(fp4::toPixel(prevAdvanceFP + kernFP), 1, letterSpacing);
     }
 
-    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    EpdGlyph solidFallback;
+    const EpdGlyph* glyph = font.getGlyphMetrics(cp, solidFallback, style);
 
     lastBaseLeft = glyph ? glyph->left : 0;
     lastBaseWidth = glyph ? glyph->width : 0;
@@ -1087,55 +1193,134 @@ void GfxRenderer::drawTextScaled(const int fontId, const int x, const int y, con
   if (text == nullptr || *text == '\0') return;
 
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  // Both scales apply: the caller's, and the one that brings a fallback to this font's size.
+  const FallbackScale redirected = redirectScale(fontId, resolvedFontId);
+  const auto compose = [scale](const uint16_t other) {
+    return static_cast<uint16_t>((static_cast<uint32_t>(scale) * other) >> 8);
+  };
+  const FaceScale face = resolvedFontId == fontId ? faceScaleFor(fontId) : FaceScale{};
   std::string visual;
-  const char* renderedText = resolveVisualText(text, visual, baseDir);
-  const int yPos = y + scaleSigned(getFontAscenderSize(resolvedFontId), scale);
-  int lastBaseX = x;
-  int lastBaseLeft = 0;
-  int lastBaseWidth = 0;
-  int lastBaseTop = 0;
-  int32_t prevAdvanceFP = 0;
-  // Advance is accumulated UNSCALED and the running total scaled once per glyph, so the pen ends
-  // at exactly x + scalePositive(total) -- the value getTextWidthScaled reports. Scaling each
-  // delta instead rounds every glyph independently, and those errors accumulate: a long word
-  // drawn that way is several pixels wider than it was measured, which is fine for a standalone
-  // string but silently overlaps the next word once scaled text goes through paragraph layout.
-  int unscaledAdvance = 0;
+  layoutTextScaled(resolvedFontId, x, y, resolveVisualText(text, visual, baseDir),
+                   compose(redirected.cjk * face.own >> 8), compose(redirected.nonCjk * face.fallback >> 8),
+                   /*draw=*/true, black, style, letterSpacing);
+}
 
-  if (fontCacheManager_ && fontCacheManager_->isScanning()) {
+namespace {
+// The scale a FaceScale font with sizeFallbacks draws one glyph at. Its own glyphs take `own`. Anything else -- the
+// family's fallback cut, or a global fallback such as an SD font at the reader's size -- takes
+// `fallback`, which is set for the family's fallback cut, corrected to the font the glyph really
+// comes from -- by em for full-width scripts, by line height otherwise: a 16pt SD glyph in an 8pt
+// row must end up 8pt too, not 2/3 of 16.
+struct FaceGlyphScale {
+  const EpdFontData* ownData;
+  int fallbackAdvanceY;  // the family's fallback cut, 0 without one
+  int fallbackEm;        // its full-width advance (12.4 fixed point), 0 when unknown
+
+  FaceGlyphScale(const EpdFontFamily& font, const EpdFontFamily::Style style)
+      : ownData(font.getData(style)), fallbackAdvanceY(0), fallbackEm(0) {
+    if (const EpdFontFamily* fallback = font.getFallback()) {
+      fallbackAdvanceY = fallback->getData(style)->advanceY;
+      if (const EpdGlyph* one = fallback->getGlyph(0x4E00, style)) fallbackEm = one->advanceX;  // 一
+    }
+  }
+
+  // Full-width scripts, whose advance is the font's em in every face: CJK symbols and kana,
+  // ideographs and their extensions, compatibility ideographs and full-width forms.
+  static bool fullWidth(const uint32_t cp) {
+    return (cp >= 0x3000 && cp <= 0x9FFF) || (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0xFF01 && cp <= 0xFF60) ||
+           (cp >= 0x20000 && cp <= 0x3FFFF);
+  }
+
+  uint16_t at(const EpdFontFamily& font, const uint32_t cp, const EpdFontFamily::Style style, const uint16_t own,
+              const uint16_t fallback) const {
+    const EpdFontData* source = font.getDataForGlyph(cp, style);
+    if (source == nullptr || source == ownData) return own;
+    // Matching ems is what makes 西 from one font and 游 from another the same size; line
+    // heights carry each font's own leading and do not.
+    if (fallbackEm > 0 && fullWidth(cp)) {
+      const EpdGlyph* glyph = font.getGlyph(cp, style);
+      if (glyph && glyph->advanceX > 0) {
+        return static_cast<uint16_t>(static_cast<uint32_t>(fallback) * fallbackEm / glyph->advanceX);
+      }
+    }
+    if (fallbackAdvanceY <= 0 || source->advanceY <= 0) return fallback;
+    return static_cast<uint16_t>(static_cast<uint32_t>(fallback) * fallbackAdvanceY / source->advanceY);
+  }
+};
+
+// The em of the font's own glyphs (its 一), 0 when it borrows 一 too.
+int32_t ownFullWidthEm(const EpdFontFamily& font, const EpdFontFamily::Style style) {
+  if (font.getDataForGlyph(0x4E00, style) != font.getData(style)) return 0;
+  const EpdGlyph* one = font.getGlyph(0x4E00, style);
+  return one ? one->advanceX : 0;
+}
+}  // namespace
+
+int GfxRenderer::layoutTextScaled(const int resolvedFontId, const int x, const int y, const char* renderedText,
+                                  const uint16_t scale, const uint16_t nonCjkScale, const bool draw, const bool black,
+                                  const EpdFontFamily::Style style, const int8_t letterSpacing) const {
+  if (draw && fontCacheManager_ && fontCacheManager_->isScanning()) {
     fontCacheManager_->recordText(renderedText, resolvedFontId, style);
-    return;
+    return 0;
+  }
+
+  // An SD font keeps only what the page needed in RAM: batch-load this string's glyphs, as
+  // drawText() does for a redirected string, or the loop below reads bitmaps that are not there.
+  if (sdCardFonts_.find(resolvedFontId) != sdCardFonts_.end()) {
+    ensureSdGlyphsResident(resolvedFontId, renderedText, style, !draw);
   }
 
   const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", resolvedFontId);
-    return;
+    return 0;
   }
   const auto& font = fontIt->second;
+  const int yPos = y + scaleSigned(rawFontAscender(resolvedFontId), scale);
+  // A FaceScale font scales each glyph by where it comes from (FaceGlyphScale).
+  const bool faceScaled = faceScaleFor(resolvedFontId).sizeFallbacks;
+  const FaceGlyphScale faceGlyph(font, style);
+  // A scaled font (an SD font lent to a UI size) that lacks a CJK glyph gets it from another font
+  // (the built-in jōyō subset, a companion) of a different size: draw that glyph at the em the
+  // font's own glyphs have, not at the font's scale. The em is the font's own 一.
+  const EpdFontData* ownData = font.getData(style);
+  const int32_t ownEm =
+      !faceScaled && (scale != 256 || faceScaleFor(resolvedFontId).matchOwnEm) ? ownFullWidthEm(font, style) : 0;
+  int lastBaseX = x;
+  int lastBaseLeft = 0;
+  int lastBaseWidth = 0;
+  int lastBaseTop = 0;
+  int32_t prevAdvanceFP = 0;
+  uint16_t prevScale = scale;
+  // The pen is kept in 1/256 px and each advance enters it at its own glyph's scale, so it ends
+  // at exactly the value this same walk reports as the width. Rounding each glyph's advance to a
+  // pixel instead lets the errors add up: a long word drawn that way is several pixels wider than
+  // it was measured, and overlaps the next word once scaled text goes through paragraph layout.
+  int32_t pen256 = 0;
   const char* textCursor = renderedText;
   uint32_t cp;
   uint32_t prevCp = 0;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&textCursor)))) {
     if (utf8IsCombiningMark(cp) || BidiUtils::isTransparentMark(cp)) {
+      if (!draw) continue;
       const EpdGlyph* combiningGlyph = font.getGlyph(cp, style);
       if (!combiningGlyph) continue;
       const auto anchor = combiningMark::anchorFor(cp);
       const int raiseBy =
           combiningMark::raiseAboveBase(anchor, combiningGlyph->top, combiningGlyph->height, lastBaseTop);
       const int combiningX = combiningMark::anchorOver(
-          anchor, lastBaseX, scaleSigned(lastBaseLeft, scale), scaleSigned(lastBaseWidth, scale),
-          scaleSigned(combiningGlyph->left, scale), scaleSigned(combiningGlyph->width, scale));
-      renderCharAtScale(*this, renderMode, font, cp, combiningX, yPos - scaleSigned(raiseBy, scale), black, style,
-                        scale);
+          anchor, lastBaseX, scaleSigned(lastBaseLeft, prevScale), scaleSigned(lastBaseWidth, prevScale),
+          scaleSigned(combiningGlyph->left, prevScale), scaleSigned(combiningGlyph->width, prevScale));
+      renderCharAtScale(*this, renderMode, font, cp, combiningX, yPos - scaleSigned(raiseBy, prevScale), black, style,
+                        prevScale);
       continue;
     }
 
     cp = font.applyLigatures(cp, textCursor, style);
     if (prevCp != 0) {
       const auto kernFP = font.getKerning(prevCp, cp, style);
-      unscaledAdvance += textAdvance::withLetterSpacing(fp4::toPixel(prevAdvanceFP + kernFP), 1, letterSpacing);
-      lastBaseX = x + scalePositive(unscaledAdvance, scale);
+      pen256 += textAdvance::withLetterSpacing(fp4::toPixel(prevAdvanceFP + kernFP), 1, letterSpacing) * prevScale;
+      lastBaseX = x + static_cast<int>((pen256 + 128) / 256);
     }
 
     const EpdGlyph* glyph = font.getGlyph(cp, style);
@@ -1145,9 +1330,23 @@ void GfxRenderer::drawTextScaled(const int fontId, const int x, const int y, con
     prevAdvanceFP = glyph ? glyph->advanceX : 0;
     const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
     if (isSupSub) prevAdvanceFP = (prevAdvanceFP + 1) / 2;
-    renderCharAtScale(*this, renderMode, font, cp, lastBaseX, yPos, black, style, scale);
+    // What the font borrows from its fallback family (a companion's built-in Latin) is that
+    // family's size, not the font's: it takes its own scale.
+    if (faceScaled) {
+      prevScale = faceGlyph.at(font, cp, style, scale, nonCjkScale);
+    } else if (nonCjkScale != scale && font.drawsFromFallback(cp, style)) {
+      prevScale = nonCjkScale;
+    } else if (ownEm > 0 && glyph && glyph->advanceX > 0 && FaceGlyphScale::fullWidth(cp) &&
+               font.getDataForGlyph(cp, style) != ownData) {
+      prevScale = static_cast<uint16_t>(static_cast<uint32_t>(scale) * ownEm / glyph->advanceX);
+    } else {
+      prevScale = scale;
+    }
+    if (draw) renderCharAtScale(*this, renderMode, font, cp, lastBaseX, yPos, black, style, prevScale);
     prevCp = cp;
   }
+  pen256 += fp4::toPixel(prevAdvanceFP) * prevScale;  // final glyph's advance
+  return std::max(0, static_cast<int>((pen256 + 128) / 256));
 }
 
 namespace {
@@ -1281,9 +1480,7 @@ void GfxRenderer::drawArc(const int maxRadius, const int cx, const int cy, const
     const int width = std::abs(x1 - x0) + 1;
     const int py = cy + yDir * dy;
 
-    if (width > 0) {
-      fillRect(left, py, width, 1, state);
-    }
+    fillRect(left, py, width, 1, state);
   }
 };
 
@@ -1761,7 +1958,7 @@ void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, con
 
 bool GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, const int maxWidth, const int maxHeight,
                              const float cropX, const float cropY, const bool allowUpscale,
-                             const bool whiteAsTransparent) const {
+                             const bool whiteAsTransparent, const bool ditherGrays) const {
   // Deliberately skipped, not failed: a caller that treats false as a render error would show
   // an error screen for a background font scan that finishes on its own.
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return true;
@@ -1871,7 +2068,11 @@ bool GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
       if (whiteAsTransparent && val == 3) continue;
 
       if (renderMode == BW && val < 3) {
-        drawPixel(screenX, screenY);
+        // Bayer 2x2 thresholds in eighths: dark gray (1) is 3/4 black, light gray (2) 1/4 black.
+        static constexpr uint8_t BAYER_EIGHTHS[4] = {1, 5, 7, 3};
+        if (!ditherGrays || val * 8 < BAYER_EIGHTHS[(screenY & 1) * 2 + (screenX & 1)] * 3) {
+          drawPixel(screenX, screenY);
+        }
       } else if (renderMode == GRAYSCALE_LSB || renderMode == GRAYSCALE_MSB) {
         const auto pixel = grayPlanePixel(val, renderMode == GRAYSCALE_MSB, absoluteGrayPlanes);
         if (pixel.write) drawPixel(screenX, screenY, pixel.black);
@@ -2564,7 +2765,7 @@ bool GfxRenderer::copyBufferToRegion(int lx, int ly, int lw, int lh, const uint8
   return true;
 }
 
-int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style style, const int8_t letterSpacing) const {
+int GfxRenderer::rawSpaceWidth(const int fontId, const EpdFontFamily::Style style, const int8_t letterSpacing) const {
   // Advance table fast-path for SD card fonts during layout
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
@@ -2590,10 +2791,10 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
   // No usable space glyph anywhere in the chain (some cpfonts ship without one, and without a
   // replacement glyph the advance table can't stage it either): synthesize the typographic
   // default of ~1/4 em rather than collapsing every word gap to zero.
-  return std::max(1, textAdvance::withLetterSpacing(std::max(2, getLineHeight(fontId) / 4), 1, letterSpacing));
+  return std::max(1, textAdvance::withLetterSpacing(std::max(2, rawLineHeight(fontId) / 4), 1, letterSpacing));
 }
 
-int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
+int GfxRenderer::rawSpaceAdvance(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
                                  const EpdFontFamily::Style style, const int8_t letterSpacing) const {
   // Advance table fast-path for SD card fonts during layout.
   // Kern data is not loaded during layout (consistent with previous metadataOnly behavior),
@@ -2614,7 +2815,7 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
   int32_t spaceAdvanceFP = spaceGlyph ? static_cast<int32_t>(spaceGlyph->advanceX) : 0;
   if (spaceAdvanceFP == 0) {
     // Synthesized ~1/4 em space -- see getSpaceWidth. (12.4 fixed-point: px << 4.)
-    return std::max(1, textAdvance::withLetterSpacing(std::max(2, getLineHeight(fontId) / 4), 1, letterSpacing));
+    return std::max(1, textAdvance::withLetterSpacing(std::max(2, rawLineHeight(fontId) / 4), 1, letterSpacing));
   }
   // Combine space advance + flanking kern into one fixed-point sum before snapping.
   // Snapping the combined value avoids the +/-1 px error from snapping each component separately.
@@ -2623,7 +2824,7 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
   return textAdvance::withLetterSpacing(fp4::toPixel(spaceAdvanceFP + kernFP), 1, letterSpacing);
 }
 
-int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
+int GfxRenderer::rawKerning(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
                             const EpdFontFamily::Style style, const int8_t tracking) const {
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) return 0;
@@ -2648,15 +2849,17 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   // right margin.
   std::string visual;
   text = resolveVisualText(text, visual, baseDir);
+  if (const FaceScale face = faceScaleFor(resolvedFontId); !face.identity()) {
+    return layoutTextScaled(resolvedFontId, 0, 0, text, face.own, face.fallback, /*draw=*/false, true, style,
+                            letterSpacing);
+  }
 
   // Advance table fast-path for SD card fonts during layout.
-  // No kerning/ligature lookup — consistent with previous metadataOnly behavior
-  // where kern/lig data was not loaded.
+  // Snap each advance like drawText. Kerning/ligature data is not resident
+  // during layout, so kerned-pair steps can still differ.
   auto sdIt = sdCardFonts_.find(resolvedFontId);
   if (mode == TextMeasureMode::Layout && sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
-    int32_t widthFP = 0;
-    int trackingPx = 0;
-    uint32_t prevCp = 0;
+    int widthPx = 0;
     const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
     const uint8_t styleIdx = resolveSdCardStyle(*sdIt->second, style);
     const auto fontIt = fontMap.find(resolvedFontId);
@@ -2667,12 +2870,12 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
     const auto& font = fontIt->second;
     size_t glyphCount = 0;
     while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text))) {
-      // RTL vowel marks (niqqud/harakat) are zero-advance overlays in drawText — no width.
-      if (BidiUtils::isTransparentMark(cp)) {
+      // RTL vowel marks (niqqud/harakat) and combining marks are zero-advance overlays in drawText.
+      if (BidiUtils::isTransparentMark(cp) || utf8IsCombiningMark(cp)) {
         continue;
       }
       int32_t advFP = sdIt->second->getAdvance(cp, styleIdx);
-      if (advFP == 0 && !utf8IsCombiningMark(cp)) {
+      if (advFP == 0) {
         // Missing from the selected SD font: price it from the companion's advance table
         // (resident RAM), else any already-resident fallback glyph -- never the on-demand SD
         // loader, which costs a seek+read per glyph and cripples indexing.
@@ -2682,10 +2885,10 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
           advFP = glyph ? glyph->advanceX : 0;
         }
       }
-      widthFP += isSupSub ? (advFP + 1) / 2 : advFP;
+      widthPx += fp4::toPixel(isSupSub ? (advFP + 1) / 2 : advFP);
       glyphCount++;
     }
-    return textAdvance::withLetterSpacing(fp4::toPixel(widthFP), glyphCount, letterSpacing);
+    return textAdvance::withLetterSpacing(widthPx, glyphCount, letterSpacing);
   }
 
   const auto fontIt = fontMap.find(resolvedFontId);
@@ -2752,6 +2955,9 @@ int GfxRenderer::getRenderAdvanceX(const int fontId, const char* text, const Epd
   // Short strings only: each cold glyph costs an SD read, so bulk word indexing must keep
   // using getTextAdvanceX.
   if (text == nullptr || *text == '\0') return 0;
+  if (const FaceScale face = faceScaleFor(fontId); !face.identity()) {
+    return layoutTextScaled(fontId, 0, 0, text, face.own, face.fallback, /*draw=*/false, true, style, 0);
+  }
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", fontId);
@@ -2783,7 +2989,7 @@ int GfxRenderer::getRenderAdvanceX(const int fontId, const char* text, const Epd
   return widthPx;
 }
 
-bool GfxRenderer::getGlyphMetrics(const int fontId, const uint32_t cp, const EpdFontFamily::Style style, int* left,
+bool GfxRenderer::rawGlyphMetrics(const int fontId, const uint32_t cp, const EpdFontFamily::Style style, int* left,
                                   int* width, int* top, int* height) const {
   if (!left || !width || !top || !height) return false;
   const auto fontIt = fontMap.find(fontId);
@@ -2800,7 +3006,7 @@ bool GfxRenderer::getGlyphMetrics(const int fontId, const uint32_t cp, const Epd
   return true;
 }
 
-int GfxRenderer::getFontAscenderSize(const int fontId) const {
+int GfxRenderer::rawFontAscender(const int fontId) const {
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", fontId);
@@ -2810,7 +3016,7 @@ int GfxRenderer::getFontAscenderSize(const int fontId) const {
   return fontIt->second.getData(EpdFontFamily::REGULAR)->ascender;
 }
 
-int GfxRenderer::getFontInkHeight(const int fontId) const {
+int GfxRenderer::rawFontInkHeight(const int fontId) const {
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", fontId);
@@ -2822,7 +3028,7 @@ int GfxRenderer::getFontInkHeight(const int fontId) const {
   return data->ascender + (descender < 0 ? -descender : descender);
 }
 
-int GfxRenderer::getLineHeight(const int fontId) const {
+int GfxRenderer::rawLineHeight(const int fontId) const {
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", fontId);
@@ -2838,20 +3044,28 @@ int GfxRenderer::getLineHeightScaled(const int fontId, const uint16_t scale) con
 }
 
 int GfxRenderer::getLineHeight(const int fontId, const float compression) const {
-  return static_cast<int>(getLineHeight(fontId) * compression + 0.5f);
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", fontId);
+    return 0;
+  }
+  // A FaceScale id shares the base face's family, so its size is the base size scaled.
+  const float sizePx = fontIt->second.getSizeInPixels() * faceScaleFor(fontId).own / 256.0f;
+  return static_cast<int>(sizePx * compression + 0.5f);
 }
 
 int GfxRenderer::textBaselineOffset(const int fontId, const char* text, const EpdFontFamily::Style style) const {
   // Mirrors drawText()'s own yPos derivation; keep the two in step.
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
-  int offset = getFontAscenderSize(resolvedFontId);
+  const uint16_t redirected = redirectScale(fontId, resolvedFontId).cjk;
+  int offset = scalePositive(getFontAscenderSize(resolvedFontId), redirected);
   if (resolvedFontId != fontId) {
-    offset += (getLineHeight(fontId) - getLineHeight(resolvedFontId)) / 2;
+    offset += (getLineHeight(fontId) - scalePositive(getLineHeight(resolvedFontId), redirected)) / 2;
   }
   return offset;
 }
 
-int GfxRenderer::getTextHeight(const int fontId) const {
+int GfxRenderer::rawTextHeight(const int fontId) const {
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", fontId);
@@ -2867,8 +3081,12 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
     return;
   }
 
-  // Route CJK-bearing strings to the fallback font (see resolveTextFontId).
+  // Route non-Latin strings to the fallback font (see resolveTextFontId).
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  if (const FaceScale face = faceScaleFor(resolvedFontId); !face.identity()) {
+    drawTextRotatedScaled(resolvedFontId, x, y, text, black, style, /*clockwise=*/true, face);
+    return;
+  }
   // Redirected to the SD fallback: batch-load the string's glyphs so the draw
   // loop below doesn't fault them in one SD read at a time (#2725).
   if (resolvedFontId != fontId) {
@@ -2920,7 +3138,8 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
       lastBaseY -= fp4::toPixel(prevAdvanceFP + kernFP);       // snap 12.4 fixed-point to nearest pixel
     }
 
-    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    EpdGlyph solidFallback;
+    const EpdGlyph* glyph = font.getGlyphMetrics(cp, solidFallback, style);
 
     lastBaseLeft = glyph ? glyph->left : 0;
     lastBaseWidth = glyph ? glyph->width : 0;
@@ -2935,6 +3154,10 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
 void GfxRenderer::drawTextRotated90CCW(const int fontId, const int x, const int y, const char* text, const bool black,
                                        const EpdFontFamily::Style style) const {
   if (text == nullptr || *text == '\0') return;
+  if (const FaceScale face = faceScaleFor(fontId); !face.identity()) {
+    drawTextRotatedScaled(fontId, x, y, text, black, style, /*clockwise=*/false, face);
+    return;
+  }
 
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) {
@@ -3210,13 +3433,8 @@ bool GfxRenderer::verticalPunctInkBox(const int fontId, const uint32_t cp, const
   *inkTop = INT32_MIN;
   drawCharVerticalRotatedInCell(fontId, 0, cellTopY, cellSize, cp, shiftType, true, style, inkTop, inkHeight);
   if (*inkTop == INT32_MIN) return false;  // no glyph / font missing
-  // VerticalTextBlock applies these extra drops at the call site, so mirror them here or the
-  // layout would read an ink box the drawer never uses.
-  if (cp == 0x2025 || cp == 0x2026) {
-    *inkTop += std::max(1, (cellSize * 7) / 8);
-  } else if (shiftType == 4) {
-    *inkTop += std::max(1, (cellSize * 3) / 8);
-  }
+  // The box the drawer itself reports: VerticalTextBlock places every shape where
+  // drawCharVerticalRotatedInCell does, with no drop of its own to mirror here.
   return true;
 }
 
@@ -3233,12 +3451,14 @@ void GfxRenderer::displayGrayscaleBase(HalDisplay::RefreshMode fallback) const {
   panelResidue_ = true;
   grayPlanesResident_ = true;
   absoluteGrayPlanes = false;
-  display.displayGrayscaleBase(fallback, fadingFix);
+  display.displayGrayscaleBase(applyPromotedRefresh(fallback), fadingFix);
 }
 
 bool GfxRenderer::displayGrayscaleBase(HalDisplay::GrayscaleMode mode, HalDisplay::RefreshMode fallback) const {
   absoluteGrayPlanes = false;
-  if (!display.displayGrayscaleBase(mode, fallback, fadingFix)) return false;
+  if (!display.displayGrayscaleBase(mode, promotedRefreshPending_ ? promotedRefresh_ : fallback, fadingFix))
+    return false;
+  promotedRefreshPending_ = false;
   absoluteGrayPlanes = mode != HalDisplay::GrayscaleMode::Overlay;
   // Same tracking as the other base/displayGrayBuffer paths: the plane passes that
   // follow leave gray charge no single HALF scrubs, and RED RAM now holds a gray
@@ -3318,6 +3538,10 @@ void GfxRenderer::freeBwBufferChunks() {
  * Returns true if buffer was stored successfully, false if allocation failed.
  */
 bool GfxRenderer::storeBwBuffer(const size_t headroom) {
+  // A new store replaces any earlier copy, which is stale. Free it first: refused for want of the
+  // heap it held, the earlier copy stayed allocated while the caller's flag said nothing was stored,
+  // and 48 KB stayed out of reach until the reader exited.
+  freeBwBufferChunks();
   // Refuse up front when the copy cannot fit: every caller has a fallback (re-render, skip the
   // grays), while an attempt that fails at chunk N leaves N freed 8 KB holes behind.
   if (ESP.getFreeHeap() < frameBufferSize + headroom || ESP.getMaxAllocHeap() < BW_BUFFER_CHUNK_SIZE) {
@@ -3326,13 +3550,6 @@ bool GfxRenderer::storeBwBuffer(const size_t headroom) {
   }
   // Allocate and copy each chunk
   for (size_t i = 0; i < bwBufferChunks.size(); i++) {
-    // Check if any chunks are already allocated
-    if (bwBufferChunks[i]) {
-      LOG_ERR("GFX", "!! BW buffer chunk %zu already stored - this is likely a bug, freeing chunk", i);
-      free(bwBufferChunks[i]);
-      bwBufferChunks[i] = nullptr;
-    }
-
     const size_t offset = i * BW_BUFFER_CHUNK_SIZE;
     const size_t chunkSize = std::min(BW_BUFFER_CHUNK_SIZE, static_cast<size_t>(frameBufferSize - offset));
     bwBufferChunks[i] = static_cast<uint8_t*>(malloc(chunkSize));
@@ -3430,5 +3647,100 @@ void GfxRenderer::getOrientedViewableTRBL(int* outTop, int* outRight, int* outBo
       *outBottom = vi.left;
       *outLeft = vi.top;
       break;
+  }
+}
+
+// --- FaceScale: the public metrics of a font drawn at a fixed scale ---
+
+int GfxRenderer::getFontAscenderSize(const int fontId) const {
+  return scaleSigned(rawFontAscender(fontId), faceScaleFor(fontId).own);
+}
+
+int GfxRenderer::getFontInkHeight(const int fontId) const {
+  return scalePositive(rawFontInkHeight(fontId), faceScaleFor(fontId).own);
+}
+
+int GfxRenderer::getLineHeight(const int fontId) const {
+  const uint16_t own = faceScaleFor(fontId).own;
+  return own == 256 ? rawLineHeight(fontId) : std::max(1, scalePositive(rawLineHeight(fontId), own));
+}
+
+int GfxRenderer::getTextHeight(const int fontId) const {
+  return scalePositive(rawTextHeight(fontId), faceScaleFor(fontId).own);
+}
+
+int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style style, const int8_t letterSpacing) const {
+  return scalePositive(rawSpaceWidth(fontId, style, letterSpacing), faceScaleFor(fontId).own);
+}
+
+int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
+                                 const EpdFontFamily::Style style, const int8_t letterSpacing) const {
+  return scaleSigned(rawSpaceAdvance(fontId, leftCp, rightCp, style, letterSpacing), faceScaleFor(fontId).own);
+}
+
+int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
+                            const EpdFontFamily::Style style, const int8_t tracking) const {
+  return scaleSigned(rawKerning(fontId, leftCp, rightCp, style, tracking), faceScaleFor(fontId).own);
+}
+
+bool GfxRenderer::getGlyphMetrics(const int fontId, const uint32_t cp, const EpdFontFamily::Style style, int* left,
+                                  int* width, int* top, int* height) const {
+  if (!rawGlyphMetrics(fontId, cp, style, left, width, top, height)) return false;
+  const FaceScale face = faceScaleFor(fontId);
+  uint16_t own = face.own;
+  // Same scale layoutTextScaled() draws a borrowed full-width glyph at.
+  if (face.matchOwnEm && FaceGlyphScale::fullWidth(cp)) {
+    const auto& font = fontMap.at(fontId);
+    const int32_t ownEm = ownFullWidthEm(font, style);
+    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    if (ownEm > 0 && glyph && glyph->advanceX > 0 && font.getDataForGlyph(cp, style) != font.getData(style)) {
+      own = static_cast<uint16_t>(static_cast<uint32_t>(own) * ownEm / glyph->advanceX);
+    }
+  }
+  if (own != 256) {
+    *left = scaleSigned(*left, own);
+    *width = scalePositive(*width, own);
+    *top = scaleSigned(*top, own);
+    *height = scalePositive(*height, own);
+  }
+  return true;
+}
+
+void GfxRenderer::drawTextRotatedScaled(const int fontId, const int x, const int y, const char* text, const bool black,
+                                        const EpdFontFamily::Style style, const bool clockwise,
+                                        const FaceScale scale) const {
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", fontId);
+    return;
+  }
+  const auto& font = fontIt->second;
+  const FaceGlyphScale faceGlyph(font, style);
+  // The pen runs along y, in 1/256 px as in layoutTextScaled(): up the screen clockwise, down it
+  // counter-clockwise. Combining marks are skipped, as the unscaled counter-clockwise path does.
+  int32_t pen256 = 0;
+  int32_t prevAdvanceFP = 0;
+  uint16_t prevScale = scale.own;
+  uint32_t cp;
+  uint32_t prevCp = 0;
+  while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
+    if (utf8IsCombiningMark(cp) || BidiUtils::isTransparentMark(cp)) continue;
+    cp = font.applyLigatures(cp, text, style);
+    if (prevCp != 0) pen256 += fp4::toPixel(prevAdvanceFP + font.getKerning(prevCp, cp, style)) * prevScale;
+    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    prevAdvanceFP = glyph ? glyph->advanceX : 0;
+    if (scale.sizeFallbacks) {
+      prevScale = faceGlyph.at(font, cp, style, scale.own, scale.fallback);
+    } else {
+      prevScale = scale.fallback != scale.own && font.drawsFromFallback(cp, style) ? scale.fallback : scale.own;
+    }
+    const int offset = static_cast<int>((pen256 + 128) / 256);
+    if (clockwise) {
+      renderCharAtScale<TextRotation::Rotated90CW>(*this, renderMode, font, cp, x, y - offset, black, style, prevScale);
+    } else {
+      renderCharAtScale<TextRotation::Rotated90CCW>(*this, renderMode, font, cp, x, y + offset, black, style,
+                                                    prevScale);
+    }
+    prevCp = cp;
   }
 }

@@ -28,9 +28,14 @@ class I18n {
   /// never ends up pointing at strings that were not loaded.
   bool setLanguage(Language lang);
 
-  /// True when `lang` can be selected right now: either compiled in, or its pack is on the card.
-  /// Used by the language picker to mark which entries need a pack download.
-  static bool isLanguageAvailable(Language lang);
+  enum class PackState : uint8_t {
+    BuiltIn,   // compiled in, no pack involved
+    Missing,   // no pack on the card
+    Outdated,  // a pack is there but was built for other firmware, so it will not load
+    Ready,     // a pack that loads
+  };
+  /// What the language picker shows for `lang`. Reads only the pack header, not the strings.
+  static PackState packState(Language lang);
 
   /// Directory holding the .cplang packs, alongside the SD font roots.
   static constexpr const char* PACK_DIR = "/.crosspoint/lang";

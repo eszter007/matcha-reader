@@ -1,20 +1,64 @@
 #include "ReadingStatsStore.h"
 
+#include <Arduino.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <SdSystemDir.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
+#include <mutex>
 #include <numeric>
+
+#include "BookStatsDownload.h"
 
 ReadingStatsStore ReadingStatsStore::instance;
 
 static std::string statsPath() { return sdsystem::path("reading_stats.bin"); }
+// Changes recorded since the last compact(); see record().
+static std::string journalPath() { return sdsystem::path("reading_stats.log"); }
+// Server minutes waiting for mergeDownload(): a uint16_t count, then DailyReading records.
+static std::string downloadPath() { return sdsystem::path("reading_stats_download.bin"); }
+// The sync account's overview: a version byte, a count, the account key, then StatsDigest records.
+static std::string accountPath() { return sdsystem::path("reading_stats_account.bin"); }
+static constexpr uint8_t ACCOUNT_VERSION = 2;
+static constexpr uint8_t MAX_DIGESTS = 21;  // all languages plus the server's 20 groups
+// Journal records start with this byte, so a torn or foreign tail is recognised and ignored.
+static constexpr uint8_t JOURNAL_RECORD_MAGIC = 0xA5;
+// Leads the language field of a record that carries only the time of day of the minutes before it: the bucket,
+// then the minutes as two bytes. Its minutes are 0 and its paths empty, so a reader that does not know it skips it.
+static constexpr char TIME_OF_DAY_MARK = '\x02';
+// A journal opens with this byte and a random nonce, so no two journals share a prefix: the fold
+// marker (see compact()) recognises a journal by its leading bytes.
+static constexpr uint8_t JOURNAL_HEADER_MAGIC = 0x5A;
+static constexpr size_t JOURNAL_HEADER_BYTES = 5;
+static constexpr size_t MAX_STORED_PATH = 500;
+// Leads a journal record's finished path that comes off the finished list (Change::unfinished). Never the
+// first byte of a path.
+static constexpr char UNFINISHED_MARK = '\x01';
+// record() runs on the main loop, the end-of-book summary on the render task; one journal writer
+// at a time, and no fold while a record is being appended. Recursive: compact() and the summary's
+// table path hold it while recoverInterruptedSave() takes it again.
+static std::recursive_mutex& journalMutex() {
+  static std::recursive_mutex m;
+  return m;
+}
+// Heap a table reserve must leave behind; a reserve() that cannot be served aborts.
+static constexpr uint32_t TABLE_RESERVE_MARGIN = 4 * 1024;
+static bool tableFits(const size_t bytes) { return ESP.getMaxAllocHeap() >= bytes + TABLE_RESERVE_MARGIN; }
 // v3 appends the per-book block after the finished-book paths; v4 appends the per-day-per-language
 // block after that. Each older reader stops where its own format ends and ignores what follows,
-// rather than rejecting the file -- it will, however, drop the newer blocks the next time it saves.
-static constexpr uint8_t STATS_VERSION = 4;
+// rather than rejecting the file -- it will, however, drop the newer blocks the next time it saves. v5 appends
+// the time-of-day totals after the fold marker.
+static constexpr uint8_t STATS_VERSION = 5;
+// A byte no stats format could carry: 0, or a version far past any written so far. Such a file is
+// not read, folded or rewritten -- one filled with text (cross-linked clusters; '{' is 123) would
+// otherwise parse as stats. A newer real format still reads, as above.
+static constexpr uint8_t MAX_PLAUSIBLE_STATS_VERSION = 31;
+static bool plausibleStatsVersion(const uint8_t version) {
+  return version >= 1 && version <= MAX_PLAUSIBLE_STATS_VERSION;
+}
 // Longest language tag a per-book entry stores, on disk and in memory. Enforced on BOTH sides:
 // the writer clamps to it, and the loader rejects anything longer rather than allocating on a
 // corrupt or misaligned file's say-so.
@@ -31,7 +75,7 @@ int daysSinceEpoch(uint16_t y, uint8_t m, uint8_t d) {
 }
 
 int dowFromDate(uint16_t y, uint8_t m, uint8_t d) {
-  return (daysSinceEpoch(y, m, d) + 1) % 7;  // 0=Sun
+  return daysSinceEpoch(y, m, d) % 7;  // 0=Sun
 }
 
 void subtractDays(uint16_t& y, uint8_t& m, uint8_t& d, int n) {
@@ -101,6 +145,43 @@ void ReadingStatsStore::addMinutes(uint16_t year, uint8_t month, uint8_t day, ui
   days.insert(days.begin(), {year, month, day, minutes});
 }
 
+// A book the server knows as finished but this card has never finished: counted under this stand-in
+// until the book itself is marked finished here. Never a real path, so isFinished() never matches it.
+static std::string remoteFinishedPath(const uint32_t nameHash) {
+  char buf[20];
+  snprintf(buf, sizeof(buf), "remote:%08lx", static_cast<unsigned long>(nameHash));
+  return buf;
+}
+
+int32_t ReadingStatsStore::dayNumber(const uint16_t year, const uint8_t month, const uint8_t day) {
+  return daysSinceEpoch(year, month, day);
+}
+
+void ReadingStatsStore::mergeMinutes(const uint16_t year, const uint8_t month, const uint8_t day,
+                                     const uint16_t minutes) {
+  const uint16_t have = getMinutesForDay(year, month, day);
+  if (minutes > have) addMinutes(year, month, day, minutes - have);
+}
+
+void ReadingStatsStore::mergeLanguageMinutes(const char* language, const uint16_t minutes, const uint16_t year,
+                                             const uint8_t month, const uint8_t day) {
+  char lang[4];
+  normalizeLanguage(language, lang);
+  const int epoch = daysSinceEpoch(year, month, day);
+  const auto dateOf = [](const LanguageDaily& e) { return daysSinceEpoch(e.year, e.month, e.day); };
+  // Sorted by date, so a binary search: a downloaded history merges thousands of days at boot.
+  auto it = std::lower_bound(languageDays.begin(), languageDays.end(), epoch,
+                             [&dateOf](const LanguageDaily& e, const int d) { return dateOf(e) < d; });
+  uint16_t have = 0;
+  for (; it != languageDays.end() && dateOf(*it) == epoch; ++it) {
+    if (memcmp(it->language, lang, sizeof(lang)) == 0) {
+      have = it->minutesRead;
+      break;
+    }
+  }
+  if (minutes > have) addLanguageMinutes(language, minutes - have, year, month, day);
+}
+
 void ReadingStatsStore::addBookMinutes(const char* bookPath, const char* language, const uint16_t minutes,
                                        const uint16_t year, const uint8_t month, const uint8_t day) {
   if (!bookPath || !*bookPath) return;
@@ -138,21 +219,22 @@ void ReadingStatsStore::addLanguageMinutes(const char* language, const uint16_t 
   LanguageDaily fresh{year, month, day, {}, minutes};
   memcpy(fresh.language, lang, sizeof(lang));
 
-  // Sorted like days, so the per-language streak passes need no scratch buffer.
-  for (auto it = languageDays.rbegin(); it != languageDays.rend(); ++it) {
-    const int e = daysSinceEpoch(it->year, it->month, it->day);
-    if (e == epoch && memcmp(it->language, lang, sizeof(lang)) == 0) {
-      const uint32_t sum = static_cast<uint32_t>(it->minutesRead) + minutes;
-      it->minutesRead = static_cast<uint16_t>(sum > UINT16_MAX ? UINT16_MAX : sum);
-      return;
-    }
-    if (e <= epoch) {
-      // Same date, other language: insert alongside rather than walk the whole run.
-      languageDays.insert(it.base(), fresh);
+  // Sorted like days, so the per-language streak passes need no scratch buffer. From the back:
+  // the date added is almost always the newest.
+  const auto dateOf = [](const LanguageDaily& e) { return daysSinceEpoch(e.year, e.month, e.day); };
+  auto pos = languageDays.end();
+  while (pos != languageDays.begin() && dateOf(*(pos - 1)) > epoch) --pos;
+  // The whole run of this date, not just its last entry: reading ja, en, then ja again in one day
+  // must add to the first ja record, not open a second one.
+  for (auto it = pos; it != languageDays.begin() && dateOf(*(it - 1)) == epoch; --it) {
+    auto& e = *(it - 1);
+    if (memcmp(e.language, lang, sizeof(lang)) == 0) {
+      const uint32_t sum = static_cast<uint32_t>(e.minutesRead) + minutes;
+      e.minutesRead = static_cast<uint16_t>(sum > UINT16_MAX ? UINT16_MAX : sum);
       return;
     }
   }
-  languageDays.insert(languageDays.begin(), fresh);
+  languageDays.insert(pos, fresh);
 }
 
 uint16_t ReadingStatsStore::getMinutesForDay(const char* language, const uint16_t year, const uint8_t month,
@@ -166,12 +248,8 @@ uint16_t ReadingStatsStore::getMinutesForDay(const char* language, const uint16_
 }
 
 uint32_t ReadingStatsStore::getTotalMinutes(const char* language) const {
-  char lang[4];
-  normalizeLanguage(language, lang);
-  return std::accumulate(languageDays.begin(), languageDays.end(), uint32_t{0},
-                         [&lang](const uint32_t sum, const LanguageDaily& e) {
-                           return memcmp(e.language, lang, sizeof(lang)) == 0 ? sum + e.minutesRead : sum;
-                         });
+  const auto* g = accountFor(language);
+  return g ? accountMinutes(language, *g) : localMinutes(language);
 }
 
 void ReadingStatsStore::getLanguages(std::vector<LanguageSummary>& out) const {
@@ -188,6 +266,21 @@ void ReadingStatsStore::getLanguages(std::vector<LanguageSummary>& out) const {
     s.minutes = e.minutesRead;
     out.push_back(s);
   }
+  // Languages read on other devices get a tab too, and every tab sorts by the account's minutes.
+  for (size_t i = 1; i < account.size(); i++) {
+    const auto it = std::find_if(out.begin(), out.end(), [&](const LanguageSummary& s) {
+      return memcmp(s.code, account[i].code, sizeof(s.code)) == 0;
+    });
+    if (it != out.end()) continue;
+    LanguageSummary s{};
+    memcpy(s.code, account[i].code, sizeof(s.code));
+    out.push_back(s);
+  }
+  if (!account.empty()) {
+    for (auto& s : out) {
+      if (s.code[0]) s.minutes = getTotalMinutes(s.code);
+    }
+  }
   // Most-read first, so the wanted tab is the one you land on.
   std::sort(out.begin(), out.end(),
             [](const LanguageSummary& a, const LanguageSummary& b) { return a.minutes > b.minutes; });
@@ -195,6 +288,7 @@ void ReadingStatsStore::getLanguages(std::vector<LanguageSummary>& out) const {
 
 int ReadingStatsStore::getStreak(const char* language, const uint16_t todayYear, const uint8_t todayMonth,
                                  const uint8_t todayDay) const {
+  if (const auto* g = accountFor(language)) return accountStreak(language, *g, todayYear, todayMonth, todayDay);
   char lang[4];
   normalizeLanguage(language, lang);
   if (getMinutesForDay(language, todayYear, todayMonth, todayDay) == 0) return 0;
@@ -229,10 +323,13 @@ int ReadingStatsStore::getLongestStreak(const char* language) const {
     prev = ep;
     if (cur > maxStreak) maxStreak = cur;
   }
-  return maxStreak;
+  // The server's run counts every device; a current run can have outgrown it since it answered.
+  const auto* g = accountFor(language);
+  return g ? std::max<int>({maxStreak, g->longestStreak, accountRecentRun(language, *g)}) : maxStreak;
 }
 
 int ReadingStatsStore::getDaysRead(const char* language) const {
+  if (const auto* g = accountFor(language)) return accountDaysRead(language, *g);
   char lang[4];
   normalizeLanguage(language, lang);
   return static_cast<int>(std::count_if(languageDays.begin(), languageDays.end(), [&lang](const LanguageDaily& e) {
@@ -242,17 +339,8 @@ int ReadingStatsStore::getDaysRead(const char* language) const {
 
 uint16_t ReadingStatsStore::getMinutesThisWeek(const char* language, const uint16_t todayYear, const uint8_t todayMonth,
                                                const uint8_t todayDay) const {
-  const int dow = (dowFromDate(todayYear, todayMonth, todayDay) + 6) % 7;  // ISO Mon=0
-  // Wider accumulator: per-day minutes saturate at UINT16_MAX, so seven of them can exceed it.
-  // Wrapping would show a small plausible number rather than an obvious fault.
-  uint32_t total = 0;
-  for (int i = 0; i <= dow; i++) {
-    uint16_t y = todayYear;
-    uint8_t m = todayMonth, d = todayDay;
-    subtractDays(y, m, d, dow - i);
-    total += getMinutesForDay(language, y, m, d);
-  }
-  return static_cast<uint16_t>(std::min<uint32_t>(total, UINT16_MAX));
+  if (const auto* g = accountFor(language)) return accountWeekMinutes(language, *g, todayYear, todayMonth, todayDay);
+  return localWeekMinutes(language, todayYear, todayMonth, todayDay);
 }
 
 void ReadingStatsStore::getWeekStatus(const char* language, const uint16_t todayYear, const uint8_t todayMonth,
@@ -262,15 +350,19 @@ void ReadingStatsStore::getWeekStatus(const char* language, const uint16_t today
     uint16_t y = todayYear;
     uint8_t m = todayMonth, d = todayDay;
     subtractDays(y, m, d, todayDow - i);
-    readDays[i] = getMinutesForDay(language, y, m, d) > 0;
+    readDays[i] = readOn(language, accountFor(language), y, m, d);
   }
 }
 
 void ReadingStatsStore::getMonthStatus(const char* language, const uint16_t year, const uint8_t month,
                                        bool out[32]) const {
+  for (int i = 0; i < 32; i++) out[i] = false;
+  if (const auto* g = accountFor(language)) {
+    for (int d = 1; d <= daysInMonth(year, month); d++) out[d] = readOn(language, g, year, month, d);
+    return;
+  }
   char lang[4];
   normalizeLanguage(language, lang);
-  for (int i = 0; i < 32; i++) out[i] = false;
   for (const auto& e : languageDays) {
     if (memcmp(e.language, lang, sizeof(lang)) != 0 || e.minutesRead == 0) continue;
     if (e.year == year && e.month == month && e.day >= 1 && e.day <= 31) out[e.day] = true;
@@ -289,28 +381,37 @@ int ReadingStatsStore::getDaysReadInMonth(const char* language, const uint16_t y
 }
 
 uint16_t ReadingStatsStore::getBooksFinished(const char* language) const {
-  char lang[4];
-  normalizeLanguage(language, lang);
-  uint16_t count = 0;
-  for (const auto& p : finishedBookPaths) {
-    const auto it = std::find_if(books.begin(), books.end(), [&p](const BookReading& b) { return b.path == p; });
-    if (it == books.end()) continue;  // evicted from the per-book block; language unknown
-    char bookLang[4];
-    normalizeLanguage(it->language.c_str(), bookLang);
-    if (memcmp(bookLang, lang, sizeof(lang)) == 0) count++;
-  }
-  return count;
+  const auto* g = accountFor(language);
+  return static_cast<uint16_t>(
+      std::min<uint32_t>(g ? accountFinished(language, *g) : localFinished(language), UINT16_MAX));
 }
+
+uint16_t ReadingStatsStore::getBooksFinished() const { return getBooksFinished(nullptr); }
 
 void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
   if (std::any_of(finishedBookPaths.begin(), finishedBookPaths.end(),
                   [&bookPath](const std::string& p) { return p == bookPath; })) {
     return;
   }
+  // Its stand-in from the server goes: the book now counts under its own path.
+  const std::string remote = remoteFinishedPath(bookdownload::nameHash(bookPath));
+  const auto stale = std::find(finishedBookPaths.begin(), finishedBookPaths.end(), remote);
+  if (stale != finishedBookPaths.end()) finishedBookPaths.erase(stale);
   finishedBookPaths.push_back(bookPath);
   // max(), not assignment: after a truncated load the path list can hold fewer entries than the
-  // count the file's header reported, and a finished-book tally must never count down.
+  // count the file's header reported, and a finished-book tally must never count down (only Mark as
+  // Unread takes a book off: unmarkBookFinished()).
   booksFinished = std::max(booksFinished, static_cast<uint16_t>(finishedBookPaths.size()));
+}
+
+void ReadingStatsStore::unmarkBookFinished(const std::string& bookPath) {
+  const std::string remote = remoteFinishedPath(bookdownload::nameHash(bookPath));
+  const auto end = std::remove_if(finishedBookPaths.begin(), finishedBookPaths.end(),
+                                  [&](const std::string& p) { return p == bookPath || p == remote; });
+  const auto removed = static_cast<uint16_t>(finishedBookPaths.end() - end);
+  finishedBookPaths.erase(end, finishedBookPaths.end());
+  booksFinished = std::max(static_cast<uint16_t>(booksFinished > removed ? booksFinished - removed : 0),
+                           static_cast<uint16_t>(finishedBookPaths.size()));
 }
 
 uint16_t ReadingStatsStore::getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const {
@@ -322,11 +423,8 @@ uint16_t ReadingStatsStore::getMinutesForDay(uint16_t year, uint8_t month, uint8
   return it == days.rend() ? 0 : it->minutesRead;
 }
 
-bool ReadingStatsStore::hasReadToday(uint16_t year, uint8_t month, uint8_t day) const {
-  return getMinutesForDay(year, month, day) > 0;
-}
-
 int ReadingStatsStore::getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const {
+  if (const auto* g = accountFor(nullptr)) return accountStreak(nullptr, *g, todayYear, todayMonth, todayDay);
   // Backwards through the sorted history, rather than probing one candidate date per day.
   if (days.empty()) return 0;
   int expected = daysSinceEpoch(todayYear, todayMonth, todayDay);
@@ -361,26 +459,19 @@ int ReadingStatsStore::getLongestStreak() const {
     prev = e;
     if (cur > maxStreak) maxStreak = cur;
   }
-  return maxStreak;
+  const auto* g = accountFor(nullptr);
+  return g ? std::max<int>({maxStreak, g->longestStreak, accountRecentRun(nullptr, *g)}) : maxStreak;
 }
 
-int ReadingStatsStore::getDaysRead() const { return static_cast<int>(days.size()); }
-
-uint32_t ReadingStatsStore::getTotalMinutes() const {
-  return std::accumulate(days.begin(), days.end(), uint32_t{0},
-                         [](const uint32_t sum, const DailyReading& d) { return sum + d.minutesRead; });
+int ReadingStatsStore::getDaysRead() const {
+  if (const auto* g = accountFor(nullptr)) return accountDaysRead(nullptr, *g);
+  return static_cast<int>(days.size());
 }
+
+uint32_t ReadingStatsStore::getTotalMinutes() const { return getTotalMinutes(nullptr); }
 
 uint16_t ReadingStatsStore::getMinutesThisWeek(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const {
-  int dow = (dowFromDate(todayYear, todayMonth, todayDay) + 6) % 7;  // ISO Mon=0
-  uint32_t total = 0;  // see the per-language overload: seven saturated days overflow a uint16
-  for (int i = 0; i <= dow; i++) {
-    uint16_t y = todayYear;
-    uint8_t m = todayMonth, d = todayDay;
-    subtractDays(y, m, d, dow - i);
-    total += getMinutesForDay(y, m, d);
-  }
-  return static_cast<uint16_t>(std::min<uint32_t>(total, UINT16_MAX));
+  return getMinutesThisWeek(nullptr, todayYear, todayMonth, todayDay);
 }
 
 void ReadingStatsStore::getWeekStatus(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay, int todayDow,
@@ -390,83 +481,98 @@ void ReadingStatsStore::getWeekStatus(uint16_t todayYear, uint8_t todayMonth, ui
     uint16_t y = todayYear;
     uint8_t m = todayMonth, d = todayDay;
     subtractDays(y, m, d, todayDow - i);
-    readDays[i] = getMinutesForDay(y, m, d) > 0;
+    readDays[i] = readOn(nullptr, accountFor(nullptr), y, m, d);
   }
 }
 
 void ReadingStatsStore::getMonthStatus(uint16_t year, uint8_t month, bool out[32]) const {
   for (int i = 0; i < 32; i++) out[i] = false;
-  int dim = daysInMonth(year, month);
-  for (int d = 1; d <= dim; d++) {
-    out[d] = getMinutesForDay(year, month, static_cast<uint8_t>(d)) > 0;
-  }
+  const auto* g = accountFor(nullptr);
+  const int dim = daysInMonth(year, month);
+  for (int d = 1; d <= dim; d++) out[d] = readOn(nullptr, g, year, month, static_cast<uint8_t>(d));
 }
 
 int ReadingStatsStore::getDaysReadInMonth(uint16_t year, uint8_t month) const {
-  int count = 0;
-  int dim = daysInMonth(year, month);
-  for (int d = 1; d <= dim; d++) {
-    if (getMinutesForDay(year, month, static_cast<uint8_t>(d)) > 0) count++;
-  }
-  return count;
+  bool status[32];
+  getMonthStatus(year, month, status);
+  return static_cast<int>(std::count(status + 1, status + 32, true));
 }
 
 bool ReadingStatsStore::saveToFile() const {
+  const std::string tmpPath = statsPath() + ".tmp";
   HalFile f;
-  if (!Storage.openFileForWrite("STAT", statsPath().c_str(), f)) return false;
-  f.write(&STATS_VERSION, 1);
+  if (!Storage.openFileForWrite("STAT", tmpPath.c_str(), f)) return false;
+  // Every write is checked: a short file must never replace a good one.
+  bool ok = true;
+  const auto put = [&f, &ok](const void* data, const size_t n) {
+    if (ok && n && f.write(static_cast<const uint8_t*>(data), n) != n) ok = false;
+  };
+  put(&STATS_VERSION, 1);
   // days never exceeds MAX_DAYS in memory, so this only guards the 16-bit field.
   const uint16_t count = static_cast<uint16_t>(std::min<size_t>(days.size(), UINT16_MAX));
-  f.write(reinterpret_cast<const uint8_t*>(&count), 2);
-  f.write(reinterpret_cast<const uint8_t*>(&booksFinished), 2);
+  put(reinterpret_cast<const uint8_t*>(&count), 2);
+  put(reinterpret_cast<const uint8_t*>(&booksFinished), 2);
   for (uint16_t i = 0; i < count; i++) {
-    f.write(reinterpret_cast<const uint8_t*>(&days[i]), sizeof(DailyReading));
+    put(reinterpret_cast<const uint8_t*>(&days[i]), sizeof(DailyReading));
   }
   // Write finished book paths
   uint16_t pathCount = static_cast<uint16_t>(finishedBookPaths.size());
-  f.write(reinterpret_cast<const uint8_t*>(&pathCount), 2);
+  put(reinterpret_cast<const uint8_t*>(&pathCount), 2);
   for (const auto& p : finishedBookPaths) {
     uint16_t len = static_cast<uint16_t>(p.size());
-    f.write(reinterpret_cast<const uint8_t*>(&len), 2);
-    f.write(reinterpret_cast<const uint8_t*>(p.data()), len);
+    put(reinterpret_cast<const uint8_t*>(&len), 2);
+    put(reinterpret_cast<const uint8_t*>(p.data()), len);
   }
   // Per-book block (v3+)
   uint16_t bookCount = static_cast<uint16_t>(books.size());
-  f.write(reinterpret_cast<const uint8_t*>(&bookCount), 2);
+  put(reinterpret_cast<const uint8_t*>(&bookCount), 2);
   for (const auto& b : books) {
     uint16_t pathLen = static_cast<uint16_t>(b.path.size());
-    f.write(reinterpret_cast<const uint8_t*>(&pathLen), 2);
-    f.write(reinterpret_cast<const uint8_t*>(b.path.data()), pathLen);
+    put(reinterpret_cast<const uint8_t*>(&pathLen), 2);
+    put(reinterpret_cast<const uint8_t*>(b.path.data()), pathLen);
     uint8_t langLen = static_cast<uint8_t>(b.language.size());
-    f.write(&langLen, 1);
-    f.write(reinterpret_cast<const uint8_t*>(b.language.data()), langLen);
-    f.write(reinterpret_cast<const uint8_t*>(&b.minutesRead), 4);
-    f.write(reinterpret_cast<const uint8_t*>(&b.lastReadDay), 4);
+    put(&langLen, 1);
+    put(reinterpret_cast<const uint8_t*>(b.language.data()), langLen);
+    put(reinterpret_cast<const uint8_t*>(&b.minutesRead), 4);
+    put(reinterpret_cast<const uint8_t*>(&b.lastReadDay), 4);
   }
   // Per-day-per-language block (v4+). Fields written individually rather than as a struct blob:
   // LanguageDaily has trailing padding on some targets, and a padded layout would not survive a
   // format change on the reading side.
   // 16-bit count, as the format defines; clamped rather than silently truncated lower.
   const uint16_t langDayCount = static_cast<uint16_t>(std::min<size_t>(languageDays.size(), UINT16_MAX));
-  f.write(reinterpret_cast<const uint8_t*>(&langDayCount), 2);
+  put(reinterpret_cast<const uint8_t*>(&langDayCount), 2);
   size_t written = 0;
   for (const auto& e : languageDays) {
     if (written++ >= langDayCount) break;
-    f.write(reinterpret_cast<const uint8_t*>(&e.year), 2);
-    f.write(&e.month, 1);
-    f.write(&e.day, 1);
-    f.write(reinterpret_cast<const uint8_t*>(e.language), 4);
-    f.write(reinterpret_cast<const uint8_t*>(&e.minutesRead), 2);
+    put(reinterpret_cast<const uint8_t*>(&e.year), 2);
+    put(&e.month, 1);
+    put(&e.day, 1);
+    put(reinterpret_cast<const uint8_t*>(e.language), 4);
+    put(reinterpret_cast<const uint8_t*>(&e.minutesRead), 2);
   }
-  f.close();
-  return true;
+  put(&foldedJournalBytes, 4);
+  put(&foldedJournalHash, 4);
+  put(timeOfDayMinutes, sizeof(timeOfDayMinutes));  // v5
+  put(timeOfDayBase, sizeof(timeOfDayBase));
+  // SdFat writes the last sector on close: a failure there is a short file too.
+  ok = f.close() && ok;
+  if (!ok) {
+    LOG_ERR("STAT", "Stats save failed; previous file kept");
+    Storage.remove(tmpPath.c_str());
+    return false;
+  }
+  return Storage.replaceFile(tmpPath.c_str(), statsPath().c_str());
 }
 
-bool ReadingStatsStore::loadFromFile() {
+bool ReadingStatsStore::loadMainFile(const size_t pendingRecords) {
   HalFile f;
   if (!Storage.openFileForRead("STAT", statsPath().c_str(), f)) return false;
+  // Shorter than its own header (an older firmware's in-place save cut off by power loss): no
+  // history to keep, as opposed to a read error, which leaves the file for the next try.
+  if (f.size() < 5) return true;
   uint8_t version;
-  if (f.read(&version, 1) != 1) {
+  if (f.read(&version, 1) != 1 || !plausibleStatsVersion(version)) {
     f.close();
     return false;
   }
@@ -489,7 +595,10 @@ bool ReadingStatsStore::loadFromFile() {
     DailyReading discard;
     if (f.read(reinterpret_cast<uint8_t*>(&discard), sizeof(DailyReading)) != sizeof(DailyReading)) break;
   }
-  days.reserve(keepDays);
+  // Room for the journal's records too, so replaying them never regrows the table.
+  const size_t dayCapacity = keepDays + pendingRecords;
+  if (!tableFits(dayCapacity * sizeof(DailyReading))) return false;
+  days.reserve(dayCapacity);
   for (size_t i = 0; i < keepDays; i++) {
     DailyReading dr;
     if (f.read(reinterpret_cast<uint8_t*>(&dr), sizeof(DailyReading)) != sizeof(DailyReading)) break;
@@ -539,7 +648,9 @@ bool ReadingStatsStore::loadFromFile() {
   if (version >= 3 && pathsIntact) {
     uint16_t bookCount = 0;
     if (f.read(reinterpret_cast<uint8_t*>(&bookCount), 2) == 2 && bookCount <= MAX_BOOKS) {
-      books.reserve(bookCount);
+      const size_t bookCapacity = std::min<size_t>(bookCount + pendingRecords, MAX_BOOKS);
+      if (!tableFits(bookCapacity * sizeof(BookReading))) return false;
+      books.reserve(bookCapacity);
       for (int i = 0; i < bookCount; i++) {
         BookReading b;
         uint16_t pathLen = 0;
@@ -571,17 +682,34 @@ bool ReadingStatsStore::loadFromFile() {
         uint8_t discard[10];
         if (f.read(discard, sizeof(discard)) != sizeof(discard)) break;
       }
-      languageDays.reserve(keepLang);
-      for (size_t i = 0; i < keepLang; i++) {
+      const size_t langCapacity = keepLang + pendingRecords;  // see days
+      if (!tableFits(langCapacity * sizeof(LanguageDaily))) return false;
+      languageDays.reserve(langCapacity);
+      bool langIntact = true;
+      for (size_t i = 0; i < keepLang && langIntact; i++) {
         LanguageDaily e{};
-        if (f.read(reinterpret_cast<uint8_t*>(&e.year), 2) != 2) break;
-        if (f.read(&e.month, 1) != 1) break;
-        if (f.read(&e.day, 1) != 1) break;
-        if (f.read(reinterpret_cast<uint8_t*>(e.language), 4) != 4) break;
-        if (f.read(reinterpret_cast<uint8_t*>(&e.minutesRead), 2) != 2) break;
-        e.language[3] = '\0';         // a corrupt record must not leave an unterminated tag
-        if (e.year < 2020) continue;  // same unset-clock garbage the per-day loop drops
-        languageDays.push_back(e);
+        langIntact = f.read(reinterpret_cast<uint8_t*>(&e.year), 2) == 2 && f.read(&e.month, 1) == 1 &&
+                     f.read(&e.day, 1) == 1 && f.read(reinterpret_cast<uint8_t*>(e.language), 4) == 4 &&
+                     f.read(reinterpret_cast<uint8_t*>(&e.minutesRead), 2) == 2;
+        e.language[3] = '\0';  // a corrupt record must not leave an unterminated tag
+        if (langIntact && e.year >= 2020) languageDays.push_back(e);  // same unset-clock rule as days
+      }
+      // The journal prefix this file already holds (see compact()); absent in older files. A file
+      // damaged before this point reads as holding none, so the whole journal is replayed.
+      if (!langIntact || f.read(reinterpret_cast<uint8_t*>(&foldedJournalBytes), 4) != 4 ||
+          f.read(reinterpret_cast<uint8_t*>(&foldedJournalHash), 4) != 4) {
+        foldedJournalBytes = 0;
+        foldedJournalHash = 0;
+      } else if (version >= 5) {
+        const bool onCard = f.size() - f.position() >= sizeof(timeOfDayMinutes) + sizeof(timeOfDayBase);
+        if (f.read(reinterpret_cast<uint8_t*>(timeOfDayMinutes), sizeof(timeOfDayMinutes)) !=
+                sizeof(timeOfDayMinutes) ||
+            f.read(reinterpret_cast<uint8_t*>(timeOfDayBase), sizeof(timeOfDayBase)) != sizeof(timeOfDayBase)) {
+          // Bytes that are there but did not read are a card error: no load, so no save drops them.
+          if (onCard) return false;
+          memset(timeOfDayMinutes, 0, sizeof(timeOfDayMinutes));
+          memset(timeOfDayBase, 0, sizeof(timeOfDayBase));
+        }
       }
       // Same ordering guarantee as days, for the same passes.
       const auto byDate = [](const LanguageDaily& a, const LanguageDaily& b) {
@@ -594,4 +722,1019 @@ bool ReadingStatsStore::loadFromFile() {
   }
   f.close();
   return true;
+}
+
+namespace {
+uint32_t fnv1a(uint32_t h, const uint8_t* p, const size_t n) {
+  for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
+  return h;
+}
+constexpr uint32_t FNV_BASIS = 2166136261u;
+uint32_t pathHash(const std::string& s) {
+  return fnv1a(FNV_BASIS, reinterpret_cast<const uint8_t*>(s.data()), s.size());
+}
+
+bool skipBytes(HalFile& f, size_t n) {
+  uint8_t buf[64];
+  while (n) {
+    const size_t k = std::min(n, sizeof(buf));
+    if (f.read(buf, k) != static_cast<int>(k)) return false;
+    n -= k;
+  }
+  return true;
+}
+
+// One journal record: magic, date, minutes, then three length-prefixed strings (language, book
+// path, finished path). Built whole so it goes to the card in one write.
+void appendString(std::string& out, const char* s, const size_t maxLen) {
+  const auto len = static_cast<uint16_t>(s ? strnlen(s, maxLen) : 0);
+  out.append(reinterpret_cast<const char*>(&len), 2);
+  if (len) out.append(s, len);
+}
+bool readString(HalFile& f, std::string& out, const size_t maxLen) {
+  uint16_t len = 0;
+  if (f.read(reinterpret_cast<uint8_t*>(&len), 2) != 2 || len > maxLen) return false;
+  out.assign(len, '\0');
+  return len == 0 || f.read(reinterpret_cast<uint8_t*>(&out[0]), len) == static_cast<int>(len);
+}
+struct JournalRecord {
+  uint16_t year = 0;
+  uint8_t month = 0;
+  uint8_t day = 0;
+  uint16_t minutes = 0;
+  std::string language, bookPath, finishedPath;
+  // A time-of-day record (see TIME_OF_DAY_MARK), read as one that changes nothing else.
+  uint8_t timeOfDay = ReadingStatsStore::NO_TIME_OF_DAY;
+  uint16_t timeOfDayMinutes = 0;
+};
+bool readRecord(HalFile& f, JournalRecord& r) {
+  uint8_t magic = 0;
+  const bool ok = f.read(&magic, 1) == 1 && magic == JOURNAL_RECORD_MAGIC &&
+                  f.read(reinterpret_cast<uint8_t*>(&r.year), 2) == 2 && f.read(&r.month, 1) == 1 &&
+                  f.read(&r.day, 1) == 1 && f.read(reinterpret_cast<uint8_t*>(&r.minutes), 2) == 2 &&
+                  readString(f, r.language, MAX_STORED_LANGUAGE) && readString(f, r.bookPath, MAX_STORED_PATH) &&
+                  readString(f, r.finishedPath, MAX_STORED_PATH);
+  r.timeOfDay = ReadingStatsStore::NO_TIME_OF_DAY;
+  r.timeOfDayMinutes = 0;
+  if (ok && r.minutes == 0 && r.language.size() == 4 && r.language[0] == TIME_OF_DAY_MARK && r.bookPath.empty() &&
+      r.finishedPath.empty()) {
+    r.timeOfDay = static_cast<uint8_t>(r.language[1]);
+    memcpy(&r.timeOfDayMinutes, &r.language[2], 2);
+    r.language.clear();
+  }
+  return ok;
+}
+
+// Size and hash of the whole journal: what compact() records as folded into the stats file.
+void journalDigest(uint32_t& bytes, uint32_t& hash) {
+  bytes = 0;
+  hash = FNV_BASIS;
+  HalFile f;
+  if (!Storage.openFileForRead("STAT", journalPath().c_str(), f)) return;
+  uint8_t buf[64];
+  int k;
+  while ((k = f.read(buf, sizeof(buf))) > 0) {
+    hash = fnv1a(hash, buf, static_cast<size_t>(k));
+    bytes += static_cast<uint32_t>(k);
+  }
+}
+
+// Opens the journal positioned after the prefix a stats file already holds, so a fold whose
+// journal removal was interrupted is never counted twice. A journal that does not start with that
+// prefix is a new one, read from the start.
+bool openUnfoldedJournal(HalFile& f, const uint32_t foldedBytes, const uint32_t foldedHash) {
+  if (!Storage.openFileForRead("STAT", journalPath().c_str(), f)) return false;
+  if (foldedBytes == 0 || f.size() < foldedBytes) return skipBytes(f, JOURNAL_HEADER_BYTES);
+  uint32_t hash = FNV_BASIS;
+  uint8_t buf[64];
+  size_t left = foldedBytes;
+  while (left) {
+    const size_t k = std::min(left, sizeof(buf));
+    if (f.read(buf, k) != static_cast<int>(k)) break;
+    hash = fnv1a(hash, buf, k);
+    left -= k;
+  }
+  if (left == 0 && hash == foldedHash) return true;
+  f.close();
+  return Storage.openFileForRead("STAT", journalPath().c_str(), f) && skipBytes(f, JOURNAL_HEADER_BYTES);
+}
+
+size_t countJournalRecords() {
+  HalFile f;
+  if (!Storage.openFileForRead("STAT", journalPath().c_str(), f) || !skipBytes(f, JOURNAL_HEADER_BYTES)) return 0;
+  JournalRecord r;
+  size_t n = 0;
+  while (readRecord(f, r)) n++;
+  return n;
+}
+
+// Reads only the trailer of a stats file: the journal prefix it holds (see compact()). False when the
+// file does not read whole to its trailer. Same bounds as the loader, so the two agree on a file.
+bool readFoldMarker(const std::string& path, uint32_t& bytes, uint32_t& hash) {
+  bytes = hash = 0;
+  HalFile f;
+  if (!Storage.openFileForRead("STAT", path.c_str(), f) || f.size() < 5) return false;
+  uint8_t version = 0;
+  uint16_t count = 0, finished = 0, n = 0;
+  if (f.read(&version, 1) != 1 || version < 4 || f.read(reinterpret_cast<uint8_t*>(&count), 2) != 2 ||
+      f.read(reinterpret_cast<uint8_t*>(&finished), 2) != 2 || !skipBytes(f, count * sizeof(DailyReading)) ||
+      f.read(reinterpret_cast<uint8_t*>(&n), 2) != 2 || n > 500) {
+    return false;
+  }
+  std::string s;
+  for (uint16_t i = 0; i < n; i++) {
+    if (!readString(f, s, MAX_STORED_PATH)) return false;
+  }
+  if (f.read(reinterpret_cast<uint8_t*>(&n), 2) != 2 || n > ReadingStatsStore::MAX_BOOKS) return false;
+  for (uint16_t i = 0; i < n; i++) {
+    uint8_t langLen = 0;
+    if (!readString(f, s, MAX_STORED_PATH) || f.read(&langLen, 1) != 1 || langLen > MAX_STORED_LANGUAGE ||
+        !skipBytes(f, langLen + 8u)) {
+      return false;
+    }
+  }
+  uint32_t b = 0, h = 0;
+  if (f.read(reinterpret_cast<uint8_t*>(&n), 2) != 2 || !skipBytes(f, n * 10u) ||
+      f.read(reinterpret_cast<uint8_t*>(&b), 4) != 4 || f.read(reinterpret_cast<uint8_t*>(&h), 4) != 4 ||
+      (version >= 5 && !skipBytes(f, 2 * ReadingStatsStore::TIME_OF_DAY_BUCKETS * sizeof(uint32_t)))) {
+    return false;
+  }
+  bytes = b;
+  hash = h;
+  return true;
+}
+
+// A save swaps its temp file in by removing the old file first; a power loss in between leaves only
+// the temp. It is adopted before anything reads or writes the stats -- but only when it reads whole
+// to its trailer: a temp cut off mid-write is dropped, and the journal still holds everything.
+void recoverInterruptedSave() {
+  std::lock_guard<std::recursive_mutex> lock(journalMutex());
+  const std::string tmpPath = statsPath() + ".tmp";
+  if (Storage.exists(statsPath().c_str()) || !Storage.exists(tmpPath.c_str())) return;
+  uint32_t bytes = 0, hash = 0;
+  if (readFoldMarker(tmpPath, bytes, hash)) {
+    Storage.rename(tmpPath.c_str(), statsPath().c_str());
+  } else {
+    Storage.remove(tmpPath.c_str());
+  }
+}
+}  // namespace
+
+bool ReadingStatsStore::replayJournal() {
+  HalFile f;
+  if (!openUnfoldedJournal(f, foldedJournalBytes, foldedJournalHash)) return true;  // nothing recorded
+  // A record cut short by a power loss ends the replay; everything before it counts.
+  JournalRecord r;
+  while (readRecord(f, r)) {
+    if (r.timeOfDay < TIME_OF_DAY_BUCKETS) timeOfDayMinutes[r.timeOfDay] += r.timeOfDayMinutes;
+    if (r.minutes > 0) {
+      if (r.year >= 2020) {  // the loader drops unset-clock days; the per-book total keeps them
+        addMinutes(r.year, r.month, r.day, r.minutes);
+        addLanguageMinutes(r.language.c_str(), r.minutes, r.year, r.month, r.day);
+      }
+      addBookMinutes(r.bookPath.c_str(), r.language.c_str(), r.minutes, r.year, r.month, r.day);
+    } else if (!r.finishedPath.empty() && r.year >= 2020) {
+      // A finish carries its book's language, so a book finished without reading time counts in it. Its
+      // day also moves the book up for the next stats upload, which sends the change.
+      addBookMinutes(r.bookPath.c_str(), r.language.c_str(), 0, r.year, r.month, r.day);
+    } else if (!r.finishedPath.empty() && !r.bookPath.empty()) {
+      // No clock: the newest day any book has still puts it in the next upload.
+      const auto newest = std::max_element(books.begin(), books.end(), [](const BookReading& a, const BookReading& b) {
+        return a.lastReadDay < b.lastReadDay;
+      });
+      for (auto& b : books) {
+        if (b.path == r.bookPath) b.lastReadDay = newest->lastReadDay;
+      }
+    }
+    if (!r.finishedPath.empty() && r.finishedPath[0] == UNFINISHED_MARK) {
+      unmarkBookFinished(r.finishedPath.substr(1));
+    } else if (!r.finishedPath.empty()) {
+      markBookFinished(r.finishedPath);
+    }
+  }
+  return true;
+}
+
+bool ReadingStatsStore::loadFromFile() {
+  if (loaded) return true;
+  recoverInterruptedSave();
+  const size_t pending = countJournalRecords();
+  if (Storage.exists(statsPath().c_str()) && !loadMainFile(pending)) {
+    LOG_ERR("STAT", "Stats not loaded (unreadable or no heap: maxAlloc=%u, %u journal records)", ESP.getMaxAllocHeap(),
+            static_cast<unsigned>(pending));
+    release();
+    return false;
+  }
+  replayJournal();
+  loaded = true;
+  return true;
+}
+
+void ReadingStatsStore::release() {
+  std::vector<DailyReading>().swap(days);
+  std::vector<std::string>().swap(finishedBookPaths);
+  std::vector<BookReading>().swap(books);
+  std::vector<LanguageDaily>().swap(languageDays);
+  std::vector<StatsDigest>().swap(account);
+  booksFinished = 0;
+  memset(timeOfDayMinutes, 0, sizeof(timeOfDayMinutes));
+  memset(timeOfDayBase, 0, sizeof(timeOfDayBase));
+  foldedJournalBytes = 0;
+  foldedJournalHash = 0;
+  loaded = false;
+}
+
+bool ReadingStatsStore::record(const Change& change) {
+  std::string rec;
+  // An unfinished book goes in the finished-path field behind its mark.
+  std::string unfinished;
+  if (change.unfinished && change.finishedPath) {
+    unfinished.reserve(1 + strnlen(change.finishedPath, MAX_STORED_PATH));
+    unfinished.push_back(UNFINISHED_MARK);
+    unfinished.append(change.finishedPath, strnlen(change.finishedPath, MAX_STORED_PATH - 1));
+  }
+  const char* finishedField = change.unfinished && change.finishedPath ? unfinished.c_str() : change.finishedPath;
+  const bool timed = change.minutes > 0 && change.timeOfDay < TIME_OF_DAY_BUCKETS;
+  rec.reserve(JOURNAL_HEADER_BYTES + 2 * 13 + MAX_STORED_LANGUAGE + 4 +
+              (change.bookPath ? strnlen(change.bookPath, MAX_STORED_PATH) : 0) +
+              (finishedField ? strnlen(finishedField, MAX_STORED_PATH) : 0));
+  const auto appendHeader = [&rec, &change](const uint16_t minutes) {
+    rec.push_back(static_cast<char>(JOURNAL_RECORD_MAGIC));
+    rec.append(reinterpret_cast<const char*>(&change.year), 2);
+    rec.push_back(static_cast<char>(change.month));
+    rec.push_back(static_cast<char>(change.day));
+    rec.append(reinterpret_cast<const char*>(&minutes), 2);
+  };
+  appendHeader(change.minutes);
+  appendString(rec, change.language, MAX_STORED_LANGUAGE);
+  appendString(rec, change.bookPath, MAX_STORED_PATH);
+  appendString(rec, finishedField, MAX_STORED_PATH);
+  if (timed) {
+    appendHeader(0);
+    // Binary, so not through appendString: its bytes can be 0.
+    const uint16_t len = 4;
+    rec.append(reinterpret_cast<const char*>(&len), 2);
+    rec.push_back(TIME_OF_DAY_MARK);
+    rec.push_back(static_cast<char>(change.timeOfDay));
+    rec.append(reinterpret_cast<const char*>(&change.minutes), 2);
+    rec.append(4, '\0');  // no book path, no finished path
+  }
+
+  std::lock_guard<std::recursive_mutex> lock(journalMutex());
+  HalFile f;
+  if (!Storage.openFileForAppend("STAT", journalPath().c_str(), f)) return false;
+  size_t before = f.size();
+  // A header cut off by a power loss would make replay misread every record after it: start over.
+  if (before > 0 && before < JOURNAL_HEADER_BYTES) {
+    if (!f.truncate(0)) {
+      f.close();
+      return false;
+    }
+    before = 0;
+  }
+  if (before == 0) {
+    const uint32_t nonce = esp_random();
+    std::string header(1, static_cast<char>(JOURNAL_HEADER_MAGIC));
+    header.append(reinterpret_cast<const char*>(&nonce), 4);
+    rec.insert(0, header);
+  }
+  // A short append is cut back off: a torn record would end every replay before the ones after it.
+  if (f.write(rec.data(), rec.size()) != rec.size()) {
+    f.truncate(before);
+    f.close();
+    return false;
+  }
+  if (f.close()) return true;
+  // A failed close may still have committed the record; retrying it then would count it twice.
+  HalFile check;
+  return Storage.openFileForRead("STAT", journalPath().c_str(), check) && check.size() == before + rec.size();
+}
+
+ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear, const uint8_t todayMonth,
+                                                        const uint8_t todayDay, const char* language,
+                                                        const char* finishedPath) {
+  Summary out;
+  recoverInterruptedSave();
+  const int today = daysSinceEpoch(todayYear, todayMonth, todayDay);
+  char lang[4] = {};
+  if (language && *language) normalizeLanguage(language, lang);
+
+  // The table path, for what the stream below does not handle (older formats, unsorted days).
+  const auto fromTables = [&]() {
+    // Held so a record() on the main loop cannot add to the journal between its count and replay.
+    std::lock_guard<std::recursive_mutex> lock(journalMutex());
+    Summary t;
+    if (loadFromFile()) {
+      t.streak = getStreak(todayYear, todayMonth, todayDay);
+      t.booksFinished = getBooksFinished();
+      if (lang[0]) t.languageBooksFinished = getBooksFinished(lang);
+      // A book finished before keeps its place: count up to it, not every finish since.
+      auto it = finishedPath ? std::find(finishedBookPaths.begin(), finishedBookPaths.end(), finishedPath)
+                             : finishedBookPaths.end();
+      // Finished on another device: counted under its stand-in until it is finished here.
+      bool viaStandIn = false;
+      if (finishedPath && it == finishedBookPaths.end()) {
+        it = std::find(finishedBookPaths.begin(), finishedBookPaths.end(),
+                       remoteFinishedPath(bookdownload::nameHash(finishedPath)));
+        viaStandIn = it != finishedBookPaths.end();
+      }
+      t.listRead = true;
+      t.alreadyFinished = it != finishedBookPaths.end();
+      if (it != finishedBookPaths.end() && it + 1 != finishedBookPaths.end()) {
+        t.booksFinished = static_cast<uint16_t>(it - finishedBookPaths.begin() + 1);
+        if (lang[0]) {
+          t.languageBooksFinished = static_cast<uint16_t>(
+              std::count_if(finishedBookPaths.begin(), it + 1, [this, &lang](const std::string& p) {
+                const auto b =
+                    std::find_if(books.begin(), books.end(), [&p](const BookReading& r) { return r.path == p; });
+                char bookLang[4];
+                normalizeLanguage(b == books.end() ? "" : b->language.c_str(), bookLang);
+                return b != books.end() && memcmp(bookLang, lang, sizeof(lang)) == 0;
+              }));
+          // A stand-in has no language of its own; the book this stamp is for is in this one.
+          if (viaStandIn) t.languageBooksFinished++;
+        }
+      }
+    }
+    release();
+    return t;
+  };
+
+  // The journal past what the file holds, condensed to what the numbers need: no strings kept.
+  struct Entry {
+    int day;
+    uint16_t minutes;
+    uint32_t book;      // hash of the book path, 0 for none
+    uint32_t finished;  // hash of the finished path, 0 for none
+    bool unfinished;    // `finished` and its stand-in `standIn` come off the list instead
+    uint32_t standIn;
+    char language[4];
+    bool hasLanguage;
+  };
+  std::vector<Entry> journal;
+  {
+    uint32_t foldedBytes = 0, foldedHash = 0;
+    readFoldMarker(statsPath(), foldedBytes, foldedHash);
+    HalFile j;
+    if (openUnfoldedJournal(j, foldedBytes, foldedHash)) {
+      journal.reserve(countJournalRecords());
+      JournalRecord r;
+      while (readRecord(j, r)) {
+        Entry e{daysSinceEpoch(r.year, r.month, r.day), r.minutes, 0, 0, false, 0, {}, !r.language.empty()};
+        e.unfinished = !r.finishedPath.empty() && r.finishedPath[0] == UNFINISHED_MARK;
+        // A finish names its book too, with its language: see replayJournal().
+        if (!r.bookPath.empty() && (r.minutes > 0 || (!r.finishedPath.empty() && !e.unfinished))) {
+          e.book = pathHash(r.bookPath);
+        }
+        if (e.unfinished) {
+          e.finished = pathHash(r.finishedPath.substr(1));
+          e.standIn = pathHash(remoteFinishedPath(bookdownload::nameHash(r.finishedPath.substr(1))));
+        } else if (!r.finishedPath.empty()) {
+          e.finished = pathHash(r.finishedPath);
+        }
+        normalizeLanguage(r.language.c_str(), e.language);
+        if (r.minutes > 0 && r.year < 2020) e.minutes = 0;  // dropped from days, as on replay
+        journal.push_back(e);
+      }
+    }
+  }
+  // Journal minutes per day, ascending.
+  std::vector<std::pair<int, uint32_t>> journalDays;
+  journalDays.reserve(journal.size());
+  for (const auto& e : journal) {
+    if (e.minutes == 0) continue;
+    auto it = std::lower_bound(journalDays.begin(), journalDays.end(), std::make_pair(e.day, uint32_t{0}));
+    if (it != journalDays.end() && it->first == e.day) {
+      it->second += e.minutes;
+    } else {
+      journalDays.insert(it, {e.day, e.minutes});
+    }
+  }
+
+  HalFile f;
+  const bool hasFile = Storage.openFileForRead("STAT", statsPath().c_str(), f) && f.size() >= 5;
+  uint8_t version = 0;
+  uint16_t count = 0, headerFinished = 0;
+  if (hasFile &&
+      (f.read(&version, 1) != 1 || version != STATS_VERSION || f.read(reinterpret_cast<uint8_t*>(&count), 2) != 2 ||
+       f.read(reinterpret_cast<uint8_t*>(&headerFinished), 2) != 2)) {
+    f.close();
+    return fromTables();
+  }
+
+  // Days, file and journal merged in date order; the run of read days ending today is the streak.
+  int prev = INT32_MIN, run = 0, lastFileDay = INT32_MIN;
+  size_t jd = 0;
+  const auto takeDay = [&](const int e, const uint32_t minutes) {
+    if (minutes == 0 || e > today) return;  // as getStreak(): empty days and future dates do not count
+    run = (e == prev + 1) ? run + 1 : 1;
+    prev = e;
+  };
+  const size_t skip = count > MAX_DAYS ? count - MAX_DAYS : 0;  // the loader keeps the newest MAX_DAYS
+  for (size_t i = 0; hasFile && i < count; i++) {
+    DailyReading d;
+    if (f.read(reinterpret_cast<uint8_t*>(&d), sizeof(d)) != sizeof(d)) {
+      f.close();
+      return fromTables();
+    }
+    if (i < skip || d.year < 2020) continue;
+    const int e = daysSinceEpoch(d.year, d.month, d.day);
+    if (e < lastFileDay) {  // unsorted: the loader sorts, so leave it to the tables
+      f.close();
+      return fromTables();
+    }
+    lastFileDay = e;
+    uint32_t minutes = d.minutesRead;
+    for (; jd < journalDays.size() && journalDays[jd].first < e; jd++)
+      takeDay(journalDays[jd].first, journalDays[jd].second);
+    if (jd < journalDays.size() && journalDays[jd].first == e) minutes += journalDays[jd++].second;
+    takeDay(e, minutes);
+  }
+  for (; jd < journalDays.size(); jd++) takeDay(journalDays[jd].first, journalDays[jd].second);
+  out.streak = prev == today ? run : 0;
+
+  // Finished books: hashes of their paths, then their languages from the per-book block.
+  std::vector<uint32_t> finished;
+  bool pathsIntact = false;
+  uint16_t pathCount = 0;
+  std::string s;
+  if (hasFile && f.read(reinterpret_cast<uint8_t*>(&pathCount), 2) == 2 && pathCount <= 500) {
+    pathsIntact = true;
+    finished.reserve(pathCount + journal.size());
+    for (uint16_t i = 0; i < pathCount; i++) {
+      if (!readString(f, s, MAX_STORED_PATH)) {
+        pathsIntact = false;
+        break;
+      }
+      finished.push_back(pathHash(s));
+    }
+  }
+  uint16_t finishedCount = hasFile ? (pathsIntact ? static_cast<uint16_t>(finished.size()) : headerFinished) : 0;
+  for (const auto& e : journal) {
+    if (e.unfinished) {  // as unmarkBookFinished()
+      const auto end = std::remove_if(finished.begin(), finished.end(),
+                                      [&e](const uint32_t h) { return h == e.finished || h == e.standIn; });
+      const auto removed = static_cast<uint16_t>(finished.end() - end);
+      finished.erase(end, finished.end());
+      finishedCount = std::max(static_cast<uint16_t>(finishedCount > removed ? finishedCount - removed : 0),
+                               static_cast<uint16_t>(finished.size()));
+      continue;
+    }
+    if (!e.finished || std::find(finished.begin(), finished.end(), e.finished) != finished.end()) continue;
+    finished.push_back(e.finished);
+    finishedCount = std::max(finishedCount, static_cast<uint16_t>(finished.size()));  // as markBookFinished()
+  }
+  out.booksFinished = finishedCount;
+  // A book finished before keeps its place in the finish order; the newest finish is the total, as Insights
+  // counts it.
+  size_t place = finished.size();
+  bool viaStandIn = false;
+  if (finishedPath && *finishedPath) {
+    // A list cut short by a damaged file cannot tell whether the book is in it: the tables can.
+    if (hasFile && !pathsIntact) {
+      f.close();
+      return fromTables();
+    }
+    auto it = std::find(finished.begin(), finished.end(), pathHash(finishedPath));
+    // Finished on another device: counted under its stand-in until it is finished here.
+    if (it == finished.end()) {
+      it = std::find(finished.begin(), finished.end(),
+                     pathHash(remoteFinishedPath(bookdownload::nameHash(finishedPath))));
+      viaStandIn = it != finished.end();
+    }
+    out.listRead = true;
+    out.alreadyFinished = it != finished.end();
+    if (it != finished.end() && it + 1 != finished.end()) {
+      place = static_cast<size_t>(it - finished.begin());
+      out.booksFinished = static_cast<uint16_t>(place + 1);
+    }
+  }
+
+  if (lang[0]) {
+    // Language per finished book: from the per-book block, then as the journal sets it.
+    std::vector<std::pair<uint32_t, std::array<char, 4>>> finishedLang;
+    uint16_t bookCount = 0;
+    if (pathsIntact && f.read(reinterpret_cast<uint8_t*>(&bookCount), 2) == 2 && bookCount <= MAX_BOOKS) {
+      std::string bookLang;
+      for (uint16_t i = 0; i < bookCount; i++) {
+        uint8_t langLen = 0;
+        if (!readString(f, s, MAX_STORED_PATH) || f.read(&langLen, 1) != 1 || langLen > MAX_STORED_LANGUAGE) break;
+        bookLang.assign(langLen, '\0');
+        if ((langLen && f.read(reinterpret_cast<uint8_t*>(&bookLang[0]), langLen) != langLen) || !skipBytes(f, 8)) {
+          break;
+        }
+        const uint32_t h = pathHash(s);
+        if (std::find(finished.begin(), finished.end(), h) == finished.end()) continue;
+        std::array<char, 4> code{};
+        normalizeLanguage(bookLang.c_str(), code.data());
+        finishedLang.push_back({h, code});
+      }
+    }
+    for (const auto& e : journal) {
+      if (!e.book || std::find(finished.begin(), finished.end(), e.book) == finished.end()) continue;
+      auto it =
+          std::find_if(finishedLang.begin(), finishedLang.end(), [&e](const auto& x) { return x.first == e.book; });
+      if (it == finishedLang.end()) {
+        finishedLang.push_back({e.book, {}});
+        it = finishedLang.end() - 1;
+      } else if (!e.hasLanguage) {
+        continue;  // an empty tag never overwrites a known one (addBookMinutes)
+      }
+      memcpy(it->second.data(), e.language, 4);
+    }
+    for (const auto& x : finishedLang) {
+      if (memcmp(x.second.data(), lang, 4) != 0) continue;
+      if (place < finished.size() && std::find(finished.begin(), finished.end(), x.first) - finished.begin() >
+                                         static_cast<std::ptrdiff_t>(place)) {
+        continue;  // finished after the book this stamp is for
+      }
+      out.languageBooksFinished++;
+    }
+    // A stand-in has no language of its own; the book this stamp is for is in this one.
+    if (viaStandIn) out.languageBooksFinished++;
+  }
+  return out;
+}
+
+bool ReadingStatsStore::compact() {
+  std::lock_guard<std::recursive_mutex> lock(journalMutex());
+  recoverInterruptedSave();
+  const bool hasJournal = Storage.exists(journalPath().c_str());
+  const bool hasDownload = Storage.exists(downloadPath().c_str());
+  const bool hasBookDownload = Storage.exists(bookdownload::newPath().c_str());
+  bool outdated = false;  // an older format: one rewrite upgrades it
+  {
+    HalFile f;
+    uint8_t version = 0;
+    if (Storage.openFileForRead("STAT", statsPath().c_str(), f) && f.size() >= 5 && f.read(&version, 1) == 1) {
+      outdated = plausibleStatsVersion(version) && version != STATS_VERSION;
+    }
+  }
+  if (!hasJournal && !outdated && !hasDownload && !hasBookDownload) return true;
+
+  release();
+  uint32_t bytes = 0, hash = 0;
+  if (hasJournal) journalDigest(bytes, hash);
+  // The saved file records which journal it now holds, so a removal cut short here never counts the
+  // journal twice; until that save lands the journal is untouched.
+  bool ok = loadFromFile();
+  bool downloadIntact = true;
+  bool bookDownloadMerged = false;
+  std::string bookList;
+  // A download is the server's data: what it adds here was counted by the overview already.
+  std::vector<AccountBaseline> beforeDownload;
+  const bool downloading = hasDownload || hasBookDownload;
+  if (ok) {
+    foldedJournalBytes = bytes;
+    foldedJournalHash = hash;
+    if (downloading) accountBaselines(beforeDownload);
+    if (hasDownload) downloadIntact = mergeDownloadFile();
+    if (hasBookDownload && bookdownload::combine(bookList)) bookDownloadMerged = mergeBookDownload(bookList);
+    ok = saveToFile();
+  }
+  if (ok && downloading) shiftAccountBaselines(beforeDownload);
+  if (ok && hasJournal) Storage.remove(journalPath().c_str());
+  // A damaged download is not kept: what it held is merged, and the next refresh fetches it again.
+  if (ok && hasDownload) {
+    if (!downloadIntact) LOG_ERR("STAT", "Downloaded stats file damaged");
+    Storage.remove(downloadPath().c_str());
+  }
+  // Folded in: from now on it is only the per-book copy BookStats::load() reads.
+  if (ok && bookDownloadMerged) {
+    bookdownload::keep(bookList);
+  } else if (!bookList.empty()) {
+    bookdownload::discard(bookList);  // the download stays for the next boot
+  }
+  if (!ok) LOG_ERR("STAT", "Stats journal not folded in; kept for the next try");
+  release();
+  return ok;
+}
+
+bool ReadingStatsStore::isFinished(const std::string& bookPath) const {
+  return std::find(finishedBookPaths.begin(), finishedBookPaths.end(), bookPath) != finishedBookPaths.end();
+}
+
+bool ReadingStatsStore::hasPendingDownload() { return Storage.exists(downloadPath().c_str()); }
+bool ReadingStatsStore::hasStatsFile() { return Storage.exists(statsPath().c_str()); }
+
+bool ReadingStatsStore::saveDownload(const std::vector<DailyReading>& downloaded, const uint32_t* serverTimeOfDay,
+                                     const uint32_t* uploadedTimeOfDay) {
+  const std::string tmpPath = downloadPath() + ".tmp";
+  HalFile f;
+  if (!Storage.openFileForWrite("STAT", tmpPath.c_str(), f)) return false;
+  const uint16_t count = static_cast<uint16_t>(std::min<size_t>(downloaded.size(), MAX_DAYS));
+  bool ok = f.write(reinterpret_cast<const uint8_t*>(&count), 2) == 2;
+  for (uint16_t i = 0; ok && i < count; i++) {
+    ok = f.write(reinterpret_cast<const uint8_t*>(&downloaded[i]), sizeof(DailyReading)) == sizeof(DailyReading);
+  }
+  // Optional, after the days: older readers stop before it.
+  if (ok && serverTimeOfDay && uploadedTimeOfDay) {
+    const size_t n = TIME_OF_DAY_BUCKETS * sizeof(uint32_t);
+    ok = f.write(reinterpret_cast<const uint8_t*>(serverTimeOfDay), n) == n &&
+         f.write(reinterpret_cast<const uint8_t*>(uploadedTimeOfDay), n) == n;
+  }
+  ok = f.close() && ok;
+  if (!ok) {
+    Storage.remove(tmpPath.c_str());
+    return false;
+  }
+  return Storage.replaceFile(tmpPath.c_str(), downloadPath().c_str());
+}
+
+bool ReadingStatsStore::writeAccountFile(const std::vector<StatsDigest>& digests, const uint32_t accountKey) {
+  const std::string tmpPath = accountPath() + ".tmp";
+  HalFile f;
+  if (!Storage.openFileForWrite("STAT", tmpPath.c_str(), f)) return false;
+  const uint8_t header[2] = {ACCOUNT_VERSION, static_cast<uint8_t>(std::min<size_t>(digests.size(), MAX_DIGESTS))};
+  bool ok = f.write(header, 2) == 2 && f.write(reinterpret_cast<const uint8_t*>(&accountKey), 4) == 4;
+  for (uint8_t i = 0; ok && i < header[1]; i++) {
+    ok = f.write(reinterpret_cast<const uint8_t*>(&digests[i]), sizeof(StatsDigest)) == sizeof(StatsDigest);
+  }
+  ok = f.close() && ok;
+  if (!ok) {
+    Storage.remove(tmpPath.c_str());
+    return false;
+  }
+  return Storage.replaceFile(tmpPath.c_str(), accountPath().c_str());
+}
+
+bool ReadingStatsStore::readAccountFile(std::vector<StatsDigest>& out, uint32_t& accountKey) {
+  out.clear();
+  HalFile f;
+  uint8_t header[2] = {};
+  if (!Storage.openFileForRead("STAT", accountPath().c_str(), f) || f.read(header, 2) != 2 ||
+      header[0] != ACCOUNT_VERSION || header[1] == 0 || header[1] > MAX_DIGESTS ||
+      f.read(reinterpret_cast<uint8_t*>(&accountKey), 4) != 4) {
+    return false;  // never synced, or an older format: this card's own numbers until the next sync
+  }
+  // At most 21 records of about 140 bytes. reserve() aborts on failure, so check the block first.
+  if (!tableFits(header[1] * sizeof(StatsDigest))) {
+    LOG_ERR("STAT", "Not enough heap for the account stats");
+    return false;
+  }
+  out.resize(header[1]);
+  for (auto& g : out) {
+    if (f.read(reinterpret_cast<uint8_t*>(&g), sizeof(g)) != sizeof(g)) {
+      out.clear();
+      return false;
+    }
+    g.code[3] = '\0';
+    g.days = std::min<uint16_t>(g.days, sizeof(g.history) * 8);
+  }
+  if (out[0].code[0] != '\0') out.clear();  // the first is always all languages
+  return !out.empty();
+}
+
+bool ReadingStatsStore::saveAccount(std::vector<StatsDigest>& digests, const std::vector<AccountBaseline>& baselines,
+                                    const uint32_t accountKey) {
+  for (size_t i = 0; i < digests.size(); i++) {
+    auto& g = digests[i];
+    // Matched the way local days are bucketed, so "JA" or "jp" from the server finds the ja tab.
+    if (i > 0) {
+      char raw[4];
+      memcpy(raw, g.code, sizeof(raw));
+      raw[3] = '\0';
+      normalizeLanguage(raw, g.code);
+    }
+    const auto it = std::find_if(baselines.begin(), baselines.end(), [&g](const AccountBaseline& b) {
+      return memcmp(b.code, g.code, sizeof(b.code)) == 0;
+    });
+    g.baselineFinished = it == baselines.end() ? 0 : it->finished;
+    g.baselineMinutes = it == baselines.end() ? 0 : it->minutes;
+  }
+  return writeAccountFile(digests, accountKey);
+}
+
+void ReadingStatsStore::accountBaselines(std::vector<AccountBaseline>& out) const {
+  std::vector<LanguageSummary> languages;
+  getLanguages(languages);
+  out.clear();
+  out.reserve(languages.size() + 1);
+  out.push_back({{}, localFinished(nullptr), localMinutes(nullptr)});
+  for (const auto& l : languages) {
+    if (l.code[0] == '\0') continue;  // the server has no unknown-language group
+    AccountBaseline b{};
+    memcpy(b.code, l.code, sizeof(b.code));
+    b.finished = localFinished(l.code);
+    b.minutes = localMinutes(l.code);
+    out.push_back(b);
+  }
+}
+
+void ReadingStatsStore::shiftAccountBaselines(const std::vector<AccountBaseline>& before) const {
+  std::vector<StatsDigest> digests;
+  uint32_t key = 0;
+  if (!readAccountFile(digests, key)) return;
+  for (auto& g : digests) {
+    const char* code = g.code[0] ? g.code : nullptr;
+    const auto it = std::find_if(before.begin(), before.end(), [&g](const AccountBaseline& b) {
+      return memcmp(b.code, g.code, sizeof(b.code)) == 0;
+    });
+    const uint32_t finishedBefore = it == before.end() ? 0 : it->finished;
+    const uint32_t minutesBefore = it == before.end() ? 0 : it->minutes;
+    g.baselineFinished += localFinished(code) - std::min(localFinished(code), finishedBefore);
+    g.baselineMinutes += localMinutes(code) - std::min(localMinutes(code), minutesBefore);
+  }
+  if (!writeAccountFile(digests, key)) LOG_ERR("STAT", "Account baselines not updated");
+}
+
+void ReadingStatsStore::loadAccount(const uint32_t accountKey) {
+  uint32_t key = 0;
+  if (!readAccountFile(account, key)) return;
+  if (key != accountKey) account.clear();  // another account's overview
+}
+
+const StatsDigest* ReadingStatsStore::accountFor(const char* language) const {
+  if (account.empty()) return nullptr;
+  if (!language) return &account[0];
+  char lang[4];
+  normalizeLanguage(language, lang);
+  if (lang[0] == '\0') return nullptr;  // the server has no "unknown language" group
+  const auto it = std::find_if(account.begin() + 1, account.end(),
+                               [&lang](const StatsDigest& g) { return memcmp(g.code, lang, sizeof(lang)) == 0; });
+  return it == account.end() ? nullptr : &*it;
+}
+
+namespace {
+int32_t day2000(const uint16_t y, const uint8_t m, const uint8_t d) {
+  return daysSinceEpoch(y, m, d) - daysSinceEpoch(2000, 1, 1);
+}
+
+bool accountRead(const StatsDigest& g, const int32_t day) {
+  const int32_t n = g.anchorDay - day;
+  return n >= 0 && n < g.days && (g.history[n >> 3] >> (n & 7) & 1) != 0;
+}
+
+// What this card added since the baseline. Never negative: a stats file lost since then is not
+// reading taken away.
+uint32_t since(const uint32_t now, const uint32_t baseline) { return now > baseline ? now - baseline : 0; }
+}  // namespace
+
+uint32_t ReadingStatsStore::localMinutes(const char* language) const {
+  if (!language) {
+    return std::accumulate(days.begin(), days.end(), uint32_t{0},
+                           [](const uint32_t sum, const DailyReading& d) { return sum + d.minutesRead; });
+  }
+  char lang[4];
+  normalizeLanguage(language, lang);
+  return std::accumulate(languageDays.begin(), languageDays.end(), uint32_t{0},
+                         [&lang](const uint32_t sum, const LanguageDaily& e) {
+                           return memcmp(e.language, lang, sizeof(lang)) == 0 ? sum + e.minutesRead : sum;
+                         });
+}
+
+uint32_t ReadingStatsStore::localFinished(const char* language) const {
+  if (!language) return booksFinished;
+  char lang[4];
+  normalizeLanguage(language, lang);
+  uint32_t count = 0;
+  for (const auto& p : finishedBookPaths) {
+    const auto it = std::find_if(books.begin(), books.end(), [&p](const BookReading& b) { return b.path == p; });
+    if (it == books.end()) continue;  // evicted from the per-book block; language unknown
+    char bookLang[4];
+    normalizeLanguage(it->language.c_str(), bookLang);
+    if (memcmp(bookLang, lang, sizeof(lang)) == 0) count++;
+  }
+  return count;
+}
+
+uint16_t ReadingStatsStore::localWeekMinutes(const char* language, const uint16_t y, const uint8_t m,
+                                             const uint8_t d) const {
+  const int dow = (dowFromDate(y, m, d) + 6) % 7;  // ISO Mon=0
+  // Wider accumulator: per-day minutes saturate at UINT16_MAX, so seven of them can exceed it.
+  uint32_t total = 0;
+  for (int i = 0; i <= dow; i++) {
+    uint16_t yy = y;
+    uint8_t mm = m, dd = d;
+    subtractDays(yy, mm, dd, dow - i);
+    total += language ? getMinutesForDay(language, yy, mm, dd) : getMinutesForDay(yy, mm, dd);
+  }
+  return static_cast<uint16_t>(std::min<uint32_t>(total, UINT16_MAX));
+}
+
+bool ReadingStatsStore::readOn(const char* language, const StatsDigest* g, const uint16_t year, const uint8_t month,
+                               const uint8_t day) const {
+  const uint16_t own = language ? getMinutesForDay(language, year, month, day) : getMinutesForDay(year, month, day);
+  return own > 0 || (g && accountRead(*g, day2000(year, month, day)));
+}
+
+// This reader's own reading days (days since 2000, minutes), overall or for one language.
+template <typename F>
+void ReadingStatsStore::eachLocalDay(const char* language, F&& f) const {
+  if (!language) {
+    for (const auto& d : days) {
+      if (d.minutesRead > 0) f(day2000(d.year, d.month, d.day), d.minutesRead);
+    }
+    return;
+  }
+  char lang[4];
+  normalizeLanguage(language, lang);
+  for (const auto& e : languageDays) {
+    if (e.minutesRead > 0 && memcmp(e.language, lang, sizeof(lang)) == 0)
+      f(day2000(e.year, e.month, e.day), e.minutesRead);
+  }
+}
+
+// As the app counts it: a day counts when any device read on it, and until today is read the
+// streak runs to yesterday.
+int ReadingStatsStore::accountStreak(const char* language, const StatsDigest& g, uint16_t y, uint8_t m,
+                                     uint8_t d) const {
+  if (!readOn(language, &g, y, m, d)) subtractDays(y, m, d, 1);
+  int streak = 0;
+  while (streak < static_cast<int>(MAX_DAYS) && readOn(language, &g, y, m, d)) {
+    streak++;
+    subtractDays(y, m, d, 1);
+  }
+  return streak;
+}
+
+// The server's count, plus this reader's days it did not have yet (read since it answered).
+int ReadingStatsStore::accountDaysRead(const char* language, const StatsDigest& g) const {
+  uint32_t extra = 0;
+  eachLocalDay(language, [&](const int32_t day, uint16_t) {
+    if (day > g.anchorDay - g.days && !accountRead(g, day)) extra++;
+  });
+  return static_cast<int>(g.readingDays + extra);
+}
+
+uint32_t ReadingStatsStore::accountMinutes(const char* language, const StatsDigest& g) const {
+  return g.minutes + since(localMinutes(language), g.baselineMinutes);
+}
+
+void ReadingStatsStore::countAccountFinished(const uint32_t accountKey, const char* language, Summary& summary) {
+  if (accountKey == 0) return;
+  // The overview is about 21 digests (2.7 KB), read for the end-of-book screen only.
+  std::vector<StatsDigest> digests;
+  uint32_t key = 0;
+  if (!readAccountFile(digests, key) || key != accountKey || digests.empty()) return;
+  // summary's counts are this card's own, as localFinished() gives them: the same arithmetic as accountFinished().
+  const StatsDigest& all = digests[0];
+  summary.booksFinished = static_cast<uint16_t>(
+      std::min<uint32_t>(all.booksFinished + since(summary.booksFinished, all.baselineFinished), UINT16_MAX));
+  char lang[4];
+  normalizeLanguage(language ? language : "", lang);
+  if (lang[0] == '\0') return;
+  const auto it = std::find_if(digests.begin() + 1, digests.end(),
+                               [&lang](const StatsDigest& g) { return memcmp(g.code, lang, sizeof(lang)) == 0; });
+  if (it == digests.end()) return;
+  summary.languageBooksFinished = static_cast<uint16_t>(
+      std::min<uint32_t>(it->booksFinished + since(summary.languageBooksFinished, it->baselineFinished), UINT16_MAX));
+}
+
+uint32_t ReadingStatsStore::accountFinished(const char* language, const StatsDigest& g) const {
+  return g.booksFinished + since(localFinished(language), g.baselineFinished);
+}
+
+uint16_t ReadingStatsStore::accountWeekMinutes(const char* language, const StatsDigest& g, const uint16_t y,
+                                               const uint8_t m, const uint8_t d) const {
+  const int32_t today = day2000(y, m, d);
+  const int32_t monday = today - (dowFromDate(y, m, d) + 6) % 7;
+  // An answer from an earlier week: everything read this week came after it, on this card.
+  if (g.anchorDay < monday || g.anchorDay > today) return localWeekMinutes(language, y, m, d);
+  const uint32_t total = g.weekMinutes + since(localMinutes(language), g.baselineMinutes);
+  return static_cast<uint16_t>(std::min<uint32_t>(total, UINT16_MAX));
+}
+
+// The run up to this card's latest reading day after the server answered, which may have outgrown the
+// server's longest streak since.
+int ReadingStatsStore::accountRecentRun(const char* language, const StatsDigest& g) const {
+  int32_t last = g.anchorDay;
+  eachLocalDay(language, [&last](const int32_t day, uint16_t) { last = std::max(last, day); });
+  if (last == g.anchorDay) return 0;
+  uint16_t y = 2100;  // day2000's inverse: count back from a fixed date
+  uint8_t m = 1, d = 1;
+  subtractDays(y, m, d, day2000(2100, 1, 1) - last);
+  int run = 0;
+  while (run < static_cast<int>(MAX_DAYS) && readOn(language, &g, y, m, d)) {
+    run++;
+    subtractDays(y, m, d, 1);
+  }
+  return run;
+}
+
+// The server's per-book list (the whole of it, see bookdownload::combine()), for what the reading stats keep
+// across books: minutes per language
+// per day (the sum of that language's books) and books finished that this card never finished.
+bool ReadingStatsStore::mergeBookDownload(const std::string& list) {
+  struct LanguageDay {
+    char language[4];
+    int32_t epoch;
+    BookDay day;
+  };
+  struct Ctx {
+    std::vector<LanguageDay> days;
+    std::vector<uint32_t> finished;
+    size_t limit;
+  } ctx;
+  // Sized from the list itself, bounded like the tables: a reserve that cannot be served aborts.
+  std::vector<BookDay> scratch;
+  struct Counts {
+    size_t days = 0;
+    size_t finished = 0;
+  } counts;
+  bookdownload::forEach(list, scratch, &counts,
+                        [](void* p, const bookdownload::Book& book, const std::vector<BookDay>& days) {
+                          auto& c = *static_cast<Counts*>(p);
+                          c.days += days.size();
+                          if (book.finished) c.finished++;
+                        });
+  ctx.limit = std::min<size_t>(counts.days, MAX_LANG_DAYS * 4);
+  if (!tableFits(ctx.limit * sizeof(LanguageDay) + counts.finished * sizeof(uint32_t))) {
+    LOG_ERR("STAT", "Downloaded book stats kept for the next boot");
+    return false;
+  }
+  ctx.days.reserve(ctx.limit);
+  ctx.finished.reserve(counts.finished);
+  bookdownload::forEach(list, scratch, &ctx,
+                        [](void* p, const bookdownload::Book& book, const std::vector<BookDay>& days) {
+                          auto& c = *static_cast<Ctx*>(p);
+                          if (book.finished) c.finished.push_back(book.nameHash);
+                          // No language is the Unknown tab's bucket, as for a book read here without one.
+                          LanguageDay e{};
+                          normalizeLanguage(book.language, e.language);
+                          for (const auto& d : days) {
+                            if (c.days.size() >= c.limit) return;
+                            e.epoch = daysSinceEpoch(d.year, d.month, d.day);
+                            e.day = d;
+                            c.days.push_back(e);
+                          }
+                        });
+  // A language's day is the sum of its books' minutes that day.
+  std::sort(ctx.days.begin(), ctx.days.end(), [](const LanguageDay& a, const LanguageDay& b) {
+    return a.epoch != b.epoch ? a.epoch < b.epoch : memcmp(a.language, b.language, 4) < 0;
+  });
+  for (size_t i = 0; i < ctx.days.size();) {
+    uint32_t minutes = 0;
+    size_t j = i;
+    for (; j < ctx.days.size() && ctx.days[j].epoch == ctx.days[i].epoch &&
+           memcmp(ctx.days[j].language, ctx.days[i].language, 4) == 0;
+         j++) {
+      minutes += ctx.days[j].day.minutes;
+    }
+    const BookDay& d = ctx.days[i].day;
+    mergeLanguageMinutes(ctx.days[i].language, static_cast<uint16_t>(std::min<uint32_t>(minutes, UINT16_MAX)), d.year,
+                         d.month, d.day);
+    i = j;
+  }
+  for (const uint32_t hash : ctx.finished) {
+    const bool here = std::any_of(finishedBookPaths.begin(), finishedBookPaths.end(),
+                                  [hash](const std::string& p) { return bookdownload::nameHash(p) == hash; });
+    if (!here) markBookFinished(remoteFinishedPath(hash));
+  }
+  return true;
+}
+
+namespace {
+// What a saved download carries for the time of day (see saveDownload).
+struct DownloadTimeOfDay {
+  uint32_t server[ReadingStatsStore::TIME_OF_DAY_BUCKETS];
+  uint32_t uploaded[ReadingStatsStore::TIME_OF_DAY_BUCKETS];
+};
+
+// Reads the saved download's days, calling `day` for each valid one, then its optional time of day. False when
+// the days are damaged; `hasTimeOfDay` tells whether the time of day was there whole.
+template <typename F>
+bool readDownloadFile(const size_t maxDays, F&& day, DownloadTimeOfDay& tod, bool& hasTimeOfDay) {
+  hasTimeOfDay = false;
+  HalFile f;
+  uint16_t count = 0;
+  bool intact = Storage.openFileForRead("STAT", downloadPath().c_str(), f) &&
+                f.read(reinterpret_cast<uint8_t*>(&count), 2) == 2 && count <= maxDays;
+  for (uint16_t i = 0; intact && i < count; i++) {
+    // Through a buffer: a record at an odd offset has no alignment guarantee.
+    uint8_t rec[sizeof(DailyReading)];
+    intact = f.read(rec, sizeof(rec)) == sizeof(rec);
+    DailyReading d;
+    memcpy(&d, rec, sizeof(d));
+    if (intact && d.month >= 1 && d.month <= 12 && d.day >= 1 && d.day <= 31) day(d);
+  }
+  hasTimeOfDay = intact && f.read(reinterpret_cast<uint8_t*>(tod.server), sizeof(tod.server)) == sizeof(tod.server) &&
+                 f.read(reinterpret_cast<uint8_t*>(tod.uploaded), sizeof(tod.uploaded)) == sizeof(tod.uploaded);
+  return intact;
+}
+}  // namespace
+
+bool ReadingStatsStore::pendingDownloadBase(const uint32_t (&cardMinutes)[TIME_OF_DAY_BUCKETS],
+                                            uint32_t (&out)[TIME_OF_DAY_BUCKETS]) {
+  DownloadTimeOfDay tod;
+  bool hasTimeOfDay = false;
+  readDownloadFile(MAX_DAYS, [](const DailyReading&) {}, tod, hasTimeOfDay);
+  for (uint8_t i = 0; hasTimeOfDay && i < TIME_OF_DAY_BUCKETS; i++) {
+    out[i] = timeOfDayBaseFrom(tod.server[i], tod.uploaded[i], cardMinutes[i]);
+  }
+  return hasTimeOfDay;
+}
+
+// Merges the saved download into the loaded tables. False when the file is damaged; what it held
+// up to there is merged.
+bool ReadingStatsStore::mergeDownloadFile() {
+  DownloadTimeOfDay tod;
+  bool hasTimeOfDay = false;
+  const bool intact = readDownloadFile(
+      MAX_DAYS, [this](const DailyReading& d) { mergeMinutes(d.year, d.month, d.day, d.minutesRead); }, tod,
+      hasTimeOfDay);
+  for (uint8_t i = 0; hasTimeOfDay && i < TIME_OF_DAY_BUCKETS; i++) {
+    timeOfDayBase[i] = timeOfDayBaseFrom(tod.server[i], tod.uploaded[i], timeOfDayMinutes[i]);
+  }
+  return intact;
 }

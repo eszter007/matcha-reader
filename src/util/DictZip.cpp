@@ -1,21 +1,16 @@
 #include "DictZip.h"
 
-#include <Arduino.h>  // ESP.getMaxAllocHeap for the pre-reserve heap guard
 #include <InflateReader.h>
 #include <Memory.h>
 
+#include <algorithm>
 #include <cstddef>
 
 namespace DictZip {
 namespace {
 
-// Caps the chunk table at 32KB of heap (8192 * 4 bytes); at the typical ~58KB
-// chunk length that still allows ~460MB of uncompressed dictionary data.
+// At the typical ~58KB chunk length this allows ~460MB of uncompressed dictionary data.
 constexpr uint16_t MAX_CHUNK_COUNT = 8192;
-
-// Slack required above the chunk table before reserving it, so a table that
-// would only just fit is refused rather than left to abort inside reserve().
-constexpr size_t CHUNK_TABLE_HEAP_HEADROOM_BYTES = 1024;
 
 bool readLe16(HalFile& file, uint16_t* out) {
   uint8_t raw[2];
@@ -75,14 +70,17 @@ bool extractChunkSlice(HalFile& file, uint32_t compressedOffset, uint32_t compre
   };
   if (extractSize == 0) return true;
 
-  // Largest block FIRST. Every allocation here is carved from the same big free
-  // run, so taking the ~3KB ChunkSource before the 32KB ring left the ring's
-  // block 12 bytes short on device (largest=32756 against need=32768) even on a
-  // barely fragmented heap. Ordering by size removes that failure mode: the ring
-  // gets the big block while it is still whole, and the small buffers fit in
-  // what remains — or in one of the smaller free blocks.
-  auto window = makeUniqueNoThrow<uint8_t[]>(InflateReader::RING_BYTES);
-  if (!window) return fail(ExtractError::LowMemory);
+  // The 32KB deflate window is taken as four 8KB segments: a fragmented heap
+  // loses its last 32KB contiguous block long before it runs short of 32KB in
+  // total. Segments go first, ahead of the ~2KB ChunkSource, so they get the
+  // large free runs before the small buffers split them.
+  std::unique_ptr<uint8_t[]> window[InflateReader::RING_SEGMENTS];
+  uint8_t* segments[InflateReader::RING_SEGMENTS];
+  for (size_t i = 0; i < InflateReader::RING_SEGMENTS; i++) {
+    window[i] = makeUniqueNoThrow<uint8_t[]>(InflateReader::RING_SEGMENT_BYTES);
+    if (!window[i]) return fail(ExtractError::LowMemory);
+    segments[i] = window[i].get();
+  }
 
   auto src = makeUniqueNoThrow<ChunkSource>();
   if (!src) return fail(ExtractError::LowMemory);
@@ -94,9 +92,9 @@ bool extractChunkSlice(HalFile& file, uint32_t compressedOffset, uint32_t compre
   if (!file.seekSet(compressedOffset)) return fail(ExtractError::ReadError);
 
   // `window` outlives the reader (declared above it, destroyed after), as
-  // initWithRing() requires.
-  if (!src->reader.initWithRing(window.get())) return fail(ExtractError::LowMemory);
-  // initWithRing() leaves source/source_limit null, so the very first byte
+  // initWithSegments() requires.
+  if (!src->reader.initWithSegments(segments)) return fail(ExtractError::LowMemory);
+  // initWithSegments() leaves source/source_limit null, so the very first byte
   // already comes through the callback. Set it after, which resets state.
   src->reader.setReadCallback(&chunkReadCb);
 
@@ -161,10 +159,7 @@ bool parse(HalFile& file, Info* info, ExtractError* outError) {
     if (extraRead + subLen > xlen) return fail(ExtractError::Decompress);
 
     if (subHeader[0] == 'R' && subHeader[1] == 'A') {
-      // Reject a second RA table rather than break: breaking would leave
-      // extraRead < xlen and trip the check below for valid files carrying other
-      // FEXTRA subfields after the RA one. Re-entering would push_back past the
-      // reserve() below, and that growth aborts under -fno-exceptions.
+      // A second RA table is malformed: the first one already set the layout.
       if (foundRa) return fail(ExtractError::Decompress);
       if (subLen < 6) return fail(ExtractError::Decompress);
 
@@ -179,23 +174,12 @@ bool parse(HalFile& file, Info* info, ExtractError* outError) {
       if (subLen != static_cast<uint16_t>(6 + chunkCount * 2)) return fail(ExtractError::Decompress);
 
       info->chunkLength = chunkLen;
-      // vector reserve() aborts under -fno-exceptions if it can't allocate;
-      // refuse up front (like Dictionary::readDefinition's guard) so a fragmented
-      // heap surfaces LowMemory instead of crashing. chunkCount <= MAX_CHUNK_COUNT
-      // caps this at ~32KB.
-      const size_t chunkTableBytes = (static_cast<size_t>(chunkCount) + 1) * sizeof(uint32_t);
-      if (ESP.getMaxAllocHeap() < chunkTableBytes + CHUNK_TABLE_HEAP_HEADROOM_BYTES)
-        return fail(ExtractError::LowMemory);
-      info->chunkOffsets.reserve(static_cast<size_t>(chunkCount) + 1);
-      info->chunkOffsets.push_back(0);
-      uint32_t cumulative = 0;
-      for (uint16_t i = 0; i < chunkCount; i++) {
-        uint16_t compLen = 0;
-        if (!readLe16(file, &compLen)) return fail(ExtractError::ReadError);
-        extraRead += 2;
-        cumulative += compLen;
-        info->chunkOffsets.push_back(cumulative);
-      }
+      info->chunkCount = chunkCount;
+      // Left on the card: an entry needs a few of these sizes, not a table of up to 32KB in RAM.
+      info->tableOffset = static_cast<uint32_t>(file.position());
+      const uint32_t tableBytes = static_cast<uint32_t>(chunkCount) * 2;
+      if (!file.seekSet(info->tableOffset + tableBytes)) return fail(ExtractError::ReadError);
+      extraRead += tableBytes;
       foundRa = true;
     } else {
       if (!file.seekSet(file.position() + subLen)) return fail(ExtractError::ReadError);
@@ -259,10 +243,22 @@ bool extractEntry(const char* path, uint32_t offset, uint32_t size, HalFile& out
 
   const uint32_t startChunk = offset / info.chunkLength;
   const uint32_t endChunk = (offset + size - 1) / info.chunkLength;
-  if (endChunk + 1 >= info.chunkOffsets.size()) return fail(ExtractError::ReadError);
+  if (endChunk >= info.chunkCount) return fail(ExtractError::ReadError);
+
+  // The compressed offset of startChunk is the sum of the sizes before it, read from the table
+  // in small batches.
+  uint32_t compOffset = 0;
+  if (!file.seekSet(info.tableOffset)) return fail(ExtractError::ReadError);
+  uint8_t sizes[128];
+  for (uint32_t done = 0; done < startChunk;) {
+    const uint32_t n = std::min<uint32_t>(startChunk - done, sizeof(sizes) / 2);
+    if (file.read(sizes, n * 2) != static_cast<int>(n * 2)) return fail(ExtractError::ReadError);
+    for (uint32_t i = 0; i < n; i++) compOffset += sizes[2 * i] | (static_cast<uint32_t>(sizes[2 * i + 1]) << 8);
+    done += n;
+  }
 
   uint32_t remaining = size;
-  const uint32_t lastChunk = static_cast<uint32_t>(info.chunkOffsets.size() - 2);
+  const uint32_t lastChunk = info.chunkCount - 1u;
   for (uint32_t chunk = startChunk; chunk <= endChunk; chunk++) {
     uint32_t chunkOutSize = info.chunkLength;
     if (chunk == lastChunk) chunkOutSize = info.totalSize - chunk * info.chunkLength;
@@ -272,9 +268,13 @@ bool extractEntry(const char* path, uint32_t offset, uint32_t size, HalFile& out
     const uint32_t available = chunkOutSize - localOffset;
     const uint32_t take = remaining < available ? remaining : available;
 
-    const uint32_t compOffset = info.dataOffset + info.chunkOffsets[chunk];
-    const uint32_t compSize = info.chunkOffsets[chunk + 1] - info.chunkOffsets[chunk];
-    if (!extractChunkSlice(file, compOffset, compSize, localOffset, take, outFile, outError)) return false;
+    // Extraction moves the file position, so each size is read at its own table slot.
+    uint16_t compSize = 0;
+    if (!file.seekSet(info.tableOffset + chunk * 2) || !readLe16(file, &compSize)) return fail(ExtractError::ReadError);
+    if (!extractChunkSlice(file, info.dataOffset + compOffset, compSize, localOffset, take, outFile, outError)) {
+      return false;
+    }
+    compOffset += compSize;
 
     remaining -= take;
     if (remaining == 0) break;

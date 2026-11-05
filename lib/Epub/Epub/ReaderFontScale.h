@@ -30,6 +30,15 @@ float cssFontSizeScale(const CssStyle& style);
  */
 int cssBlockFontId(const CssStyle& style, int baseFontId);
 
+// The same two lookups for a scale already resolved against the body size -- an inline element's
+// em compounded through its sized ancestors (see cssFontSizeIsParentRelative).
+int fontIdForScale(float scale, int baseFontId);
+int32_t fontScaleTagForScale(float scale);
+
+// True when the declared font-size is relative to the PARENT's size (em, %, a bare number) rather
+// than to the reader's body size (rem, pt, px).
+bool cssFontSizeIsParentRelative(const CssStyle& style);
+
 // Bitmap scale for an inline font-size the LADDER cannot serve -- a single-size reader font (an
 // SD-card font has no 12/14/16/18pt siblings), or an ask that snaps back to the base. Returns a
 // NEGATIVE tag for the per-word font slot (see TextBlock::wordFontScale) carrying a 256-based
@@ -40,6 +49,11 @@ int cssBlockFontId(const CssStyle& style, int baseFontId);
 // short, regular period -- 3/4 keeps three of every four rows -- while an arbitrary factor like
 // 77% beats against the stem spacing and breaks strokes unevenly.
 int32_t cssFontScaleTag(const CssStyle& style);
+
+// The same tag for a BLOCK's font-size (h1 { font-size: 2em }), but only when the reader font has
+// no built-in sizes to snap to (an SD-card font). A built-in font keeps the ladder, or its body
+// size when the ask snaps back to it, as cssBlockFontId decides. 0 = no scaling.
+int32_t cssBlockFontScaleTag(const CssStyle& style, int baseFontId);
 
 /**
  * CSS line-height -> a PERCENTAGE of the leading the reader would have used anyway.

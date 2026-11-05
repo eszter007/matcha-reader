@@ -4,6 +4,7 @@
 #include <I18n.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -12,6 +13,7 @@
 #include "components/icons/flame.h"
 #include "components/icons/stats_icons.h"
 #include "fontIds.h"
+#include "util/DateFormat.h"
 
 namespace StatsWidgets {
 
@@ -95,7 +97,7 @@ int drawStreakCard(const GfxRenderer& renderer, const int x, const int y, const 
 
   renderer.drawRoundedRect(x, y, w, streakH, 2, CARD_RADIUS, true);
 
-  char streakBuf[32];
+  char streakBuf[64];
   snprintf(streakBuf, sizeof(streakBuf), tr(STR_STREAK_FORMAT), streak);
   const int streakTextW = renderer.getTextWidth(UI_12_FONT_ID, streakBuf, EpdFontFamily::BOLD);
   const int row1TotalW = iconSize + 8 + streakTextW;
@@ -105,7 +107,7 @@ int drawStreakCard(const GfxRenderer& renderer, const int x, const int y, const 
   renderer.drawText(UI_12_FONT_ID, row1X + iconSize + 8, row1Y + (iconSize - renderer.getLineHeight(UI_12_FONT_ID)) / 2,
                     streakBuf, true, EpdFontFamily::BOLD);
 
-  char weekBuf[48];
+  char weekBuf[96];
   snprintf(weekBuf, sizeof(weekBuf), tr(STR_WEEK_MINUTES_READ_FORMAT), weekMinutes,
            weekMinutes == 1 ? tr(STR_MINUTE) : tr(STR_MINUTES));
   const int weekTextW = renderer.getTextWidth(SMALL_FONT_ID, weekBuf);
@@ -160,7 +162,8 @@ int drawTileGrid(const GfxRenderer& renderer, const int x, const int y, const in
 }
 
 int drawMonthCalendar(const GfxRenderer& renderer, const int x, const int y, const int w, const uint16_t calYear,
-                      const uint8_t calMonth, const Today& today, const MonthSource& source, MonthNav* navOut) {
+                      const uint8_t calMonth, const Today& today, const MonthSource& source, MonthNav* navOut,
+                      const DayMarks* marks) {
   const int smallLH = renderer.getLineHeight(SMALL_FONT_ID);
   const int dim = daysInMonth(calYear, calMonth);
   const int firstDow = firstDowOfMonth(calYear, calMonth);
@@ -174,8 +177,8 @@ int drawMonthCalendar(const GfxRenderer& renderer, const int x, const int y, con
   renderer.drawRoundedRect(x, y, w, calH, 2, CARD_RADIUS, true);
 
   // Month/year header with chevrons
-  char monthBuf[32];
-  snprintf(monthBuf, sizeof(monthBuf), "%s %d", monthName(calMonth), calYear);
+  char monthBuf[64];
+  formatDate(monthBuf, sizeof(monthBuf), tr(STR_MONTH_YEAR_FORMAT), calYear, calMonth, 1, monthName(calMonth));
   const int monthW = renderer.getTextWidth(UI_12_FONT_ID, monthBuf, EpdFontFamily::BOLD);
   const int monthX = x + (w - monthW) / 2;
   const int monthY = y + 12;
@@ -209,7 +212,7 @@ int drawMonthCalendar(const GfxRenderer& renderer, const int x, const int y, con
 
   // Days read count
   const int daysReadMonth = source.daysReadInMonth(source.ctx, calYear, calMonth);
-  char daysReadBuf[32];
+  char daysReadBuf[64];
   snprintf(daysReadBuf, sizeof(daysReadBuf), tr(STR_DAYS_READ_IN_MONTH_FORMAT), daysReadMonth);
   const int drW = renderer.getTextWidth(SMALL_FONT_ID, daysReadBuf);
   renderer.drawText(SMALL_FONT_ID, x + (w - drW) / 2, monthY + calTitleH + 2, daysReadBuf, true);
@@ -251,6 +254,20 @@ int drawMonthCalendar(const GfxRenderer& renderer, const int x, const int y, con
       renderer.drawText(SMALL_FONT_ID, cx - dw / 2, dy, dayBuf, true, EpdFontFamily::BOLD);
     } else {
       renderer.drawText(SMALL_FONT_ID, cx - dw / 2, dy, dayBuf, true);
+    }
+
+    if (!marks) continue;
+    const int ringR = circR + 3;
+    if (calYear == marks->finishYear && calMonth == marks->finishMonth && d == marks->finishDay) {
+      renderer.drawRoundedRect(cx - ringR, cy - ringR, ringR * 2, ringR * 2, 2, ringR, true);
+    } else if (calYear == marks->startYear && calMonth == marks->startMonth && d == marks->startDay) {
+      // Dotted, so the start reads lighter than the finish.
+      for (int deg = 0; deg < 360; deg += 20) {
+        const float a = static_cast<float>(deg) * 3.14159265f / 180.0f;
+        const int px = cx + static_cast<int>(std::lround(ringR * std::cos(a)));
+        const int py = cy + static_cast<int>(std::lround(ringR * std::sin(a)));
+        renderer.fillRect(px, py, 2, 2, true);
+      }
     }
   }
 

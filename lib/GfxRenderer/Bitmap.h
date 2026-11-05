@@ -79,6 +79,8 @@ class Bitmap {
   // A false return (image above the size cap, or no heap) is not an error -- readNextRow()
   // just keeps reading row-wise from the file.
   bool preload() const;
+  // Unprocessed luminance of display-order row y (0 = top); leaves readNextRow()'s dither state alone.
+  BmpReaderError readRowGray(int y, uint8_t* gray, uint8_t* rowBuffer) const;
   int getWidth() const { return width; }
   int getHeight() const { return height; }
   bool isTopDown() const { return topDown; }
@@ -86,6 +88,14 @@ class Bitmap {
   int getRowBytes() const { return rowBytes; }
   bool is1Bit() const { return bpp == 1; }
   uint16_t getBpp() const { return bpp; }
+  // Map every pixel to the nearest of the four levels by luminance (the native-palette path)
+  // instead of the photo thresholds, which turn light grays white. For line art such as a logo.
+  void setEvenLevels(const bool enabled) { evenLevels = enabled; }
+  // Composite a 32-bit BMP that declares an alpha mask over white. Files without one keep their
+  // alpha byte unread: BI_RGB writers often leave it 0 meaning "unused".
+  void setTransparentAsWhite(const bool enabled) { transparentAsWhite = enabled; }
+  // Advance past the next row without decoding it (a seek, not a read).
+  BmpReaderError skipRow() const;
 
  private:
   static uint16_t readLE16(HalFile& f);
@@ -101,6 +111,9 @@ class Bitmap {
   uint16_t bpp = 0;
   uint32_t colorsUsed = 0;
   bool nativePalette = false;  // true if all palette entries map to native gray levels
+  bool evenLevels = false;
+  bool transparentAsWhite = false;
+  bool hasAlpha = false;  // 32-bit with an 0xFF000000 alpha mask in a V3+ header
   int rowBytes = 0;
   uint8_t paletteLum[256] = {};
 

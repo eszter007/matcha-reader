@@ -475,7 +475,8 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
 
 XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
                                       std::function<void(const uint8_t* data, size_t size, size_t offset)> callback,
-                                      size_t chunkSize, bool (*shouldCancel)(void*), void* cancelCtx) {
+                                      size_t chunkSize, bool (*shouldCancel)(void*), void* cancelCtx,
+                                      size_t startOffset, size_t length) {
   if (!m_isOpen) {
     return XtcError::FILE_NOT_FOUND;
   }
@@ -522,13 +523,23 @@ XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
     return XtcError::CORRUPTED_HEADER;
   }
 
+  // Only [startOffset, startOffset + length) of the bitmap is read; callback offsets stay
+  // relative to the bitmap start.
+  if (startOffset > bitmapSize || (length != SIZE_MAX && length > bitmapSize - startOffset)) {
+    return XtcError::READ_ERROR;
+  }
+  const size_t end = length == SIZE_MAX ? bitmapSize : startOffset + length;
+  if (startOffset > 0 && !m_file.seek64(page.offset + sizeof(XtgPageHeader) + startOffset)) {
+    return XtcError::READ_ERROR;
+  }
+
   // Read in chunks
   std::vector<uint8_t> chunk(chunkSize);
-  size_t totalRead = 0;
+  size_t totalRead = startOffset;
 
-  while (totalRead < bitmapSize) {
+  while (totalRead < end) {
     if (shouldCancel && shouldCancel(cancelCtx)) return XtcError::CANCELLED;
-    size_t toRead = std::min(chunkSize, bitmapSize - totalRead);
+    size_t toRead = std::min(chunkSize, end - totalRead);
     size_t bytesRead = m_file.read(chunk.data(), toRead);
 
     if (bytesRead == 0) {

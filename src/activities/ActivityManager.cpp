@@ -1,15 +1,20 @@
 #include "ActivityManager.h"
 
+#include <BlePageTurner.h>
 #include <BoardConfig.h>
 #include <FontCacheManager.h>
+#include <FontDecompressor.h>
 #include <HalDisplay.h>
+#include <HalFrontlight.h>
 #include <HalPowerManager.h>
 #include <Memory.h>
 #include <VectorFontSupport.h>
 
 #include <algorithm>
 
+#include "Activity.h"
 #include "CrossPointSettings.h"
+#include "HapticFeedback.h"
 #include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
@@ -23,15 +28,25 @@
 #include "library/LibraryListActivity.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "network/UsbDriveActivity.h"
+#include "plugins/PluginCatalogActivity.h"
 #include "reader/ReaderActivity.h"
+#include "reader/RemoteTurnGate.h"
 #include "settings/OpdsServerListActivity.h"
-#include "settings/SettingsActivity.h"
+#include "settings/SettingsListActivity.h"
 // Upstream also includes BmpViewerActivity.h here; Matcha's consolidated reader owns BMP
 // viewing (ReaderActivity::onGoToBmpViewer), so nothing in this file references it.
 #include "util/FrontlightPanelActivity.h"
 #include "util/FullScreenMessageActivity.h"
 
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
+
+ActivityManager::ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
+    : renderer(renderer), mappedInput(mappedInput), renderingMutex(xSemaphoreCreateMutex()) {
+  assert(renderingMutex != nullptr && "Failed to create rendering mutex");
+  stackActivities.reserve(10);
+}
+
+ActivityManager::~ActivityManager() { assert(false); /* should never be called */ }
 
 void ActivityManager::begin() {
 #if defined(configNUM_CORES) && configNUM_CORES > 1
@@ -75,7 +90,10 @@ void ActivityManager::renderTaskLoop() {
       // Night mode is a global output polarity applied to every activity.
       // The sleep screen forces normal polarity itself (SleepActivity).
       display.setInverted(SETTINGS.screenInverted != 0);
+      syncGlyphSlab();
+      const uint32_t renderingVisit = screenVisit;
       currentActivity->render(std::move(lock));
+      paintedVisit.store(renderingVisit, std::memory_order_release);
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;
@@ -104,6 +122,12 @@ void ActivityManager::loop() {
   }
 
   if (currentActivity) {
+    // Before anything below waits on the RenderLock: going home pops the reader, which blocks until
+    // the render task's background work ends. Buttons alone are seen by the reader itself; the Home
+    // key and touch never reach it.
+    if (auto* reader = foregroundReader(); reader && (mappedInput.wasAnyPressed() || mappedInput.wasTouchActivity())) {
+      reader->interruptBackgroundWork();
+    }
     if (!currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
       if (currentActivity->handleHomeGesture()) {
         return;
@@ -117,28 +141,40 @@ void ActivityManager::loop() {
     // panels' etched glass makes unreliable). The reader keeps its clean page
     // (no status bar there to tap). Touch boards only, like the swipe itself.
     bool statusBarTap = false;
-    if (mappedInput.hasTouch() &&
-        (currentActivity->name == "Home" || currentActivity->name == "FileBrowser" ||
-         currentActivity->name == "Settings" || currentActivity->name == "NetworkModeSelection")) {
+    if (mappedInput.hasTouch() && (currentActivity->name == "Home" || currentActivity->name == "FileBrowser" ||
+                                   currentActivity->name == "Settings" || currentActivity->name == "SettingsList" ||
+                                   currentActivity->name == "NetworkModeSelection")) {
       int tx = 0;
       int ty = 0;
       // The header back button shares this band; its taps stay Back.
       statusBarTap = mappedInput.wasScreenTapped(tx, ty) && ty < 44 && !HeaderBackTapTarget::contains(tx, ty);
     }
-    if (statusBarTap || mappedInput.wasLightPanelGesture()) {
-      if (currentActivity->name == "FrontlightPanel") {
-        popActivity();
-        return;
-      }
+    const bool lightPanelRequested = statusBarTap || mappedInput.wasLightPanelGesture();
+    if (lightPanelRequested && currentActivity->name == "FrontlightPanel") {
+      popActivity();
+      return;
+    }
+    // Only boards whose frontlight was detected get the panel.
+    if (lightPanelRequested && Frontlight.present()) {
+      haptic_feedback::touchAction();
       pushActivity(std::make_unique<FrontlightPanelActivity>(renderer, mappedInput));
       return;
     }
 
-    // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed
-    currentActivity->loop();
+    // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed.
+    // Not while leaving: a reader that let go of its book for a sync would close itself and drop
+    // the sync, and the page turner can hold a screen change over several passes.
+    if (pendingAction == PendingAction::None) currentActivity->loop();
   }
 
   while (pendingAction != PendingAction::None) {
+    // The page turner's radio gives its heap back before the next screen allocates. Its teardown
+    // can span loop passes and runs outside the render lock.
+    if (pendingAction != PendingAction::ReplaceForSleep &&
+        !bleturner::beforeScreenChange(
+            0, pendingActivity ? pendingActivity->isReaderActivity() : !pendingReaderPath.empty())) {
+      return;
+    }
     if (pendingAction == PendingAction::Pop) {
       RenderLock lock;
 
@@ -149,6 +185,7 @@ void ActivityManager::loop() {
         continue;
       }
 
+      ++screenVisit;
       ActivityResult pendingResult = std::move(currentActivity->result);
 
       // Destroy the current activity
@@ -185,7 +222,7 @@ void ActivityManager::loop() {
         continue;
       }
 
-    } else if (pendingActivity) {
+    } else if (pendingActivity || !pendingReaderPath.empty()) {
       // A pushed activity comes from the input loop. Do not stall that loop behind a long render
       // tail (for example SD-backed glyph prewarming); leave the request pending and retry it on
       // the next tick instead.
@@ -194,7 +231,10 @@ void ActivityManager::loop() {
         if (!lock.held()) break;
 
         stackActivities.push_back(std::move(currentActivity));
+        // The parent's header back rect must not route taps on the pushed screen.
+        HeaderBackTapTarget::clear();
         LOG_DBG("ACT", "Pushed to activity stack, new size = %zu", stackActivities.size());
+        ++screenVisit;
         pendingAction = PendingAction::None;
         currentActivity = std::move(pendingActivity);
 
@@ -204,13 +244,22 @@ void ActivityManager::loop() {
       }
 
       RenderLock lock;
-      if (pendingAction == PendingAction::Replace) {
+      if (pendingAction == PendingAction::Replace || pendingAction == PendingAction::ReplaceForSleep) {
         // Destroy the current activity
         exitActivity(lock);
         // Clear the stack
         while (!stackActivities.empty()) {
           stackActivities.back()->onExit();
           stackActivities.pop_back();
+        }
+        if (!pendingActivity) {
+          pendingActivity =
+              ReaderActivity::create(renderer, mappedInput, std::move(pendingReaderPath), pendingReaderFastRefresh);
+          pendingReaderPath.clear();
+          if (!pendingActivity) {
+            LOG_ERR("ACT", "OOM: reader activity");
+            pendingActivity = std::make_unique<HomeActivity>(renderer, mappedInput, HomeMenuItem::NONE, false);
+          }
         }
       } else if (pendingAction == PendingAction::Push) {
         // Move current activity to stack
@@ -220,6 +269,7 @@ void ActivityManager::loop() {
         HeaderBackTapTarget::clear();
         LOG_DBG("ACT", "Pushed to activity stack, new size = %zu", stackActivities.size());
       }
+      ++screenVisit;
       pendingAction = PendingAction::None;
       currentActivity = std::move(pendingActivity);
 
@@ -253,6 +303,7 @@ void ActivityManager::exitActivity(const RenderLock& lock) {
 
 void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   mappedInput.resetHomeButtonInput();
+  pendingReaderPath.clear();
   // Note: no lock here, this is usually called by loop() and we may run into deadlock
   if (currentActivity) {
     // Defer launch if we're currently in an activity, to avoid deleting the current activity
@@ -279,6 +330,17 @@ void ActivityManager::goToReadingStats() {
   replaceActivity(std::make_unique<ReadingStatsActivity>(renderer, mappedInput));
 }
 
+void ActivityManager::goToJoinNetwork() {
+  // Post heap-defrag reboot: enter the web-server activity straight in Join
+  // Network mode (skips mode selection, does not reboot again).
+  auto activity = makeUniqueNoThrow<CrossPointWebServerActivity>(renderer, mappedInput, /*startInJoinNetwork=*/true);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: file transfer activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+
 void ActivityManager::goToUsbDrive() {
 #if FREEINK_CAP_USB_MSC
   auto activity = makeUniqueNoThrow<UsbDriveActivity>(renderer, mappedInput);
@@ -292,7 +354,9 @@ void ActivityManager::goToUsbDrive() {
 #endif
 }
 
-void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
+void ActivityManager::goToSettings(const SettingsSection openSection) {
+  replaceActivity(std::make_unique<SettingsListActivity>(renderer, mappedInput, openSection));
+}
 
 void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
@@ -340,9 +404,28 @@ void ActivityManager::goToOpdsServers() {
   replaceActivity(std::move(activity));
 }
 
+void ActivityManager::goToPlugins(bool showOpds) {
+  auto activity = makeUniqueNoThrow<PluginCatalogActivity>(renderer, mappedInput, showOpds, /*rootMode=*/true);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: plugin catalog activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
   if (path.empty()) {
     goToFileBrowser("/");
+    return;
+  }
+
+  if (currentActivity) {
+    // Built in loop() after the current screen is gone; see pendingReaderPath.
+    mappedInput.resetHomeButtonInput();
+    pendingActivity.reset();
+    pendingReaderPath = std::move(path);
+    pendingReaderFastRefresh = allowFastInitialRefresh;
+    pendingAction = PendingAction::Replace;
     return;
   }
   auto activity = ReaderActivity::create(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
@@ -355,6 +438,7 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
 
 void ActivityManager::goToSleep(bool fromTimeout) {
   replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout));
+  if (pendingAction == PendingAction::Replace) pendingAction = PendingAction::ReplaceForSleep;
   loop();  // Important: sleep screen must be rendered immediately, the caller will go to sleep right after this returns
 }
 
@@ -379,11 +463,11 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::FILE_BROWSER;
     } else if (activityName == "Library") {
       initialMenuItem = HomeMenuItem::LIBRARY;
-    } else if (activityName == "OpdsBookBrowser") {
+    } else if (activityName == "OpdsBookBrowser" || activityName == "PluginCatalog") {
       initialMenuItem = HomeMenuItem::OPDS_BROWSER;
     } else if (activityName == "CrossPointWebServer") {
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
-    } else if (activityName == "Settings") {
+    } else if (activityName == "Settings" || activityName == "SettingsList") {
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
     }
   }
@@ -394,6 +478,7 @@ void ActivityManager::goToCrashReport() { replaceActivity(std::make_unique<Crash
 
 void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {
   mappedInput.resetHomeButtonInput();
+  pendingReaderPath.clear();
   if (pendingActivity) {
     // Should never happen in practice
     LOG_ERR("ACT", "pendingActivity while pushActivity is not expected");
@@ -405,6 +490,7 @@ void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {
 
 void ActivityManager::popActivity() {
   mappedInput.resetHomeButtonInput();
+  pendingReaderPath.clear();
   if (pendingActivity) {
     // Should never happen in practice
     LOG_ERR("ACT", "pendingActivity while popActivity is not expected");
@@ -425,7 +511,144 @@ bool ActivityManager::isReaderActivity() const {
          (currentActivity && currentActivity->isReaderActivity());
 }
 
+bool ActivityManager::isForegroundReader() const {
+  return pendingAction == PendingAction::None && currentActivity && currentActivity->isReaderActivity();
+}
+
+ReaderActivity* ActivityManager::foregroundReader() const {
+  return pendingAction == PendingAction::None && currentActivity ? currentActivity->asReaderActivity() : nullptr;
+}
+
+bool ActivityManager::isRemoteReaderContext() const {
+  return pendingAction == PendingAction::None && currentActivity && currentActivity->acceptsRemoteInput();
+}
+
+bool ActivityManager::remoteClick(const RemoteButton button) {
+  if (!isRemoteReaderContext()) return false;
+  if (RenderLock::peek() || requestedUpdate.load()) {
+    // Kept for when the drawing ends, like a page turn: the latest click wins.
+    queuedRemoteClick = button;
+    noteQueuedRemoteInput();
+    return true;
+  }
+  return mappedInput.injectRemoteClick(button);
+}
+
+bool ActivityManager::isForegroundHomeShown() const {
+  return pendingAction == PendingAction::None && currentActivity && currentActivity->name == "Home" &&
+         paintedVisit.load(std::memory_order_acquire) == screenVisit;
+}
+
+bool ActivityManager::isOnlyHomeOrReader() const {
+  return pendingAction == PendingAction::None && stackActivities.empty() && currentActivity &&
+         (currentActivity->name == "Home" || currentActivity->isReaderActivity());
+}
+
+bool ActivityManager::remoteShortcut(const bool readerMenu) {
+  auto* reader = foregroundReader();
+  if (!reader) return false;
+  const bool shown = reader->pageRendered.load(std::memory_order_acquire);
+  if (!remoteTurnAccepted(shown, RenderLock::peek(), reader->inputOverPage())) {
+    if (!shown || reader->inputOverPage()) return false;
+    queuedRemoteShortcut = readerMenu ? QueuedShortcut::ReaderMenu : QueuedShortcut::SaveQuote;
+    noteQueuedRemoteInput();
+    return true;
+  }
+  return reader->remoteShortcut(readerMenu);
+}
+
+namespace {
+constexpr int MAX_QUEUED_REMOTE_TURNS = 3;
+constexpr unsigned long QUEUED_REMOTE_TURN_MAX_AGE_MS = 4000;
+}  // namespace
+
+bool ActivityManager::remoteTurn(const bool forward, const bool chapter) {
+  if (!isRemoteReaderContext() || mappedInput.hasRemoteClick()) return false;
+  auto* reader = foregroundReader();
+  if (!reader || reader->inputOverPage()) {
+    return !chapter && remoteClick(forward ? RemoteButton::Next : RemoteButton::Previous);
+  }
+  const bool shown = reader->pageRendered.load(std::memory_order_acquire);
+  if (!remoteTurnAccepted(shown, RenderLock::peek(), reader->inputOverPage())) {
+    // A press during a page draw or a background slice is kept, not lost: a remote has no held
+    // state to read back later, so a dropped press is simply gone.
+    if (!shown || chapter) return false;
+    if (queuedRemoteTurnVisit != screenVisit) queuedRemoteTurns = 0;
+    queuedRemoteTurns = static_cast<int8_t>(
+        std::clamp(queuedRemoteTurns + (forward ? 1 : -1), -MAX_QUEUED_REMOTE_TURNS, MAX_QUEUED_REMOTE_TURNS));
+    noteQueuedRemoteInput();
+    return true;
+  }
+  const bool turned = chapter ? reader->skipPages(forward ? 1 : -1) : reader->pageTurn(forward);
+  if (turned) requestUpdate();
+  return turned;
+}
+
+void ActivityManager::noteQueuedRemoteInput() {
+  if (queuedRemoteTurnVisit != screenVisit) {
+    queuedRemoteTurns = 0;
+    queuedRemoteClick = RemoteButton::None;
+    queuedRemoteShortcut = QueuedShortcut::None;
+  }
+  queuedRemoteTurnVisit = screenVisit;
+  queuedRemoteTurnAtMs = millis();
+  if (auto* reader = foregroundReader()) reader->interruptBackgroundWork();
+}
+
+bool ActivityManager::applyQueuedRemoteInput() {
+  if (queuedRemoteTurns == 0 && queuedRemoteClick == RemoteButton::None && queuedRemoteShortcut == QueuedShortcut::None)
+    return false;
+  // Another screen, or a wait so long the reader would no longer expect it.
+  if (queuedRemoteTurnVisit != screenVisit || millis() - queuedRemoteTurnAtMs > QUEUED_REMOTE_TURN_MAX_AGE_MS) {
+    queuedRemoteTurns = 0;
+    queuedRemoteClick = RemoteButton::None;
+    queuedRemoteShortcut = QueuedShortcut::None;
+    return false;
+  }
+  if (!isRemoteReaderContext() || RenderLock::peek() || requestedUpdate.load()) return false;
+  if (queuedRemoteClick != RemoteButton::None) {
+    // Refused while a device key is in this frame; tried again next loop.
+    if (!mappedInput.injectRemoteClick(queuedRemoteClick)) return false;
+    queuedRemoteClick = RemoteButton::None;
+    return true;
+  }
+  auto* reader = foregroundReader();
+  if (!reader || reader->inputOverPage()) {
+    queuedRemoteTurns = 0;
+    queuedRemoteShortcut = QueuedShortcut::None;
+    return false;
+  }
+  if (queuedRemoteShortcut != QueuedShortcut::None) {
+    const bool readerMenu = queuedRemoteShortcut == QueuedShortcut::ReaderMenu;
+    queuedRemoteShortcut = QueuedShortcut::None;
+    queuedRemoteTurns = 0;  // the shortcut opens something over the page
+    return reader->remoteShortcut(readerMenu);
+  }
+  const bool forward = queuedRemoteTurns > 0;
+  queuedRemoteTurns = static_cast<int8_t>(queuedRemoteTurns + (forward ? -1 : 1));
+  queuedRemoteTurnAtMs = millis();
+  const bool turned = reader->pageTurn(forward);
+  if (turned) requestUpdate();
+  return turned;
+}
+
 bool ActivityManager::handleForcedRefresh() { return currentActivity && currentActivity->handleForcedRefresh(); }
+
+void ActivityManager::syncGlyphSlab() {
+  if (!currentActivity) return;
+  // Before a draw, under the render lock (re-entrant, so callers holding it are fine): suspending
+  // the slab frees it.
+  RenderLock lock;
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor(); fd && fd->slabEnabled() != currentActivity->wantsGlyphSlab()) {
+      fd->setSlabEnabled(!fd->slabEnabled());
+    }
+  }
+}
+
+bool ActivityManager::startShortcutSync() {
+  return pendingAction == PendingAction::None && currentActivity && currentActivity->startShortcutSync();
+}
 
 bool ActivityManager::skipLoopDelay() const { return currentActivity && currentActivity->skipLoopDelay(); }
 
@@ -434,6 +657,12 @@ ScreenshotInfo ActivityManager::getScreenshotInfo() const {
     return currentActivity->getScreenshotInfo();
   }
   return {};
+}
+
+void ActivityManager::prepareForSleep() {
+  RenderLock lock;
+  for (const auto& activity : stackActivities) activity->prepareForSleep();
+  if (currentActivity) currentActivity->prepareForSleep();
 }
 
 void ActivityManager::requestUpdate(bool immediate) {
@@ -518,6 +747,14 @@ RenderLock::RenderLock(Try) {
     return;
   }
   isLocked = (xSemaphoreTake(activityManager.renderingMutex, 0) == pdTRUE);
+}
+
+RenderLock::RenderLock(const TryFor wait) {
+  if (heldByCurrentTask()) {
+    nested = true;
+    return;
+  }
+  isLocked = (xSemaphoreTake(activityManager.renderingMutex, pdMS_TO_TICKS(wait.ms)) == pdTRUE);
 }
 
 RenderLock::~RenderLock() { unlock(); }

@@ -12,9 +12,11 @@
 
 #include "GfxRenderer.h"
 #include "MappedInputManager.h"
+#include "settings/SettingsSection.h"
 #include "util/ScreenshotInfo.h"
 
-class Activity;    // forward declaration
+class Activity;  // forward declaration
+class ReaderActivity;
 class RenderLock;  // forward declaration
 
 // LIBRARY covers both views: the cover grid and upstream's indexed list, chosen by
@@ -48,8 +50,13 @@ class ActivityManager {
 
   // Pending activity to be launched on next loop iteration
   std::unique_ptr<Activity> pendingActivity;
-  enum class PendingAction { None, Push, Pop, Replace };
+  enum class PendingAction { None, Push, Pop, Replace, ReplaceForSleep };
   PendingAction pendingAction = PendingAction::None;
+  // A reader asked for by goToReader() is built only once the current screen is gone, so its
+  // objects take the space that screen frees instead of splitting the large free block a chapter
+  // build needs. Empty when none is pending.
+  std::string pendingReaderPath;
+  bool pendingReaderFastRefresh = false;
 
   // Task to render and display the activity
   TaskHandle_t renderTaskHandle = nullptr;
@@ -70,13 +77,24 @@ class ActivityManager {
   // Bumped by every update request, see updateRequestCount().
   std::atomic<uint32_t> updateRequests{0};
 
+  // Counts screen changes, so the Bluetooth page turner can tell one visit of a book from the next.
+  // Written by the main loop under RenderLock; the render task captures it under that lock.
+  uint32_t screenVisit = 0;
+  // Remote input waiting for the drawing to end, for the screen visit it came in: net page turns
+  // (+ forward), the latest click, and a long-press shortcut.
+  enum class QueuedShortcut : uint8_t { None, ReaderMenu, SaveQuote };
+  int8_t queuedRemoteTurns = 0;
+  RemoteButton queuedRemoteClick = RemoteButton::None;
+  QueuedShortcut queuedRemoteShortcut = QueuedShortcut::None;
+  uint32_t queuedRemoteTurnVisit = 0;
+  unsigned long queuedRemoteTurnAtMs = 0;
+  void noteQueuedRemoteInput();
+  // The screen visit whose frame the render task painted last.
+  std::atomic<uint32_t> paintedVisit{0};
+
  public:
-  explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : renderer(renderer), mappedInput(mappedInput), renderingMutex(xSemaphoreCreateMutex()) {
-    assert(renderingMutex != nullptr && "Failed to create rendering mutex");
-    stackActivities.reserve(10);
-  }
-  ~ActivityManager() { assert(false); /* should never be called */ };
+  explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput);
+  ~ActivityManager();
 
   void begin();
   void loop();
@@ -87,8 +105,10 @@ class ActivityManager {
   // goTo... functions are convenient wrapper for replaceActivity()
   void goToFileTransfer();
   void goToReadingStats();
+  void goToJoinNetwork();  // File Transfer straight into Join Network (post heap-defrag reboot)
   void goToUsbDrive();
-  void goToSettings();
+  // openSection jumps straight into one group (End = the section list).
+  void goToSettings(SettingsSection openSection = SettingsSection::End);
   void goToFileBrowser(std::string path = {});
   // initialTab selects the cover library's tab (LibraryTabs::Books / Shelves); the indexed list
   // view has its own tabs and ignores it.
@@ -97,6 +117,7 @@ class ActivityManager {
   // The server list as the Library's OPDS tab: picking a server opens the browser, so moving
   // across the tabs never starts Wi-Fi.
   void goToOpdsServers();
+  void goToPlugins(bool showOpds);
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();
@@ -116,9 +137,32 @@ class ActivityManager {
   bool preventAutoSleep() const;
   bool requiresExclusiveStorageLoop() const;
   bool isReaderActivity() const;
+  // Bluetooth page turner (lib/BlePageTurner): the book in front, whether it has painted a page, and
+  // a page or chapter turn from a remote. False when no book in front took the turn.
+  bool isForegroundReader() const;
+  // The book in front as a ReaderActivity, or null (also for screens that only act like a reader).
+  ReaderActivity* foregroundReader() const;
+  bool isRemoteReaderContext() const;
+  bool remoteClick(RemoteButton button);
+  // Home is in front and has painted a frame of its own (not one left from the screen before).
+  bool isForegroundHomeShown() const;
+  // Home or a book is the only screen: nothing underneath has exit work (such as a reboot) pending.
+  bool isOnlyHomeOrReader() const;
+  uint32_t visit() const { return screenVisit; }
+  bool remoteTurn(bool forward, bool chapter);
+  // Replays what a remote sent while a page was still drawing: a click, a shortcut, or page turns.
+  // Call every loop; true when something acted.
+  bool applyQueuedRemoteInput();
+  // A remote button mapped to the reader menu (true) or to a new clipping (false).
+  bool remoteShortcut(bool readerMenu);
   bool handleForcedRefresh();
+  // Applies the front screen's wantsGlyphSlab(). The render task does before each render; a screen
+  // that draws outside it (the reader's panels) calls it itself.
+  void syncGlyphSlab();
+  bool startShortcutSync();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;
+  void prepareForSleep();
 
   // If immediate is true, the update will be triggered immediately.
   // Otherwise, it will be deferred until the end of the current loop iteration.

@@ -51,7 +51,7 @@ constexpr uint32_t WIFI_STACK_RESERVE = 36000;
 // conservative empirical floor above the crash point, not a documented ESP-IDF constant.
 constexpr uint32_t MIN_HEAP_FOR_WIFI_INIT = 70000;
 static std::string apiKeyPath() { return sdsystem::findUserFile("gemini.key"); }
-constexpr const char* GEMINI_MODEL = "gemini-3.6-flash";
+constexpr const char* GEMINI_MODEL = "gemini-3.8-flash";
 // The page behind the panel, kept across the full-screen Wi-Fi list and a silent restart.
 static std::string backgroundPath() { return sdsystem::path("translate_bg.bin"); }
 // A saved network either answers within this or is out of range; the Wi-Fi list takes over then.
@@ -64,10 +64,11 @@ constexpr int TRANSLATION_FONT_ID = UI_12_FONT_ID;
 
 EpubReaderTranslationActivity::EpubReaderTranslationActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                              std::string sourceText, std::string preTranslatedText,
-                                                             const bool resumedAfterRestart)
+                                                             const bool resumedAfterRestart, const StrId title)
     : Activity("Translation", renderer, mappedInput),
       sourceText(std::move(sourceText)),
-      resumedAfterRestart(resumedAfterRestart) {
+      resumedAfterRestart(resumedAfterRestart),
+      title(title) {
   if (!preTranslatedText.empty()) {
     translatedText = std::move(preTranslatedText);
     hasPreTranslation = true;
@@ -313,6 +314,11 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
   url += GEMINI_MODEL;
   url += ":generateContent?key=";
   url += apiKey;
+  // Only the translated text. The full reply also carries the model's thought signature and
+  // usage counters -- 9 KB for a page whose translation is 600 bytes -- and the HTTP client
+  // gathers the body in one growing string beside the TLS session: on the device that growth
+  // ran out of contiguous heap and aborted.
+  url += "&$fields=candidates.content.parts.text";
 
   // TLS/HTTP client init needs one large *contiguous* buffer (record buffers, X.509 parsing,
   // etc.), so the gate must check the largest allocatable block, not total free heap -- on a
@@ -352,12 +358,16 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
   auto parts = part["parts"].to<JsonArray>();
   auto textPart = parts.add<JsonObject>();
   textPart["text"] = std::string(
-                         "Translate the following Japanese text to English. "
+                         "Translate the following text to English. "
                          "Return only the translation, no commentary.\n\n") +
                      sourceText;
 
   auto config = reqDoc["generationConfig"].to<JsonObject>();
   config["maxOutputTokens"] = 2048;
+  // The model thinks before answering, and those tokens count against maxOutputTokens: at its
+  // default level a long page could use up the budget and return no translation, or outlast the
+  // timeout below. A translation needs little reasoning; "low" is the lowest level 3.8 accepts.
+  config["thinkingConfig"].to<JsonObject>()["thinkingLevel"] = "low";
 
   std::string body;
   serializeJson(reqDoc, body);
@@ -463,7 +473,7 @@ void EpubReaderTranslationActivity::loop() {
     return;
   }
 
-  switch (PanelTouch::read(renderer, mappedInput)) {
+  switch (PanelTouch::read(renderer, mappedInput, false, pageTurnReversed)) {
     case PanelTouch::Action::Close:
       cancel();
       return;
@@ -497,7 +507,7 @@ void EpubReaderTranslationActivity::render(RenderLock&&) {
     snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, textPages.pageCount());
   }
   const auto layout =
-      DictionaryPanel::draw(renderer, tr(STR_TRANSLATE_PAGE), hasPreTranslation ? "" : "Gemini", counter);
+      DictionaryPanel::draw(renderer, I18n::getInstance().get(title), hasPreTranslation ? "" : "Gemini", counter);
 
   if (state == SHOWING_RESULT) {
     auto* fcm = renderer.getFontCacheManager();

@@ -20,14 +20,44 @@ permissions:
   contents: read
 
 jobs:
+  # A release whose firmware was built by hand and attached while it was a draft (debug builds for
+  # testers) keeps it: publishing then only adds the language packs and the file tables.
+  prebuilt:
+    runs-on: ubuntu-latest
+    outputs:
+      firmware: ${{ steps.check.outputs.firmware }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_TAG" ]; then
+            echo "firmware=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          assets="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for asset in x4old-x3-firmware.bin x4c-firmware.bin sticky-firmware.bin \
+                       x4pro-firmware.bin papermono-firmware.bin metalio_eink4-firmware.bin \
+                       eego_a4-firmware.bin picco-firmware.bin; do
+            if ! grep -qxF "$asset" <<<"$assets"; then
+              echo "firmware=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "Release already carries every firmware file; not rebuilding"
+          echo "firmware=true" >> "$GITHUB_OUTPUT"
+
   build-release:
+    needs: prebuilt
+    if: needs.prebuilt.outputs.firmware != 'true'
     runs-on: ubuntu-latest
     # One name for the environment this job builds, because four steps have to agree on it:
-    # the build, the asset copy and the two artifact paths all read `.pio/build/<env>/`, and a
-    # prerelease builds the `_rc` variant (LOG_LEVEL=1, RC hash in the version) rather than the
-    # release one. Derived from pio_env so a renamed env cannot leave one step behind.
-    env:
-      PIO_ENV: ${{ github.event.release.prerelease && format('{0}_rc', matrix.pio_env) || matrix.pio_env }}
+    # the build, the asset copy and the two artifact paths all read `.pio/build/<env>/`. A
+    # release builds pio_env, an rc prerelease its `_rc` variant (LOG_LEVEL=1, RC hash in the
+    # version), and a nightly the debug env (LOG_LEVEL=2, "matcha-reader-<version>-debug").
+    # Set by the "Choose environment" step, which needs platformio.ini to tell a nightly apart.
     strategy:
       fail-fast: false
       matrix:
@@ -36,19 +66,47 @@ jobs:
           # the combined X3/X4 C3 image published as x4old-x3. Renaming one here without
           # the matching change in OtaUpdater.cpp silently breaks over-the-air updates.
           - pio_env: gh_release
+            debug_env: default
             asset: x4old-x3-firmware.bin
           - pio_env: x4c-gh_release
+            debug_env: x4c
             asset: x4c-firmware.bin
           - pio_env: sticky-gh_release
+            debug_env: sticky
             asset: sticky-firmware.bin
           - pio_env: x4pro-gh_release
+            debug_env: x4pro
             asset: x4pro-firmware.bin
           - pio_env: papermono-gh_release
+            debug_env: papermono
             asset: papermono-firmware.bin
+          - pio_env: metalio_eink4-gh_release
+            debug_env: metalio_eink4
+            asset: metalio_eink4-firmware.bin
+          - pio_env: eego_a4-gh_release
+            debug_env: eego_a4
+            asset: eego_a4-firmware.bin
+          # Picco has no second app slot and no OTA; this one is flashed over USB.
+          - pio_env: picco-gh_release
+            debug_env: picco
+            asset: picco-firmware.bin
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - name: Choose environment
+        env:
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          version="$(sed -n 's/^version = //p' platformio.ini | head -n1)"
+          case "$PRERELEASE:$version" in
+            true:*-nightly-*) env_name="${{ matrix.debug_env }}" ;;
+            true:*) env_name="${{ matrix.pio_env }}_rc" ;;
+            *) env_name="${{ matrix.pio_env }}" ;;
+          esac
+          echo "Building $env_name for $version"
+          echo "PIO_ENV=$env_name" >> "$GITHUB_ENV"
 
       - name: Validate release version
         env:
@@ -113,7 +171,15 @@ jobs:
           "$penv_python" -c "import platformio; print('penv Core', platformio.VERSION)"
 
       - name: Build CrossPoint
-        run: CROSSPOINT_RC_LABEL=rc CROSSPOINT_RC_HASH="$(git rev-parse --short=7 HEAD)" pio run -e "$PIO_ENV" -j1
+        run: |
+          # The _rc envs build "<version><label>+<hash>". A prerelease tag already names its stage
+          # (1.7.0-nightly-1, 1.6.5-rc-3), so it gets no label; anything else is marked -rc.
+          version="$(sed -n 's/^version = //p' platformio.ini | head -n1)"
+          case "$version" in
+            *-nightly-*|*-rc-*) label="" ;;
+            *) label="-rc" ;;
+          esac
+          CROSSPOINT_RC_LABEL="$label" CROSSPOINT_RC_HASH="$(git rev-parse --short=7 HEAD)" pio run -e "$PIO_ENV" -j1
 
       - name: Name release asset
         run: |
@@ -134,8 +200,8 @@ jobs:
   publish-release:
     # Only a published release has somewhere to attach to. On a bare tag push this is
     # skipped and the artifacts remain available for a manual upload.
-    if: github.event_name == 'release'
-    needs: [build-release, language-packs]
+    if: github.event_name == 'release' && !failure() && !cancelled()
+    needs: [prebuilt, build-release, language-packs]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -146,15 +212,17 @@ jobs:
           path: dist
 
       - name: Attach firmware to the release
+        if: needs.prebuilt.outputs.firmware != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          # Exactly the names OtaUpdater asks for; a missing one means some device would
-          # see no update, so fail loudly rather than publish a half-updatable release.
+          # Exactly the names OtaUpdater asks for, plus Picco's USB image; a missing one means some
+          # device would see no update, so fail loudly rather than publish a half-updatable release.
           for asset in x4old-x3-firmware.bin x4c-firmware.bin sticky-firmware.bin \
-                       x4pro-firmware.bin papermono-firmware.bin; do
+                       x4pro-firmware.bin papermono-firmware.bin metalio_eink4-firmware.bin \
+                       eego_a4-firmware.bin picco-firmware.bin; do
             path="$(find dist -type f -name "$asset" | head -1)"
             if [ -z "$path" ]; then
               echo "No $asset among the built artifacts" >&2
@@ -162,12 +230,158 @@ jobs:
             fi
             gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY" --clobber
           done
+
+      - name: Attach the language pack bundle to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
           pack="$(find dist -type f -name language-packs.zip | head -1)"
           if [ -z "$pack" ]; then
             echo "No language-packs.zip among the built artifacts" >&2
             exit 1
           fi
           gh release upload "$RELEASE_TAG" "$pack" --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Check out the translation names
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: lib/I18n/translations
+          path: src
+
+      # One release per firmware version in the assets repo, with every pack as its own file, so
+      # people download just their language. A pack only loads on the firmware it was built for,
+      # hence the firmware tag in the name. Needs a token that can write to the assets repo; without
+      # one the step is skipped and the notes link to language-packs.zip instead.
+      - name: Publish the language packs to the assets repo
+        env:
+          GH_TOKEN: ${{ secrets.ASSETS_REPO_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          ASSETS_REPO: eszter007/matcha-reader-assets
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::ASSETS_REPO_TOKEN is not set, language packs are not published to $ASSETS_REPO"
+            exit 0
+          fi
+          tag="language-packs-$RELEASE_TAG"
+          url="https://github.com/$ASSETS_REPO/releases/download/$tag"
+          mapfile -t packs < <(find dist -type f -name '*.cplang' | sort)
+          [ "${#packs[@]}" -gt 0 ] || { echo "No .cplang packs among the built artifacts" >&2; exit 1; }
+          {
+            echo "Menu languages for Matcha Reader **$RELEASE_TAG**. English, Japanese, Spanish, French and German"
+            echo "are built in. Every other language needs its file from here."
+            echo
+            echo "These files only work on $RELEASE_TAG. After a firmware update, download your language again"
+            echo "from the release with the new version number."
+            echo
+            echo '### 1. Download the file for your language'
+            echo
+            echo 'Only that one file, e.g. `IT.cplang` for Italiano. No unzipping needed.'
+            echo
+            echo '### 2. Copy it to the SD card'
+            echo
+            echo 'Put the card in your computer. Open the hidden `.crosspoint` folder on the card (it is there'
+            echo 'once the device has used the card) and make a folder called `lang` inside it, if there is none yet.'
+            echo 'Copy the file into `lang`:'
+            echo
+            echo '```'
+            echo 'SD card'
+            echo '└── .crosspoint'
+            echo '    └── lang'
+            echo '        └── IT.cplang'
+            echo '```'
+            echo
+            echo 'Folders that start with a dot are hidden on most computers. On a Mac press Cmd+Shift+. in'
+            echo 'Finder to show them; on Windows turn on View → Show → Hidden items.'
+            echo
+            echo '### 3. Choose the language on the device'
+            echo
+            echo 'Put the card back and pick your language in **Settings → System → Language**.'
+            echo
+            echo '| Language | File |'
+            echo '|---|---|'
+            for pack in "${packs[@]}"; do
+              file="$(basename "$pack")"
+              code="${file%.cplang}"
+              yaml="$(grep -lE "^_language_code: *\"?$code\"?\s*$" src/lib/I18n/translations/*.yaml | head -1)"
+              name="$(sed -n 's/^_language_name: *"\(.*\)"/\1/p' "$yaml")"
+              echo "$name|$file"
+            done | sort -f | while IFS='|' read -r name file; do
+              echo "| $name | [\`$file\`]($url/$file) |"
+            done
+          } > packs.md
+          flags=()
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          if gh release view "$tag" --repo "$ASSETS_REPO" >/dev/null 2>&1; then
+            # A pack release prepared as a draft beside a draft firmware release goes out with it.
+            gh release edit "$tag" --repo "$ASSETS_REPO" --notes-file packs.md --draft=false
+          else
+            gh release create "$tag" --repo "$ASSETS_REPO" --latest=false "${flags[@]}" \
+              --title "Language packs $RELEASE_TAG" --notes-file packs.md
+          fi
+          gh release upload "$tag" --repo "$ASSETS_REPO" --clobber "${packs[@]}"
+
+      - name: Add the file tables to the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          # Fonts and dictionaries are released separately; bump these when they change.
+          ASSETS_REPO: eszter007/matcha-reader-assets
+          FONTS_RELEASE: fonts-2.0
+          DICTIONARIES_RELEASE: dictionaries-2.0
+        run: |
+          set -euo pipefail
+          # GitHub lists assets alphabetically, so the top of the notes says which file is for
+          # what. The block between the markers is rebuilt, so a re-run replaces it.
+          start='<!-- release-files -->'
+          end='<!-- /release-files -->'
+          body="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
+          if [[ "$body" == *"$end"* ]]; then
+            body="${body#*"$end"}"
+          fi
+          body="$(printf '%s' "$body" | sed '/./,$!d')"
+          assets="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
+          table() {
+            local header="$1" rows=""
+            while IFS='|' read -r label asset; do
+              grep -qxF "$asset" <<<"$assets" || continue
+              rows+="| $label | [\`$asset\`]($url/$asset) |"$'\n'
+            done
+            [ -n "$rows" ] || return 0
+            printf '| %s | File |\n|---|---|\n%s\n' "$header" "$rows"
+          }
+          {
+            printf '%s\n\n' "$start"
+            printf '**Please ensure that you flash the right firmware on your device.**\n\n'
+            table 'Device' <<'TABLE'
+          X3, and X4 (old)|x4old-x3-firmware.bin
+          X4C (new)|x4c-firmware.bin
+          X4 Pro|x4pro-firmware.bin
+          Sticky|sticky-firmware.bin
+          Papermono|papermono-firmware.bin
+          Metalio 3.97"|metalio_eink4-firmware.bin
+          EEGO A4|eego_a4-firmware.bin
+          BOOX Picco (USB only, no Wi-Fi updates)|picco-firmware.bin
+          TABLE
+            printf '**Extras for the SD card**\n\nThey live in [%s](https://github.com/%s). Each release there explains where the files go on the card.\n\n' \
+              "${ASSETS_REPO#*/}" "$ASSETS_REPO"
+            printf '| Contents | File |\n|---|---|\n'
+            packs_tag="language-packs-$RELEASE_TAG"
+            if gh release view "$packs_tag" --repo "$ASSETS_REPO" >/dev/null 2>&1; then
+              printf '| Language packs | [%s](https://github.com/%s/releases/tag/%s) |\n' "$packs_tag" "$ASSETS_REPO" "$packs_tag"
+            elif grep -qxF language-packs.zip <<<"$assets"; then
+              printf '| Language packs | [`language-packs.zip`](%s/language-packs.zip) |\n' "$url"
+            fi
+            printf '| Fonts | [%s](https://github.com/%s/releases/tag/%s) |\n' "$FONTS_RELEASE" "$ASSETS_REPO" "$FONTS_RELEASE"
+            printf '| Dictionaries | [%s](https://github.com/%s/releases/tag/%s) |\n\n' \
+              "$DICTIONARIES_RELEASE" "$ASSETS_REPO" "$DICTIONARIES_RELEASE"
+            printf '%s\n\n%s\n' "$end" "$body"
+          } > notes.md
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
 
   # Languages that are not compiled in ship as .cplang packs for the SD card. A pack is
   # only valid for the firmware it was generated with -- it is indexed by string-key

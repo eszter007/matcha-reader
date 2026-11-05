@@ -34,6 +34,32 @@ struct LanguageDaily {
   uint16_t minutesRead;
 };
 
+// The sync account's numbers from the server's overview (GET /api/v1/stats/overview), counting
+// every device: one digest for all languages, then one per language. Days count from 2000-01-01.
+struct StatsDigest {
+  char code[4];       // primary subtag, lowercase; empty for all languages
+  int32_t anchorDay;  // the server's today when it answered
+  uint16_t days;      // bits used in history
+  uint16_t longestStreak;
+  uint16_t booksFinished;
+  uint32_t readingDays;
+  uint32_t minutes;
+  uint32_t weekMinutes;  // Monday through anchorDay
+  uint8_t history[92];   // bit N, LSB first: day anchorDay - N was a reading day
+  // This card's own counts when the server answered, right after they were uploaded: what this card
+  // adds beyond them is reading the server does not have yet.
+  uint32_t baselineFinished;
+  uint32_t baselineMinutes;
+};
+
+// This card's own totals for one language ("" = all languages), the baseline an overview fetched
+// right after the upload is saved with.
+struct AccountBaseline {
+  char code[4];
+  uint32_t finished;
+  uint32_t minutes;
+};
+
 class ReadingStatsStore {
   static ReadingStatsStore instance;
 
@@ -45,10 +71,18 @@ class ReadingStatsStore {
   // 3650 days is a decade of reading every day for 22KB. A file holding more keeps its most
   // recent 3650 (see loadFromFile, which consumes the rest to stay aligned).
   static constexpr size_t MAX_DAYS = 3650;
-  // Bounded because each entry heap-allocates its path (~40-80 bytes) and the store is a
-  // long-lived singleton. When full, the least recently read book is dropped -- its minutes
-  // stay counted in the per-day totals, which are the numbers the UI shows today.
+
+ public:
+  // Minutes read by local time of day: morning (6-12), afternoon (12-18), evening (18-24), night (0-6), the
+  // server's buckets. Only minutes recorded with a local hour count there.
+  static constexpr uint8_t TIME_OF_DAY_BUCKETS = 4;
+  static constexpr uint8_t NO_TIME_OF_DAY = 0xFF;
+  // Bounded because each entry heap-allocates its path (~40-80 bytes). When full, the least
+  // recently read book is dropped -- its minutes stay counted in the per-day totals, which are the
+  // numbers the UI shows today. Public for the file reader that checks it without loading.
   static constexpr size_t MAX_BOOKS = 150;
+
+ private:
   std::vector<DailyReading> days;  // sorted ascending by date
   uint16_t booksFinished = 0;
   std::vector<std::string> finishedBookPaths;
@@ -58,12 +92,57 @@ class ReadingStatsStore {
   // its tag -- so a smaller cap buys the same 25KB. Shrink the record with a language table
   // before raising this.
   static constexpr size_t MAX_LANG_DAYS = 2500;
-  std::vector<LanguageDaily> languageDays;  // sorted ascending by date
+  std::vector<LanguageDaily> languageDays;              // sorted ascending by date
+  uint32_t timeOfDayMinutes[TIME_OF_DAY_BUCKETS] = {};  // read on this card (see TIME_OF_DAY_BUCKETS)
+  // The account's minutes that did not come from this card (another reader, before a reset), from the last
+  // download; what is uploaded is this plus timeOfDayMinutes.
+  uint32_t timeOfDayBase[TIME_OF_DAY_BUCKETS] = {};
+  bool loaded = false;  // set by loadFromFile(), cleared by release()
+  // The account digests ([0] all languages), loaded only for display: with them the getters count
+  // a day read on any device, plus this reader's own minutes since the server answered.
+  std::vector<StatsDigest> account;
+  void loadAccount(uint32_t accountKey);
+  static bool readAccountFile(std::vector<StatsDigest>& out, uint32_t& accountKey);
+  static bool writeAccountFile(const std::vector<StatsDigest>& digests, uint32_t accountKey);
+  // compact(): what folding in a download adds to this card's counts is server data, so it moves the
+  // baselines along with it.
+  void shiftAccountBaselines(const std::vector<AccountBaseline>& before) const;
+  const StatsDigest* accountFor(const char* language) const;  // nullptr language: all languages
+  // This card's own numbers, whatever account view is loaded; nullptr language: all languages.
+  uint32_t localMinutes(const char* language) const;
+  uint32_t localFinished(const char* language) const;
+  uint16_t localWeekMinutes(const char* language, uint16_t y, uint8_t m, uint8_t d) const;
+  bool readOn(const char* language, const StatsDigest* g, uint16_t year, uint8_t month, uint8_t day) const;
+  template <typename F>
+  void eachLocalDay(const char* language, F&& f) const;
+  int accountStreak(const char* language, const StatsDigest& g, uint16_t y, uint8_t m, uint8_t d) const;
+  int accountDaysRead(const char* language, const StatsDigest& g) const;
+  uint32_t accountMinutes(const char* language, const StatsDigest& g) const;
+  uint16_t accountWeekMinutes(const char* language, const StatsDigest& g, uint16_t y, uint8_t m, uint8_t d) const;
+  uint32_t accountFinished(const char* language, const StatsDigest& g) const;
+  int accountRecentRun(const char* language, const StatsDigest& g) const;
+  // The journal prefix (byte count and hash) this file already holds; replay starts after it.
+  // Stored after the last block, where older readers stop.
+  uint32_t foldedJournalBytes = 0;
+  uint32_t foldedJournalHash = 0;
+
+  bool loadMainFile(size_t pendingRecords);
+  bool mergeDownloadFile();
+  bool mergeBookDownload(const std::string& list);
+  bool replayJournal();
 
  public:
   static ReadingStatsStore& getInstance() { return instance; }
 
   void addMinutes(uint16_t year, uint8_t month, uint8_t day, uint16_t minutes);
+  // The day number BookReading::lastReadDay is counted in.
+  static int32_t dayNumber(uint16_t year, uint8_t month, uint8_t day);
+  // Raises a day to `minutes` if it holds fewer; for minutes read back from the sync server, which
+  // are this device's own (or another CrossPoint reader's on the same account), so taking the larger
+  // value never counts a session twice.
+  void mergeMinutes(uint16_t year, uint8_t month, uint8_t day, uint16_t minutes);
+  // The same for one language's day (see addLanguageMinutes).
+  void mergeLanguageMinutes(const char* language, uint16_t minutes, uint16_t year, uint8_t month, uint8_t day);
   // Same minutes, attributed to one book. Called alongside addMinutes(); a null or empty
   // bookPath is ignored. A non-empty language overwrites a previously unknown one (a book
   // converted before meta.bin carried a language tag starts blank and fills in after a
@@ -84,6 +163,8 @@ class ReadingStatsStore {
   uint16_t getMinutesForDay(const char* language, uint16_t year, uint8_t month, uint8_t day) const;
   uint32_t getTotalMinutes(const char* language) const;
   void markBookFinished(const std::string& bookPath);
+  // Takes a book (and its stand-in from the server) off the finished list: Mark as Unread.
+  void unmarkBookFinished(const std::string& bookPath);
 
   // ---- per-language views, mirroring the overall ones ----
   // Every language read, most-read first. Written into the caller's vector so the store keeps
@@ -110,11 +191,18 @@ class ReadingStatsStore {
   int getLongestStreak() const;
   int getDaysRead() const;
   uint32_t getTotalMinutes() const;
-  uint16_t getBooksFinished() const { return booksFinished; }
+  uint16_t getBooksFinished() const;
+  bool isFinished(const std::string& bookPath) const;
+  const std::vector<DailyReading>& getDays() const { return days; }
+  uint32_t getTimeOfDayMinutes(const uint8_t bucket) const { return timeOfDayMinutes[bucket]; }
+  uint32_t getTimeOfDayBase(const uint8_t bucket) const { return timeOfDayBase[bucket]; }
+  // The time-of-day bucket a local hour (0-23) falls in.
+  static uint8_t timeOfDay(int hour) {
+    return hour >= 6 && hour < 12 ? 0 : hour >= 12 && hour < 18 ? 1 : hour >= 18 ? 2 : 3;
+  }
 
   uint16_t getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const;
   uint16_t getMinutesThisWeek(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;
-  bool hasReadToday(uint16_t year, uint8_t month, uint8_t day) const;
 
   void getWeekStatus(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay, int todayDow, bool readDays[7]) const;
 
@@ -124,8 +212,104 @@ class ReadingStatsStore {
   // Count days read in a given month.
   int getDaysReadInMonth(uint16_t year, uint8_t month) const;
 
+  // Writes the tables through a temp file, so an interrupted save leaves the old file whole.
   bool saveToFile() const;
+  // Reads the stats file and replays the journal on top. Returns at once if already loaded; false
+  // (with nothing held) when the file is unreadable or its tables do not fit the heap right now.
   bool loadFromFile();
+  // Frees everything loaded. Screens that show stats load, read and release, so the store holds no
+  // heap between uses.
+  void release();
+
+  // A change recorded without loading anything: one record appended to a small journal. What the
+  // reader saves while a chapter is laid out (session minutes, a finished book) goes through here.
+  struct Change {
+    uint16_t year = 0;
+    uint8_t month = 0;
+    uint8_t day = 0;
+    uint16_t minutes = 0;                // 0 = no reading session
+    const char* bookPath = nullptr;      // book the minutes belong to
+    const char* language = nullptr;      // that book's language tag
+    const char* finishedPath = nullptr;  // book marked finished, or nullptr
+    bool unfinished = false;             // finishedPath comes off the finished list instead
+    uint8_t timeOfDay = NO_TIME_OF_DAY;  // bucket the minutes were read in (see timeOfDay())
+  };
+  static bool record(const Change& change);
+  // Folds the journal and any saved download into the stats file (load, replay, merge, save, remove
+  // them). Run where the heap is free -- boot -- so the tables are only ever built there or on a stats
+  // screen.
+  bool compact();
+
+  // Daily minutes downloaded from the sync server, kept on SD until the next compact() folds them in
+  // with mergeMinutes(). Written with WiFi up, when the tables may not fit; a newer download replaces
+  // an unmerged one, and one that cannot be folded in yet stays for the next boot.
+  // serverTimeOfDay: this reader's time-of-day minutes on the server; uploadedTimeOfDay: this card's own minutes
+  // in its last upload to that account, or NO_UPLOAD_MARKER when unknown. Both or neither.
+  static bool saveDownload(const std::vector<DailyReading>& downloaded, const uint32_t* serverTimeOfDay = nullptr,
+                           const uint32_t* uploadedTimeOfDay = nullptr);
+  // A saved download the next compact() has not folded in yet.
+  static bool hasPendingDownload();
+  // The time-of-day base the next fold sets from it (see timeOfDayBase), for an upload made before the fold, given
+  // this card's own minutes now; false when the download holds no time of day.
+  static bool pendingDownloadBase(const uint32_t (&cardMinutes)[TIME_OF_DAY_BUCKETS],
+                                  uint32_t (&out)[TIME_OF_DAY_BUCKETS]);
+  static constexpr uint32_t NO_UPLOAD_MARKER = UINT32_MAX;
+  // What of the server's minutes did not come from this card: `uploaded` of them did. Fewer own minutes than were
+  // uploaded means the stats were reset since, so none of the current ones are on the server. Not knowing what was
+  // uploaded, it takes the server to hold all of them: an undercount, never a minute counted twice.
+  static uint32_t timeOfDayBaseFrom(uint32_t server, uint32_t uploaded, uint32_t card) {
+    const uint32_t own = uploaded == NO_UPLOAD_MARKER ? card : (card >= uploaded ? uploaded : 0);
+    return server > own ? server - own : 0;
+  }
+  // A stats file exists: what a download since the last one would add to.
+  static bool hasStatsFile();
+  // This card's own totals, all languages first, for the overview the same sync fetches after uploading
+  // them. Needs the tables loaded without an account view.
+  void accountBaselines(std::vector<AccountBaseline>& out) const;
+  // The server's overview for the account `accountKey` names, each digest paired with its baseline (0 for
+  // a language this card never read).
+  static bool saveAccount(std::vector<StatsDigest>& digests, const std::vector<AccountBaseline>& baselines,
+                          uint32_t accountKey);
+
+  // The numbers the end-of-book summary shows, read straight from the file and the journal with no
+  // tables built: that screen runs with the book still in memory. Same values as the getters.
+  struct Summary {
+    int streak = 0;
+    // The stamp's "Nth book": finishedPath's place in the finish order when it was finished before (a
+    // reopening keeps its number), else every finished book.
+    uint16_t booksFinished = 0;
+    uint16_t languageBooksFinished = 0;  // the same within summarize()'s language; 0 without one
+    // finishedPath is in the finished list (file or journal), also as the stand-in for a book finished on
+    // another device. Only meaningful with listRead: the list could not be read when that is false.
+    bool alreadyFinished = false;
+    bool listRead = false;
+  };
+  // finishedPath: the book the end-of-book screen is for. Asked before recording its finish, it tells a
+  // first finish from a reopening.
+  Summary summarize(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay, const char* language,
+                    const char* finishedPath = nullptr);
+  // Counts a summary's finished books the way Insights does with "All devices" (Loaded with accountKey):
+  // the account's books plus what this card finished since the overview. Unchanged for accountKey 0 or
+  // without that account's overview (a language the server has no group for keeps its own count).
+  static void countAccountFinished(uint32_t accountKey, const char* language, Summary& summary);
+
+  // Holds the full tables for as long as it lives (a stats screen). loaded() is false when they
+  // could not be read or did not fit the heap.
+  class Loaded {
+   public:
+    // accountKey: the getters also count that sync account's other devices (Insights' "All devices"), when
+    // its overview is saved; 0 for this card's own numbers. Display only: never with a save or upload.
+    explicit Loaded(const uint32_t accountKey = 0) : ok_(getInstance().loadFromFile()) {
+      if (ok_ && accountKey != 0) getInstance().loadAccount(accountKey);
+    }
+    ~Loaded() { getInstance().release(); }
+    Loaded(const Loaded&) = delete;
+    Loaded& operator=(const Loaded&) = delete;
+    bool loaded() const { return ok_; }
+
+   private:
+    bool ok_;
+  };
 };
 
 #define READING_STATS_STORE ReadingStatsStore::getInstance()

@@ -3,15 +3,19 @@
 #include <Arduino.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <Utf8.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 
+#include "../../lib/Epub/Epub/CjkBreaks.h"
 #include "DictZip.h"
 #include "DictionaryRegistry.h"
 #include "StringUtils.h"
+#include "TxtToHtml.h"
 
 namespace {
 
@@ -55,6 +59,21 @@ bool readSampleOffset(HalFile& file, uint32_t sampleIndex, uint32_t* out) {
   return file.read(out, sizeof(*out)) == static_cast<int>(sizeof(*out));
 }
 
+// A dictionary's .idx is kept in PSRAM up to this size; larger ones are searched on the card.
+constexpr uint32_t MAX_RESIDENT_IDX_BYTES = 2 * 1024 * 1024;
+
+// Copies the NUL-terminated headword at `at` into buf the way readWordInto() does (truncated to
+// fit), and returns the offset just past its NUL, or 0 when it runs past the end.
+size_t residentWordInto(const uint8_t* idx, const size_t size, const size_t at, char* buf, const size_t bufSize) {
+  const auto* nul = static_cast<const uint8_t*>(std::memchr(idx + at, 0, size - at));
+  if (!nul) return 0;
+  const size_t len = static_cast<size_t>(nul - (idx + at));
+  const size_t copy = std::min(len, bufSize - 1);
+  std::memcpy(buf, idx + at, copy);
+  buf[copy] = '\0';
+  return at + len + 1;
+}
+
 uint32_t readBe32(const uint8_t* p) {
   return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
          (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
@@ -75,8 +94,9 @@ void normalizeIndexHeadword(char* word) {
 // headers are tiny and both keys always appear early when present.
 struct IfoFacts {
   bool offsets64 = false;        // idxoffsetbits=64 (unsupported)
-  bool htmlDefinitions = false;  // sametypesequence=h (definitions are HTML)
+  bool htmlDefinitions = false;  // sametypesequence=h or x (HTML or XDXF)
   std::string bookName;          // bookname=, shown in the definition panel's footer
+  bool inlineTypes = false;      // no sametypesequence: each field carries its own type byte
 };
 
 IfoFacts readIfoFacts(const std::string& ifoPath) {
@@ -92,10 +112,10 @@ IfoFacts readIfoFacts(const std::string& ifoPath) {
   facts.offsets64 = eq && strtol(eq + 1, nullptr, 10) == 64;
   line = strstr(buf, "sametypesequence");
   eq = line ? strchr(line, '=') : nullptr;
+  facts.inlineTypes = !eq;
   if (eq) {
-    // Only the single-field sequence "h" is treated as HTML; multi-type
-    // entries keep the plain-text viewing path.
-    facts.htmlDefinitions = eq[1] == 'h' && (eq[2] == '\0' || eq[2] == '\r' || eq[2] == '\n');
+    // HTML and XDXF share the styled renderer; multi-type entries stay plain text.
+    facts.htmlDefinitions = (eq[1] == 'h' || eq[1] == 'x') && (eq[2] == '\0' || eq[2] == '\r' || eq[2] == '\n');
   }
   // bookname= is the dictionary's own title; the folder name is the fallback at the call site.
   line = strstr(buf, "bookname");
@@ -106,6 +126,89 @@ IfoFacts readIfoFacts(const std::string& ifoPath) {
     facts.bookName.assign(eq + 1, static_cast<size_t>(end - (eq + 1)));
   }
   return facts;
+}
+
+bool readInlineField(std::string_view& input, char& type, std::string_view& field, bool truncated) {
+  type = input.front();
+  input.remove_prefix(1);
+  if (type >= 'A' && type <= 'Z') {
+    if (input.size() < 4) return false;
+    const size_t size = readBe32(reinterpret_cast<const uint8_t*>(input.data()));
+    input.remove_prefix(4);
+    if (size > input.size()) return false;
+    input.remove_prefix(size);
+    field = {};
+    return true;
+  }
+  if (type < 'a' || type > 'z') return false;
+  const size_t end = input.find('\0');
+  if (end == std::string_view::npos && !truncated) return false;
+  field = input.substr(0, end);
+  input.remove_prefix(end == std::string_view::npos ? input.size() : end + 1);
+  return true;
+}
+
+Dictionary::LookupResult decodeInlineFields(std::string& text, size_t start, bool truncated, bool* exceedsLimit) {
+  const auto source = std::string_view(text).substr(start);
+  size_t decodedSize = start;
+  bool onlyMarkup = true;
+  std::string decoded;
+  for (int pass = 0; pass < 2; ++pass) {
+    auto input = source;
+    while (!input.empty()) {
+      char type;
+      std::string_view field;
+      if (!readInlineField(input, type, field, truncated)) {
+        LOG_ERR("DICT", "Invalid inline definition field");
+        return Dictionary::LookupResult::ReadError;
+      }
+      if (field.empty()) continue;
+      const bool markup = type == 'h' || type == 'x';
+      if (pass == 0) {
+        onlyMarkup = onlyMarkup && markup;
+        decodedSize += markup ? field.size() : sizeof("<pre></pre>") - 1 + TxtToHtml::escapedHtmlSize(field);
+        // Escaping plus <pre> wrappers expands bounded raw input by less than six times.
+        const size_t limit = Dictionary::MAX_DEFINITION_BYTES * (exceedsLimit ? 1 : 6);
+        if (decodedSize > limit) {
+          if (exceedsLimit) *exceedsLimit = true;
+          LOG_INF("DICT", "Decoded definition exceeds byte limit");
+          return Dictionary::LookupResult::ReadError;
+        }
+      } else if (markup) {
+        decoded.append(field);
+      } else {
+        decoded += "<pre>";
+        TxtToHtml::appendEscapedHtml(decoded, field);
+        decoded += "</pre>";
+      }
+    }
+    if (pass == 0) {
+      if (decodedSize == start) return Dictionary::LookupResult::NotFound;
+      // Markup only shrinks, so remove its framing without another text buffer.
+      if (onlyMarkup) {
+        auto fields = source;
+        size_t written = start;
+        while (!fields.empty()) {
+          char type;
+          std::string_view field;
+          if (!readInlineField(fields, type, field, truncated)) return Dictionary::LookupResult::ReadError;
+          if (field.empty()) continue;
+          memmove(text.data() + written, field.data(), field.size());
+          written += field.size();
+        }
+        text.resize(written);
+        return Dictionary::LookupResult::Found;
+      }
+      if (ESP.getMaxAllocHeap() < decodedSize + 1 + DEFINITION_HEAP_HEADROOM_BYTES) {
+        LOG_ERR("DICT", "Low heap for %u byte decoded definition", static_cast<unsigned>(decodedSize));
+        return Dictionary::LookupResult::LowMemory;
+      }
+      decoded.reserve(decodedSize);
+      decoded.append(text.data(), start);
+    }
+  }
+  text.swap(decoded);
+  return Dictionary::LookupResult::Found;
 }
 
 }  // namespace
@@ -143,7 +246,9 @@ bool Dictionary::open(const char* folderName, const char* languageTag) {
     return false;
   }
   hasSyn = Storage.exists((resolved + ".syn").c_str());
-  htmlDefinitions = ifo.htmlDefinitions;
+  inlineTypes = ifo.inlineTypes;
+  // Decoded inline fields come out as markup (plain fields wrapped in <pre>).
+  htmlDefinitions = ifo.htmlDefinitions || inlineTypes;
   bookName = ifo.bookName.empty() ? (folderName ? folderName : "") : ifo.bookName;
 
   // The book's own tag wins; an untagged book falls back to the language folder
@@ -338,6 +443,18 @@ bool Dictionary::openSession(LookupSession& session) {
     if (header.valid && header.sourceFileSize == session.idxSize) {
       session.sampleCount = header.sampleCount;
       session.entryCount = header.entryCount;
+      if (ResidentFiles::kAvailable && session.idxSize <= MAX_RESIDENT_IDX_BYTES) {
+        // Samples first: they are small, and loading them second could evict the index just loaded.
+        const std::string samplesKey = basePath + ".qidx";
+        const std::string idxKey = basePath + ".idx";
+        session.residentSamples =
+            ResidentFiles::acquire(samplesKey.c_str(), session.sampleCount, session.qidx, SIDECAR_HEADER_BYTES,
+                                   static_cast<size_t>(session.sampleCount) * sizeof(uint32_t));
+        if (session.residentSamples) {
+          session.residentIdx =
+              ResidentFiles::acquire(idxKey.c_str(), session.idxSize, session.idx, 0, session.idxSize);
+        }
+      }
     }
   }
   return true;
@@ -400,7 +517,9 @@ uint32_t Dictionary::bisectSamples(HalFile& sidecar, HalFile& source, uint32_t s
     // key or it descends on "Intelligenz," while the scan looks for "Intelligenz" and lands on
     // the wrong offset (Babylon's Duden conversion, see normalizeIndexHeadword).
     normalizeIndexHeadword(wordBuf);
-    if (StringUtils::asciiCaseCmp(wordBuf, target) <= 0) {
+    // Strictly below: a headword listed several times may start before the last sample equal to
+    // it, and the scan has to see the whole run.
+    if (StringUtils::asciiCaseCmp(wordBuf, target) < 0) {
       lo = mid;
     } else {
       hi = mid - 1;
@@ -414,8 +533,61 @@ uint32_t Dictionary::bisectSamples(HalFile& sidecar, HalFile& source, uint32_t s
 // absolutely first, so a shared handle carries no position state between calls.
 DictLocation Dictionary::locate(LookupSession& session, const char* target, std::string* matchedHeadwordOut) {
   DictLocation result;
+  sameHeadwordCount = 0;
 
-  // Bisect the sampled offsets to the last sample whose headword <= target.
+  // One .idx entry (headword, BE32 offset, BE32 size) against the target; false once past it.
+  const auto take = [&](const uint8_t* suffix) {
+    normalizeIndexHeadword(wordBuf);
+    const int cmp = StringUtils::asciiCaseCmp(wordBuf, target);
+    if (cmp == 0 && !result.found) {
+      result.offset = readBe32(suffix);
+      result.size = readBe32(suffix + 4);
+      result.found = true;
+      if (matchedHeadwordOut) *matchedHeadwordOut = wordBuf;
+    } else if (cmp == 0) {
+      // Every further entry of the same headword (homographs) is a definition of its own.
+      if (sameHeadwordCount == MAX_SAME_HEADWORD - 1) return false;
+      DictLocation& more = sameHeadword[sameHeadwordCount++];
+      more = DictLocation{readBe32(suffix), readBe32(suffix + 4), true, false};
+    }
+    return cmp <= 0;
+  };
+
+  const uint8_t* idx = ResidentFiles::data(session.residentIdx);
+  const auto* samples = reinterpret_cast<const uint32_t*>(ResidentFiles::data(session.residentSamples));
+  if (idx && samples) {
+    // The same bisect and scan as below, over the copy in PSRAM.
+    const size_t size = session.idxSize;
+    uint32_t lo = 0;
+    uint32_t hi = session.sampleCount - 1;
+    while (lo < hi) {
+      const uint32_t mid = (lo + hi + 1) / 2;
+      if (samples[mid] >= size || residentWordInto(idx, size, samples[mid], wordBuf, sizeof(wordBuf)) == 0) {
+        lo = 0;
+        break;
+      }
+      normalizeIndexHeadword(wordBuf);
+      if (StringUtils::asciiCaseCmp(wordBuf, target) < 0) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    size_t at = samples[lo];
+    if (at >= size) {
+      result.readError = true;  // as a failed seek on the card
+      return result;
+    }
+    while (at < size) {
+      const size_t next = residentWordInto(idx, size, at, wordBuf, sizeof(wordBuf));
+      if (next == 0 || next + 8 > size) break;
+      if (!take(idx + next)) break;
+      at = next + 8;
+    }
+    return result;
+  }
+
+  // Bisect the sampled offsets to the last sample whose headword < target.
   const uint32_t startByte = bisectSamples(session.qidx, session.idx, session.sampleCount, target);
 
   // Linear scan of at most SAMPLE_INTERVAL entries: headword NUL, BE32 offset,
@@ -431,19 +603,9 @@ DictLocation Dictionary::locate(LookupSession& session, const char* target, std:
     // the end of the index rather than risk reporting a read failure for what
     // is really a miss.
     if (readWordInto(session.idx, wordBuf, sizeof(wordBuf)) < 0) break;
-    normalizeIndexHeadword(wordBuf);
     uint8_t suffix[8];
     if (session.idx.read(suffix, 8) != 8) break;
-
-    const int cmp = StringUtils::asciiCaseCmp(wordBuf, target);
-    if (cmp == 0) {
-      result.offset = readBe32(suffix);
-      result.size = readBe32(suffix + 4);
-      result.found = true;
-      if (matchedHeadwordOut) *matchedHeadwordOut = wordBuf;
-      return result;
-    }
-    if (cmp > 0) break;
+    if (!take(suffix)) break;
   }
   return result;
 }
@@ -592,6 +754,18 @@ bool Dictionary::readDefinition(const DictLocation& location, std::string& out, 
     out.clear();
     return fail(LookupResult::ReadError);
   }
+  if (inlineTypes) {
+    const auto result = decodeInlineFields(out, 0, location.size > size, nullptr);
+    if (result != LookupResult::Found) {
+      out.clear();
+      return fail(result);
+    }
+  }
+  // Keep room for the viewer's plain-text fallback while retaining the input.
+  if (htmlDefinitions && ESP.getMaxAllocHeap() < out.size() + DEFINITION_HEAP_HEADROOM_BYTES) {
+    LOG_ERR("DICT", "Low heap for %lu byte definition fallback", static_cast<unsigned long>(out.size()));
+    return fail(LookupResult::LowMemory);
+  }
   return true;
 }
 
@@ -608,16 +782,35 @@ std::string Dictionary::cleanWord(const char* word) {
       start++;
     else if (end - start >= 3 && b[start] == 0xE2 && (b[start + 1] == 0x80 || b[start + 1] == 0x81))
       start += 3;
-    else
-      break;
+    else {
+      const unsigned char* p = b + start;
+      const uint32_t cp = utf8NextCodepoint(&p);
+
+      if (CjkBreaks::isNoBreakAfterCjkPunctuation(cp)) {
+        start += static_cast<size_t>(p - (b + start));
+      } else {
+        break;
+      }
+    }
   }
   while (end > start) {
     if (!isWordByte(b[end - 1]))
       end--;
     else if (end - start >= 3 && b[end - 3] == 0xE2 && (b[end - 2] == 0x80 || b[end - 2] == 0x81))
       end -= 3;
-    else
-      break;
+    else {
+      size_t lastCharStart = end - 1;
+      while (lastCharStart > start && (b[lastCharStart] & 0xC0) == 0x80) {
+        lastCharStart--;
+      }
+      const unsigned char* p = b + lastCharStart;
+      const uint32_t cp = utf8NextCodepoint(&p);
+      if (CjkBreaks::isNoBreakBeforeCjkPunctuation(cp)) {
+        end = lastCharStart;
+      } else {
+        break;
+      }
+    }
   }
   if (start >= end) return "";
 
@@ -681,9 +874,18 @@ bool Dictionary::lookup(const char* word, std::string& definitionOut, std::strin
 
   // Found in the index — propagate the precise failure reason from readDefinition
   // (decompression / low memory / read error) so the caller can name it.
-  if (readDefinition(location, definitionOut, outResult)) {
-    setResult(LookupResult::Found);
-    return true;
+  if (!readDefinition(location, definitionOut, outResult)) return false;
+  // The other entries of the same headword follow, separated like sections. Appending can move the
+  // whole text, so the joined size must stay within the definition cap and fit one free block; an
+  // entry that does not, or cannot be read, ends the list there and the first definition stands.
+  std::string more;
+  for (uint8_t i = 0; i < sameHeadwordCount; i++) {
+    const size_t joined = definitionOut.size() + 5 + sameHeadword[i].size;
+    if (joined > MAX_DEFINITION_BYTES || ESP.getMaxAllocHeap() < joined + DEFINITION_HEAP_HEADROOM_BYTES) break;
+    if (!readDefinition(sameHeadword[i], more)) break;
+    definitionOut += htmlDefinitions ? "<hr/>" : "\n\n";
+    definitionOut += more;
   }
-  return false;
+  setResult(LookupResult::Found);
+  return true;
 }

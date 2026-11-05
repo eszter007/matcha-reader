@@ -33,6 +33,29 @@ enum Color : uint8_t { Clear = 0x00, White = 0x01, LightGray = 0x05, DarkGray = 
 
 class GfxRenderer {
  public:
+  // The scales (8.8 fixed point, 256 = as is) a fallback font is drawn at in place of a primary
+  // of another size: its own glyphs, and those it takes from its own fallback family.
+  struct FallbackScale {
+    uint16_t cjk = 256;
+    uint16_t nonCjk = 256;
+    bool identity() const { return cjk == 256 && nonCjk == 256; }
+  };
+  // A font id drawn at a fixed scale (8.8 fixed point, 256 = as is): its own glyphs at `own`,
+  // those it takes from its fallback family at `fallback`. Lets one bitmap face serve as a
+  // larger reader size, and makes a UI face draw what it borrows at its own size.
+  struct FaceScale {
+    uint16_t own = 256;
+    uint16_t fallback = 256;
+    // A UI face: every glyph from outside the face lands at the fallback cut's scaled size, even
+    // one from another font (an SD font at the reader's size). Off for reader faces, whose
+    // global fallback is the book's own CJK font at the reader's size.
+    bool sizeFallbacks = false;
+    // A partial reader face (kana but not every kanji): what it borrows from a font of another
+    // size, the 12pt built-in, is drawn at the face's own em, as if the face carried it.
+    bool matchOwnEm = false;
+    // A UI face at its own size still sizes what it borrows, so it is not an identity.
+    bool identity() const { return own == 256 && fallback == 256 && !sizeFallbacks && !matchOwnEm; }
+  };
   enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
 
   // Logical screen orientation from the perspective of callers
@@ -49,9 +72,11 @@ class GfxRenderer {
   HalDisplay& display;
   RenderMode renderMode;
   mutable bool absoluteGrayPlanes = false;
+  bool ditherImagesInBw = false;
   Orientation orientation;
   bool fadingFix;
   uint8_t* frameBuffer = nullptr;
+  uint32_t frameBufferLoans = 0;
   uint16_t panelWidth = HalDisplay::DISPLAY_WIDTH;
   uint16_t panelHeight = HalDisplay::DISPLAY_HEIGHT;
   uint16_t panelWidthBytes = HalDisplay::DISPLAY_WIDTH_BYTES;
@@ -100,7 +125,7 @@ class GfxRenderer {
   // that composites onto the current frame instead of repainting it has to check this first.
   mutable bool frameBufferContentsStale_ = false;
   // One-shot refresh promotion (see promoteNextRefresh). Mutable because
-  // displayBuffer() is const but must consume the flag.
+  // Display entry points are const but must consume the flag.
   mutable bool promotedRefreshPending_ = false;
   mutable HalDisplay::RefreshMode promotedRefresh_ = HalDisplay::FAST_REFRESH;
   // Swap in (and clear) the promoted mode, if one is pending.
@@ -129,12 +154,39 @@ class GfxRenderer {
   // appears at the same point size as the surrounding UI text. Populated by the
   // app-level SD font setup when an SD family is loaded. See resolveTextFontId().
   std::map<int, int> fallbackFontMap_;
+  std::map<int, FallbackScale> fallbackScaleMap_;  // primary font id -> scales its fallback draws at
+  std::map<int, FaceScale> faceScales_;            // font id -> the scale it is always drawn at
+
+  // The metrics as the font data holds them, before a FaceScale. The scaled walk applies its own
+  // scale to these; the public getters return them scaled.
+  int rawFontAscender(int fontId) const;
+  int rawFontInkHeight(int fontId) const;
+  int rawLineHeight(int fontId) const;
+  int rawTextHeight(int fontId) const;
+  int rawSpaceWidth(int fontId, EpdFontFamily::Style style, int8_t letterSpacing) const;
+  int rawSpaceAdvance(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style,
+                      int8_t letterSpacing) const;
+  int rawKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style, int8_t tracking) const;
+  bool rawGlyphMetrics(int fontId, uint32_t cp, EpdFontFamily::Style style, int* left, int* width, int* top,
+                       int* height) const;
+  // Rotated draw of a FaceScale font: the scaled walk turned through 90 degrees.
+  void drawTextRotatedScaled(int fontId, int x, int y, const char* text, bool black, EpdFontFamily::Style style,
+                             bool clockwise, FaceScale scale) const;
 
   // If `text` contains a CJK codepoint that `fontId` cannot render and `fontId`
   // has a registered fallback, returns the fallback id; otherwise returns
   // fontId unchanged. The whole string is routed as a unit so each draw/measure
   // call stays single-font (consistent bit depth, metrics, wrapping).
   int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
+  // The scales a string redirected from fontId to resolvedFontId is drawn and measured at.
+  FallbackScale redirectScale(int fontId, int resolvedFontId) const {
+    return resolvedFontId == fontId ? FallbackScale{} : fallbackScaleFor(fontId);
+  }
+  // One walk for scaled text, drawing it or only measuring it, so the two cannot disagree.
+  // scale applies to the font's own glyphs, nonCjkScale to those it takes from its fallback
+  // family. Returns the pen advance in pixels.
+  int layoutTextScaled(int resolvedFontId, int x, int y, const char* renderedText, uint16_t scale, uint16_t nonCjkScale,
+                       bool draw, bool black, EpdFontFamily::Style style, int8_t letterSpacing) const;
 
   // Batch-load `text`'s glyphs into an SD-card font's resident mini tables
   // before a per-glyph measure/draw loop runs. Called when resolveTextFontId
@@ -207,9 +259,9 @@ class GfxRenderer {
   // Point one registered family's glyph fallback at another. Used to give an SD font loaded
   // for a UI size a SIZE-MATCHED next stop (the built-in family of that size) instead of
   // letting it fall through to the global fallback, which is the reader-size companion.
-  void setFamilyFallback(int fontId, const EpdFontFamily* fallback) {
+  void setFamilyFallback(int fontId, const EpdFontFamily* fallback, bool nonCjkFirst = false) {
     const auto it = fontMap.find(fontId);
-    if (it != fontMap.end()) it->second.setFallback(fallback);
+    if (it != fontMap.end()) it->second.setFallback(fallback, nonCjkFirst);
   }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
 
@@ -244,9 +296,49 @@ class GfxRenderer {
   bool isVectorFont(const int fontId) const { return ttfFonts_.find(fontId) != ttfFonts_.end(); }
   // Register/clear size-matched CJK UI fallbacks (see fallbackFontMap_).
   // setFallbackFont maps a primary UI font id to an SD font id of the same size.
-  void setFallbackFont(int primaryFontId, int fallbackFontId) { fallbackFontMap_[primaryFontId] = fallbackFontId; }
-  void clearFallbackFonts() { fallbackFontMap_.clear(); }
-  void clearFallbackFont(int primaryFontId) { fallbackFontMap_.erase(primaryFontId); }
+  // scale (8.8 fixed point, 256 = as is): draw the fallback's glyphs that much smaller or larger,
+  // for a fallback that is not the primary's size -- the CJK cuts start at 12 pt, the UI fonts at 8.
+  // nonCjkScale: the same for what the fallback itself takes from ITS fallback family (the
+  // built-in Latin of a CJK companion, see EpdFontFamily::setFallback), which has its own size.
+  void setFallbackFont(int primaryFontId, int fallbackFontId, uint16_t scale = 256, uint16_t nonCjkScale = 256) {
+    fallbackFontMap_[primaryFontId] = fallbackFontId;
+    if (scale == 256 && nonCjkScale == 256) {
+      fallbackScaleMap_.erase(primaryFontId);
+    } else {
+      fallbackScaleMap_[primaryFontId] = {scale, nonCjkScale};
+    }
+  }
+  // Draw and measure fontId at a fixed scale from now on (see FaceScale).
+  void setFaceScale(int fontId, uint16_t own, uint16_t fallback, bool sizeFallbacks = false, bool matchOwnEm = false) {
+    const FaceScale face{own, fallback, sizeFallbacks, matchOwnEm};
+    if (face.identity()) {
+      faceScales_.erase(fontId);
+    } else {
+      faceScales_[fontId] = face;
+    }
+  }
+  FaceScale faceScaleFor(int fontId) const {
+    const auto it = faceScales_.find(fontId);
+    return it == faceScales_.end() ? FaceScale{} : it->second;
+  }
+  void clearFallbackFonts() {
+    fallbackFontMap_.clear();
+    fallbackScaleMap_.clear();
+  }
+  void clearFallbackFont(int primaryFontId) {
+    fallbackFontMap_.erase(primaryFontId);
+    fallbackScaleMap_.erase(primaryFontId);
+  }
+  FallbackScale fallbackScaleFor(int primaryFontId) const {
+    const auto it = fallbackScaleMap_.find(primaryFontId);
+    return it == fallbackScaleMap_.end() ? FallbackScale{} : it->second;
+  }
+  // The fallback font id registered for a primary, 0 when none.
+  int fallbackFontFor(int primaryFontId) const {
+    const auto it = fallbackFontMap_.find(primaryFontId);
+    return it == fallbackFontMap_.end() ? 0 : it->second;
+  }
+
   // Ensure SD card font glyph data is loaded for the given text. Called from layout code
   // (which holds a const GfxRenderer&) before measuring word widths. Safe to call on non-SD fonts (no-op).
   // styleMask: bitmask of styles to prepare (bit 0=regular, 1=bold, 2=italic, 3=bold-italic).
@@ -277,7 +369,8 @@ class GfxRenderer {
   // baseline, so a FAST (differential) refresh would diff against it. Callers that are about to
   // put a fresh full-screen image up must take a HALF pass instead. See grayPlanesResident_.
   [[nodiscard]] bool panelHasGrayPlanes() const { return grayPlanesResident_; }
-  // One-shot: the next displayBuffer()/displayBufferAsync() call uses `mode`
+  // One-shot: the next displayBuffer(), displayBufferAsync(), or
+  // displayGrayscaleBase() call uses `mode`
   // instead of what its caller asked for, then the override clears itself.
   // Lets a closing overlay (the control center's refresh tile) hand a
   // ghost-cleanup waveform to the repaint of whatever screen is underneath,
@@ -352,6 +445,9 @@ class GfxRenderer {
     clipBottom_ = y + height;
   }
   void drawPixel(int x, int y, bool state = true) const;
+  // Whether the pixel at logical (x, y) is ink in the BW framebuffer. False off-panel and while a
+  // grayscale strip is being rendered, which has no whole frame to read back.
+  bool readPixel(int x, int y) const;
   // Draw glyph ink with clipping and orientation resolved once per glyph.
   void drawGlyphBitmap(const uint8_t* bitmap, int width, int height, const glyphBitmap::Frame& frame, bool twoBit,
                        RenderMode mode, bool state) const;
@@ -380,8 +476,10 @@ class GfxRenderer {
   // screens rely on this); pass true to also grow a source smaller than the box up to fill it
   // (manga panel zoom). Only wired through the 1-bit path -- the grayscale path always shrink-fits.
   void drawIcon(const uint8_t bitmap[], int x, int y, int size) const;
+  // ditherGrays: in BW mode, draw the two gray levels as a 2x2 ordered dither instead of solid
+  // black, for a picture that gets no grayscale passes afterwards.
   bool drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0, float cropY = 0,
-                  bool allowUpscale = false, bool whiteAsTransparent = false) const;
+                  bool allowUpscale = false, bool whiteAsTransparent = false, bool ditherGrays = false) const;
   bool drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, bool allowUpscale = false) const;
   // Counter-invert content images in the logical framebuffer so output-level
   // dark mode leaves their original polarity unchanged.
@@ -449,6 +547,7 @@ class GfxRenderer {
   int textBaselineOffset(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   int getLineHeight(int fontId) const;
   int getLineHeightScaled(int fontId, uint16_t scale) const;
+  // Explicit line spacing scales font size; the one-argument form returns font metrics.
   int getLineHeight(int fontId, float compression) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
@@ -519,6 +618,11 @@ class GfxRenderer {
   void displayGrayBuffer() const;
   // Active input encoding, used when drawing monochrome overlays into planes.
   bool grayPlanesAreAbsolute() const { return absoluteGrayPlanes; }
+  // B/W pass: draw 2-bit image pixels as a 2x2 ordered dither instead of
+  // "any ink is black". Only for pages that get no image grayscale pass,
+  // because overlay gray planes expect every gray pixel black in the base.
+  void setDitherImagesInBw(bool enabled) { ditherImagesInBw = enabled; }
+  bool imagesDitheredInBw() const { return ditherImagesInBw; }
 
   // Tiled grayscale (X4): stream one band of a plane straight to controller RAM
   // from `scratch` (panelWidthBytes * numRows, physical rows [yStart, yStart+
@@ -561,6 +665,9 @@ class GfxRenderer {
   bool frameBufferContentsStale() const { return frameBufferContentsStale_; }
   // The caller put the pre-loan bytes back after a loan (e.g. from an SD copy).
   void markFrameBufferContentsRestored() { frameBufferContentsStale_ = false; }
+  // Bumped by every loan. A loan returns the buffer white, so a caller that ran code which may lend
+  // (e.g. a background chapter-build step) compares this to know the page it drew is gone.
+  uint32_t frameBufferLoanCount() const { return frameBufferLoans; }
 
   // RAII form of the loan above, for blocking build regions with early-return
   // error paths: restores on scope exit (or explicitly via end()). Display the

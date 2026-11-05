@@ -15,9 +15,11 @@ void BootActivity::onEnter() {
   renderer.clearScreen();
   // BW on purpose -- see GrayLogo::drawBw. The full refresh here also clears any gray charge
   // states left by the (grayscale) sleep screen when waking reboots through this activity.
-  GrayLogo::drawBw(renderer, (pageWidth - GrayLogo::SIZE) / 2, (pageHeight - GrayLogo::SIZE) / 2 - 24);
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, tr(STR_BOOTING));
+  const int logoY = GrayLogo::top(pageHeight);
+  GrayLogo::drawBw(renderer, (pageWidth - GrayLogo::WIDTH) / 2, logoY);
+  renderer.drawCenteredText(UI_12_FONT_ID, pageHeight - GrayLogo::WORDMARK_FROM_BOTTOM, tr(STR_CROSSPOINT), true,
+                            EpdFontFamily::BOLD);
+  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - GrayLogo::STATUS_FROM_BOTTOM, tr(STR_BOOTING));
   renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - 30, CROSSPOINT_VERSION);
   renderer.displayBuffer();
 }

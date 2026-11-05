@@ -6,10 +6,14 @@ All POD fields are written in the ESP32 little-endian representation used by
 
 ## `book.bin`
 
-### Version 10
+### Version 11
 
 `book.bin` stores EPUB metadata plus lookup tables for spine and TOC entries.
 The current firmware writes this version from `BookMetadataCache`.
+
+Version 11 appends one byte to the metadata block: `pageProgressionRtl`, 1 when
+the OPF spine declares `page-progression-direction="rtl"`. The reader opens a
+Chinese book vertically when it is set; Japanese books are vertical regardless.
 
 ImHex pattern:
 
@@ -18,7 +22,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 10
+#define EXPECTED_VERSION 11
 #define MAX_STRING_LENGTH 65535
 
 struct String {
@@ -39,6 +43,7 @@ struct Metadata {
     String language [[comment("Book language code")]];
     String coverItemHref [[comment("Path to cover image")]];
     String textReferenceHref [[comment("Path to guided first text reference")]];
+    u8 pageProgressionRtl [[comment("1 when the spine is page-progression-direction=\"rtl\"")]];
 };
 
 struct SpineEntry {
@@ -89,6 +94,97 @@ if (parsedSize != fileSize) {
 ```
 
 ## `section.bin`
+
+### Version 111 (fork numbering)
+
+Upstream merge (their versions 72 and 73). The layout format is unchanged. Ruby layout now
+follows Chromium's defaults (`ruby-align: space-around; ruby-overhang: auto`): an annotation may
+overhang its neighbours by at most half its edge character and a quarter of the neighbouring
+word, and a base narrower than its annotation is spaced out to the annotation's width. TrueType
+fonts draw and advance `.notdef` for missing glyphs. Lines move, so older sections are rebuilt;
+book metadata and progress are kept.
+
+### Version 110 (fork numbering)
+
+Upstream merge (their versions 69 to 71). The layout format is unchanged. Line spacing now
+multiplies the font size instead of the font's newline distance (`advanceY`), SD-font layout
+rounds each glyph advance to pixels as drawing does, and focus-reading split offsets follow the
+visual run order in RTL words. Lines move, so older sections are rebuilt; book metadata and
+progress are kept.
+
+### Version 109 (fork numbering)
+
+The layout format is unchanged. CSS text-emphasis marks (bouten) are now stored on each
+character of an emphasised CJK run instead of all on the last one. Older sections are rebuilt so
+the marks line up with their characters.
+
+### Version 108 (fork numbering)
+
+Upstream merge (their versions 65 to 67). The layout format is unchanged. Justification now
+stretches a literal space after a hyphen or ellipsis, and after visual reordering only a space
+that continues into a word. A no-break space carried across a soft line wrap no longer indents
+the next line. Older sections are rebuilt; book metadata and progress are kept.
+
+### Version 107 (fork numbering)
+
+The layout format is unchanged. A block whose CSS sets `font-size` (a heading, for example) now
+stores a per-word scale tag when the reader font is an SD-card font, so it draws at the book's size
+instead of body size. Older sections are rebuilt so those headings pick it up.
+
+### Version 106 (fork numbering)
+
+Upstream merge (their versions 63 and 64). The layout is unchanged. Static GIF images are laid out
+like JPEG and PNG instead of being skipped, and `font-weight: inherit` / `font-style: inherit` keep
+the parent's emphasis. CSS cache version 27 stores `inherit` as value 2 in the existing font-style
+and font-weight bytes, so older CSS caches are rebuilt too.
+
+### Version 105 (fork numbering)
+
+`PageBox` stores one border spec per side, top, right, bottom and left, in place of its single
+spec byte; each is the `CssStyle` packed spec for that side alone, or 0 for no line. The record is
+three bytes longer. Older sections are rebuilt; book metadata and progress are kept.
+
+### Version 104 (fork numbering)
+
+The serialized layout is unchanged. A bordered block inside another bordered block now draws its
+own frame, inset within the outer one, and the lines around it move to make room for it. Older
+sections are rebuilt; book metadata and progress are kept.
+
+### Version 103 (fork numbering)
+
+Absorbs upstream's version 60. The serialized layout is unchanged. Text that runs straight into a
+block or heading start (`text<div>…`) now stays in its own paragraph instead of being joined to the
+first word of the new block. Older sections are rebuilt; book metadata and progress are kept.
+
+### Version 102 (fork numbering)
+
+Absorbs upstream's version 57 and the layout parts of upstream #3891 that Matcha ports. The framing
+is unchanged except for `PageBox`: its final byte, previously a `filled` bool, is now a fill kind
+(0 none, 1 black under an inverted block, 2 light gray under a shaded block). Pagination changes
+with widow/orphan control, headings kept with the following block, forced CSS page breaks,
+preformatted text, nested `em` font sizes, repeated `<br>` lines and bordered table cells, so older
+sections are rebuilt; book metadata and progress are kept.
+
+### Version 99 (fork numbering)
+
+Absorbs upstream's versions 52 to 55. Each TextBlock arena starts with one 8-byte source range per
+word (two uint32 chapter-visible codepoint offsets, start inclusive and end exclusive, codepoints
+absorbed by NFC composition included), and the block header gains a uint16 `paragraphStartWord`
+after `textBytes` (the visual index of the paragraph's first logical word, or `UINT16_MAX`). Both
+anchor clippings. The high bit of a word's style byte marks a discretionary hyphen. Older sections
+are rebuilt; book metadata and progress are kept.
+
+### Version 98 (fork numbering)
+
+Absorbs upstream's version 51. The layout is unchanged: a long paragraph laid out in several
+chunks no longer repeats its first-line indent and top spacing mid-paragraph, so lines move and
+older sections are rebuilt.
+
+### Version 97 (fork numbering)
+
+Absorbs upstream's version 50. The header adds `paragraphIndentSpaces` after
+`extraParagraphSpacing`. The value participates in cache validation, so sections with different
+indentation settings are rebuilt.
 
 ### Version 94 (fork numbering)
 
@@ -265,7 +361,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 94
+#define EXPECTED_VERSION 111
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
@@ -325,19 +421,29 @@ struct BlockStyle {
     s8 characterSpacing;
 };
 
+struct SourceRange {
+    u32 start [[comment("Chapter-visible codepoint offset, inclusive")]];
+    u32 end [[comment("Chapter-visible codepoint offset, exclusive")]];
+};
+
 struct TextBlock {
     u16 wordCount;
-    u8 hasFocus;
+    u8 flags [[comment("bit 0: focus arrays present, bit 1: per-word font array present")]];
     u16 textBytes [[comment("Total size of text[], including one NUL per word")]];
+    u16 paragraphStartWord [[comment("Visual index of the paragraph's first word, 0xFFFF for a continuation line")]];
 
     if (wordCount > 0) {
+        SourceRange sourceRange[wordCount];
+        if ((flags & 2) != 0) {
+            s32 wordFont[wordCount] [[comment("Font id, or a negative 256-based scale tag; 0 = block font")]];
+        }
         u16 textOff[wordCount] [[comment("Byte offset of word i's text within text[]")]];
         s16 wordXPos[wordCount];
-        if (hasFocus != 0) {
+        if ((flags & 1) != 0) {
             u16 wordFocusSuffixX[wordCount] [[comment("Suffix x offset from word start")]];
         }
-        WordStyle wordStyle[wordCount];
-        if (hasFocus != 0) {
+        WordStyle wordStyle[wordCount] [[comment("High bit: discretionary hyphen")]];
+        if ((flags & 1) != 0) {
             u8 wordFocusBoundary[wordCount] [[comment("UTF-8 byte boundary between bold prefix and suffix")]];
         }
         char text[textBytes] [[comment("All words back to back, each NUL-terminated")]];
@@ -422,6 +528,7 @@ struct SectionBin {
     s32 fontId;
     float lineCompression;
     bool extraParagraphSpacing;
+    u8 paragraphIndentSpaces;
     u8 paragraphAlignment;
     u16 viewportWidth;
     u16 viewportHeight;
@@ -479,7 +586,28 @@ if (parsedSize != fileSize) {
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
 
-### Version 140
+### Versions 144 to 158
+
+No format change; each rebuilds the cached pages once for a layout fix. In 148, a chapter applies
+the stylesheets its linked ones `@import` (EBPAJ boxes, rules and indents), a block holding only an
+image no longer hides the styled blocks after it, and styled elements nested in a block before its
+first text merge into it. In 149, what follows a merged element continues with the outer element's
+params alone, so it is not framed with the element before it. In 150, a GIF page stores the image's own size
+instead of the full-page placeholder, since static GIFs are now decoded. In 151, group ruby stays
+in one column with its reading set over the whole group. In 152, an opening bracket after 。 or 、
+keeps half an em, more pairs stay together across columns and pages, and a paragraph's first column
+honours the book's text-indent. In 153, a paragraph that starts a page starts in its first column,
+not after a blank one. In 154, an opening bracket moves with the ruby group after it when the group
+moves to the next column. In 155, a chapter cached without block styling on low heap is rebuilt styled
+once an open has more room, and chapters cached unstyled before are rebuilt once. In 156, a column
+shortened by oidashi spreads by at most an eighth of an em between characters and otherwise ends short
+of the foot. In 157, a paragraph nested in another block whose text ends inside an inline element (a
+`<span>`, `<em>`, `<ruby>`) starts its own column again instead of running on from the previous paragraph.
+In 158, `text-align: right`/`end` sets a column at the foot, and auto margins at the head and foot of a block (EBPAJ `.block-align-center` / `-end`) centre the block along the column or push it
+to the foot. CSS cache version 28 stores a margin's `auto` as its own unit (resolving to 0 everywhere
+else), so CSS caches are rebuilt too.
+
+### Version 143
 
 The page index (`pageCount` × `u32` file offsets) is followed by the **anchor table**, which lets
 TOC and footnote jumps land on their page:
@@ -504,6 +632,16 @@ The table holds every `id` that is not on a `<span>`, up to 1,024 per chapter, p
 TOC targets regardless of tag and cap. A short read anywhere in the table fails the lookup.
 
 v139 caches have no flag and may lack TOC targets, so they are rebuilt once on first open.
+
+v141 adds a signed byte to the header, after the furigana flag: the Character Spacing setting in
+px (−2…+2), added to the one-em step between characters down a column. It is part of cache
+validation, so changing the setting rebuilds the chapter. v140 caches are rebuilt once.
+
+v142 adds a `u16` after it: the margin right of the text area in px. With furigana on, the layout
+holds back whatever part of half an em that margin cannot give the first column's ruby.
+
+v143 changes no bytes. The layout changed: no slide after "……", brackets squeezed only on their
+white side, and a slide that survives a layout batch boundary. v142 caches are rebuilt once.
 
 ## `ruby.bin`
 
@@ -532,6 +670,27 @@ Only kanji-bearing base texts are stored. The file is capped at 16KB; overflow p
 are silently dropped (the glossary is best-effort). Distinct readings for the same
 base text may appear as separate records; lookup joins them with '・'.
 
+## MATCHA — single-file manga volume (`<title>.matcha`)
+
+A manga folder packed into one file by `scripts/pack_matcha.py`, `convert_manga.py` or the browser tool.
+Read from firmware 2.0.0-rc-4. It is a plain ZIP (no ZIP64) in which every entry is **stored**, never
+compressed, so the storage layer reads an entry through a window onto the file. Renamed to `.zip`, any
+unzip tool gives back the folder's files.
+
+The **first** local entry is `matcha.idx`, with no extra field, so its data starts at byte
+`30 + 10`. All values are little-endian:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| magic | `char[4]` | `"MTCH"` |
+| version | `uint32_t` | currently 1 |
+| count | `uint32_t` | number of records |
+| records | 12 bytes × count | sorted by hash: `uint32_t` FNV-1a of the entry name (UTF-8, path relative to the volume), `uint32_t` offset of the entry's data, `uint32_t` size |
+
+A directory such as `panels/` has its own record with size `0xFFFFFFFF` (offset 0). Writers refuse
+two names with the same hash. A path like `/manga/Vol.matcha/page_0001.jpg` (extension in any case)
+resolves through this index; `HalStorage::exists` and `openFileForRead` handle it, other calls do not.
+
 ## LIBX — cover grid index (`.crosspoint/covers.idx`)
 
 Written and read by `src/activities/library/CoverLibraryActivity.cpp`, for the Matcha Covers
@@ -545,7 +704,7 @@ index, so both rebuild on every switch between the views.
 
 `"LIBX"` magic, `uint8_t` version (currently 3), `uint32_t` entry count (rejected above 2048),
 then that many 15-byte records: `pathHash` (`uint32_t`), `fileSize` (`uint32_t`, the size of
-`panels.idx` for a manga folder), `modifiedStamp` (`uint32_t`, packed FAT date/time, 0 when the
+`panels.idx` for a manga folder, of the file itself for a `.matcha`), `modifiedStamp` (`uint32_t`, packed FAT date/time, 0 when the
 driver has none), `thumbHeight` (`uint16_t`, the cover height the thumbnail was verified for),
 and `flags` (`uint8_t`: bit 0 a verified thumbnail is present, bit 1 the book declares no cover).
 A mismatched magic, version or count is treated as no index at all and the scan runs in full.
@@ -575,6 +734,8 @@ build-assigned discovery counter — breaks ties and carries books whose
 filesystem reports no time. Fold version 3 introduced the timestamp key; a
 fold bump rebuilds ranks while preserving `firstSeen`.
 Fold version 4 preserves leading articles in title sort and search keys.
+Fold version 5 adds manga: a `.matcha` file, and a folder holding `panels.idx`, which is one
+book keyed by that file's size and time and titled by the folder name.
 
 Sections are 512-byte aligned so each starts on an SD block boundary.
 
@@ -648,3 +809,25 @@ make a real book disappear.
 
 `selfSize` is the expected file size. Comparing it against the real one is a free
 truncation guard: a build cut short by a power failure cannot pass.
+
+## Clipping store (`/.crosspoint/clippings/epub_<path-hash>.bin`)
+
+Version 4 retains the version 3 header and page-local range fields. After each
+record's layout signature it stores `startOffset` and `endOffset` (uint32 chapter
+codepoint range, end exclusive; UINT32_MAX means unavailable), `syncRevision`
+(uint64), `pendingUpload` (one byte), and a 65-byte NUL-terminated sync ID. The
+chapter title, text length, and text follow. Versions 1–3 remain readable.
+
+Stable IDs are saved before upload. A sibling `.deleted` file stores fixed
+65-byte IDs awaiting server acknowledgement. Deletions are queued before the
+local record is removed and retried on the next enabled manual sync. A `.bak`
+file is recovered if power interrupted replacement of the main store.
+
+Clipping header strings are limited to 4 KiB on both reads and writes. A failed
+load leaves no usable index and disables writes until a successful load. The
+index is allocated with checked, bounded growth and released on unload.
+
+Book moves rename the store and its `.deleted` journal (plus recovery sidecars)
+together. The stored source path is informational and is refreshed on the next
+save; the current file path selects the store. Local book deletion cleans up all
+of these sidecars but preserves the independent `My Clippings.txt` export.

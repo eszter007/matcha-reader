@@ -5,9 +5,12 @@
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
+#include <HiddenItems.h>
 #include <Logging.h>
+#include <MangaPanel.h>
 #include <Memory.h>
 #include <Utf8.h>
+#include <Xtc.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -185,15 +188,13 @@ void clearLibraryIndexDirty() {
   }
 }
 
-bool isBookName(const std::string& name) {
-  return FsHelpers::checkFileExtension(name, ".epub") || FsHelpers::checkFileExtension(name, ".txt") ||
-         FsHelpers::checkFileExtension(name, ".md") || FsHelpers::checkFileExtension(name, ".xtc");
+bool isHiddenOrSidecar(const std::string_view name) {
+  if (!name.empty() && name.front() == '.') return true;
+  for (const auto* item : FsHelpers::HIDDEN_ITEMS) {
+    if (name == item) return true;
+  }
+  return false;
 }
-
-// macOS AppleDouble sidecars and hidden entries. The file browser already hides
-// these (FileBrowserActivity isMacOSMetadataEntry); the shelf must agree, or a
-// card written on a Mac shows every book twice.
-bool isHiddenOrSidecar(const char* name) { return name[0] == '.'; }
 
 std::string stemOf(const std::string& name) {
   const size_t dot = name.find_last_of('.');
@@ -291,13 +292,14 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
 // nothing about a book's surroundings names its author any more.
 [[gnu::noinline]] bool stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize,
                                    const uint16_t folderId, const std::string& fullPath,
-                                   const uint32_t modificationTime) {
+                                   const uint32_t modificationTime, const bool folderBook) {
   StagedEntry& entry = *st.stagedEntry;
   memset(&entry, 0, sizeof(entry));
   // The filename is a fallback for the title and nothing else: no parsing, and
   // never an author. Per review on #2885 -- no other reader parses filenames,
   // and a name pulled out of one by pattern is a guess wearing a fact's clothes.
-  std::string title = stemOf(name);
+  // A manga folder's name has no extension to drop: "Vol. 2" stays whole.
+  std::string title = folderBook ? name : stemOf(name);
   std::string author;
   bool titleFromBook = false;
   bool authorFromBook = false;
@@ -305,7 +307,9 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
   entry.pathHash = clixPathHash(fullPath.data(), fullPath.size());
   const int priorIndex = findPrior(st, entry.pathHash);
 
-  const bool extractionExpected = st.readMetadata && FsHelpers::hasEpubExtension(name);
+  const bool isXtc = FsHelpers::hasXtcExtension(name);
+  const bool isManga = folderBook || FsHelpers::hasMatchaExtension(name);
+  const bool extractionExpected = st.readMetadata && (FsHelpers::hasEpubExtension(name) || isXtc || isManga);
   const uint8_t expectedStatus = extractionExpected ? CLIX_METADATA_EXTRACTED : CLIX_METADATA_NOT_ATTEMPTED;
   bool reuseMetadata = false;
   ClixRecord priorRecord{};
@@ -335,7 +339,7 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
     if (hasBookTitle) {
       titleFromBook = true;
     } else {
-      title = stemOf(name);
+      title = folderBook ? name : stemOf(name);
     }
     st.stats->metadataReused++;
   }
@@ -345,9 +349,30 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
   // builds spine, TOC, CSS, cover, or section caches during the library walk.
   if (!reuseMetadata && extractionExpected) {
     st.stats->parsed++;
-    Epub epub(fullPath, CACHE_DIR);
     std::string bookTitle;
-    if (epub.loadMetadata(bookTitle, author)) {
+    bool loaded = false;
+    if (isManga) {
+      // meta.bin only: no page scan and no panels.idx.
+      manga::MangaBook book(fullPath);
+      loaded = book.loadMeta();
+      if (loaded) {
+        bookTitle = book.getMetaTitle();
+        author = book.getAuthor();
+      }
+    } else if (isXtc) {
+      // XTC/XTCH carry title and author in their own header block; load() reads that and the
+      // page table header, and writes no cache.
+      Xtc xtc(fullPath, CACHE_DIR);
+      loaded = xtc.load();
+      if (loaded) {
+        bookTitle = xtc.getTitle();
+        author = xtc.getAuthor();
+      }
+    } else {
+      Epub epub(fullPath, CACHE_DIR);
+      loaded = epub.loadMetadata(bookTitle, author);
+    }
+    if (loaded) {
       entry.record.metadataStatus = CLIX_METADATA_EXTRACTED;
       if (!bookTitle.empty()) {
         title = std::move(bookTitle);
@@ -465,14 +490,27 @@ void walk(WalkState& st, const std::string& path, const int depth) {
     st.nameBuf[0] = '\0';
     entry.getName(st.nameBuf, NAME_BUF_SIZE);
     const bool isDir = entry.isDirectory();
-    const uint32_t size = isDir ? 0 : static_cast<uint32_t>(entry.fileSize());
-    const uint32_t modificationTime = isDir ? 0 : entry.modificationTime();
+    uint32_t size = isDir ? 0 : static_cast<uint32_t>(entry.fileSize());
+    uint32_t modificationTime = isDir ? 0 : entry.modificationTime();
     entry.close();
 
     if (st.nameBuf[0] == '\0' || isHiddenOrSidecar(st.nameBuf)) continue;
     const std::string name(st.nameBuf);
 
+    // A manga folder (its pages and panels.idx) is one book, not a shelf to walk into. Its panels.idx
+    // stands in for the file: its size and time say when the volume changed.
+    bool mangaFolder = false;
     if (isDir) {
+      HalFile panels = Storage.open(joinLibraryPath(joinLibraryPath(path, name), "panels.idx").c_str());
+      if (panels && !panels.isDirectory()) {
+        mangaFolder = true;
+        size = static_cast<uint32_t>(panels.fileSize());
+        modificationTime = panels.modificationTime();
+      }
+      if (panels) panels.close();
+    }
+
+    if (isDir && !mangaFolder) {
       const size_t resumePosition = dir.position();
       dir.close();
       walk(st, joinLibraryPath(path, name), depth + 1);
@@ -487,7 +525,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
       }
       continue;
     }
-    if (!isBookName(name)) continue;
+    if (!mangaFolder && !isLibraryBookFile(name)) continue;
 
     // A zero-length book is a dangling directory entry: the name enumerates but
     // the contents do not exist. Counted rather than silently dropped.
@@ -541,7 +579,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
       st.folderId++;
       folderEmitted = true;
     }
-    if (!stageRecord(st, name, size, myFolderId, joinLibraryPath(path, name), modificationTime)) break;
+    if (!stageRecord(st, name, size, myFolderId, joinLibraryPath(path, name), modificationTime, mangaFolder)) break;
   }
   dir.close();
 }
@@ -1042,6 +1080,21 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
 }  // namespace
 
 const char* libraryIndexPath() { return INDEX_PATH; }
+
+bool isLibraryBookFile(const std::string_view path) {
+  // Match the walk's exclusions in every path component. A lone "." names the folder itself.
+  size_t start = 0;
+  while (start < path.size()) {
+    const size_t slash = path.find('/', start);
+    const std::string_view name = path.substr(start, slash - start);
+    if (name != "." && isHiddenOrSidecar(name)) return false;
+    if (slash == std::string_view::npos) break;
+    start = slash + 1;
+  }
+  return FsHelpers::checkFileExtension(path, ".epub") || FsHelpers::checkFileExtension(path, ".txt") ||
+         FsHelpers::checkFileExtension(path, ".md") || FsHelpers::hasXtcExtension(path) ||
+         FsHelpers::hasMatchaExtension(path);
+}
 
 bool markLibraryIndexDirty() {
   if (Storage.exists(DIRTY_PATH)) return true;

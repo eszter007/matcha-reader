@@ -14,14 +14,18 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
+#include "HapticFeedback.h"
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
+#include "activities/ActivityManager.h"
+#include "activities/home/StatsSyncActivity.h"
 #include "components/HomeTabBar.h"
 #include "components/StatsWidgets.h"
 #include "components/UITheme.h"
 #include "components/icons/flame.h"
 #include "components/icons/stats_icons.h"
 #include "fontIds.h"
+#include "stats/StatsSync.h"
 
 namespace {
 using StatsWidgets::dayLabel;
@@ -75,6 +79,7 @@ void ReadingStatsActivity::stepTab(const int direction) {
 }
 
 void ReadingStatsActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) {
+  refreshFocused = false;
   tabFocus = focus == TabRing::Focus::BottomBar ? static_cast<int>(HomeTab::Stats) : -1;
   // The top of the ring is the top of the page, where the tabs are; coming up out of the bar
   // lands at the page's end.
@@ -85,8 +90,14 @@ void ReadingStatsActivity::ringSetFocus(const TabRing::Focus focus, const bool a
 void ReadingStatsActivity::onEnter() {
   Activity::onEnter();
   tabBand_.begin();
-  READING_STATS_STORE.loadFromFile();
-  READING_STATS_STORE.getLanguages(languages);
+  stats_.emplace(statsSync::insightsAccountKey());
+  languages.clear();
+  if (SETTINGS.showLanguageStats) READING_STATS_STORE.getLanguages(languages);
+  if (SETTINGS.hideUnknownLanguages) {
+    languages.erase(std::remove_if(languages.begin(), languages.end(),
+                                   [](const ReadingStatsStore::LanguageSummary& l) { return l.code[0] == '\0'; }),
+                    languages.end());
+  }
   tabLabels.clear();
   tabLabels.reserve(languages.size() + 1);
   tabLabels.emplace_back(tr(STR_STATS_TAB_ALL));
@@ -98,7 +109,10 @@ void ReadingStatsActivity::onEnter() {
   requestUpdate();
 }
 
-void ReadingStatsActivity::onExit() { Activity::onExit(); }
+void ReadingStatsActivity::onExit() {
+  stats_.reset();
+  Activity::onExit();
+}
 
 // Shared by both stats screens in spirit, but each owns its own calendar rect.
 bool ReadingStatsActivity::stepMonthFromTap() {
@@ -114,8 +128,14 @@ bool ReadingStatsActivity::stepMonthFromTap() {
   } else {
     return false;
   }
+  haptic_feedback::touchAction();
   requestUpdate();
   return true;
+}
+
+// Replaces this screen, so the stats tables are freed before WiFi and TLS need the heap.
+void ReadingStatsActivity::startRefresh() {
+  activityManager.replaceActivity(std::make_unique<StatsSyncActivity>(renderer, mappedInput));
 }
 
 void ReadingStatsActivity::loop() {
@@ -145,7 +165,11 @@ void ReadingStatsActivity::loop() {
   // Confirm cycles the tabs -- All, then one per language -- and past the last one steps into
   // the bottom bar.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    TabRing::confirmTopTabs(*this);
+    if (refreshFocused) {
+      startRefresh();
+    } else {
+      TabRing::confirmTopTabs(*this);
+    }
     return;
   }
   // Tapping a tab picks it: the tabs are FreeInkUI touch targets, exactly where the band drew them.
@@ -166,6 +190,16 @@ void ReadingStatsActivity::loop() {
   // Tapping a chevron steps the month, the touch equivalent of the Left/Right keys
   // below -- which resolve to front buttons a touch board does not have.
   if (stepMonthFromTap()) return;
+  {
+    int tx = 0;
+    int ty = 0;
+    if (refreshRow.width > 0 && mappedInput.wasScreenTapped(tx, ty) && tx >= refreshRow.x &&
+        tx < refreshRow.x + refreshRow.width && ty >= refreshRow.y && ty < refreshRow.y + refreshRow.height) {
+      haptic_feedback::touchAction();
+      startRefresh();
+      return;
+    }
+  }
   // Left/Right to navigate calendar months
   if (mappedInput.wasReleased(MappedInputManager::Button::ScreenLeft)) {
     StatsWidgets::stepMonth(calYear, calMonth, -1);
@@ -202,10 +236,21 @@ void ReadingStatsActivity::loop() {
       requestUpdate();
       return;
     }
-    // Bottom of the page: the next Down carries on into the bottom bar.
+    // Bottom of the page: the next Down focuses Refresh Stats, the one after carries on into the
+    // bottom bar.
+    if (!refreshFocused) {
+      refreshFocused = true;
+      requestUpdate();
+      return;
+    }
     if (TabRing::hasBottomBar(*this)) TabRing::leaveContent(*this, 1);
   });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenUp}, [this] {
+    if (refreshFocused) {
+      refreshFocused = false;
+      requestUpdate();
+      return;
+    }
     if (scrollOffset > 0) {
       scrollOffset -= 40;
       if (scrollOffset < 0) scrollOffset = 0;
@@ -223,11 +268,21 @@ void ReadingStatsActivity::render(RenderLock&&) {
   // The tab bar replaces the hints at the bottom, so the scrollable area ends where it begins.
   if (HomeTabBar::enabled()) screen.height = HomeTabBar::top(renderer) - screen.y;
 
-  // The tab band sits in the fixed strip under the header, exactly as it does in Library and
-  // Settings, and the scrollable content starts below it.
+  // The first card sits 8px below headerBottom. Cover Grid's tab pills get it 18px under them, the
+  // same gap as above the calendar (the pills end 5px above the band's bottom); the full-width tab
+  // strips of the other themes keep the theme's spacing. Without tabs and without a header rule the
+  // card goes 16px under the title, inside the ~19px the header box leaves empty below it.
+  constexpr int HEADER_STRIP_BELOW_TITLE = 19;
+  constexpr int TAB_PILL_BOTTOM_INSET = 5;
   const int tabBarY = screen.y + metrics.topPadding + metrics.headerHeight;
-  const int tabBarH = tabBandHeight(metrics, mappedInput.hasTouch());
-  const int headerBottom = tabBarY + tabBarH + metrics.verticalSpacing;
+  // With language stats hidden there is only the All tab, so the band is left out.
+  const bool showTabs = tabLabels.size() > 1;
+  const bool headerRule = !UITheme::hasCoverGridHome() && metrics.headerUnderlineSize > 0;
+  const int tabBarH = showTabs ? tabBandHeight(metrics, mappedInput.hasTouch()) : 0;
+  int headerGap = metrics.verticalSpacing;
+  if (showTabs && HomeTabBar::enabled()) headerGap = 18 - TAB_PILL_BOTTOM_INSET - 8;
+  if (!showTabs && !headerRule) headerGap = 16 - HEADER_STRIP_BELOW_TITLE - 8;
+  const int headerBottom = tabBarY + tabBarH + headerGap;
   const int contentTop = headerBottom - scrollOffset;
 
   // Draw header AFTER content so it covers scrolled text underneath.
@@ -249,6 +304,15 @@ void ReadingStatsActivity::render(RenderLock&&) {
     READING_STATS_STORE.getWeekStatus(code, today.year, today.month, today.day, today.dow, weekDays);
   } else {
     READING_STATS_STORE.getWeekStatus(today.year, today.month, today.day, today.dow, weekDays);
+  }
+
+  // Without tabs the header goes first and the content is clipped below it instead of being
+  // painted over afterwards: the first card may overlap the bottom of the header box.
+  const auto savedClip = renderer.getClipRect();
+  if (!showTabs) {
+    GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
+                   tr(STR_STATS), nullptr, HomeTabBar::showsBackButton(true), -1);
+    renderer.setClipRect(0, headerBottom + 8, screen.width, renderer.getScreenHeight() - headerBottom - 8);
   }
 
   int y = contentTop + 8;
@@ -284,6 +348,26 @@ void ReadingStatsActivity::render(RenderLock&&) {
   const StatsWidgets::MonthSource source{code, statsMonthStatus, statsDaysReadInMonth};
   y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source, &monthNav);
 
+  // ==================== REFRESH STATS ====================
+  // A quiet text action: icon and small text, outlined only while focused.
+  {
+    constexpr int ICON = 24;
+    constexpr int GAP = 8;
+    constexpr int ROW_H = 44;
+    y += 12;
+    const char* label = tr(STR_REFRESH_STATS);
+    const int rowW = ICON + GAP + renderer.getTextWidth(SMALL_FONT_ID, label);
+    const int rx = cardX + (cardW - rowW) / 2;
+    if (refreshFocused) {
+      renderer.drawRoundedRect(rx - 16, y, rowW + 32, ROW_H, 2, StatsWidgets::CARD_RADIUS, true);
+    }
+    renderer.drawIcon(RefreshIcon24, rx, y + (ROW_H - ICON) / 2, ICON);
+    renderer.drawText(SMALL_FONT_ID, rx + ICON + GAP, y + (ROW_H - renderer.getLineHeight(SMALL_FONT_ID)) / 2, label,
+                      true);
+    refreshRow = Rect{cardX, y, cardW, ROW_H};
+    y += ROW_H;
+  }
+
   // Compute max scroll: content bottom minus the visible area.
   const int contentEndY = y + 10;  // 10px bottom margin
   // Where the scrollable area really ends: the tab bar's top edge when it is drawn, otherwise the
@@ -291,18 +375,23 @@ void ReadingStatsActivity::render(RenderLock&&) {
   // unable to scroll clear of the bar.
   const int visibleBottom = HomeTabBar::enabled() ? HomeTabBar::top(renderer) : renderer.getScreenHeight() - 50;
   const int visibleHeight = visibleBottom - headerBottom;
+  // Under the header or the bar a tap must not reach it.
+  if (refreshRow.y < headerBottom || refreshRow.y + refreshRow.height > visibleBottom) refreshRow = Rect{};
   maxScrollOffset = contentEndY - headerBottom - visibleHeight + scrollOffset;
   if (maxScrollOffset < 0) maxScrollOffset = 0;
   scrollPageHeight = visibleHeight;
 
-  // Redraw header and band on top of scrolled content so text doesn't bleed through.
-  renderer.fillRect(0, 0, screen.width, headerBottom - metrics.verticalSpacing, false);
-  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                 tr(STR_STATS), nullptr, HomeTabBar::showsBackButton(true));
+  renderer.setClipRect(savedClip[0], savedClip[1], savedClip[2], savedClip[3]);
+  if (showTabs) {
+    // Redraw header and band on top of scrolled content so text doesn't bleed through.
+    renderer.fillRect(0, 0, screen.width, headerBottom - headerGap, false);
+    GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
+                   tr(STR_STATS), nullptr, HomeTabBar::showsBackButton(true), UiTabBand::drawsTopRule() ? 0 : -1);
+  }
   // Kept for loop(), so a tap in the band's gaps is swallowed. Drawn focused while the cursor is
   // on the page: Confirm acts on the tabs there and nothing else.
   tabBar = Rect{0, tabBarY, screen.width, tabBarH};
-  {
+  if (showTabs) {
     constexpr int MAX_TABS = 12;
     freeink::ui::TabItem tabs[MAX_TABS];
     const int total = static_cast<int>(tabLabels.size());
@@ -329,9 +418,10 @@ void ReadingStatsActivity::render(RenderLock&&) {
     uint8_t pm = calMonth, nm = calMonth;
     StatsWidgets::stepMonth(py, pm, -1);
     StatsWidgets::stepMonth(ny, nm, +1);
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tabLabels.size() > 1 ? tr(STR_SWITCH) : "",
-                                              StatsWidgets::monthAbbrev(pm, prevBuf, sizeof(prevBuf)),
-                                              StatsWidgets::monthAbbrev(nm, nextBuf, sizeof(nextBuf)));
+    const char* confirm = refreshFocused ? tr(STR_SELECT) : tabLabels.size() > 1 ? tr(STR_SWITCH) : "";
+    const auto labels =
+        mappedInput.mapLabels(tr(STR_BACK), confirm, StatsWidgets::monthAbbrev(pm, prevBuf, sizeof(prevBuf)),
+                              StatsWidgets::monthAbbrev(nm, nextBuf, sizeof(nextBuf)));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
 

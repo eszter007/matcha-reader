@@ -18,6 +18,7 @@
 #include "components/UITheme.h"  // TabInfo, Rect
 #include "components/UiTabBand.h"
 #include "util/ButtonNavigator.h"
+#include "util/RemoteProgress.h"
 
 class CoverLibraryActivity final : public Activity, public TabRing::Host {
  private:
@@ -47,6 +48,9 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
   int ringActiveTopTab() const override { return selectedTab; }
   void ringSelectTopTab(int index) override;
   HomeTab ringBottomTab() const override { return HomeTab::Library; }
+  // As on every list with tabs (UiTabListActivity): Left/Right step the tabs only beside the
+  // bottom bar; elsewhere they are Previous/Next, as the hints say, and walk on into the covers.
+  bool ringTopTabsLeftRightStep() const override { return TabRing::hasBottomBar(*this); }
   bool ringHasContent() const override;
   TabRing::Focus ringFocus() const override;
   void ringSetFocus(TabRing::Focus focus, bool atEnd) override;
@@ -123,6 +127,7 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
   std::atomic<int> gridCoverHeight_{0};
 
   void loadRecentBooks();
+  remoteProgress::Snapshot remoteBooks;  // reloaded with the badges
   void loadBookProgress();
   // A pointer-style selector belongs to key navigation. Touch users act on what they
   // touch, so a highlight sitting on some other cover is just noise -- and worse, it
@@ -149,7 +154,9 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
   [[nodiscard]] int shelfRowAtPoint(int x, int y, int contentTop, int contentHeight) const;
   void loadShelves();
   void loadShelfBooks(const std::string& folderPath);
+  // The furthest of this device's progress and the progress elsewhere (remoteProgress).
   int readProgressPercent(const std::string& bookPath) const;
+  int readLocalProgressPercent(const std::string& bookPath) const;
   void fillPageProgressNow(std::vector<BookProgress>& progress, const std::vector<RecentBook>* books,
                            const std::vector<ShelfBook>* sBooks, int firstIdx, int lastIdx);
 

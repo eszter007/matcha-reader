@@ -1,6 +1,11 @@
 # Dictionary
 
-Look up words while reading an EPUB using an offline StarDict dictionary stored on the SD card.
+Look up words and phrases while reading an EPUB using an offline StarDict dictionary stored on the SD card.
+
+Japanese and Chinese books do not use StarDict: they read converted files from `/dictionaries/jp/` (Japanese),
+`/dictionaries/zh/` (Mandarin, simplified and traditional) and `/dictionaries/yue/` (Cantonese), because their text
+has no word spaces and the lookup segments the page by dictionary word.
+See [dictionary-setup.md](dictionary-setup.md) for the files and converter commands; everything below is about the other languages.
 
 ## Supported Format
 
@@ -21,12 +26,12 @@ Not supported: dictionaries with 64-bit index offsets (`idxoffsetbits=64` in the
 ## Setting Up a Dictionary
 
 1. Copy your dictionary folder(s) to `/dictionaries/` on the SD card — one dictionary per folder, e.g. `/dictionaries/webster/webster.idx` + `webster.dict.dz`. A hidden `/.dictionaries/` folder (dot-prefixed) works the same way, for keeping it out of the file browser.
-2. Open **Settings → Reader → Fallback dictionary** on the device.
+2. Open **Settings → Reader → Dictionary Settings → Fallback for other languages** on the device.
 3. Select the dictionary to use when a book's language has no matching dictionary, or **None** to disable fallback lookups. For a tagged EPUB with matching language folders, those dictionaries are used automatically: up to four in one language (`/dictionaries/en/collins/`, `/dictionaries/en/wiktionary/`) are all checked, and every entry found is shown in one run of pages, with the dictionary picked here first if it is one of them and the rest by folder name. The Reader Settings **Dictionary** row shows the dictionary a book reads first and is read-only.
 
-The Fallback dictionary row only appears when at least one usable dictionary folder exists. Folders containing more than one dictionary (multiple `.idx` stems) are skipped as ambiguous.
+The Fallback for other languages row only appears when at least one usable dictionary folder exists. Folders containing more than one dictionary (multiple `.idx` stems) are skipped as ambiguous.
 
-## Looking Up a Word
+## Looking Up Words and Phrases
 
 Three ways to start a lookup while reading:
 
@@ -36,17 +41,25 @@ Three ways to start a lookup while reading:
 - Open the reader menu (**Confirm**) and choose **Look Up**.
 - Or set **Settings → Controls → Long-press Menu** to "Dictionary", then hold **Confirm** (~0.4s) on the reading page.
 
-One word on the page becomes highlighted:
+### Selecting Text
 
-1. Use **Left/Right** to move between words in reading order, and the side **Up/Down** buttons to jump between lines.
-2. Press **Confirm** to look up the highlighted word.
-3. Press **Back** to return to the reader.
+**On button-driven devices:**
+
+1. A selection cursor appears on a word. **Press** any direction button to move to the next or previous word; at the end of a line it carries on into the next line. **Hold** a button (about 0.7 s) to jump a whole line.
+2. Press **Confirm** (**Look Up**) to look up the highlighted word.
+3. Press **Back** at any time to cancel and return to reading.
+
+In the definition, a press scrolls one screen and carries on to the next entry at the end; a hold skips straight to the next or previous entry.
+
+**On touchscreen devices:**
+
+- Tap or drag the selection handles across words to highlight a word or phrase, then tap **Look Up**.
 
 On the very first lookup with a dictionary (and again whenever the `.idx` or `.syn` source file changes), the reader shows *"Indexing dictionary…"* while it builds small sidecar files next to them — a `.qidx` for the word index, and a `.sidx` when a `.syn` synonym file is present. Each sidecar is rebuilt independently, only when its own source changes. This takes a few seconds for large dictionaries and makes all subsequent lookups fast. The sidecars can be deleted safely at any time — they will simply be rebuilt.
 
 ### How Lookup Works
 
-1. **Direct match** — the word is found as-is (case-insensitive) in the dictionary index. Surrounding punctuation is ignored.
+1. **Direct match** — the word or phrase is searched as-is (case-insensitive) in the dictionary index. Leading and trailing punctuation and whitespace are stripped automatically. Multi-word phrases match dictionary entries containing spaces (such as idioms, phrasal verbs, or compound terms).
 2. **Synonyms** — on a miss, if the dictionary ships a `.syn` file, alternate spellings and irregular forms recorded there are resolved to their headword (e.g. `oxen` → `ox`, `colour` → `color`). This step is skipped if the `.sidx` sidecar could not be built (e.g. transient low memory during indexing); the dictionary otherwise stays usable, and the build is retried the next time it is opened.
 3. **Inflection** — still no match: word forms are retried automatically, using the rules for the book's language.
    - Accented capitals are folded first, in every language, so a word at the start of a sentence (`École`, `Être`, `Über`) reaches its lowercase headword.
@@ -60,7 +73,15 @@ The rules are selected by the book's language tag, falling back to the language 
 
 When a word is found, the definition screen shows the matched headword at the top and the definition text below, with a page counter for long definitions.
 
-HTML dictionaries that declare `sametypesequence=h` use the EPUB text-layout engine for semantic formatting such as headings, bold, italics, lists, and line breaks. Images and CSS styling are ignored. Definitions that are too large or cannot be laid out within the available memory fall back to plain text.
+HTML dictionaries (`sametypesequence=h`) and XDXF dictionaries (`sametypesequence=x`) use the EPUB text-layout engine for supported formatting such as headings, bold, italics, lists, and line breaks. Unrecognized tags keep their text without special formatting. Images and CSS styling are ignored. Definitions that are too large or cannot be parsed or laid out within the available memory fall back to plain text.
+
+A dictionary whose `.ifo` has no `sametypesequence` stores the type in each entry field. HTML (`h`) and XDXF (`x`) fields use the same formatting support, text fields are shown as text, and binary fields such as images and sounds are skipped. An entry with only empty or binary fields counts as not found.
+
+A readable `.ifo` file with a missing or empty `sametypesequence` enables the type stored in each entry field. HTML (`h`) and XDXF (`x`) fields use the same formatting support. Text fields are shown as text; binary fields, such as images and sounds, are skipped. Missing, empty, or unreadable `.ifo` files retain plain-text handling.
+
+Inline entries with only empty or binary fields are skipped. If all matching entries are empty, the lookup reports no match.
+
+Definitions are drawn in your reading font. Dictionaries may use IPA symbols (e.g. `ˈ ː ɹ ɪ ʊ`…) as pronunciation guide, which built-in reader fonts do not include, so they are shown as `�`. To see them, install an [SD card font](./sd-card-fonts.md) that covers IPA and select it as the reading font.
 
 - **Left/Right** or side **Up/Down** — previous / next page
 - **Back** — return to word selection

@@ -13,6 +13,7 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
 # Originally from https://github.com/vroland/epdiy
+# EPDiy tools use MIT. Copyright (c) 2017 Mr. PK. See licenses/borrowed-code.txt.
 
 parser = argparse.ArgumentParser(description="Generate a header file from a font to be used with epdiy.")
 parser.add_argument("name", action="store", help="name of the font.")
@@ -22,9 +23,14 @@ parser.add_argument("--2bit", dest="is2Bit", action="store_true", help="generate
 parser.add_argument("--additional-intervals", dest="additional_intervals", action="append", help="Additional code point intervals to export as min,max. This argument can be repeated.")
 parser.add_argument("--compress", dest="compress", action="store_true", help="Compress glyph bitmaps using DEFLATE with group-based compression.")
 parser.add_argument("--zopfli", dest="zopfli", action="store_true", help="Use Zopfli for the DEFLATE backend instead of zlib. Produces standard raw-DEFLATE streams (decoded unchanged by the on-device uzlib inflater), typically a few percent smaller than zlib -9, at the cost of much slower compression. Requires --compress and the 'zopfli' package.")
+parser.add_argument("--bw-threshold", dest="bw_threshold", type=int, default=2, help="1-bit mode: the 4-bit grey level (0-15) from which a pixel is black. Default 2. Higher thins strokes that round up to an extra pixel at small sizes.")
+parser.add_argument("--embolden-x", dest="embolden_x", type=int, default=0, help="Widen each outline horizontally by this many 1/64 px before rasterising; the advance grows by the same amount. Fills out strokes evenly where a threshold change alone would round some up and leave others thin.")
+parser.add_argument("--embolden-y", dest="embolden_y", type=int, default=0, help="Same as --embolden-x, vertically: thickens horizontal strokes and the tops and bottoms of curves.")
 parser.add_argument("--force-autohint", dest="force_autohint", action="store_true", help="Force FreeType auto-hinter instead of native font hinting. Improves stem width consistency for fonts with weak or no native TrueType hints.")
 parser.add_argument("--pnum", dest="pnum", action="store_true", help="Use proportional numerals (pnum OpenType feature) instead of default tabular figures. Reduces visual gaps between digits in running prose.")
 args = parser.parse_args()
+
+import ctypes
 
 import freetype
 from fontTools.ttLib import TTFont
@@ -51,6 +57,9 @@ intervals = [
     ### Latin Extended-A ###
     # Eastern European and Baltic languages
     (0x0100, 0x017F),
+    ### Latin Extended-B (Azerbaijani) ###
+    # Schwa and turned e used by Azerbaijani Ə/ə
+    (0x018F, 0x018F),
     ### Latin Extended-B (Vietnamese subset only) ###
     # Only Ơ/ơ (U+01A0-01A1), Ư/ư (U+01AF-01B0) for Vietnamese
     (0x01A0, 0x01A1),
@@ -59,6 +68,7 @@ intervals = [
     # Croatian digraphs (DŽ/Lj/Nj), Pinyin caron variants,
     # European diacritical variants, Romanian (Ș/ș/Ț/ț)
     (0x01C4, 0x021F),
+    (0x0259, 0x0259),
     ### Vietnamese Extended ###
     # All precomposed Vietnamese characters with tone marks
     # Ả Ấ Ầ Ẩ Ẫ Ậ Ắ Ằ Ẳ Ẵ Ặ Ẹ Ẻ Ẽ Ế Ề Ể Ễ Ệ Ỉ Ị Ọ Ỏ Ố Ồ Ổ Ỗ Ộ Ớ Ờ Ở Ỡ Ợ Ụ Ủ Ứ Ừ Ử Ữ Ự Ỳ Ỵ Ỷ Ỹ
@@ -264,7 +274,15 @@ def load_glyph(code_point):
         if glyph_index is None:
             glyph_index = face.get_char_index(code_point)
         if glyph_index > 0:
-            face.load_glyph(glyph_index, load_flags)
+            if args.embolden_x or args.embolden_y:
+                # Load the outline, widen it, then rasterise it the way FT_LOAD_RENDER would.
+                face.load_glyph(glyph_index, load_flags & ~freetype.FT_LOAD_RENDER)
+                if face.glyph.format == freetype.FT_GLYPH_FORMAT_OUTLINE:
+                    freetype.FT_Outline_EmboldenXY(
+                        ctypes.byref(face.glyph._FT_GlyphSlot.contents.outline), args.embolden_x, args.embolden_y)
+                face.glyph.render(freetype.FT_RENDER_MODE_NORMAL)
+            else:
+                face.load_glyph(glyph_index, load_flags)
             return face
         face_index += 1
     return None
@@ -343,15 +361,17 @@ for i_start, i_end in intervals:
                 px = px << (4 - (bitmap.width * bitmap.rows) % 4) * 2
                 pixels2b.append(px)
         else:
-            # Downsample to 1-bit bitmap - treat any 2+ as black
+            # Downsample to 1-bit bitmap: grey level args.bw_threshold and up is black
             pixelsbw = []
+            bw_low = args.bw_threshold & 0xF
+            bw_high = bw_low << 4
             px = 0
             pitch = (bitmap.width // 2) + (bitmap.width % 2)
             for y in range(bitmap.rows):
                 for x in range(bitmap.width):
                     px = px << 1
                     bm = pixels4g[y * pitch + (x // 2)]
-                    px += 1 if ((x & 1) == 0 and bm & 0xE > 0) or ((x & 1) == 1 and bm & 0xE0 > 0) else 0
+                    px += 1 if ((x & 1) == 0 and (bm & 0xF) >= bw_low) or ((x & 1) == 1 and (bm & 0xF0) >= bw_high) else 0
 
                     if (y * bitmap.width + x) % 8 == 7:
                         pixelsbw.append(px)
@@ -369,7 +389,7 @@ for i_start, i_end in intervals:
             height = bitmap.rows,
             # We use linearHoriAdvance (16.16 fixed-point, unhinted) instead of
             # advance.x (26.6 fixed-point, grid-fitted to whole pixels by hinter)
-            advance_x = fp4_from_ft16_16(face.glyph.linearHoriAdvance),
+            advance_x = fp4_from_ft16_16(face.glyph.linearHoriAdvance + (args.embolden_x << 10)),
             left = face.glyph.bitmap_left,
             top = face.glyph.bitmap_top,
             data_length = len(packed),
@@ -796,9 +816,6 @@ def to_byte_aligned(packed, width, height):
 
 
 # Build groups for compression
-if compress and not is2Bit:
-    print("Error: --compress requires --2bit (byte-aligned compression only supports 2-bit format)", file=sys.stderr)
-    sys.exit(1)
 if compress:
     # Script-based grouping: glyphs that co-occur in typical text rendering
     # are grouped together for efficient LRU caching on the embedded target.
@@ -838,7 +855,12 @@ if compress:
     # though the crash itself was already fixed (malloc+null-check instead of an abort). Smaller
     # groups mean more frequent group-swap decompression (more CPU) but each individual malloc is
     # far more likely to actually succeed under real-world memory pressure.
-    GROUP_MAX_UNCOMPRESSED_BYTES = 16384
+    # UI fonts keep their packed 1-bit pixels. 4 KB holds all of basic Latin even at 12pt bold, so
+    # ordinary UI text never switches the single hot group mid-word.
+    GROUP_MAX_UNCOMPRESSED_BYTES = 16384 if is2Bit else 4096
+    # Glyphs outside the named ranges (kana, kanji, enclosed numbers) cap at 4 KB even in 2-bit
+    # fonts, so a fragmented heap can still hold their group. regroup_font_header.py mirrors this.
+    OTHER_SCRIPT_GROUP_MAX_BYTES = 4096
 
     def get_script_group(code_point):
         for i, (start, end) in enumerate(SCRIPT_GROUP_RANGES):
@@ -854,11 +876,9 @@ if compress:
 
     for i, (props, _) in enumerate(all_glyphs):
         sg = get_script_group(props.code_point)
-        # Use the byte-aligned size (4-pixel-aligned row stride) rather than
-        # the packed length, since the decompressor consumes byte-aligned
-        # buffers. Empty glyphs contribute zero.
+        # 2-bit groups pad each row; 1-bit groups retain packed glyph bytes.
         glyph_aligned_size = (((props.width + 3) // 4) * props.height
-                              if props.width > 0 and props.height > 0 else 0)
+                              if is2Bit else props.data_length)
         if glyph_aligned_size > GROUP_MAX_UNCOMPRESSED_BYTES:
             raise ValueError(
                 f"Glyph {i} (code point U+{props.code_point:04X}) byte-aligned size "
@@ -866,7 +886,8 @@ if compress:
                 f"{GROUP_MAX_UNCOMPRESSED_BYTES}. Consider: (1) increasing GROUP_MAX_UNCOMPRESSED_BYTES, "
                 f"(2) reducing font size, or (3) excluding this codepoint."  
             )
-        size_overflow = group_uncompressed + glyph_aligned_size > GROUP_MAX_UNCOMPRESSED_BYTES
+        group_cap = OTHER_SCRIPT_GROUP_MAX_BYTES if sg == -1 else GROUP_MAX_UNCOMPRESSED_BYTES
+        size_overflow = group_uncompressed + glyph_aligned_size > group_cap
 
         if sg != current_group_id or size_overflow:
             if group_count > 0:
@@ -910,9 +931,10 @@ if compress:
                 code_point=old_props.code_point,
             )
             packed_len += len(packed)
-            group_aligned.extend(to_byte_aligned(packed, old_props.width, old_props.height))
+            group_aligned.extend(to_byte_aligned(packed, old_props.width, old_props.height)
+                                 if is2Bit else packed)
 
-        # Compress byte-aligned data with raw DEFLATE (no zlib/gzip header)
+        # Compress group data with raw DEFLATE (no zlib/gzip header)
         compressed = deflate_raw(group_aligned)
 
         compressed_groups.append((compressed, len(group_aligned), count, first_idx))
@@ -926,6 +948,7 @@ if compress:
 
 print(f"""/**
  * generated by fontconvert.py
+ * Font licenses and copyright notices: licenses/fonts.txt.
  * name: {font_name}
  * size: {size}
  * mode: {'2-bit' if is2Bit else '1-bit'}{'  compressed: true' if compress else ''}

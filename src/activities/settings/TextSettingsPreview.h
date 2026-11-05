@@ -4,6 +4,8 @@
 #include <memory>
 #include <vector>
 
+#include "components/themes/BaseTheme.h"
+
 class GfxRenderer;
 class TextBlock;
 
@@ -18,10 +20,12 @@ struct PreviewKey {
   float lineCompression = -1.0f;
   uint8_t alignment = 0xFF;
   bool extraParagraphSpacing = false;
+  uint8_t paragraphIndentSpaces = 2;
   int8_t characterSpacing = 0;
   uint8_t wordSpacingPercent = 100;
   bool focusReading = false;
   bool hyphenation = false;
+  const char* sample = nullptr;
   bool operator==(const PreviewKey&) const = default;
 };
 
@@ -38,7 +42,10 @@ struct PreviewLayout {
 // `fontId` is the caller's EFFECTIVE reader font, not SETTINGS.getReaderFontId(): for a book
 // whose script the selected face cannot carry, the page renders with a substitute, and a preview
 // that resolved its own font would promise a face and a size the page will not use.
-void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, int top,
-                   int height, const char* familyName, const char* sizeName, int fontId);
+// sample: the text to lay out, in the script of the profile being edited; it must outlive the
+// layout, which is keyed on the pointer. The caption (nullptr for none) is borrowed for this draw.
+// Returns the bottom of the last sample line drawn (bounds.y when none was).
+int renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, Rect bounds,
+                  const char* caption, int fontId, const char* sample);
 
 }  // namespace textsettings

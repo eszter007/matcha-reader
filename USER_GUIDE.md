@@ -1,19 +1,20 @@
 # CrossPoint User Guide
 
-Welcome to the **CrossPoint** firmware. This guide outlines the hardware controls, navigation, and reading features of the device.
+This guide covers the **CrossPoint** firmware as shipped in Matcha Reader: the buttons, the main screens and the reading features.
 
 > [!TIP]
-> Japanese dictionaries, fonts and manga all need converting before the device can read them.
-> [**Matcha Reader Tools**](https://eszter007.github.io/matcha-reader-tools/) does all three in your browser and
-> gives you a zip laid out for the SD card, with no Python to install. Files stay on your machine, except manga
-> OCR, which sends panels to Gemini under your own API key.
+> Japanese and Chinese dictionaries, fonts, and manga or manhua must be converted before the device can use them.
+> [**Matcha Reader Tools**](https://eszter007.github.io/matcha-reader-tools/) does all of this in your web browser
+> and gives you a zip file laid out for the SD card. You do not need to install anything. Your files stay on your
+> computer. The one exception is manga text recognition (OCR), which sends page panels to Google Gemini using your own API key.
 > ([source](https://github.com/eszter007/matcha-reader-tools))
 
 - [CrossPoint User Guide](#crosspoint-user-guide)
   - [1. Hardware Overview](#1-hardware-overview)
     - [Button Layout](#button-layout)
     - [Taking a Screenshot](#taking-a-screenshot)
-    - [Frontlight (X4 Pro only)](#frontlight-x4-pro-only)
+    - [Syncing the Clock](#syncing-the-clock)
+    - [Frontlight (X4 Pro and Paper Mono)](#frontlight-x4-pro-and-paper-mono)
   - [2. Power \& Startup](#2-power--startup)
     - [Power On / Off](#power-on--off)
     - [First Launch](#first-launch)
@@ -30,13 +31,17 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
       - [Uploading Books](#uploading-books)
       - [Removing a Book](#removing-a-book)
     - [3.6 Settings](#36-settings)
-      - [3.6.1 Display](#361-display)
-      - [3.6.2 Reader](#362-reader)
-      - [3.6.3 Controls](#363-controls)
-      - [3.6.4 System](#364-system)
-      - [3.6.5 OPDS Servers (Multiple Libraries)](#365-opds-servers-multiple-libraries)
-      - [3.6.6 Web Settings (Wi-Fi + OPDS)](#366-web-settings-wi-fi--opds)
-      - [3.6.7 KOReader Sync Quick Setup](#367-koreader-sync-quick-setup)
+      - [3.6.1 System](#361-system)
+      - [3.6.2 Display](#362-display)
+      - [3.6.3 Sleep](#363-sleep)
+      - [3.6.4 Library](#364-library)
+      - [3.6.5 Insights](#365-insights)
+      - [3.6.6 Reader](#366-reader)
+      - [3.6.7 Controls](#367-controls)
+      - [3.6.8 Connectivity](#368-connectivity)
+      - [3.6.9 OPDS Servers (Multiple Libraries)](#369-opds-servers-multiple-libraries)
+      - [3.6.10 Web Settings (Wi-Fi + OPDS)](#3610-web-settings-wi-fi--opds)
+      - [3.6.11 KOReader Sync Quick Setup](#3611-koreader-sync-quick-setup)
         - [Option A: CrossPoint Sync Server (`sync.crosspointreader.com`, default)](#option-a-crosspoint-sync-server-synccrosspointreadercom-default)
         - [Option B: Legacy Public KOReader Server (`sync.koreader.rocks`)](#option-b-legacy-public-koreader-server-synckoreaderrocks)
         - [Option C: Self-Hosted Server (Docker Compose)](#option-c-self-hosted-server-docker-compose)
@@ -52,57 +57,76 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
     - [Chapter Navigation](#chapter-navigation)
     - [Auto Page Turn](#auto-page-turn)
     - [Tilt Page Turn (X3 only)](#tilt-page-turn-x3-only)
-    - [Footnote Navigation](#footnote-navigation)
+    - [Links and footnotes](#links-and-footnotes)
     - [Dictionary Lookup](#dictionary-lookup)
     - [System Navigation](#system-navigation)
     - [Supported Languages](#supported-languages)
   - [5. Reader Menu](#5-reader-menu)
       - [5.1 Chapter Selection](#51-chapter-selection)
       - [5.2 Bookmarks](#52-bookmarks)
-  - [6. Japanese Reading Features](#6-japanese-reading-features)
-    - [6.1 Reading a Japanese Book](#61-reading-a-japanese-book)
-    - [6.2 Word Lookup](#62-word-lookup)
-    - [6.3 Page Translation](#63-page-translation)
-    - [6.4 Reading Manga](#64-reading-manga)
-    - [6.5 Dictionary Files and Language Selection](#65-dictionary-files-and-language-selection)
-  - [7. Reading Stats](#7-reading-stats)
+      - [5.3 Clippings and Highlights](#53-clippings-and-highlights)
+  - [6. Language Learning Features](#6-language-learning-features)
+    - [6.1 Word Lookup](#61-word-lookup)
+    - [6.2 Page Translation](#62-page-translation)
+    - [6.3 Japanese Books](#63-japanese-books)
+    - [6.4 Chinese Books](#64-chinese-books)
+    - [6.5 Books in Other Languages](#65-books-in-other-languages)
+    - [6.6 Manga, Manhua and Comics](#66-manga-manhua-and-comics)
+    - [6.7 Dictionary Files and Language Selection](#67-dictionary-files-and-language-selection)
+  - [7. Reading Insights](#7-reading-insights)
     - [7.1 Insights](#71-insights)
-    - [7.2 Per-book Stats](#72-per-book-stats)
+    - [7.2 Per-book Insights](#72-per-book-insights)
     - [7.3 What the Numbers Do Not Cover](#73-what-the-numbers-do-not-cover)
+    - [7.4 Syncing Insights Between Devices](#74-syncing-insights-between-devices)
   - [8. Current Limitations & Roadmap](#8-current-limitations--roadmap)
   - [9. Troubleshooting Issues & Escaping Bootloop](#9-troubleshooting-issues--escaping-bootloop)
 
 ## 1. Hardware Overview
 
-The device utilises the standard buttons on the Xteink X4 (in the same layout as the manufacturer firmware, by default):
+On the Xteink X4 the firmware uses the device's own buttons, in the same layout as the factory firmware. Other boards differ: some have fewer buttons, and touch boards such as the X4 Pro are mostly used by tapping and swiping.
 
 ### Button Layout
 
-| Location        | Buttons                                              |
-| --------------- | ---------------------------------------------------- |
-| **Bottom Edge** | **Back**, **Confirm**, **Left**, **Right**           |
+| Location        | Buttons                                          |
+| --------------- | ------------------------------------------------ |
+| **Bottom Edge** | **Back**, **Confirm**, **Left**, **Right**       |
 | **Right Side**  | **Power**, **Side Up**, **Side Down**, **Reset** |
 
-Button layout can be customized in the **[Controls Settings](#363-controls)**.
+You can change what the front buttons do in **[Controls Settings](#367-controls)**.
 
 ### Taking a Screenshot
 
-When the Power button and the lower side button (Side Down) are pressed at the same time, it will take a screenshot and save it in the folder `screenshots/`.
+Press **Power** and **Side Down** together. The screenshot is saved in the `screenshots` folder on the SD card. A screenshot taken inside a book goes into a subfolder named after the book.
 
-Alternatively, while reading a book, press the **Confirm** button to open the reader menu and select **Take screenshot**.
+While reading, you can also press **Confirm** to open the reader menu and choose **Take screenshot**.
 
-### Frontlight (X4 Pro only)
+### Syncing the Clock
 
-The X4 Pro has a built-in frontlight with adjustable brightness and warmth. It is controlled from a swipe panel rather than the Settings menu:
+Set **Power + Up** in **Settings → Controls → Shortcuts** to **Sync Clock**. It is off by default. After that, pressing **Power** and **Side Up** together sets the clock from the internet, on any screen. **Sync Clock** is also offered for the power button, the side buttons and the Home key gestures.
 
-* **Open or close the frontlight panel:** Swipe down from the top edge of the screen, from almost any screen (Home, Browse Files, Reading Mode, etc.). Drag the brightness and warmth sliders to adjust the light live, or tap the sun icon to turn it on or off. The same swipe (or a status-bar tap) closes the panel again, as does the **Back** button.
-* **Adjust brightness with the buttons:** While the panel is open, the **Up**/**Down** side buttons and the page-turn buttons step the brightness. Hold one to ramp continuously. On devices with edge-mounted side buttons the direction follows the physical layout, so the upper button always brightens.
-* **Quick toggle:** Double-click the **Power** button to turn the frontlight on or off instantly, without opening the panel.
+* If Wi-Fi is not connected, the network list opens first.
+* When the new time appears, press **Back**. If you started in a book, you go back to the book.
+* The same sync is also available as **Sync Clock Now** in **Settings → System → Clock**.
+
+Some devices, such as the X4, have no clock chip. Their clock drifts during sleep and resets on a restart, which makes the reading insights wrong. A sync fixes it.
+
+**Settings → System → Clock → Show in Header** shows the time at the top of menu screens, on the opposite side from the battery. Some themes have no room for it. The time updates whenever the screen redraws. On the X4 it shows the device's own time even when that time has drifted, so a wrong time there means you should sync.
+
+### Control Center and Frontlight
+
+The X4 Pro and the M5Stack Paper Mono have a built-in light. On the X4 Pro you can set brightness and warmth. On the Paper Mono you can set brightness only. You control the light from a pull-down panel, not from the Settings menu.
+
+* **Open the panel:** Swipe down from the top edge of the screen. This works on almost every screen, including Home, Browse Files and a book. Tapping the status bar at the top also opens it.
+* **Adjust the light:** Drag the **Brightness** and **Warmth** sliders. The light changes as you drag.
+* **Turn the light on or off:** Tap the **Light** button in the row of quick buttons, or press **Confirm**. The same row also has buttons for **Night Mode**, a screen refresh, screen rotation and touch controls, and on devices with Bluetooth a button that turns the Bluetooth page turner on or off.
+* **Use the buttons:** While the panel is open, **Side Up**/**Side Down**, **Left**/**Right** and the page-turn buttons change the brightness. Hold a button to keep changing it. On devices with side buttons on the edge, the upper button always makes the light brighter.
+* **Close the panel:** Swipe up, tap below the panel, or press **Back**.
+* **Quick on/off (X4 Pro only):** Double-click **Power**. This shortcut is **Double-Click Power for Light** in **Settings → Controls → Shortcuts** and is on by default.
 
 > [!NOTE]
-> Frontlight brightness and warmth are intentionally not listed in **[Display Settings](#361-display)** — the swipe panel is the only place to adjust them. The on/off state can also be toggled with the Power-button double-click above.
+> Brightness and warmth are not in **[Display Settings](#362-display)** on purpose. The pull-down panel is the only place to change them.
 
-If the frontlight doesn't come back on after the device wakes from sleep, check **Restore Light on Wake** in **Settings → Display → Sleep** (on by default). Turning it off is intentional if you'd rather have the light stay off on wake and switch it on yourself each time — but it's easy to forget you changed it.
+If the light stays off after the device wakes from sleep, check **Restore Light on Wake** in **Settings → Sleep**. It is on by default. Turn it off if you want the light to stay off after waking until you switch it on yourself.
 
 ---
 
@@ -110,17 +134,18 @@ If the frontlight doesn't come back on after the device wakes from sleep, check 
 
 ### Power On / Off
 
-To turn the device on or off, **press and hold the Power button for approximately half a second**.
-In the **[Controls Settings](#363-controls)** you can configure the power button to turn the device off with a short press instead of a long one.
+**Hold the Power button for about half a second** to turn the device on or off.
 
-To reboot the device (for example after a firmware update or if it's frozen), press and release the Reset button, and then quickly press and hold the Power button for a few seconds.
+To turn the device off with a short press instead, set **Short Power Button Click** to **Sleep** in **Settings → Controls → Shortcuts** (see **[Controls Settings](#367-controls)**).
+
+To restart a frozen device, or after a firmware update, press and release **Reset**, then quickly press and hold **Power** for a few seconds.
 
 ### First Launch
 
-Upon turning the device on for the first time, you will be placed on the **[Home](#31-home-screen)** screen.
+The first time you turn the device on, it opens the **[Home](#31-home-screen)** screen.
 
 > [!NOTE]
-> On subsequent restarts, the firmware will automatically reopen the last book you were reading.
+> After that, if the device went to sleep while you were reading, it reopens that book when it starts. Hold **Back** while it starts to go to Home instead.
 
 ---
 
@@ -128,469 +153,618 @@ Upon turning the device on for the first time, you will be placed on the **[Home
 
 ### 3.1 Home Screen
 
-The Home screen is the main entry point to the firmware. From here you can navigate to **[Reading Mode](#4-reading-mode)** with the most recently read book, **[Browse Files](#33-browse-files-screen)**, the **[Library](#34-library-screen)**, **[File Transfer](#35-file-transfer-screen)**, or **[Settings](#36-settings)**.
+Home is where you start. From here you can open:
 
-In the **Cover Grid** theme the Home screen is a grid of covers instead of a menu: the book you are reading fills a card
-across the top and the rest follow below it. Covers are made in the background the first time the device sees a book, so
-the grid appears straight away with titles in place of the artwork it has not built yet, and each cover replaces its own
-title as it finishes. Nothing blocks while this happens, and a button press stops the conversion rather than waiting for
-it. A cover that could not be built is retried the next time you visit Home.
+* your most recent book, in **[Reading Mode](#4-reading-mode)**
+* the **[Library](#34-library-screen)**
+* **[Browse Files](#33-browse-files-screen)**
+* **OPDS Browser** (online book catalogs), or **Plugins** if you have plugins installed
+* **[File Transfer](#35-file-transfer-screen)**
+* **Insights** (your [reading insights](#7-reading-insights))
+* **[Settings](#36-settings)**
 
-Long press a cover, here, in the Library or inside a shelf, for **View Stats**, **Mark as Read** / **Mark as Unread**
-and **Delete**. Without a touch panel, select the cover and hold **Confirm** for a second; letting go leaves the menu
-open.
-Only the direction that changes something is offered, so a finished book has no **Mark as Read**. Delete asks first and
-takes the book's reading cache with it.
+In the **Cover Grid** theme, Home shows book covers instead of a menu. The book you are reading sits in a large card at the top, and the others follow below. The first time the device sees a book, it makes the cover in the background. Until a cover is ready, you see the book's title in its place. Pressing a button pauses this work. If a cover fails, the device tries again the next time you open Home.
+
+**Book options:** Long-press a cover on Home, in the Library or in a shelf. On a device without touch, select the cover and hold **Confirm** for one second. The menu stays open when you let go. It offers:
+
+* **View Insights**
+* **Mark as Read** and **Mark as Unread**. You only see the one that would change something, so a finished book has no **Mark as Read**. This also works on a book you have never opened. A book you mark as read counts as finished in [Insights](#7-reading-insights), with today as its finish date once the clock is set. Marking it unread removes it from your finished books.
+* **Delete**. The device asks you to confirm first. Deleting also removes the book's saved reading data.
 
 #### 3.1.1 Tabs and Button Navigation (Cover Grid theme)
 
-The Cover Grid theme carries a tab bar along the bottom of Home, Library, File Transfer, Insights and Settings. It stays
-put as you move between them, and the tab you are in is drawn filled. Nothing opens on top of anything else, so there is
-no stack to back out of.
+In the Cover Grid theme, a row of tabs runs along the bottom of Home, Library, File Transfer, Insights and Settings. It stays in place as you move between them. The tab you are on has a filled icon.
 
-On a touch device, tap a tab. On a button-only device the bar is part of one navigation ring, so every control on the
-screen is reachable without leaving it:
+On a touch device, tap a tab.
 
-- **Up / Side Up** and **Down / Side Down** walk the ring: the screen's own tabs at the top (where it has them), then its
-  rows or covers, then the bottom bar, and round again.
-- **Confirm** on a screen's own tabs steps to the next one — **Books**, **Shelves**, **OPDS**, **Files** in the Library, the
-  categories in Settings, the languages in Insights — and past the last one it moves the cursor into the bottom bar.
-- **Left** and **Right** on a screen's own tabs step to the previous or next one. Once the cursor is in the bottom bar
-  they move between Home, Library, File Transfer, Insights and Settings. **Confirm** goes to the highlighted tab;
-  **Confirm** on the tab you are already in hands the cursor back to the first tab at the top of the screen, closing
-  the ring.
-- **Back** still leaves the screen, and holding it still goes Home.
+On a device with buttons only, the cursor moves in one loop through the whole screen: the screen's own tabs at the top (if it has any), then its list or covers, then the bottom tabs, and back to the top.
 
-A grey outline marks whatever the cursor is on, whether that is a cover, a row or a tab.
+* **Up / Side Up** and **Down / Side Down** move the cursor around the loop.
+* **Confirm** on a top tab moves to the next one, e.g. **Books**, **Shelves**, **OPDS** and **Files** in the Library, or the languages in Insights. After the last top tab, the cursor moves to the bottom tabs.
+* **Left** and **Right** on a top tab move to the previous or next one. In the bottom tabs, they move between Home, Library, File Transfer, Insights and Settings.
+* **Confirm** on a bottom tab opens that screen. **Confirm** on the tab you are already on sends the cursor back to the first top tab.
+* **Back** leaves the screen. Hold **Back** to go to Home.
+
+A grey outline shows where the cursor is, whether on a cover, a row or a tab.
 
 ### 3.2 Reading Mode
 
-See [Reading Mode](#4-reading-mode) below for more information.
+See [Reading Mode](#4-reading-mode) below.
 
 ### 3.3 Browse Files Screen
 
-The Browse Files screen acts as a file and folder browser. The full path to the current directory is shown at the top of the screen. File extensions are displayed alongside each filename, and directories are shown with brackets (e.g. `[folder-name]`). Hidden entries — those beginning with `.` — appear only when **Settings → Display → Show Hidden Files** is enabled. Turning it on is also what makes the folders macOS leaves behind on a card (`.Spotlight-V100`, `.Trashes`) selectable, so they can be deleted. `System Volume Information` stays hidden either way.
+Browse Files shows the folders and files on the SD card. The name of the current folder is shown at the top (**SD Card** at the top level). Every file is listed with its extension, including files the device cannot open. In themes without file icons, folders are shown in brackets, e.g. `[folder-name]`.
 
-* **Navigate List:** Use **Left** (or **Side Up**), or **Right** (or **Side Down**) to move the selection cursor up and down through folders and books. You can also long-press these buttons to scroll a full page up or down.
-* **Open Selection:** Press **Confirm** to open a folder or start reading a selected book. Selecting a `.bmp` file will open the image viewer.
-* **Delete Files or Folders:** Hold and release **Confirm** to delete the selected file or folder. You will be given an option to either confirm or cancel. Multiple files can be selected for deletion in a single operation. Deleting a folder removes everything inside it.
-* **Rename or Move:** Files can be renamed or moved to a different folder from within the browse screen.
+Files and folders whose names start with a dot are hidden. To show them, turn on **Settings → Display → Show Hidden Files**. You need this to delete the hidden folders a Mac leaves on the card, e.g. `.Spotlight-V100` or `.Trashes`. `System Volume Information` is always hidden.
 
-In the **Cover Grid** theme this screen is the Library's **Files** tab rather than its own entry on the home menu, so it
-keeps the **Books / Shelves / OPDS / Files** tabs at the top and the bottom tab bar. The back arrow in the header appears only
-once you are inside a folder; at the card root the tabs are the way out. Every other theme keeps **Browse Files** as a
-separate home entry, exactly as before.
+* **Move through the list:** Use **Left** or **Side Up** to move up, and **Right** or **Side Down** to move down. Hold a button to jump a page at a time.
+* **Open:** Press **Confirm** to open a folder or start reading a book. A `.bmp` file opens in the image viewer. A manga folder or `.matcha` file opens as a book.
+* **Go back:** Press **Back** to go up one folder. Hold **Back** to jump to the top of the card.
+* **Delete or rename:** Hold **Confirm** on a file or folder for one second. A menu offers **Open**, **Delete** and **Rename**. The device asks before it deletes anything. Deleting a folder deletes everything in it.
+
+In the **Cover Grid** theme, Browse Files is the **Files** tab of the Library, not a separate Home entry. It keeps the **Books / Shelves / OPDS / Files** tabs at the top and the tab row at the bottom. The back arrow in the header only appears inside a folder. At the top of the card, use the tabs to leave, or press **Back** to return to **Books**. All other themes keep **Browse Files** as its own entry on Home.
 
 ### 3.4 Library Screen
 
-Matcha ships two Library screens and **Settings → Display → Library → Library View** chooses between them. **Matcha Covers**, the
-default, is a grid of book covers described in the README. **CrossPoint List** is the indexed list documented below.
-Everything in this section applies to the list view.
+Matcha has two Library screens. Choose one in **Settings → Library → Library View**:
 
-The Library indexes up to 4,096 supported books on the SD card and shows their titles and authors without requiring you to remember their folders. Its four tabs provide different views. An arrow beside an indexed tab shows the sort direction:
+* **Matcha Covers** (the default) shows a grid of book covers. The README describes it.
+* **CrossPoint List** shows a list of titles and authors. The rest of this section is about the list.
 
-- **Recent** lists the ten books you opened most recently. Hold a book to remove it from this list.
-- **Added** keeps books in the order in which the Library first discovered them. Down shows newest additions first; up shows oldest first.
-- **Title** groups books by the first letter of the title. Up sorts A-Z and down sorts Z-A. Titles beginning with numbers or punctuation appear under `#`; letters from non-English scripts, including Hebrew, have their own groups.
-- **Author** groups books by author. Up sorts A-Z and down sorts Z-A.
+The list keeps an index of up to 4,096 books on the SD card, so you can find a book without remembering its folder. It has three tabs. An arrow next to a tab shows the sort direction.
 
-On a button-only device:
+* **Recent** shows the ten books you opened most recently first, then the rest of your books by file date.
+* **Title** groups books by the first letter of the title. Titles that start with a number or a symbol go under `#`. Other alphabets, such as Hebrew, get their own groups.
+* **Author** groups books by author.
 
-- Use **Up/Down** or **Left/Right** to move one row at a time. Hold a direction to move a page at a time.
-- Press **Confirm** to open the selected book.
-- Press **Back** from the book list to focus the tabs. Use **Left/Right** to select another tab, press **Confirm** to reverse its sort direction, or press **Down** to return to the list.
-- While the tabs are focused, hold **Confirm** to open Search.
-- In the Title or Author views, hold **Confirm** on a book to collapse the list to its letter or author groups. The matching group remains selected. Press **Confirm** to enter a group, or **Back** to restore the exact book and position you came from.
+On a device with buttons only:
 
-On a touch device, tap tabs, books, and the Search icon directly. Tap an active indexed tab again to reverse its sort direction. Swipe to scroll. Long-press a book in the Recent view to remove it from the list. Long-press a book in a Title or Author view to collapse to the group list, then tap a group to expand it. The **Added** view is not grouped; tapping or long-pressing a book opens it.
+* Use **Up/Down** or **Left/Right** to move one row. Hold to move a page at a time. In the Cover Grid theme, **Left/Right** take you to the bottom tabs instead.
+* Press **Confirm** to open the selected book.
+* Press **Back** to move the cursor from the list up to the tabs.
+* On the tabs, press **Confirm** to go to the next tab, and hold **Confirm** to reverse the sort direction. Press **Left** (or **Up**) to open Search. Press **Down** to return to the list.
+* In **Recent**, hold **Confirm** on a book for a menu with **Open**, **Delete**, **Rebuild Library Index** and an option to remove it from the recent books.
+* In **Title** or **Author**, hold **Confirm** on a book to fold the list into its letter or author groups. The group you were in stays selected. Press **Confirm** to open a group, or **Back** to return to the exact book you came from.
 
-The index is created automatically the first time the list view is opened. To pick up later file changes or updated metadata, use **Settings → Display → Library → Rebuild library index**. The **Use book metadata** setting in the same place controls whether the index reads titles and authors stored inside books.
+On a touch device, tap a tab, a book or the Search icon. Tap the tab you are on to reverse its sort. Swipe to scroll. Long-press a book in **Recent** for the book menu. Long-press a book in **Title** or **Author** to fold the list into groups, then tap a group to open it. The refresh icon in the header rebuilds the index.
+
+The device builds the index the first time you open the list. If you add or change books later, use **Settings → Library → Rebuild Library Index**. The **Use Book Metadata** setting in the same place decides whether the index uses the title and author stored inside each book.
 
 ### 3.5 File Transfer Screen
 
-The File Transfer screen allows you to upload and manage files on the device. When you enter the screen, choose **Join a Network**, **Calibre Wireless**, or **Create Hotspot**. The reader then starts the web server for the selected mode.
+Use File Transfer to put books on the device and manage its files over Wi-Fi. When you open it, pick a mode:
 
-See the [web server docs](./docs/webserver.md) for more information on how to connect to the web server and upload files.
+* **Join a Network**: connect to your Wi-Fi.
+* **Calibre Wireless**: receive books from Calibre (see [3.5.1](#351-calibre-wireless-transfers)).
+* **Create Hotspot**: the device makes its own Wi-Fi network for your computer or phone to join.
+* **USB Drive**: manage the SD card from your computer over a USB cable. Only boards that support it show this option, e.g. the X4 Pro and Paper Mono.
 
-The web interface also supports **WebDAV**, allowing you to mount the device as a network drive and manage files directly from your computer's file manager.
+For the Wi-Fi modes, the device starts a small web server and shows an address. Open that address in a browser on your computer or phone. The [web server docs](./docs/webserver.md) explain how to connect and upload files.
 
-Download links for files already on the device are available in the web interface, so you can retrieve books or screenshots over Wi-Fi without connecting a cable.
-
-A **Wi-Fi signal strength indicator** (dBm) is displayed on-screen during joined-network web server sessions.
+* The web page lets you download files from the device, e.g. books or screenshots, without a cable.
+* The web server also supports **WebDAV**, so you can open the device as a network drive in your computer's file manager.
+* When you have joined a network, the screen shows Wi-Fi signal bars.
 
 > [!TIP]
-> Advanced users can also manage files programmatically or via the command line using `curl`. See the [web server docs](./docs/webserver.md) for details.
+> You can also manage files from the command line with `curl`. See the [web server docs](./docs/webserver.md).
+
 > [!TIP]
-> If your EPUBs have compatibility issues, you can run the built-in **EPUB Optimizer** directly from the device to clean up and reprocess books for better rendering.
+> If a book displays badly, tick **Optimize EPUB** when you upload it from the web page. This cleans up the book before it reaches the device. It changes the file, which can break progress sync for that book.
 
 ### 3.5.1 Calibre Wireless Transfers
 
-CrossPoint supports sending books from Calibre using the CrossPoint Reader device plugin.
+You can send books from Calibre to the device with the CrossPoint Reader plugin for Calibre.
 
 #### Installing the Plugin in Calibre
 
-If you don't already have the plugin installed:
+If you do not have the plugin yet:
 
-1. Head to https://github.com/crosspoint-reader/calibre-plugins/releases to download the latest version of the crosspoint_reader plugin.
-2. Download the zip file.
-3. Open Calibre → Preferences → Plugins → Load plugin from file → Select the zip file.
+1. Go to https://github.com/crosspoint-reader/calibre-plugins/releases.
+2. Download the zip file of the latest crosspoint_reader plugin.
+3. In Calibre, open **Preferences → Plugins → Load plugin from file** and choose the zip file.
 4. Restart Calibre.
 
 #### Configuring the CrossPoint Plugin in Calibre
-1. In Calibre select Preferences.
-2. In the Preferences dialog select Plugins.
-3. In Plugins search for "crosspoint".
-4. Click on "Customize plugin".
-5. Update the value for "Host" to match the IP for your device.
+1. In Calibre, open **Preferences**.
+2. Choose **Plugins**.
+3. Search for "crosspoint".
+4. Click **Customize plugin**.
+5. Set **Host** to your device's IP address. The device shows it on the Calibre Wireless screen.
 6. Leave the other settings as they are.
-7. [optional] Modify the "Upload path" to point to a subfolder other than the root "/" folder. Enter this as a path relative to the root folder. Example: `/mybooks`
+7. Optional: to save books in a folder other than the top of the card, change **Upload path**, e.g. `/mybooks`.
 8. Restart Calibre.
 
 <img width="420" height="385" alt="Image" src="https://github.com/user-attachments/assets/01fc7e33-a9a7-48ba-9e26-2e68d1f9daec" />
 
 #### Uploading Books
 
-To upload a book using the CrossPoint plugin in Calibre:
+1. On the device, open **File Transfer → Calibre Wireless**. If Wi-Fi is not connected, pick a network. Keep this screen open while you send.
+2. In Calibre, select one or more books.
+3. Right-click the selection.
+4. Choose **Send to device → Send to main memory**.
 
-1. On the device: File Transfer -> Calibre Wireless, then join a network.
-2. Select one or more books.
-3. Right-click on that selection.
-4. Select "Send to Device" > "Send to main memory"
-
-The CrossPoint plugin will connect to your device, create a folder for the book's author in the root folder (or the folder you configured for the plugin), then copy the book into that folder.
+The plugin connects to the device and creates a folder for each author, at the top of the card or in your upload path. It then copies each book into its author's folder.
 
 <img width="783" height="310" alt="Image" src="https://github.com/user-attachments/assets/741b0909-2e1d-4f16-8af0-2c43fbda5ce6" />
 
 #### Removing a Book
 
-Books cannot be removed from your device through Calibre. Use the web interface instead.
-
+You cannot remove books from the device through Calibre. Delete them on the device in **[Browse Files](#33-browse-files-screen)**, or use the web page.
 ### 3.6 Settings
 
-The Settings screen allows you to configure the device's behavior. There are a few settings you can adjust:
-
-Settings that are simply on or off show a switch on the right of their row instead of the words "ON" and "OFF" —
-selecting the row flips it in place. Settings with more than two choices still show their current value as text and
-open a list when selected.
-
-#### 3.6.1 Display
-
-- **Library**: Opens the library settings, gathered on one screen:
-  
-  - **Library View**: Which screen the Library entry opens — "Matcha Covers" (default), the cover grid, or
-    "CrossPoint List", the indexed title/author list described in [Library Screen](#34-library-screen)
-  - **Rebuild library index**: Re-scan the card to pick up file changes and updated metadata
-  - **Clear Read Books from Recent List**: Drop a book from the Recent tab once you finish it
-  - **Move finished books to Read**: Move a finished book into a `Read` folder
-  - **Use book metadata**: Read the title and author stored inside each book when the index is rebuilt.
-    When disabled or unavailable, the filename is used
-  
-  Three of those only affect the CrossPoint List screen and are hidden while Matcha Covers is
-  selected, leaving Library View and Move finished books to Read: the index rebuild and the
-  metadata toggle both feed the list's index, which the cover grid does not use, and the cover
-  grid shows every book the card scan finds rather than a recent list.
-
-- **Sleep**: Opens the sleep settings, gathered on one screen, in this order: Sleep Screen, Sleep Screen Cover Mode,
-  Sleep Screen Cover Filter, Quick Resume on Timeout, Time to Sleep, and Restore Light on Wake (described under
-  [Frontlight](#frontlight-x4-pro-only)). They live there rather than in the Display list itself; each is described
-  below.
-
-- **Sleep Screen**: Which sleep screen to display when the device sleeps:
-  
-  - "Dark" (default) - The default dark Crosspoint logo sleep screen
-  - "Light" - The same default sleep screen, on a white background
-  - "Custom" - Custom images from the SD card; see [Sleep Screen](#37-sleep-screen) below for more information
-  - "Cover" - The book cover image (Note: this is experimental and may not work as expected)
-  - "None" - A blank screen
-  - "Cover + Custom" - The book cover image while actively reading, falls back to "Custom" behavior otherwise
-  - "Quick resume" - The text of the last page read will be displayed on the sleep screen and a moon icon is shown on the edge of the screen. Waking up the device will return to the same page of the opened book. This is useful for quickly resuming reading without waiting for the device to fully wake up and load the book.
-  - "Transparent" - A transparent overlay image drawn over the current screen; see [Sleep Screen](#37-sleep-screen) below for more information
-- **Sleep Screen Cover Mode**: How to display the book cover when "Cover" sleep screen is selected:
-  
-  - "Fit" (default) - Scale the image down to fit centered on the screen, padding with white borders as necessary
-  - "Crop" - Scale the image down and crop as necessary to try to fill the screen (Note: this is experimental and may not work as expected)
-
-- **Sleep Screen Cover Filter**: What filter will be applied to the book cover when "Cover" sleep screen is selected:
-  
-  - "None" (default) - The cover image will be converted to a grayscale image and displayed as it is
-  - "Contrast" - The image will be displayed as a black & white image without grayscale conversion
-  - "Inverted" - The image will be inverted as in white & black and will be displayed without grayscale conversion
+The Settings screen has eight sections: **System**, **Display**, **Sleep**, **Library**, **Insights**, **Reader**,
+**Controls** and **Connectivity**. Each one opens its own list. When **Plugins** is switched on under System, a ninth entry,
+**Plugins**, appears at the end and lists the installed plugins.
 
-- **Quick Resume on Timeout**: Whether to enable the "Quick Resume" sleep screen when the device goes to sleep due to inactivity (Time to Sleep, below). This is useful for quickly resuming reading without waiting for the device to fully wake up and load the book. This overwrites the Sleep Screen Cover Mode when enabled.
+Settings that are simply on or off show a switch at the right of the row. Select the row to flip it. Settings with
+more choices show the current value and open a list of options.
 
-- **Time to Sleep**: Set the duration of inactivity before the device automatically goes to sleep; options are 1, 3, 5, 10 (default), 15 or 30 minutes.
+Some rows only appear on certain devices or while another setting is on. The notes below say when.
 
-- **Status Bar**: Configure the status bar displayed while reading:
-  
-  - "None" - No status bar
-  - "No Progress" - Show status bar without reading progress
-  - "Full w/ Percentage" - Show status bar with book progress (as percentage)
-  - "Full w/ Book Bar" - Show status bar with book progress (as bar)
-  - "Book Bar Only" - Show book progress (as bar)
-  - "Full w/ Chapter Bar" - Show status bar with chapter progress (as bar)
-
-- **Hide Battery %**: Configure where to suppress the battery percentage display in the status bar; the battery icon will still be shown:
-  
-  - "Never" (default) - Always show battery percentage
-  - "In Reader" - Show battery percentage everywhere except in reading mode
-  - "Always" - Always hide battery percentage
-
-- **Refresh Frequency**: Set how often the screen does a full refresh while reading to reduce ghosting; options are every 1, 5, 10, 15, or 30 pages. In manga each panel step counts as a page.
-
-- **UI Theme**: Set which UI theme to use:
-  
-  - "Classic" - The original Crosspoint theme
-  - "Lyra" - The new theme for Crosspoint featuring rounded elements and menu icons
-  - "Lyra Extended" - Lyra, but displays 3 books instead of 1 on the **[Home Screen](#31-home-screen)**
-  - "RoundedRaff" - A rounded theme with additional visual styling
-
-- **Sunlight Fading Fix**: Configure whether to enable a software-fix for the issue where white X4 models may fade when used in direct sunlight:
-  
-  - "OFF" (default) - Disable the fix
-  - "ON" - Enable the fix
-
-#### 3.6.2 Reader
-
-- **Reader Font Family**: Choose the font used for reading:
-  
-  - "Noto Serif" (default) - Google's serif font
-  - "Noto Sans" - Google's sans-serif font
-  - Installed SD card families
-
-- **Reader Font Size**: Choose a point size. Built-in and direct TTF/OTF/TTC fonts offer 12, 14, 16, and 18 pt. A `.cpfont` family offers the sizes installed for that family.
-
-- **Reader Line Spacing**: Adjust the spacing between lines; options are "Tight", "Normal" (default), or "Wide".
-
-- **Reader Screen Margin**: Controls the screen margins in Reading Mode between 5 and 40 pixels in 5-pixel increments.
-
-- **Vertical text**: while a book is shown vertically, Text Settings > Layout lists only **Line Spacing** and **Screen Margin**, the two settings vertical layout uses. Horizontal books, Japanese ones included, show every Layout setting.
-
-- **Use Book Margins**: Whether to keep the side margins a book sets for itself. Many books indent epigraphs, letters and long quotations; with this ON those blocks stay indented, and with it OFF they are set flush with the body text and only the Reader Screen Margin applies. Default is ON. Found under Text Settings > Layout.
-
-- **Reader Paragraph Alignment**: Set the alignment of paragraphs; options are "Justified" (default), "Left", "Center", or "Right".
-
-- **Embedded Style**: Whether to use the EPUB file's embedded HTML and CSS stylisation and formatting; options are "ON" or "OFF".
-
-- **Hyphenation**: Whether to hyphenate text in Reading Mode; options are "ON" or "OFF". Korean text wraps only at spaces when "OFF"; when "ON", a Korean word may also wrap at the end of a line between syllables or where it meets digits, Latin letters, or brackets (no hyphen is drawn).
-
-- **Reading Orientation**: Set the screen orientation for reading EPUB files:
-  
-  - "Portrait" (default) - Standard portrait orientation
-  - "Landscape CW" - Landscape, rotated clockwise
-  - "Inverted" - Portrait, upside down
-  - "Landscape CCW" - Landscape, rotated counter-clockwise
+#### 3.6.1 System
 
-- **Extra Paragraph Spacing**: Set how to handle paragraph breaks:
-  
-  - "ON" - Vertical space will be added between paragraphs in Reading Mode
-  - "OFF" - Paragraphs will not have vertical space added, but will have first-line indentation
+- **About**: Shows the firmware version and details about your device's hardware. Useful when asking for help.
 
-- **Dictionary**: Select the StarDict dictionary used for word lookups while reading, or "None" to disable lookups. *(Only shown when at least one dictionary folder exists under `/dictionaries/` or `/.dictionaries/` on the SD card — see [docs/dictionary.md](docs/dictionary.md) for setup and usage.)*
+- **Clock**: Set the **Time Zone**, **Daylight Saving** and **Clock Format** (12 or 24 hour), sync the time with
+  **Sync Clock Now**, and choose **Show in Header** to show the time at the top of menu screens. See
+  [Syncing the Clock](#syncing-the-clock).
 
-- **Text Anti-Aliasing**: Whether to show smooth grey edges (anti-aliasing) on text in reading mode, horizontal and vertical (Japanese) text alike, furigana included. Note this slows down page turns slightly: the grey edges follow the black-and-white page about half a second later, and a page turn before then skips them. Images inside vertical text turn grayscale once you stay on the page, whether or not this is on.
+- **Clear Reading Cache**: Deletes the data the reader saves for each book on the SD card. Your books stay, but
+  **reading progress is lost** and each book is prepared again the next time you open it.
 
-- **Images**: Whether to display embedded images (JPG/PNG) found in EPUB files; options are "ON" (default) or "OFF".
+- **Language**: The menu language. English, Japanese, Spanish, French and German are built in. The other languages
+  in the list show **Download**: select one and the device downloads its language pack over Wi-Fi and switches to it; see
+  [Language Packs (SD Card)](#39-language-packs-sd-card). Chinese menus also need a Chinese font on the SD card
+  (see [§6.4](#64-chinese-books)), or some characters show as boxes.
 
-- **Focus Reading**: Bolds the first part of each word to create visual fixation points, similar to Bionic Reading. This can help improve reading speed and focus; options are "ON" or "OFF" (default).
+- **Keyboard Layouts**: Which on-screen keyboard layouts you can switch between when typing.
 
-#### 3.6.3 Controls
+- **Plugins** (off by default): Turns the plugins on your SD card on or off. Adding or updating a plugin needs no
+  firmware update. See [docs/sd-plugins.md](docs/sd-plugins.md).
+  To remove a plugin, open **Home → Plugins**, select it and hold **Confirm** for a second (on a touch device,
+  long-press its row), then confirm. This deletes the plugin's folder from the card.
 
-- **Shortcuts**: Opens the button-shortcut settings, gathered on one screen: **Long-Press Button Behavior**,
-  **Long-press Menu**, **Short Power Button Click** and **Quick-return from footnotes**, plus **Upper Side Button
-  in Reader** and **Lower Side Button in Reader** on the X3/X4, **Double-Click Power for Light** on the X4 Pro and
-  **Tilt Page Turn** on the X3, with **Short Back to File Browser** last. Each is described
-  below; the remaining entries in this section stay in the Controls list itself.
+- **Check for Updates**: Looks for a new Matcha Reader release over Wi-Fi and installs the right file for your
+  device, so you keep the Matcha features. Test builds (nightlies) are never offered here. You install those by
+  flashing.
 
-- **Remap Front Buttons**: A menu for customising the function of each bottom edge button.
+- **SD Card Firmware Update**: Installs firmware without a cable. Copy the firmware `.bin` file to the SD card, then
+  pick it from the list.
 
-- **Front Buttons Follow Orientation** (on by default): Directional buttons act on the direction you *see*, not the direction they point on the case. Rotate to landscape and the pair that used to move left/right moves up/down instead, with the on-screen hints relabelled to match — so page turns, list scrolling, the keyboard and the word lookup all keep working the way the screen is facing. Rotating swaps which axis each pair of buttons serves, so in landscape the front buttons take the up/down axis and the side buttons take left/right. Switch it off to keep every button fixed to its portrait meaning however the screen is turned. Devices with a touchscreen always follow the orientation and ignore this setting.
+**Check for Updates** and **SD Card Firmware Update** are missing on boards that cannot update themselves.
+**Rebuild Library Index** is under **Settings → Library**. **Manage Fonts** is at the bottom of the font list in
+any profile of **Settings → Reader → Text Settings**.
 
-- **Navigate with Side Buttons in Word Lookup** (on by default): Lets the side buttons step between words during
-  Word Lookup. See [Word Lookup](#62-word-lookup).
+#### 3.6.2 Display
 
-- **Reversed page turn (Vertical & Manga)** (off by default): Flips which button turns the page forward, for the two things that are read right-to-left.
-
-  - In a **vertical (tategaki) Japanese book**, the button that normally goes back turns forward instead.
-  - In **manga**, the left button advances — into the page's panels and on through the pages — and the right button goes back.
-  - A horizontal book in any language is **not** affected, even if you leave the toggle on after reading a Japanese one.
-
-  This affects **page turning only**. Menus, the reader menu and Word Lookup keep their normal directions. It applies to the front buttons and the side buttons together. Unlike the per-book text settings this one is global: it lives in the Controls screen, so it is the same for every book. Touch page turns have their own setting — see **Touch Reader Controls**, which offers inverted tap and swipe modes for the same reason.
-
-- **Upper / Lower Side Button in Reader** (X3/X4 only, in Shortcuts): Rebinds what the upper (Side Up) or
-  lower (Side Down) button does while reading. Each offers Default (previous page on Upper, next page on Lower),
-  Sleep, Previous Page, Next Page, Refresh Screen, Footnotes, Word Lookup and Off — so swapping the page-turn order
-  is Upper = Next Page plus Lower = Previous Page, and Off on both is the old "Side Button Layout = Disabled".
-  A device upgrading from an earlier version carries its old Side Button Layout over automatically.
-
-  A button with a custom action does that action and nothing else: it no longer turns pages or steps lists under
-  the shared roles, so it cannot fire two things at once. Outside the reader both buttons keep their ordinary
-  navigation role. Inside Word Lookup the page bindings move the cursor — Previous Page steps back, Next Page
-  steps forward, in the word list and through a definition's entries alike. A button bound to Word Lookup walks
-  the same path as the power-button shortcut: the first click opens word selection, the second looks the
-  highlighted word up, and a click in the definition view closes the dictionary — two clicks in, one click out,
-  without moving your reading hand. The **Short Power Button Click** page bindings work inside Word Lookup too,
-  so Power set to "Previous Page" steps back there as well.
-
-  **Reversed Page Turn does not apply to a remapped button.** A button you set to "Next Page" advances in a
-  vertical or manga book exactly as it does in a horizontal one — you named the direction yourself, so nothing
-  flips it behind your back. The same holds for the Power button's page bindings. Reversed Page Turn keeps
-  reversing the buttons still doing their *shared* page-turn job, which is what it is for.
-
-  Only **Navigate with Side Buttons in Word Lookup** is hidden, and only once *both* side buttons are remapped —
-  it is the one setting that merely arranges the shared side-button roles. **Reversed Page Turn** and
-  **Long-Press Button Behavior** stay visible, since they also govern the front buttons, touch and tilt.
-
-- **Long-Press Button Behavior**: Set whether long-pressing page turn buttons skips to the next/previous chapter:
-  
-  - "Chapter Skip" (default) - Long-pressing skips to next/previous chapter
-  - "Page Scroll" - Long-pressing scrolls a page up/down
-- **Long-press Menu**: Selects the function bound to holding the menu button (Confirm) while reading an EPUB. **Cycles through the available functions** each time the setting is selected — additional functions may be added in future releases, so this is not a binary on/off toggle. A short press of Confirm always opens the reader menu as normal:
-  - "Bookmark" (default) - Hold Confirm (~0.4 second) to drop a bookmark at the current page.
-  - "KOSync" - Hold Confirm (~1 second) to launch KOReader sync directly.
-  - "Dictionary" - Hold Confirm (~0.4 second) to start dictionary word selection on the current page (see [docs/dictionary.md](docs/dictionary.md)).
-  - "Disabled" - Long-press is ignored; only short-press opens the reader menu.
-
-- **Short Power Button Click**: Controls the effect of a short click of the power button:
-  
-  - "Ignore" (default) - Require a long press to turn off the device
-  - "Sleep" - A short press puts the device into sleep mode
-  - "Next Page" - A short press in reading mode turns to the next page; a long press turns the device off
-  - "Previous Page" - A short press in reading mode turns back one page
-  - "Footnotes" - A short press in reading mode opens the footnotes submenu; if only one footnote is present on the page, the referenced page is opened directly. The short press on the power button can be used to select the footnote in the submenu, and to go back to the original page after finish reading the footnote (like the back button).
-  - "Refresh" - A short press triggers a manual full-screen refresh, useful for clearing ghosting
-  - "Word Lookup" - A short press in reading mode opens word selection. A second press looks up the highlighted word, and a press in the definition view closes the dictionary and returns to the page — two presses in, one press out, without moving your reading hand.
-  - "Confirm" - A short press acts as the Confirm button. It earns its place on touch devices, which have no front Confirm key.
-
-- **Touch Reader Controls**: How the touchscreen turns pages while reading (touch devices only):
-  
-  - "Off" - The reading surface ignores touch entirely
-  - "Tap" (default) - Tap the left third to go back, the right third to go forward
-  - "Swipe" - Swipe horizontally to turn pages, leaving taps free for the reader menu
-  - "Inverted Tap" - As "Tap", with the sides reversed. Useful for vertical Japanese text, which reads right-to-left
-  - "Inverted Swipe" - As "Swipe", with the directions reversed, for the same reason
-
-- **Tap For Reader Menu**: Opens the reader menu when you tap the centre of the screen. Only offered on devices with a Home key, where the menu stays reachable through the key's long-press function if you turn this off.
-
-- **Quick-return from footnotes**: Toggles on and off the quick return functionality from the footnotes. When the functionality it's active, a short press of the power button will act as the back button from the footnotes page.
-
-#### 3.6.4 System
-
-
-- **Wi-Fi Networks**: Connect to Wi-Fi networks for file transfers and firmware updates.
-
-- **KOReader Sync**: Options for setting up KOReader for syncing book progress. **Smart sync** is the default for new configurations and auto-resolves simple push/pull decisions. Existing credential files retain **Ask every time** when migrated; you can switch Sync Behavior at any time if you prefer manual confirmation.
-
-- **OPDS Servers**: Manage one or more OPDS [(Open Publication Distribution System)](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System) libraries for browsing and downloading books. See [OPDS Servers (Multiple Libraries)](#365-opds-servers-multiple-libraries) below.
-
-- **Clear Reading Cache**: Clear the internal SD card cache.
-
-- **Language**: Set the UI language. English, Japanese, Spanish, French and German are built into the firmware. The
-  rest — Czech, Brazilian Portuguese, Russian, Swedish, Romanian, Catalan, Ukrainian, Belarusian, Italian, Polish,
-  Finnish, Danish, Dutch, Turkish, Kazakh, Hungarian, Lithuanian, Slovenian, Valencian, Hebrew and more — are listed
-  too, but marked **Needs pack** until you install a language pack. See [Language Packs (SD Card)](#39-language-packs-sd-card).
-
-- **Keyboard Layouts**: Choose which on-screen keyboard layouts are offered when typing.
-
-- **Check for updates**: Check for Crosspoint firmware updates over Wi-Fi.
-
-- **SD Card Firmware Update**: Install firmware without a USB connection by placing a `firmware.bin` file on the SD card.
-
-Rebuilding the library index moved to **Settings → Display → Library**, and **Manage Fonts** is at the bottom of the
-font list inside **Text Settings**.
-
-#### 3.6.5 OPDS Servers (Multiple Libraries)
-
-CrossPoint supports saving multiple OPDS servers and switching between them when browsing catalogs.
-
-In the **Cover Grid** theme the catalogs are the Library's **OPDS** tab: it lists your saved servers under the
-**Books / Shelves / OPDS / Files** tabs, and choosing one opens its catalog (Wi-Fi connects only then, never just from
-moving across the tabs). **Back** from the catalog's top level returns to the tab. **Add Server** is on the tab too; the
-download folder and file name format stay in Settings. Other themes open the catalogs from the home menu, as before.
-
-A catalog stays inside the tab layout, with the Library tabs above it and the bottom bar below; only the Wi-Fi
-network picker takes the full screen. On a button-only device the cursor moves in one ring: **Up** from the first
-entry reaches the Library tabs (**Left**/**Right** switch tab, **Confirm** goes on to **Files**), **Down** past the
-last entry reaches the bottom bar. On an error screen or an empty catalog, **Up** and **Down** go straight to the tabs
-and the bar.
-
-1. Open **Settings -> System -> OPDS Servers**.
-
-2. Select **Add Server** to create a new entry, or select an existing server to edit it.
-
-3. Configure these fields:
-   
-   - **Server Name**: Optional display name (for example, "Home Calibre" or "Public Catalog").
-   
-   - **OPDS Server URL**: Full catalog root URL (for Calibre Content Server, usually ends with `/opds`).
-   
-   - **Username / Password**: Optional credentials for authenticated servers.
-
-4. Use **Delete Server** inside a server entry to remove it.
-
-Behavior notes:
-
-- You can store up to 8 OPDS servers.
-- OPDS authentication supports HTTP Basic auth. If you use Calibre Content Server with authentication enabled, set it to Basic (not Digest).
-
-You can also manage OPDS servers from the web interface while in File Transfer mode:
-
-1. Connect to the device web UI.
-2. Open `http://<device-ip>/settings`.
-3. Use the **OPDS Servers** card to add, edit, or delete entries.
-
-For web-based Wi-Fi network management, see [Web Settings (Wi-Fi + OPDS)](#366-web-settings-wi-fi--opds).
-
-#### 3.6.6 Web Settings (Wi-Fi + OPDS)
-
-While in **File Transfer** mode, the web settings page includes management cards for both **Wi-Fi Networks** and **OPDS Servers**.
-
-1. On device: open **File Transfer** and connect through **Join a Network** or **Create Hotspot**.
-2. In a browser, open `http://<device-ip>/settings` or `http://crosspoint.local`.
-3. In **Wi-Fi Networks**, add, edit, or delete saved network entries (SSID + optional password).
-4. In **OPDS Servers**, add, edit, or delete OPDS catalogs.
-
-Behavior notes:
-
-- Passwords are never shown back in the web UI after saving.
-- Leaving Password blank while editing keeps the existing saved password unchanged.
-- The web UI can save hidden-network SSIDs, but connecting to hidden networks still depends on the device-side Wi-Fi connection flow.
-
-#### 3.6.7 KOReader Sync Quick Setup
-
-CrossPoint can sync reading progress with KOReader-compatible sync servers.
-It also interoperates with KOReader apps/devices when they use the same server and credentials.
+- **Hide Battery %**: Where to hide the battery percentage. The battery icon always stays.
+  - **Never** (default): always show it.
+  - **In Reader**: hide it only while reading.
+  - **Always**: never show it.
+
+- **Refresh Frequency**: How often the whole screen flashes black and white while you read. A full refresh clears the
+  faint leftovers of earlier pages (ghosting). Choose every **1**, **5**, **10**, **15** (default) or **30** pages, or
+  **Never**. In manga each panel step counts as a page.
+
+- **UI Theme**: The look of the menus.
+  - **Classic**: the original CrossPoint look.
+  - **Lyra**: rounded elements and menu icons. Default on button devices.
+  - **Lyra Extended**: Lyra with three books on the [Home Screen](#31-home-screen) instead of one.
+  - **RoundedRaff**: another rounded style.
+  - **Cover Grid**: Home shows a grid of covers with a tab bar along the bottom (see
+    [3.1.1](#311-tabs-and-button-navigation-cover-grid-theme)). Works with buttons or touch. Default on touch devices.
+
+- **Sunlight Fading Fix** (off by default): Fixes text fading in direct sunlight on some X4 screens. Not shown on
+  touch devices, the X4 Pro or the X4 Classic.
+
+- **Night Mode** (off by default): White text on black, on every screen.
+
+- **Show Hidden Files** (off by default): Shows files and folders whose names start with a dot (`.`) in the file
+  browser.
+
+#### 3.6.3 Sleep
+
+- **Sleep Screen**: What the screen shows while the device sleeps.
+  - **Dark** (default): the logo, or your own `logo.bmp`, on black.
+  - **Light**: the same logo on white.
+  - **Custom**: your own pictures from the SD card. See [Sleep Screen](#37-sleep-screen).
+  - **Cover**: the cover of the book you are reading. Experimental.
+  - **Cover + Custom**: the book cover while you are reading a book, your own pictures otherwise.
+  - **None**: a blank screen.
+  - **Quick Resume**: the page you were reading stays on screen with a small moon icon. Waking the device takes you
+    straight back to that page.
+  - **Transparent**: one of your pictures drawn on top of the current screen. See [Sleep Screen](#37-sleep-screen).
+  - **Insights**: your reading insights, such as hours read, your daily streak and minutes read this week.
+
+- **Sleep Screen Cover Mode**: How a cover or custom sleep image fits the screen.
+  - **Fit** (default): the whole picture, centred, with white borders where needed.
+  - **Crop**: fills the screen and cuts off the edges.
+
+- **Sleep Screen Cover Filter**: How a cover is drawn on the cover sleep screens.
+  - **None** (default): in shades of grey.
+  - **Contrast**: pure black and white.
+  - **Inverted**: black and white, swapped.
+
+- **Quick Resume on Timeout** (off by default): When the device falls asleep by itself (see **Time to Sleep**), it
+  uses the Quick Resume screen whatever **Sleep Screen** is set to. Pressing the power button still shows your chosen
+  sleep screen. Choosing **Quick Resume** as the sleep screen switches this on.
+
+- **Time to Sleep**: How long the device waits without use before it sleeps: 1 to 30 minutes (default 10), or
+  **Never**.
+
+- **Restore Light on Wake** (on by default, devices with a frontlight only): Turns the light back on after sleep. See
+  [Frontlight](#frontlight-x4-pro-and-paper-mono).
+
+#### 3.6.4 Library
+
+- **Library View**: What the Library entry opens.
+  - **Matcha Covers** (default): a grid of book covers.
+  - **CrossPoint List**: a list of titles and authors; see [Library Screen](#34-library-screen).
+- **Rebuild Library Index**: Scans the card again to pick up new, moved or changed books.
+- **Clear Read Books from Recent List** (off by default): Removes a book from the Recent tab once you finish it.
+- **Move Finished Books to Read Folder** (off by default): Moves a finished book into a `Read` folder.
+- **Use Book Metadata** (on by default): Uses the title and author stored inside each book when the list is
+  rebuilt. Without it, or when a book has none, the file name is used.
+
+While **Matcha Covers** is selected, only **Library View** and **Move Finished Books to Read Folder** appear. The
+other three only affect the CrossPoint List. The cover grid always shows every book it finds on the card.
+
+#### 3.6.5 Insights
+
+- **Show language insights** (on by default): Shows a tab per language in [Insights](#71-insights). Turn it off to see only
+  the totals for all languages. Insights are still recorded per language, so turning it back on brings the tabs back.
+
+- **Hide unknown languages** (on by default, shown while language insights are on): Hides the **Unknown** tab, which
+  holds time on books that declare no language, e.g. TXT and XTC files. The CrossPoint app has no such group either.
+  The time still counts in the **All** tab.
+
+- **Insights data** (All devices by default): **All devices** shows your whole sync account in
+  [Insights](#71-insights) and on the **Insights** sleep screen, as the CrossPoint app counts it: every device, the app's
+  own reader and imported time. **This device** shows only what this reader recorded. See
+  [Syncing Insights Between Devices](#74-syncing-insights-between-devices).
+
+- **Sync Insights**: Joins Wi-Fi and syncs your reading insights with the CrossPoint sync server, the same as **Refresh
+  Insights** in Insights. See [Syncing Insights Between Devices](#74-syncing-insights-between-devices).
+
+#### 3.6.6 Reader
+
+The values here are the starting point for books you have not opened yet. Once you open a book, it remembers its own
+font, size, spacing, margins, alignment, style options, images and orientation. Changes you make while reading apply
+to that book only.
+
+- **Text Settings**: Opens a list of five text profiles: **Japanese**, **Traditional Chinese**, **Simplified
+  Chinese**, **Korean** and **Latin & Others**. Pick one to change its options. A preview at the top
+  shows sample text in that profile's script with the current settings, and the options sit below it.
+  - **Font**: the reading font. **Noto Serif** is built in. Fonts you add to the SD card are listed with it, and
+    **Manage Fonts** is at the bottom. The list scrolls when it does not fit on the screen.
+  - **Size**: the font size. Built-in fonts and plain TTF/OTF/TTC files offer 12, 14, 16 and 18 pt. A `.cpfont`
+    family offers the sizes installed for it. When **Noto Sans** on your card consists only of Chinese or Japanese
+    versions, a book offers the sizes of the version it uses, e.g. `NotoSansSC` for a simplified-Chinese book.
+  - **LAYOUT**:
+    - **Tategaki (vertical Japanese)**, in the **Japanese** profile, and **Zhípái (vertical Chinese)**, in the
+      **Traditional Chinese** and **Simplified Chinese** profiles: whether books in that language open in vertical
+      columns. Each profile's setting applies only to its own books. Only listed when Text Settings is opened from
+      **Settings**.
+      - **Automatic** (default): follows the book. A book set to read right to left opens vertically, any other
+        book horizontally.
+      - **On**: always vertical.
+      - **Off**: always horizontal.
+    - **Line Spacing**: Space between lines, as a percentage of the font size: **0%**, **+10%**, **+20%** (default), **+30%**, **+45%**, **+60%** or **+75%**. Vertical text uses three column gaps: 0% and +10% are tight, +20% is normal, and +30% and up are wide.
+    - **Word spacing**: 50% to 200% of a normal space (default 100%).
+    - **Character spacing**: −2 px to +2 px (default 0 px). In vertical text this is the gap between characters down
+      a column, so a tighter setting fits more characters in each column.
+    - **Extra Paragraph Spacing** (on by default): adds space between paragraphs. When off, paragraphs start with an
+      indent instead.
+    - **Paragraph Indentation**: how far the first line of a paragraph is pushed in, from **Off** to five spaces
+      (default two). It replaces the book's own indent, except where the book pulls the first line out to the left.
+      Vertical text is not affected.
+    - **Alignment**: **Justify** (default), **Left**, **Center**, **Right**, or **Book's Style**, which follows
+      the book.
+    - **Screen Margin**: the space around the text, 5 to 40 pixels in steps of 5 (default 5).
+    - **Use Book Margins** (on by default): keeps the extra side margins a book sets, e.g. for indented quotes and
+      letters. When off, those blocks line up with the rest of the text.
+  - **STYLE**:
+    - **Focus Reading** (off by default): prints the start of each word in bold to guide the eye, like Bionic
+      Reading.
+    - **Hyphenation** (off by default): splits long words at the end of a line. With it on, Korean text may also
+      break between syllables, without a hyphen. With it off, Korean breaks only at spaces.
+    - **Embedded Style** (on by default): uses the book's own formatting (its CSS).
+    - **Text Anti-Aliasing** (on by default): smooth grey edges on letters, furigana included. The grey appears
+      about half a second after a page turns. Turning pages faster than that skips it.
+  - The Japanese and Chinese profiles list only **Embedded Style** and **Text Anti-Aliasing** under **STYLE**.
+  - While a book is shown vertically, **LAYOUT** lists only **Line Spacing**, **Character spacing** and
+    **Screen Margin**, the settings vertical text uses.
+
+- **Text profiles**: each of the five profiles keeps its own **font**, **font size**, **line spacing**, **character
+  spacing** and **word spacing**, so a font that suits Japanese leaves your English books alone. A book uses the
+  profile of its language: Japanese, traditional Chinese (Cantonese too), simplified Chinese, or Korean (a book
+  tagged `ko` or `kor`). Every other book uses **Latin & Others**. Opened from inside a book, **Text Settings** goes
+  straight to that book's profile. A size or spacing you change while reading goes to the book's profile too. A font
+  you pick while reading stays with that book only: change a profile's font from **Settings → Reader → Text
+  Settings**.
+
+- **Dictionary Settings**: Opens a page with the word lookup settings:
+  - **Word Lookup Font Size**: Text size in the word lookup window: **Tiny**, **Small** (default), **Medium** or
+    **Large**.
+  - **Japanese dictionary**, **Mandarin dictionary**, **Cantonese dictionary**: Read-only. They show **Installed**
+    when the files for that language were found (`/dictionaries/jp/`, `zh/` or `yue/`), else **Not installed**. These
+    dictionaries are used automatically in books of their language, so they are not in the fallback list.
+  - **Fallback for other languages**: The StarDict dictionary for word lookups, or **None**. Lookups use a dictionary
+    that matches the book's language first, then this one. Only shown when a dictionary folder exists under
+    `/dictionaries/` or `/.dictionaries/` on the SD card. See [docs/dictionary.md](docs/dictionary.md).
+- **Plugins** (**Settings → Connectivity**): Enable or disable SD-card plugins. Clean installs start disabled; upgrades with existing plugins are kept enabled automatically. Disabling plugins leaves all plugin files on the SD card but stops plugin discovery and execution until they are enabled again.
+  - Enabling plugins immediately adds **Plugins** to the Home screen, even when no plugins are installed yet. Sideloaded SD-card plugins work without Plugin Hub.
+  - Open **Home → Plugins** to view installed plugins. Hold **Confirm** on a selected installed plugin for one second (or long-press its row on a touch device) to open an uninstall confirmation. Confirming deletes that plugin's installed folder and files; cancelling leaves it installed. If no usable on-device Plugin Hub is available and its installer has not been hidden, a **Plugin Hub — Download, discover, and update plugins** entry is also shown. A manually sideloaded Hub with a valid `device.json` is recognized without requiring the optional README or browser files.
+  - Selecting that Plugin Hub entry offers **Install**, **Hide**, or **Cancel**. **Install** downloads Plugin Hub over Wi-Fi. If you back out of Wi-Fi selection, installation is cancelled, Wi-Fi is turned back off, and you return to Plugins with the installer still available. **Hide** removes only the Plugin Hub install entry; it does not disable plugins or affect sideloaded plugins. **Cancel** leaves the entry unchanged.
+  - **Hide** persists across reboots. Setting **Settings → Connectivity → Plugins** to **Enabled** again brings the installer back.
+  - Plugins with web settings appear on the **Plugins** page of the web UI while **File Transfer** is running. Its link is hidden while plugins are disabled.
+  - Plugin Hub is optional. Users who prefer manual installation can download it directly from [crosspoint-plugin-hub releases](https://github.com/crosspoint-reader/crosspoint-plugin-hub/releases) and copy/extract the `pluginhub` folder so it ends up at `/.crosspoint/plugins/pluginhub/`, `/plugins/pluginhub/`, or `/.plugins/pluginhub/`. Once installed, Plugin Hub appears as a normal entry under **Home → Plugins**.
+
+- **Reading Orientation**:
+  - **Portrait** (default)
+  - **Landscape CW**: turned a quarter clockwise.
+  - **Portrait 180°**: upside down.
+  - **Landscape CCW**: turned a quarter counter-clockwise.
+
+  The **Vertical Text** switch in a book's Reader Settings overrides this for that book.
+
+- **Rotate Panels** (on by default): In manga, turns a panel sideways when that makes it fit the screen better.
+
+- **Images**: Pictures inside books.
+  - **Display** (default): shows them.
+  - **Placeholder**: shows only the picture's description text.
+  - **Suppress**: leaves them out.
+  - **Black & White**: draws them as a black-and-white dot pattern, so pages with pictures turn as fast as text pages.
+
+- **Reader Menu Style**: How the reader menu looks: **List** (default), a full-screen list, or **Toolbar**, a dock
+  at the bottom of the page.
+
+- **Customise Status Bar**: The line of information at the edge of the page while you read. Set it up one item at a
+  time: chapter page count, book progress percentage, progress bar (book, chapter or hidden) and its thickness, title,
+  battery, the status bar for XTC files, and the clock when the device knows the time.
+  - **Time Left**: an estimate of the reading time left in the chapter or the book (default: hidden). It is shown before the page count, e.g. "12 min". It learns from how long you stay on each page as you turn forward, ignoring pages you skip past in under 2 seconds or leave open for more than 30 minutes. A page left open much longer than your usual pace counts as about three times your average. Each book keeps its own reading speed, measured against how much of the book's text you get through, so it stays right when you change the font size or margins. The estimate appears once about five pages have been timed.
+
+#### 3.6.7 Controls
+
+Which rows you see depends on your device. Touch devices hide the rows that only make sense with front buttons.
+
+- **Shortcuts**: Opens the button shortcuts, in this order. Each one is described further down.
+  - **Home Button Gestures** (devices with a Home key)
+  - **Long-Press Button Behavior**
+  - **Long-Press Menu** (button devices)
+  - **Power + Up**
+  - **Double-Click Power for Light** (X4 Pro)
+  - **Short Power Button Click**
+  - **Tilt Page Turn** (devices with a motion sensor, e.g. the X3)
+  - **Quick return from links** (only while **Short Power Button Click** is **Links and footnotes**)
+  - **Upper Side Button in Reader** and **Lower Side Button in Reader**
+  - **Slide Switch** (BOOX Picco): what the slide switch controls: **Frontlight**, **Night Mode** or **Touch Reader Controls**
+  - **Short Back to File Browser** (button devices)
+
+- **Remap Front Buttons** (button devices): Choose what each button below the screen does.
+
+- **Haptic Feedback** (off by default, devices with a vibration motor only): A short buzz when the device accepts a
+  touch.
+  - **On Touch**: taps, long presses and touch page turns.
+  - **On Touch + Page Turn**: adds the touch page-turn buttons.
+  - **Off**
+  - A touch that does nothing, such as a tap on the tab you are already in, stays silent.
+
+- **Haptic Intensity**: **Low**, **Medium** or **High** (default).
+
+- **Orient Front Buttons** (on by default, button devices): Arrow buttons follow the direction you see on screen when
+  you turn the device, and their hints change to match. In landscape the front buttons move up and down and the side
+  buttons move left and right. Switch it off to keep every button as it works in portrait. Touch devices always
+  follow the screen.
+
+- **Reversed page turn (Vertical & Manga)** (off by default): Swaps the page-turn direction for the two kinds of
+  book read right to left.
+  - In a **vertical (tategaki) Japanese book**, the button that normally goes back turns forward.
+  - In **manga**, the left button goes forward (through the panels, then the pages) and the right button goes back.
+  - Horizontal books in any language are **not** affected.
+
+  It changes page turning only, on buttons, taps and swipes alike. Menus and Word Lookup keep their usual
+  directions. It is one setting for all books. While it applies, **Inverted Tap** and **Inverted Swipe** add
+  nothing, so the two do not cancel each other out.
+
+- **Back Resumes Last Book** (off by default; X3, X4 and X4 Classic): On the Home screen, **Back** reopens the book
+  you read last, and its hint reads **Resume**.
+
+- **Upper / Lower Side Button in Reader** (in Shortcuts): What each side button does while reading. On the X4 Pro and
+  X4 Classic the rows are called **Left** and **Right Side Button in Reader**.
+  - Options: **Default** (previous page on the upper button, next page on the lower), **Off**, **Previous Page**,
+    **Next Page**, **Sleep**, **Refresh Screen**, **Links and footnotes**, **Word Lookup**, **Create Clipping**,
+    **Sync Insights & Clock** or **Sync Clock**.
+  - A button with its own action does only that. Outside the reader both buttons work as usual.
+  - In Word Lookup, a button set to **Previous Page** or **Next Page** moves between words.
+  - A button set to **Word Lookup** starts word selection on the first press, looks up the word on the second, and
+    closes the definition on the third.
+  - **Reversed page turn** does not change a button you set yourself. **Next Page** always goes forward.
+
+- **Home Button Gestures** (devices with a Home key): What a tap, a double tap and a long press on the Home key
+  do. Each can be **Off**, **Home**, **Page Turn**, **Refresh Screen**, **Links and footnotes**,
+  **Confirm**, **KOSync**, **Bookmark**, **Dictionary**, **Reader Menu**, **Toggle Frontlight**, **Create
+  Clipping**, **Sync Insights & Clock** or **Sync Clock**. A tap is **Home** by default.
+
+- **Long-Press Button Behavior**: What holding a page-turn button does.
+  - **Off** (default): nothing extra.
+  - **Chapter Skip**: jumps to the next chapter, or back to the start of the chapter, then to the previous one.
+  - **Orientation Change**: turns the screen to the next orientation.
+
+- **Long-Press Menu** (button devices): What holding **Confirm** does while reading. A short press always opens the
+  reader menu.
+  - **Off** (default): holding does nothing.
+  - **KOSync**: hold about 1 second to start CrossPoint Sync. Works once sync is set up.
+  - **Bookmark**: hold about 0.4 seconds to bookmark the page.
+  - **Dictionary**: hold about 0.4 seconds to pick a word to look up (see [docs/dictionary.md](docs/dictionary.md)).
+  - **Create Clipping**: hold about 0.4 seconds to start selecting a clipping.
+  - **Links and footnotes**: hold about 0.4 seconds to open the page's links and footnotes.
+
+- **Power + Up** (off by default): What pressing Power and the upper side button together does. The options are those
+  of the side buttons, without **Default**. **Sleep**, **Refresh Screen** and the syncs work on any screen; the
+  other options only while reading. See
+  [Syncing the Clock](#syncing-the-clock).
+
+- **Double-Click Power for Light** (on by default, X4 Pro): Double-click Power to switch the frontlight on or off.
+
+- **Short Power Button Click**: What a quick press of the power button does.
+  - **Off** (default): nothing. Hold the button to switch off.
+  - **Previous Page**: while reading, goes back one page.
+  - **Next Page**: while reading, turns to the next page. Hold the button to switch off.
+  - **Sleep**: puts the device to sleep.
+  - **Refresh Screen**: a full refresh that clears ghosting.
+  - **Links and footnotes**: while reading, opens the page's links and footnotes. With only one on the page, it
+    jumps straight there. Press again to choose an entry, and once more to return to your page.
+  - **Word Lookup**: while reading, the first press starts word selection, the second looks up the word, and the
+    next closes the definition.
+  - **Create Clipping**: while reading, starts selecting a clipping.
+  - **Sync Insights & Clock**: sets the clock from the internet, then uploads this device's reading stats and
+    downloads the other devices'. The stats need a CrossPoint Sync account; without one only the clock is set. The
+    device restarts at the end; started in a book, it reopens the book.
+  - **Sync Clock**: sets the clock from the internet.
+  - **Confirm** (touch devices only): works like a Confirm button.
+  - **Bookmark**, **KOSync** and **Reader Menu** (touch devices without a Home key): add or remove a bookmark, start
+    a sync, or open the reader menu.
+
+- **Tilt Page Turn** (devices with a motion sensor): Tilt the device to turn pages: **Off** (default), **Normal** or
+  **Inverted**.
+
+- **Touch Reader Controls** (on by default, touch devices only): Lets touching the page turn it while reading. When
+  off, taps and swipes no longer turn pages, but tapping the centre for the menu and holding a word still work. When
+  on, two more rows set each direction.
+
+  - **Next Page** and **Previous Page**: **Tap & Swipe**, **Tap Only**, **Swipe Only** (default), **Inverted Tap**,
+    **Inverted Swipe** or **Disabled**.
+    - Taps: the left third of the page goes back and the rest goes forward. The centre opens the menu. When only one
+      direction uses taps, the whole page turns that way.
+    - Swipes: swipe left to go forward and right to go back.
+    - The **Inverted** choices swap these. For vertical books and manga, **Reversed page turn** does the same and
+      also covers the buttons.
+
+- **Show Reader Menu** (devices with a Home key only): How the reader menu opens: **Off**, **Tap** (default, tap the
+  centre) or **Swipe Up**. With **Off** you can still open it through the Home key.
+
+- **Tap to look up** (no setting of its own): When neither page direction uses taps, a short tap on a word looks it
+  up, and holding a word starts a clipping that you drag out with your finger. Tapping a link still follows it, and
+  tapping empty space in the centre opens the reader menu. In manga, holding inside a speech bubble still looks up
+  the text.
+
+- **Quick return from links** (on by default, in Shortcuts): Only shown while **Short Power Button Click** is
+  **Links and footnotes**. A quick press of Power on a footnote page then takes you back, like the Back button.
+
+- **Short Back to File Browser** (off by default, button devices): Swaps what Back does in a book. A short press
+  opens the file browser and a long press goes Home, instead of the other way round.
+#### 3.6.8 Connectivity
+
+- **Wi-Fi Networks**: Save and connect to Wi-Fi networks. You need Wi-Fi for file transfers, sync, font downloads and firmware updates.
+
+- **Bluetooth Page Turner** (only on boards built with Bluetooth): Use a Bluetooth remote to turn pages.
+  1. Switch **Bluetooth Page Turner** on.
+  2. Open **Scan for Remotes** and pick your remote from the list.
+  3. **Paired Remotes** lists the remotes you have saved. Select a row marked **Forget** to remove that remote.
+
+  The remote works right away with its default buttons. To choose what each button does, open **Map Buttons** (it needs a connected remote):
+  1. Select an action: **Next Page**, **Previous Page**, **Next Chapter**, **Previous Chapter**, **Confirm**, **Back**, **Reader Menu** or **Create Clipping**.
+  2. Press the remote button you want for it within 15 seconds.
+  3. A short tap and a hold (0.7 seconds or longer) count as two different buttons, so one remote button can do two jobs. Some remotes never report that the button was let go. In that case the device waits the full 15 seconds and saves the press as a tap.
+
+  Good to know:
+  - Each button can do one thing. Mapping it again replaces the old action.
+  - To clear an action, hold **Confirm** on it (or long-press the row on a touch screen).
+  - **Back** cancels a mapping in progress, or returns to the Bluetooth menu.
+  - While reading, remote **Confirm** and **Back** work like the device buttons. With the reader menu open, the page buttons move through the menu items instead of turning pages.
+  - You can also switch Bluetooth on or off from the reader menu, or from the toolbar's **More** menu.
+
+- **CrossPoint Sync**: Sync your reading position with the CrossPoint sync server or any KOReader-compatible sync server. See [KOReader Sync Quick Setup](#3611-koreader-sync-quick-setup) below.
+
+- **OPDS Servers**: Save online book catalogs (OPDS libraries) so you can browse them and download books straight to the device. See [OPDS Servers (Multiple Libraries)](#369-opds-servers-multiple-libraries) below. ([What is OPDS?](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System))
+
+#### 3.6.9 OPDS Servers (Multiple Libraries)
+
+You can save up to 8 catalogs (for example your Calibre library at home and a public catalog) and switch between them.
+
+**Where to find your catalogs**
+
+- **Cover Grid** theme: open the Library's **OPDS** tab (next to **Books**, **Shelves** and **Files**). It lists your saved servers and an **Add Server** row. Choose a server to open its catalog. Wi-Fi only connects at that moment, never just because you moved across the tabs. Press **Back** at the top level of a catalog to return to the tab.
+- Other themes: open the catalogs from the home menu.
+
+In the Cover Grid theme the catalog stays inside the Library screen, with the tabs above it and the bottom bar below. Only the Wi-Fi picker takes the full screen. On a device without a touch screen:
+- **Up** from the first entry jumps to the tabs. There, **Left** and **Right** switch tabs.
+- **Down** past the last entry jumps to the bottom bar.
+- On an error screen or an empty catalog, **Up** and **Down** go straight to the tabs and the bar.
+
+**Add or edit a server**
+
+1. Open **Settings → Connectivity → OPDS Servers**.
+2. Select **Add Server**, or select a saved server to edit it.
+3. Fill in the fields:
+   - **Server Name**: Any name you like, e.g. "Home Calibre". Optional.
+   - **OPDS Server URL**: The full catalog address. For Calibre Content Server it usually ends in `/opds`.
+   - **Username** and **Password**: Only if the server asks you to log in.
+   - **Custom Header 1** and **Custom Header 2**: Only if your server's instructions tell you to set them. Most people leave these empty.
+4. To remove a server, open it and select **Delete Server**.
+
+The same **OPDS Servers** screen also has **Download folder** (where downloaded books are saved) and **Filename format** (how they are named).
+
+> [!NOTE]
+> Logins use standard "Basic" authentication. If your Calibre Content Server requires a login, set its authentication type to **Basic** (Digest does not work).
+
+You can also manage servers from a computer or phone. See [Web Settings (Wi-Fi + OPDS)](#3610-web-settings-wi-fi--opds).
+
+#### 3.6.10 Web Settings (Wi-Fi + OPDS)
+
+The device's web page lets you manage saved Wi-Fi networks and OPDS servers from a browser.
+
+1. On the device, open **File Transfer** and choose **Join a Network** or **Create Hotspot**.
+2. On your computer or phone, open `http://<device-ip>/settings` (the address shown on the device screen) or `http://crosspoint.local/settings`.
+3. In the **Wi-Fi Networks** card, add, edit or delete networks (network name, called SSID, plus an optional password).
+4. In the **OPDS Servers** card, add, edit or delete catalogs.
+
+Good to know:
+- Saved passwords are never shown again. A password field marked **(unchanged)** already has one stored.
+- To keep a stored password while editing, leave the password field empty.
+- You can save a hidden network here. Whether the device can then connect to it depends on the device's own Wi-Fi connection screen.
+
+#### 3.6.11 KOReader Sync Quick Setup
+
+Sync keeps your reading position the same on every device that uses the same sync server and account. That includes KOReader apps on phones and other e-readers.
+
+All settings live in **Settings → Connectivity → CrossPoint Sync**. Two of them decide what gets sent.
+
+**Server Type** tells the device what kind of server it talks to:
+- **Matcha**: The default CrossPoint sync server, or a self-hosted server that works like it. Sends the standard KOReader position plus a more precise position of its own.
+- **KoSync**: Standard KOReader sync servers, e.g. `sync.koreader.rocks` or a self-hosted `koreader/kosync`. Sends only the standard KOReader data.
+- **Other**: Custom servers that support the extra CrossPoint data. With **Send Document Metadata** on, it can also send the ISBN, ASIN, series name and series number.
+
+**Send Document Metadata** controls your privacy. Turn it off to sync only your position, without the book's title, author, ISBN/ASIN or series.
+
+Your password is typed in plain. The device turns it into the coded form (an MD5 hash) that sync servers expect.
 
 ##### Option A: CrossPoint Sync Server (`sync.crosspointreader.com`, default)
 
-When **Sync Server URL** is left empty, CrossPoint uses the free CrossPoint sync server at `https://sync.crosspointreader.com`. It speaks the standard KOReader sync protocol (so KOReader apps can use it too). CrossPoint records page starts as chapter-content offsets and sends the corresponding standard KOReader XPath, so devices with different fonts or layouts can return to the same text.
+This free server is used when **Sync Server URL** is empty. KOReader apps can use it too.
 
-1. On each CrossPoint device:
+On each device:
+1. Go to **Settings → Connectivity → CrossPoint Sync**.
+2. Enter your **Username** and **Password**. Use the same ones on every device.
+3. Leave **Sync Server URL** empty, or enter `https://sync.crosspointreader.com`.
+4. Set **Server Type** to **Matcha**.
+5. On your first device, select **Sign Up** once to create the account. On every other device, select **Authenticate**.
 
-   - Go to **Settings -> System -> KOReader Sync**.
-
-   - Set **Username** and **Password** (enter the plain password; CrossPoint computes MD5 internally, and use the same values on all devices).
-
-   - Leave **Sync Server URL** empty (or set it to `https://sync.crosspointreader.com`).
-
-   - On the first device, run **Sign Up** once to create the account directly from the device. On every other device, just run **Authenticate**.
-
-Accounts are per server. Existing `sync.koreader.rocks` credentials do not exist on the CrossPoint server; either sign up again with the same username/password or use Option B to keep using the legacy server.
+Accounts belong to one server. An account on `sync.koreader.rocks` does not exist on the CrossPoint server. Sign up again (you can reuse the same username and password), or use Option B to stay on the old server.
 
 ##### Option B: Legacy Public KOReader Server (`sync.koreader.rocks`)
 
-Use this if you already sync KOReader devices against the official public server.
+Use this if your KOReader devices already sync with the official public server.
 
-1. On each CrossPoint device:
+1. On each device:
+   1. Go to **Settings → Connectivity → CrossPoint Sync**.
+   2. Set **Sync Server URL** to `https://sync.koreader.rocks`. You must enter it: an empty field means the CrossPoint server.
+   3. Set **Server Type** to **KoSync**.
+   4. Enter your existing KOReader sync **Username** and **Password**.
+   5. Select **Authenticate**.
 
-   - Go to **Settings -> System -> KOReader Sync**.
-
-   - Set **Sync Server URL** to `https://sync.koreader.rocks` (required; an empty URL now points at the CrossPoint server instead).
-
-   - Set **Username** and **Password** to your existing KOReader Sync credentials.
-
-   - Run **Authenticate**.
-
-2. If you do not have an account yet, run **Sign Up** on the device, or register once with curl:
+2. No account yet? Select **Sign Up** on the device, or create one from a computer with curl:
 
 ```bash
 USERNAME="user"
@@ -603,11 +777,13 @@ curl -i "https://sync.koreader.rocks/users/create" \
   --data "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD_MD5\"}"
 ```
 
-When this returns `HTTP 402` with `{"code":2002,"message":"Username is already registered."}`, pick a different username or use that existing account.
+An answer of `HTTP 402` with `{"code":2002,"message":"Username is already registered."}` means the name is taken. Pick another, or log in with that account if it is yours.
 
 ##### Option C: Self-Hosted Server (Docker Compose)
 
-1. Start a sync server:
+This runs your own KOReader sync server (`koreader/kosync`) with Docker or Podman.
+
+1. Start the server:
 
 ```bash
 mkdir -p kosync-quickstart
@@ -635,23 +811,22 @@ podman compose up -d
 ```
 
 > [!NOTE]
-> `ENABLE_USER_REGISTRATION=true` is convenient for first setup. After creating your users, set it to `false` (or remove it) to avoid unexpected registrations.
+> `ENABLE_USER_REGISTRATION=true` makes first setup easy. Once your users exist, set it to `false` (or remove it) so strangers cannot register.
 
-2. Verify the server:
+2. Check that it runs:
 
 ```bash
 curl -H "Accept: application/vnd.koreader.v1+json" "http://<server-ip>:17200/healthcheck"
 # Expected: {"state":"OK"}
 ```
 
-3. Register a user once.
-   CrossPoint authenticates against KOReader Sync (`koreader/kosync`) using an MD5 key, so register using the MD5 of your password:
+3. Create a user once. The server stores the MD5 hash of the password, so send the hash:
 
 > [!WARNING]
-> Sending a reusable MD5-derived password over plain HTTP is insecure.
-> Create unique sync-only credentials and do not reuse main account passwords.
-> Prefer `https://<server-ip>:7200` whenever traffic leaves a fully trusted LAN or when using untrusted networks.
-> Use `curl -k` only for self-signed certificate testing.
+> Over plain HTTP the MD5 hash travels unencrypted and anyone on the network can reuse it.
+> Make a separate sync-only password. Never reuse an important one.
+> Use `https://<server-ip>:7200` whenever traffic leaves a network you fully trust.
+> Use `curl -k` only to test a self-signed certificate.
 
 ```bash
 USERNAME="user"
@@ -664,81 +839,109 @@ curl -i "http://<server-ip>:17200/users/create" \
   --data "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD_MD5\"}"
 ```
 
-If this returns `HTTP 402` with `{"code":2002,"message":"Username is already registered."}`, the account already exists.
+`HTTP 402` with `{"code":2002,"message":"Username is already registered."}` means the account already exists.
 
-4. On each CrossPoint device:
-   
-   - Go to **Settings -> System -> KOReader Sync**.
-   
-   - Set **Username** and **Password** (enter the plain password; CrossPoint computes MD5 internally, and use the same values on all devices).
-   
-   - Set **Sync Server URL** to `http://<server-ip>:17200`.
-   
-   - Run **Authenticate**.
-
-If you use the HTTPS listener, use `https://<server-ip>:7200` (`curl -k` only for self-signed certificate testing).
+4. On each device:
+   1. Go to **Settings → Connectivity → CrossPoint Sync**.
+   2. Enter the **Username** and the plain **Password** (the device makes the hash itself). Use the same ones on every device.
+   3. Set **Sync Server URL** to `http://<server-ip>:17200`, or `https://<server-ip>:7200` for the encrypted port.
+   4. Set **Server Type** to **KoSync**.
+   5. Select **Authenticate**.
 
 ##### Syncing While Reading
 
-Once any of the options above is set up, press **Confirm** while reading to open the reader menu, then select **Sync Progress**. Alternatively, set **Settings -> Controls -> Long-press Menu** to **KOSync** and hold Confirm to launch sync directly.
+To sync, press **Confirm** while reading to open the reader menu, then select **Sync Progress**.
 
-- With **Sync Behavior** set to **Ask every time**, choose **Apply Remote** to jump to remote progress or **Upload Local** to push current progress.
-- With **Sync Behavior** set to **Smart sync**, CrossPoint auto-resolves simple cases: upload when no remote progress exists, confirm and leave both unchanged when local and remote progress are already synchronized, upload when local progress is further ahead, or apply remote when remote progress is further ahead.
+This works in every reader: EPUB, TXT and Markdown, XTC/XTCH and manga. An XTC or manga book syncs its page, the way KOReader syncs a PDF or CBZ. A manga also finds the position of the same title read as `Title.cbz`, `.epub`, `.pdf`, `.xtc` or `.xtch` on another device. Those files number their pages differently, so the reader then goes by the share of the book read, e.g. 40%.
+
+For a shortcut, set **Settings → Controls → Shortcuts → Long-Press Menu** to **KOSync**. Holding **Confirm** then starts a sync, in every reader. In XTC and manga, KOSync is the only Long-Press Menu choice that works.
+
+**Sync Behavior** decides what happens when the device and the server disagree:
+- **Smart Sync** (default for new setups) handles the easy cases on its own. It uploads your position when the server has none or when you are further ahead. It jumps to the server's position when that one is further ahead. If both already match, it confirms and changes nothing. It never asks, also not when you open a book.
+- **Ask Every Time** lets you choose each time: **Apply remote progress** jumps to the server's position, **Upload local progress** sends yours. Setups saved by older firmware keep this choice until you change it.
+
+**Sync Clippings** is off by default. Turn it on only with a CrossPoint sync server that supports clippings. **Sync Progress** then also uploads and downloads this book's clippings. Leave it off for ordinary KOSync servers.
+
+With the CrossPoint sync server, **Sync Progress** also uploads your reading insights: minutes per day, total time, books finished and your longest streak, plus each book's reading time, sessions and finished status (as the finish date it sends the day on the end-of-book stamp, or your last reading day for books finished before that day was saved). The CrossPoint app then shows your measured reading time, overall and per book. **Sync Progress** also sends how much of your reading fell in the morning, afternoon, evening and night, so the app's time-of-day chart fills up from the first time you read after installing this version. Insights are only sent once the clock is set (see [Syncing the Clock](#syncing-the-clock)). The first sync sends up to two years of history and the insights of every book in your reading insights, so it takes longer than usual; later syncs only send the days and books read since. If the upload fails, your progress still syncs and the next sync picks up where it stopped. Your insights then live on the server too, so switching to another reader or resetting this one loses nothing: the CrossPoint app keeps showing your whole history, and **Refresh Insights** brings your daily reading time back to the device (see [Syncing Insights Between Devices](#74-syncing-insights-between-devices)). Dictionary lookups and saved sentences are not synced. Pages are not recorded on the device, so the app's pages chart stays empty for this device. All CrossPoint readers on one account count as one device. Ordinary KOSync servers get no insights.
+
+With the CrossPoint sync server, each sync that sends your insights (**Sync Progress**, **Refresh Insights** or **Sync Insights**) also asks the server which books changed their reading position on another device, e.g. the CrossPoint app, KOReader or another reader. The badges in the Library and on Home then show the furthest position: 60% on your phone beats 50% here, and a book finished there shows **Read**, even if you never opened it on this reader. If you start a book over on this reader that was finished elsewhere, its badge follows your new reading as soon as you turn a page. Just opening it keeps **Read**. **Mark as Unread** also resets it. Books are matched by their file name, and also by their content when **Document Matching** is set to **Binary**. A manga matches by its title: the folder `Title`, `Title.matcha` and a `Title.epub`, `.cbz`, `.pdf`, `.xtc` or `.xtch` on another device all count as the same book. The first sync goes through every book on your account, so it takes longer. A book marked as finished in the app without a reading position does not count. For every book on the card that is further ahead elsewhere, the sync also fetches its exact position, so opening the book later needs no WiFi: **Smart Sync** opens it there, and **Ask Every Time** asks first. A sync takes up to 30 such books; the next sync takes the rest.
 
 ### 3.7 Sleep Screen
 
-The **Sleep Screen** setting controls what is displayed when the device goes to sleep:
+Choose what the screen shows while the device sleeps in **Settings → Sleep → Sleep Screen**.
 
-| Mode               | Behavior                                                                                                                     |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| **Dark** (default) | The CrossPoint logo on a dark background.                                                                                    |
-| **Light**          | The CrossPoint logo on a white background.                                                                                   |
-| **Custom**         | A custom image from the SD card (see below). Falls back to **Dark** if no custom image is found.                             |
-| **Cover**          | The cover of the currently open book. Falls back to **Dark** if no book is open.                                             |
-| **Cover + Custom** | The cover of the currently open book, shown only while actively reading. Falls back to **Custom** behavior when not reading. |
-| **Transparent**    | A BMP or PNG overlay drawn over the current screen. Supports PNG and 32-bit BGRA alpha transparency, and treats white as transparent in regular BMPs. Falls back to **Dark** if no valid overlay image is found. |
-| **None**           | A blank screen.                                                                                                              |
+| Mode               | What you see                                                                                                    |
+| ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| **Dark** (default) | The logo on a black background. See [Custom logo](#custom-logo) to use your own.                                |
+| **Light**          | The logo on a white background.                                                                                 |
+| **Custom**         | Your own picture from the SD card (see [Custom images](#custom-images)). Shows **Dark** if none is found.       |
+| **Cover**          | The cover of the book you have open. Shows **Dark** if no book is open.                                         |
+| **Cover + Custom** | The book cover when you put the device to sleep while reading. From anywhere else, behaves like **Custom**.     |
+| **None**           | A blank screen.                                                                                                 |
+| **Quick Resume**   | Leaves the current screen as it is, so the page you were on stays visible.                                      |
+| **Transparent**    | A picture drawn on top of the current page (see [Transparent sleep screen](#transparent-sleep-screen)). Shows **Dark** if no usable picture is found. |
+| **Cover + Transparent** | The transparent picture drawn on top of the cover of the last book you opened, from any screen. Behaves like **Transparent** if that book has no cover, and shows the plain cover if no usable picture is found. On the X4 the cover is drawn in dithered black and white under the picture. |
+| **Insights**          | Your reading insights styled as a train departures board: total hours read, current day streak and minutes this week. The board's words are always in English and Japanese. |
 
 #### Cover settings
 
-When using **Cover** or **Cover + Custom**, two additional settings apply:
+Two more settings change how pictures look in **Cover**, **Cover + Custom**, **Cover + Transparent** and **Custom**:
 
-- **Sleep Screen Cover Mode**: **Fit** (scale to fit, white borders) or **Crop** (scale and crop to fill the screen).
-- **Sleep Screen Cover Filter**: **None** (grayscale), **Contrast** (black & white), or **Inverted** (inverted black & white).
+- **Sleep Screen Cover Mode**: **Fit** shows the whole picture with white borders. **Crop** fills the screen and trims the edges.
+- **Sleep Screen Cover Filter**: **None** keeps the shades of gray. **Contrast** turns the picture pure black and white. **Inverted** does the same with the colors swapped.
 
 #### Custom images
 
-To use custom sleep images, set the sleep screen mode to **Custom** or **Cover + Custom**, then place images on the SD card:
+Set **Sleep Screen** to **Custom** or **Cover + Custom**, then put BMP images on the SD card:
 
-- **Multiple Images (recommended):** Create a `.sleep` directory in the root of the SD card and place any number of `.bmp` images inside. One will be randomly selected each time the device sleeps. (A directory named `sleep` is also accepted as a fallback.)
-- **Single Image:** Place a file named `sleep.bmp` in the root directory. This takes priority over the `.sleep`/`sleep` directories.
+- **Several images (recommended):** Make a folder called `.sleep` in the top level of the SD card and put your `.bmp` files in it. The device picks one at random each time it sleeps. A folder called `sleep` works too.
+- **One image:** Put a file called `sleep.bmp` in the top level of the card. It wins over the folders.
+
+Like book covers, custom images are scaled to the screen using **Sleep Screen Cover Mode**. The first sleep with a new image takes longer while it is converted.
 
 #### Transparent overlay images
 
-To use transparent sleep overlays, set the sleep screen mode to **Transparent**, then place BMP or PNG files on the SD card:
+Set **Sleep Screen** to **Transparent** or **Cover + Transparent**, then put BMP or PNG images on the SD card:
 
-- **Multiple Images (recommended):** Create a `.sleep-overlay` directory in the root of the SD card and place any number of valid overlay `.bmp` or `.png` images inside. One will be randomly selected each time the device sleeps. A directory named `sleep-overlay` is also accepted as a fallback.
-- **Single Image:** Place `sleep-overlay.bmp` or `sleep-overlay.png` in the root directory. A root BMP takes priority over a root PNG, and both take priority over the `.sleep-overlay`/`sleep-overlay` directories.
+- **Several images (recommended):** Make a folder called `.sleep-overlay` in the top level of the card and put your `.bmp` or `.png` files in it. One is picked at random each time. Folders called `sleep-overlay` and `.sleep/transparent` work too, and pictures in all of them share one pool.
+- **One image:** Put `sleep-overlay.bmp` or `sleep-overlay.png` in the top level of the card. The BMP wins over the PNG, and both win over the folders.
 
-Transparent overlay files are intentionally separate from normal sleep images. Regular BMP formats supported by CrossPoint are accepted; white pixels leave the existing screen unchanged. For per-pixel alpha transparency, use a PNG with an alpha channel or a 32-bit BGRA BMP with both visible and non-opaque pixels. Opaque white pixels in alpha images erase the content behind them.
-
-> [!TIP]
-> For best results:
-> - For non-transparent **Custom** mode, use uncompressed BMP files with 24-bit color depth.
-> - For **Transparent** mode, use a PNG or uncompressed 32-bit BGRA BMP for per-pixel alpha, or a regular BMP for white-as-transparent artwork.
-> - X4: Use a resolution of 480x800 pixels to match the device's screen resolution.
-> - X3: Use a resolution of 528x792 pixels to match the device's screen resolution.
+Keep these pictures apart from your normal sleep images, because they work differently:
+- In a normal BMP, white areas let the page show through.
+- For soft, see-through edges, use a PNG with transparency, or a 32-bit BMP with an alpha channel. In these files a solid white pixel covers the page.
 
 > [!TIP]
-> You can set an image as the sleep screen cover directly from the BMP image viewer in the **[Browse Files](#33-browse-files-screen)** screen.
+> For the best results:
+> - **Custom** mode: use uncompressed 24-bit BMP files.
+> - **Transparent** mode: use a PNG or a 32-bit BMP for soft transparency, or a normal BMP where white means "see-through".
+> - X4: make images 480x800 pixels, the size of the screen.
+> - X3: make images 528x792 pixels.
+
+> [!TIP]
+> You can set a picture as your sleep screen straight from the image viewer in **[Browse Files](#33-browse-files-screen)**. On touch devices, long-press the image.
+
+#### Custom logo
+
+You can replace the cat on the start-up screen and on the **Dark**, **Light** and **Insights** sleep screens with your own drawing. No setting needed.
+
+1. Make a BMP image called `logo.bmp`.
+2. Put it in the device's system folder on the SD card. That is the folder holding `reading_stats.bin` and `bookstats`, usually the hidden `.system` folder (a folder called `system` works too).
+3. To get the cat back, delete the file.
+
+Tips for the image:
+- Size: 222x316 pixels is ideal. The device adds a 4-pixel white border around it. Bigger images up to 800 pixels on each side are shrunk to fit. Smaller ones are centered and never enlarged.
+- Any uncompressed BMP works (1, 2, 4, 8, 24 or 32-bit). The device shows it in 4 shades of gray, so very light grays turn white.
+- Draw on a plain white background. A 32-bit BMP with transparency is placed on white.
+- On the dark screens it gets a white outline, like the cat. The white around the drawing turns black, while white areas inside the drawing (a face, a book page) stay white.
+- The start-up screen shows only black and white, so it can start quickly. Light gray parts vanish there, so use dark lines.
+- The **Insights** screen may show the logo smaller, or leave it out if there is no room.
+- Still seeing the cat? The file is probably bigger than 800 pixels on a side, compressed, or damaged. The serial log names the reason.
 
 #### Transparent sleep screen
 
-**Transparent** does not replace the page, it draws over it. White pixels in the image let the page through, black
-ones paint on top, so you get the wallpaper and the paragraph you stopped at in the same picture.
+**Transparent** draws a picture on top of the page you were reading. White parts of the picture let the page show through and black parts paint over it. You see your artwork and the paragraph where you stopped, together.
 
-It uses the same images as **Custom**: put 480x800 BMPs (X4) or 528x792 (X3) in `.sleep/transparent` on the card. Images with a lot of white space work best, since anything solid hides the text under it.
-Artwork along one edge, as below, keeps most of the page readable.
+Put 480x800 images (X4) or 528x792 images (X3) in `.sleep-overlay` on the card, as described above. Pictures with lots of white space work best, because solid areas hide the text below. Artwork along one edge, like the example, keeps most of the page readable.
 
 <p align="center"><img src="docs/images/screenshots/sleep-screen-transparent.png" width="260" alt="Sleep wallpaper drawn over the page, with the text still readable behind it"></p>
 
@@ -746,118 +949,138 @@ Artwork along one edge, as below, keeps most of the page readable.
 
 ### 3.8 Custom Fonts (SD Card)
 
-CrossPoint loads additional fonts from the SD card. Custom fonts can add Chinese, Japanese, Korean, and other scripts that the built-in reader fonts lack. If your device have external RAM, you can copy `.ttf`, `.otf`, and `.ttc` files directly. Otherwise, use `.cpfont` files made from those fonts. 
+You can add fonts from the SD card. Use them for a different look, or for Chinese, Japanese, Korean and other scripts that the built-in fonts do not cover.
 
-Convert any TTF or OTF with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) and put the
-result in `.fonts/<Family>/regular.cpfont`.
+Fonts come in `.cpfont` files, one file per size. You can convert any TTF or OTF font yourself with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) in your browser. On boards with extra memory (PSRAM), the device can also read `.ttf`, `.otf` and `.ttc` files directly, without converting them. The dictionary panel then uses that font too, for characters its own font lacks such as IPA, except in Japanese and Chinese books.
 
-There are three ways to install fonts:
+**Ways to install a font**
 
-1. **Download from device (recommended):** Go to **Settings -> System -> Manage Fonts**, browse the available font families, and select one to download over Wi-Fi.
-2. **Upload via web interface:** While in **File Transfer** mode, open the web UI and use the **Fonts** tab to upload `.cpfont` files. The Fonts tab does not accept TTF/OTF/TTC files.
-3. **Manual SD card copy:** Copy `.cpfont` families from the [crosspoint-fonts repository](https://github.com/crosspoint-reader/crosspoint-fonts) to `/.fonts/` or `/fonts/`. If your device have external RAM, you can also copy TTF/OTF/TTC files there without conversion.
+1. **Download on the device (easiest):** Go to **Settings → Reader → Text Settings**, pick a profile, open **Font**, scroll to the bottom of the list and select **Manage Fonts**. Pick a font family to download it over Wi-Fi.
+2. **Upload from a browser:** In **File Transfer** mode, open the device's web page and use the **Fonts** tab. It takes `.cpfont` files, and on boards with PSRAM also `.ttf` and `.otf`. Choose the folder that holds the family's files. For `.ttc` files, copy them to the card instead (item 3).
+3. **Copy to the SD card:** Put each font in its own folder inside `/.fonts/` (or `/fonts/`), named like this: `.fonts/<Family>/<Family>_<size>.cpfont`, e.g. `.fonts/NotoSansSC/NotoSansSC_16.cpfont`. Ready-made `.cpfont` families are in the [crosspoint-fonts repository](https://github.com/crosspoint-reader/crosspoint-fonts).
 
-Once installed, custom fonts appear in **Settings → Reader → Font Family** alongside the built-in fonts.
+Installed fonts appear in the font list of every profile in **Settings → Reader → Text Settings**, next to the built-in ones.
 
-A font that only widens another one's character coverage does not get its own row. `NotoSerifExtended` is Noto Serif plus Greek, Cyrillic and phonetic characters, so it is folded into the **Noto Serif** entry rather than listed beside it; the same applies to any `…Extended` or `…IPA` font whose base font is present. Selecting the single row gives you the widest version installed, except in a Japanese book, where the base font is paired with the Japanese font instead — only one SD font is ever held in memory at a time. A variant whose base font is *not* installed keeps its own row, so its characters are always reachable.
+**Noto Sans**
 
-See [docs/sd-card-fonts.md](./docs/sd-card-fonts.md) for full installation details and SD card folder structure.
+Noto Sans is no longer built in. Install the `NotoSans` family on the card to use it. If you had Noto Sans selected before updating, the device uses `NotoSans` when it is installed and Noto Serif when it is not. A Noto Sans JP, SC, TC or HK font pairs with `NotoSans` the same way the Noto Serif versions pair with the built-in serif. Without `NotoSans` on the card, the first of them that is installed (JP, then SC, then TC/HK) appears as **Noto Sans** instead.
+
+**Extended fonts share one row**
+
+Some fonts only add extra characters to another font. For example, `NotoSerifExtended` is Noto Serif plus Greek, Cyrillic and phonetic symbols. Such a font (any `…Extended` or `…IPA` font) does not get its own row when its base font is installed. It is folded into the base font's row, and choosing that row gives you the widest version you have. Japanese books are the exception: there the base font is paired with your Japanese font, because the device holds only one SD font in memory at a time. If the base font is missing, the extended font keeps its own row so you can still use it.
+
+If the reader shows **Damaged font file**, a `.cpfont` file on the SD card is broken (for example, from an interrupted copy). The affected characters are drawn blank. Delete the font family's folder and install it again.
+
+For folder layout and more detail, see [docs/sd-card-fonts.md](./docs/sd-card-fonts.md).
 
 ### 3.9 Language Packs (SD Card)
 
-English, Japanese, Spanish, French and German are built into the firmware. Every other translation ships separately as
-a **language pack**, so the ~30 remaining languages do not have to occupy flash on a device that only ever displays one
-of them. All languages still appear in **Settings → System → Language**; the ones without a pack installed are marked
-**Needs pack** and selecting one leaves the interface as it was.
+English, Japanese, Spanish, French and German are built in. The other languages (about 30) come as separate **language packs**, so they do not take up space on a device that only ever uses one of them.
 
-To install one:
+All languages are listed in **Settings → System → Language**. A language marked **Download** has no pack on the card yet. Select it, pick a Wi-Fi network, and the device downloads the pack for your firmware version and switches to that language.
 
-1. Download `language-packs.zip` from the [release you are running](https://github.com/eszter007/matcha-reader/releases).
-2. Unzip it and copy the `.cplang` file for your language — for example `RU.cplang` — into `/.crosspoint/lang/` on the
-   SD card, creating the folder if it is not there. You can copy them all; only the selected one is ever loaded.
-3. Put the card back and pick the language in **Settings → System → Language**.
+Once a pack is on the card, **Update language packs** appears at the top of the list. It downloads every installed pack again, plus the one for the selected language. Use it after a firmware update.
 
-A pack is tied to the firmware it was built with. After a firmware update, download the packs from the new release as
-well: a mismatched pack is refused and the language stays on English rather than showing wrong text.
+To install a pack by hand instead:
+
+1. Open the [language packs release](https://github.com/eszter007/matcha-reader-assets/releases) whose name matches the firmware you are running, e.g. `language-packs-2.0.0-rc-2` for 2.0.0-rc-2. A pack only works with the firmware it was built for. The firmware release notes link to the right one.
+2. Download the `.cplang` file for your language (e.g. `RU.cplang`) and copy it into the folder `/.crosspoint/lang/` on the SD card. Create the folder if it does not exist.
+3. Put the card back and choose the language in **Settings → System → Language**.
+
+**Chinese:** The packs are `ZHS.cplang` (简体中文, Simplified) and `ZHT.cplang` (繁體中文, Traditional). The menus need a Chinese font, so install one first: Noto Sans SC or TC, from the [fonts release](https://github.com/eszter007/matcha-reader-assets/releases/tag/fonts-2.0) (`chinese-fonts-simplified.zip` or `chinese-fonts-traditional.zip`).
+
+**After a firmware update**, use **Update language packs** (or download the packs from the new release by hand). Each pack only fits the firmware it was built for. The device refuses an old pack and shows English instead of wrong text; your language then shows **Download** again.
 
 ---
-
 ## 4. Reading Mode
 
-Once you have opened a book, the button layout changes to facilitate reading.
+When a book is open, the buttons switch to reading controls.
 
 ### Page Turning
 
-| Action            | Buttons                              |
-| ----------------- | ------------------------------------ |
-| **Previous Page** | Press **Left** _or_ **Side Up**    |
-| **Next Page**     | Press **Right** _or_ **Side Down** |
+| Action            | Buttons                            | Touch                                   |
+| ----------------- | ---------------------------------- | --------------------------------------- |
+| **Previous Page** | Press **Left** _or_ **Side Up**    | Tap the left third of the page, or swipe right |
+| **Next Page**     | Press **Right** _or_ **Side Down** | Tap anywhere else on the page, or swipe left |
 
-The side buttons can be rebound per button in **Settings → Controls → Shortcuts** (Upper / Lower Side Button in
-Reader, X3/X4 only).
+On a touch device, **Next Page** and **Previous Page** in **Settings → Controls** choose whether taps, swipes or both turn the page.
 
-If the **Short Power Button Click** setting is set to "Next Page", you can also turn to the next page by briefly pressing the Power button ("Previous Page" turns back).
+You can give each side button a different job (e.g. Sleep or Footnotes) in **Settings → Controls → Shortcuts**, under **Upper Side Button in Reader** and **Lower Side Button in Reader**. On the X4 Pro the two rows are called **Left Side Button in Reader** and **Right Side Button in Reader**.
+
+The Power button can turn pages too. Set **Short Power Button Click** (also in Shortcuts) to **Next Page** or **Previous Page**.
 
 ### Chapter Navigation
 
-* **Next Chapter:** Press and **hold** the **Right** (or **Side Down**) button briefly, then release.
-* **Previous Chapter:** Press and **hold** the **Left** (or **Side Up**) button briefly, then release.
+To jump a whole chapter with a long press, open **Settings → Controls → Shortcuts** and set **Long-Press Button Behavior** to **Chapter Skip**. It is off by default.
 
-This feature can be disabled in the **[Controls Settings](#363-controls)** to help avoid changing chapters by mistake.
+With it on, hold **Right** (or **Side Down**) for about a second to go to the next chapter. Hold **Left** (or **Side Up**) to go back to the start of the chapter, and hold again to reach the previous one.
+
+You can also pick any chapter from the **[Reader Menu](#5-reader-menu)**.
 
 ### Auto Page Turn
 
-Auto Page Turn automatically advances pages at a set interval, useful for hands-free reading. This feature can be enabled and configured from the **[Reader Menu](#5-reader-menu)** while reading an EPUB.
+Auto Page Turn moves to the next page on its own, so you can read without touching the device. Open the **[Reader Menu](#5-reader-menu)**, choose **Auto Turn (Pages Per Minute)** and pick a speed: 1, 3, 6 or 12 pages per minute. Choose **Off** to stop.
 
 ### Tilt Page Turn (X3 only)
 
-On the **Xteink X3**, the gyroscope can be used to turn pages by tilting the device. This feature is available in the Controls settings.
+The Xteink X3 can turn pages when you tilt it. Turn this on with **Tilt Page Turn** in **Settings → Controls → Shortcuts**. **Inverted** swaps the tilt directions. The setting only appears on devices with a motion sensor.
 
 ### Images in Books
 
-An image that fills the page, across its width or its height, gets a page of its own; a wide one is turned sideways
-so it fills the screen, and you tilt the device to look at it. A smaller image stays with the text around it,
-upright and at no more than its own size: a figure between paragraphs, with its caption, or a narrow heading strip
-or diagram among the columns of vertical text.
+A large image gets a page to itself. If it is wider than it is tall, it is turned sideways to fill the screen, and you rotate the device to view it. Smaller images, such as a figure with its caption, stay in place within the text at their normal size.
 
-### Footnote Navigation
+### Links and footnotes
 
-When reading an EPUB that contains footnotes, you can navigate to the footnote text by selecting the footnote reference in the book. From the footnote, you can return to your original reading position.
+Books can link to other places in the same book: chapter links, cross-references and footnotes. On a touch device, tap a link to follow it. Press **Back** to return to where you were.
 
-If the device goes to sleep or you close the book while viewing a footnote, the book reopens to your original reading position, not the footnote.
+The book remembers your way back. If the device goes to sleep, or you close the book after following a link, it reopens on the page you were reading, and **Back** still takes you to the link. It keeps up to three of these return points.
 
-To read the notes without leaving the page, choose **Footnotes** in the reader menu (or set the power button or a
-side button to it). The page's notes open in the same floating panel as the dictionary: the footer names the note's
-place among them (`2/3`). A long note scrolls with Up/Down or a vertical swipe; Left/Right, or the page-turn gesture
-your touch setting uses, moves to the next or previous note. Confirm jumps to the note in the book, and Back or a
-tap outside the panel returns to the page.
+To read footnotes without leaving the page, choose **Links and footnotes** in the Reader Menu. You can also set the Power button or a side button to **Footnotes**. The notes open in a small panel on top of the page, starting at the note closest to where you are. The bottom of the panel shows which note you are on, e.g. `2/3`.
+
+| In the footnote panel            | Buttons          | Touch                                           |
+| -------------------------------- | ---------------- | ----------------------------------------------- |
+| Scroll a long note               | **Up** / **Down** | Swipe up or down                                |
+| Next or previous note            | **Left** / **Right** | Your page-turn gesture                      |
+| Go to the note in the book       | **Confirm**      |                                                 |
+| Close the panel                  | **Back**         | Tap outside the panel                           |
 
 <p align="center"><img src="docs/images/screenshots/footnotes.png" width="260" alt="A footnote in the floating panel, note 2 of 3"></p>
 
 ### Dictionary Lookup
 
-Words on the current page can be looked up in an offline StarDict dictionary stored on the SD card. Copy a dictionary to the `/dictionaries/` folder (or `/.dictionaries/`, see [6.5](#65-dictionary-files-and-language-selection)), select it in **Settings → Reader → Dictionary**, then start a lookup by choosing **Look Up** in the **[Reader Menu](#5-reader-menu)** (or by holding **Confirm**, if the **Long-press Menu** setting in **[Controls Settings](#363-controls)** is set to "Dictionary"). Use **Left/Right** to highlight a word and press **Confirm** to show its definition.
+You can look up words with an offline dictionary on the SD card. To set it up:
 
-On a touch device you can skip all of that: **long-press a word on the page** and its definition opens directly, with no setting to turn on first. A press between words opens ordinary word selection instead. The definition card pages by touch the way the reader is set to turn pages in **Touch Reader Controls**, and a tap outside it puts it away.
+1. Copy a StarDict dictionary into the `/dictionaries/` folder (or `/.dictionaries/`, see [6.7](#67-dictionary-files-and-language-selection)).
+2. Select it in **Settings → Reader → Dictionary Settings → Fallback for other languages**. Inside a book, the same row in **Reader Settings** is called **Dictionary**.
 
-See [docs/dictionary.md](docs/dictionary.md) for supported formats, setup, and where to find dictionaries.
+To look up a word with the buttons, choose **Look Up** in the **[Reader Menu](#5-reader-menu)**. Use **Left** and **Right** to highlight a word, then press **Confirm** to see its definition. On button-only devices you can also start a lookup by holding **Confirm**, if **Long-Press Menu** in **Settings → Controls → Shortcuts** is set to **Dictionary**.
+
+On a touch device, press and hold a word on the page. Its definition opens straight away. If your page turns use swipes only, a short tap on a word opens the definition and holding a word starts a clipping instead (see [3.6.7](#367-controls)). Page through a long definition with your page-turn gesture, and tap outside the card to close it.
+
+See [docs/dictionary.md](docs/dictionary.md) for supported formats and where to find dictionaries.
 
 ### System Navigation
 
-* **Return to Home:** Press the **Back** button to close the book and return to the **[Home](#31-home-screen)** screen.
-* **Return to Browse Files:** Press and hold the **Back** button to close the book and return to the **[Browse Files](#33-browse-files-screen)** screen.
-* **Reader Menu:** Press **Confirm** to open the **[Reader Menu](#5-reader-menu)**, which includes chapter navigation, reading options, and more.
-* **Long-press Confirm (configurable):** Holding **Confirm** runs the function chosen by the **Long-press Menu** setting in **[Controls Settings](#363-controls)** — "Bookmark" (default) drops a bookmark, "KOSync" launches KOReader Sync, "Dictionary" starts a word lookup, "Disabled" does nothing. A short press always opens the Reader Menu.
+| Action                    | How                                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------- |
+| **Go to Home**            | Press **Back**. The book closes and the **[Home](#31-home-screen)** screen opens.      |
+| **Go to Browse Files**    | Hold **Back** for about a second. The **[Browse Files](#33-browse-files-screen)** screen opens. |
+| **Open the Reader Menu**  | Press **Confirm**. On a touch device, tap the middle of the page.                      |
+
+**Short Back to File Browser** in **Settings → Controls → Shortcuts** swaps the two **Back** actions.
+
+**Hold Confirm (button-only devices).** Holding **Confirm** does whatever **Long-Press Menu** is set to. The choices are **Bookmark** (adds or removes a bookmark), **KOSync** (opens KOReader Sync), **Dictionary** (starts a word lookup), **Create Clipping** (starts a text selection), **Links and footnotes** (opens the footnote panel) and **Off**, which is the default. A short press always opens the Reader Menu. Touch devices don't have this setting. There, the Power button or Home button shortcuts do these jobs.
 
 ### Supported Languages
 
-CrossPoint renders text using the following Unicode character blocks, enabling support for a wide range of languages:
+The built-in reading fonts cover:
 
-* **Latin Script (Basic, Supplement, Extended-A/B):** Covers English, German, French, Spanish, Portuguese, Italian, Dutch, Swedish, Norwegian, Danish, Finnish, Polish, Czech, Hungarian, Romanian, Slovak, Slovenian, Turkish, Catalan, and others.
-* **Cyrillic Script (Standard and Extended):** Covers Russian, Ukrainian, Belarusian, Bulgarian, Serbian, Macedonian, Kazakh, Kyrgyz, Mongolian, and others.
-* **Vietnamese:** Supported via extended Latin glyph coverage in the built-in reader fonts.
+* **Latin script:** English, German, French, Spanish, Portuguese, Italian, Dutch, the Nordic languages, Polish, Czech, Hungarian, Romanian, Turkish, Vietnamese and many more.
+* **Cyrillic script:** Russian, Ukrainian, Belarusian, Bulgarian, Serbian, Macedonian and others.
 
-The UI includes Arabic and Hebrew (menus use built-in fonts with presentation-form coverage). Built-in **reader** fonts do not cover Chinese, Japanese, Korean, Arabic, Greek, Hebrew, or Farsi for book text. **CJK, Hebrew, Arabic, Greek, and other extended scripts can be enabled for reading by installing custom SD card fonts** — see [Custom Fonts (SD Card)](#38-custom-fonts-sd-card).
+They also include a small Japanese set (kana and common kanji) so Japanese text can show up. Menus can also show Arabic and Hebrew.
+
+For books in Chinese, Japanese, Korean, Arabic, Greek, Hebrew, Farsi or other scripts, install a font on the SD card. See [Custom Fonts (SD Card)](#38-custom-fonts-sd-card).
 
 ---
 
@@ -865,201 +1088,472 @@ The UI includes Arabic and Hebrew (menus use built-in fonts with presentation-fo
 
 <p align="center"><img src="docs/images/screenshots/reader-menu.png" width="260" alt="The reader menu"></p>
 
-Press **Confirm** while reading to open the Reader Menu. From here you can access reading utilities and navigation options without leaving the book.
+Press **Confirm** while reading to open the Reader Menu. On a touch device, tap the middle of the page. Press **Back** to close the menu and return to your page.
 
-Available options include:
+The menu shows these entries, top to bottom. Some only appear when they apply to the book or the device.
 
-- **Select Chapter** – Open the table of contents to jump to a specific chapter (see [Chapter Selection](#51-chapter-selection) below).
-- **Footnotes** – Navigate to the footnotes for the current section *(only shown in books that contain footnotes)*.
-- **Look Up** – Select a word on the current page and show its dictionary definition (see [docs/dictionary.md](docs/dictionary.md)). Requires a dictionary to be selected in **Settings → Reader → Dictionary**.
-- **Reading Orientation** – Cycle through screen orientations without leaving the reader.
-- **Auto Turn (Pages Per Minute)** – Cycle through automatic page turn speed options for hands-free reading.
-- **Go to %** – Jump to a specific position in the book by percentage.
-- **Take screenshot** – Save a screenshot of the current page to the `screenshots/` folder.
-- **Show page as QR** – Display a QR code encoding the current reading position.
-- **Go Home** – Close the book and return to the Home screen.
-- **Sync Progress** – Push or pull reading progress with a KOReader sync server (see [KOReader Sync Quick Setup](#367-koreader-sync-quick-setup)).
-- **Delete Book Cache** – Clear the cached layout data for the current book, forcing a re-index on next open.
+| Entry | What it does |
+| ----- | ------------ |
+| **Select Chapter** | Opens the table of contents (see [5.1](#51-chapter-selection)). |
+| **Links and footnotes** | Opens the footnote panel. Shown when the chapter has footnotes. |
+| **Word Lookup** | Looks up words in Japanese and Chinese books (see [§6](#6-language-learning-features)). |
+| **Translate Page** | Translates the page (see [6.2](#62-page-translation)). |
+| **Reader Settings** | Font, spacing and other reading settings for this book. |
+| **Bookmarks** | Lists this book's bookmarks. Shown once you have one. |
+| **Toggle Bookmark** | Adds a bookmark on this page, or removes it if there is one already. |
+| **Create Clipping** | Lets you select text and save it (see [5.3](#53-clippings-and-highlights)). |
+| **View Clippings** | Lists this book's clippings. Shown once you have one. |
+| **Night Mode** | Switches to white text on black. |
+| **Frontlight** | Adjusts the light. Only on devices with a frontlight. |
+| **Bluetooth Page Turner** | Connects a Bluetooth page turner. Only in builds that support it. |
+| **Look Up** | Looks up a word in your StarDict dictionary. Shown once a dictionary is selected. Hidden in Japanese books, and in Chinese books that use Word Lookup. |
+| **Auto Turn (Pages Per Minute)** | Turns pages automatically (see [Auto Page Turn](#auto-page-turn)). |
+| **Go to %** | Jumps to a point in the book by percentage. |
+| **Take screenshot** | Saves the screen as an image in the `screenshots/` folder on the SD card. |
+| **Show page as QR** | Shows the text of the current page as a QR code, so you can scan it with your phone. |
+| **Go Home** | Closes the book and opens the Home screen. |
+| **Sync Progress** | Sends or fetches your reading position with a KOReader sync server (see [KOReader Sync Quick Setup](#3611-koreader-sync-quick-setup)). |
+| **Delete Book Cache** | Deletes the saved page layout for this book and closes it. The book is prepared again the next time you open it. Your reading position is kept. |
 
-Press **Back** at any time to close the menu and return to your current page.
+**Reader Settings → Reader Menu Style** switches between this list (the default) and **Toolbar**, a dock at the bottom of the page:
+
+* **Progress row:** drag the knob or tap the line to jump through the book; the buttons at either end go to the previous or next chapter.
+* **Chapter line:** the chapter, the page and the book percentage, and a bookmark you tap to mark or unmark the page.
+* **Contents** lists the chapters. **Translate** translates the page straight away. **More** lists everything else from the full menu.
+* **Text:** the font size (the small and large A step it down and up), the font, **Focus Reading**, and **More text settings** for the full list (word spacing, hyphenation, indents and more). Japanese and Chinese books show **Furigana** (**Pinyin** in Chinese books) instead of Focus Reading.
+* **Page:** line spacing, margins, alignment and orientation as small page pictures: tap one to choose it. Japanese and Chinese books get **Vertical Text** (lines or columns) instead of alignment.
+
+With buttons, Left and Right move between the dock's controls and Select uses one. In the Text and Page panels, Up and Down choose a row, and Left and Right change it one step at a time, which reaches every value, not just the ones the pictures show. On the Text panel's Font and More text settings rows, Left and Right switch to the next panel instead; on the Page panel, go back to the dock to change panel. Back steps from a panel to the dock, and from the dock to the page.
 
 ### 5.1 Chapter Selection
 
-Accessible by selecting **Chapters** from the Reader Menu.
+Choose **Select Chapter** in the Reader Menu to see the table of contents.
 
-1. Use **Left** (or **Side Up**), or **Right** (or **Side Down**) to highlight the desired chapter.
-2. Press **Confirm** to jump to that chapter.
-3. *Alternatively, press **Back** to cancel and return to your current page.*
+1. Move through the list to the chapter you want.
+2. Press **Confirm** to jump there.
+
+Press **Back** to return to the Reader Menu without changing chapter.
 
 ---
 
 ### 5.2 Bookmarks
 
-Bookmarks can be created to quickly save and restore your place in a book.
+A bookmark saves your place so you can come back to it later.
 
-To create a bookmark, hold **Confirm** for about half a second while inside a book. A popup will appear letting you know a bookmark was created. The popup message will automatically disappear in a couple of seconds.
+**To add a bookmark**, choose **Toggle Bookmark** in the Reader Menu. A short message says **Bookmark Added.** Choosing it again on the same page removes the bookmark. With the **Toolbar** menu style, tap the bookmark on the dock's chapter line instead. On button-only devices you can also hold **Confirm**, if **Long-Press Menu** is set to **Bookmark** (see [System Navigation](#system-navigation)).
 
-To open bookmarks, press **Confirm** while inside a book. Then navigate to the **Bookmarks** menu. Bookmarks can be opened by navigating to them and pressing **Confirm**, which will redirect you to that place in the book. You can delete bookmarks by holding **Confirm** for about 0.7 seconds, and then pressing **Confirm** again to confirm deletion, or **Back** to cancel.
+**To open a bookmark**, choose **Bookmarks** in the Reader Menu, highlight one and press **Confirm**.
 
-Bookmarks are stored in the `.crosspoint/bookmarks` folder in the JSON format.
+**To rename or delete a bookmark**, hold **Confirm** on it for about a second (on a touch device, press and hold the row). Choose **Rename** or **Delete**. Delete asks you to confirm first.
 
-## 6. Japanese Reading Features
+### 5.3 Clippings and Highlights
 
-These are specific to the Matcha Reader fork. See the [README](README.md) for what they are and how to set
-up the dictionaries, fonts, and API key they need.
+A clipping saves a passage you have selected and highlights it on the page.
 
-### 6.1 Reading a Japanese Book
+**With buttons:** choose **Create Clipping** in the Reader Menu. Move to the first word and press **Confirm**, then move to the last word and press **Confirm** again to save. **Back** clears the selection. Press **Back** again to leave.
 
-Copy a Japanese EPUB to the SD card and open it from the Library. Vertical text activates on its own when the
-book declares `<dc:language>ja</dc:language>`, with no setting to find.
+**With touch:** press and hold a word. Its definition opens, with a handle on each side of the word. Drag a handle to turn the lookup into a selection. If your page turns use swipes only, holding a word starts the selection right away. Drag the handles to set the start and end, then tap one of the buttons above the selection (below it when the selection is at the top of the page): **Define** (look it up), **Translate** (with Gemini, see [6.2](#62-page-translation)), **Clip** or **Save** (bookmark the page). When the selection holds several words, **Define** shows the word it opens on first and further words of the selection (up to ten) on the next pages. They fill in while you read; a **Loading...** page at the end means more are coming. Back or a tap outside the panel stops the lookups.
 
-The reader menu (**Confirm**) gains **Vertical Text** and **Furigana** switches for Japanese books. Both
-toggle in place without leaving the menu, and both are remembered per book.
+To carry a selection onto the next page, hold the end handle on the last word for a second. A selection can cover up to three pages of the same chapter. To remove a clipping, press and hold its highlighted text.
+
+Highlights stay in place even after you change the font, spacing or screen orientation.
+
+**View Clippings** lists this book's clippings. Press **Confirm** on one to read it or go to its passage. Hold **Confirm** to delete it.
+
+Clippings are also added to `My Clippings.txt` in the main folder of the SD card, in the same format Kindle uses. Very long clippings are shortened there. If you move or rename a book, its clippings move with it. Deleting a book deletes its clippings, but `My Clippings.txt` is not changed.
+
+If you use a CrossPoint Sync server, turn on **Sync Clippings** in the KOReader Sync settings. Your clippings then sync together with **Sync Progress**. Leave it off for an ordinary KOSync server.
+
+**Vertical text.** Selection works the same way on vertical pages, but it moves one character at a time. A run of Latin letters or digits counts as one character. The side buttons move along a column, and **Left** and **Right** jump between columns. **Left** moves forward, in reading direction. On touch, the handles sit above and below the selection. A vertical selection can't go past the current page.
+## 6. Language Learning Features
+
+Matcha Reader adds tools for learning a language while you read. They were built first for **Japanese** and
+**Chinese** (Mandarin in simplified or traditional characters, and Cantonese). Most of them also work for books in
+other languages.
+
+You need a few files on the SD card first. The [README's Setup](README.md#setup) lists the steps, and
+[docs/dictionary-setup.md](docs/dictionary-setup.md) explains which dictionary to get for each language.
+
+| If you read | Start with | Then |
+| --- | --- | --- |
+| Japanese | [6.3 Japanese Books](#63-japanese-books) | 6.1, 6.2, 6.6 |
+| Mandarin, simplified or traditional | [6.4 Chinese Books](#64-chinese-books) | 6.1, 6.2, 6.6 |
+| Cantonese | [6.4 Chinese Books](#64-chinese-books) | 6.1, 6.2, 6.6 |
+| French, English or another language | [6.5 Books in Other Languages](#65-books-in-other-languages) | 6.1, 6.2 |
+
+Every EPUB says which language it is in (e.g. `ja`, `zh`, `zh-TW`, `yue` or `fr`). The reader uses that to pick
+the dictionary, the font and the page layout. If a Japanese or Chinese book has no language or the wrong one, the
+reader works it out from the text. You can also set it by hand: see [Book Language](#book-language) in 6.4.
+
+### 6.1 Word Lookup
+
+Word Lookup shows the dictionary entry for a word on the page.
+
+**Opening it**
+
+- Open the reader menu and choose **Word Lookup**. It is listed for Japanese and Chinese books once their
+  dictionary is installed.
+- On a touch device, hold your finger on a word. Its entry opens straight away.
+- For one-press access, go to **Settings → Controls → Shortcuts** and set **Short Power Button Click** to
+  **Word Lookup**. A side button can be set to **Word Lookup** on the same screen.
+
+Lookup opens on the page you were reading, vertical or horizontal, with one word highlighted. On a touch device
+you can then tap any word to open its entry.
+
+**Moving between words**
+
+Every lookup screen, in every language, uses the same rule: **press** to move on a little, **hold** (about 0.7 s) to
+skip ahead. Holding a button no longer repeats the move.
+
+| Button | Vertical text | Horizontal text |
+| --- | --- | --- |
+| Up / Down (press) | Previous / next word. At the end of a column it carries on into the next column | Previous / next word. At the end of a line it carries on into the next line |
+| Up / Down (hold) | Jump to the previous / next column | Jump to the line above / below |
+| Left / Right (press) | Next / previous column (Left moves forward, as the text runs) | Previous / next word |
+| Left / Right (hold) | Next / previous column | Line above / below |
+
+These directions follow the screen, so in landscape the side and front buttons swap roles. A device with only two side
+buttons can reach every word with them alone.
+
+| Button | Action |
+| --- | --- |
+| **Look Up** (Confirm) | Open the entry for the highlighted word |
+| Back | Return to reading |
+| Power (short click) | Open the entry, when **Short Power Button Click** is set to **Word Lookup** |
+
+No button labels are shown on this screen. A label bar would cover the last line of text.
+
+The highlight starts in the middle of the page, so no word is more than half a page away. Only words the dictionary
+knows can be highlighted. A page you looked at before opens faster, with the highlight on the word you last
+picked.
+
+**In the entry**
+
+- **Back** returns to the page with the same word highlighted, so the next word is a few presses away.
+- **Select** (Confirm) saves the word for sentence mining (see below).
+- A short power click closes the dictionary, when the shortcut above is set.
+- On a touch device, a tap outside the entry closes the dictionary and returns to the book.
+
+Some words have more than one entry. A Japanese word may be in both the vocabulary and the grammar dictionary,
+and a Chinese word may have several readings. Each entry gets its own page. Every button pair works the same way:
+
+| Action | What happens |
+| --- | --- |
+| Press Down / Right | Scroll one screen. At the end of a page it carries on to the next page |
+| Press Up / Left | Scroll back one screen. At the top of a page it goes back to the previous page |
+| Hold Down / Right | Skip straight to the next page |
+| Hold Up / Left | Skip straight to the previous page |
+| Swipe up / down (touch) | Same as a press |
+| Page-turn swipe (touch) | Same as a hold |
+
+**In manga**, lookup opens straight in the entry view:
+
+| Button | Action |
+| --- | --- |
+| Press Down / Right | Scroll the entry. At its end it carries on to the next word on the page |
+| Press Up / Left | Scroll back. At the top it goes to the previous word |
+| Hold Down / Right | Skip to the next word |
+| Hold Up / Left | Skip to the previous word |
+| Select | Save the word and its sentence for sentence mining (see below) |
+| Back | Return to reading |
+| Power (short click) | Same as Back, when **Short Power Button Click** is set to **Word Lookup** |
+
+The bottom of the entry shows where you are (e.g. 10/35) and which dictionary answered (e.g. `Vocab | JMdict` or
+`Vocab | CC-CEDICT`). You only land on words the dictionary has. When stepping from word to word in manga, each word
+shows one entry so stepping stays quick.
+
+**Settings**
+
+- **Reader Settings → Word Lookup Font Size**: **Tiny**, **Small** (default), **Medium** or **Large**.
+
+#### Sentence mining
+
+Sentence mining saves a word together with the sentence you found it in, as a flashcard for
+[Anki](https://apps.ankiweb.net/). It works in books in every language and in manga, manhua and comics.
+
+**To save a word**, open its entry and then:
+
+- **On a touch device** (X4 Pro, Papermono, Sticky): tap the **+** in the top-right corner of the entry (circled
+  below).
+- **On a button device** (X4, X3, X4 Classic): press **Select**. There is no **+** on these devices.
+
+<p align="center"><img src="docs/images/screenshots/sentence-mining.png" width="260" alt="A definition panel for 用意 over a vertical page of たのしいムーミン一家, with the save button in its top-right corner circled"></p>
+
+A short **Saved** message appears, and the corner shows a check until you move on. If the SD card could not be
+written, you see **Could not save**.
+
+Each word is saved once per sentence. Saving the same word from the same sentence again adds nothing, even days
+later. The same word in a different sentence makes a new card.
+
+**Where the cards go:** the **sentence-mining** folder on the SD card, with one file per language, e.g.
+`sentences-ja.csv`, `sentences-zh.csv`, `sentences-yue.csv` or `sentences-en.csv`. That way each language can go
+into its own Anki deck. Each card holds:
+
+| Column | Contents |
+| --- | --- |
+| Word | The word in its dictionary form, e.g. 漏らす |
+| Reading | Kana for Japanese (もらす). Pinyin for Chinese, plus zhuyin or jyutping when the dictionary has them. Empty for other languages |
+| Sentence | The sentence it came from, with the word in bold |
+| Definition | The dictionary entry (a very long one is shortened) |
+| Book, Author | Where it came from |
+| Date | The day you saved it |
+| Dictionary | Which dictionary answered |
+| Tags | `matcha` and the book title |
+
+A sentence cut off at the bottom of the page is completed from the next page. In manga, the sentence is the text of
+the speech bubble the word is in.
+
+**Importing into Anki**
+
+1. Copy the CSV file to your computer.
+2. In Anki, choose **File → Import** and pick the file.
+
+The file tells Anki how it is laid out, so you do not need to set up columns. The file keeps growing as you save
+more words. You can import the same file again later: Anki updates the cards it already has and adds only the new
+ones.
+
+The file is plain CSV, so a spreadsheet or another flashcard app can open it too.
+
+**The date** comes from the device clock, which is set whenever the device connects to Wi-Fi. The X4 has no clock
+chip and loses the time on a restart, so the date can be wrong or empty until the next Wi-Fi connection. To set
+the clock at any time, see [Syncing the Clock](#syncing-the-clock).
+
+### 6.2 Page Translation
+
+Reader menu → **Translate Page** translates the current page into English.
+
+**Before the first use**, get a Gemini API key from Google and save it as a text file named `gemini.key` in the
+`/.system/` folder on the SD card. A `/system/` folder works too. The dotted name hides the folder in the file
+browser.
+
+**What happens**
+
+1. The reader connects to the last Wi-Fi network you used. If there is none, or it does not answer, the Wi-Fi list
+   opens. Pick a network and the translation continues.
+2. "Translating..." shows while it works.
+3. The translation opens in a panel over the page. A long one is split into pages: turn them with Left / Right,
+   the page buttons or your usual page-turn gesture.
+4. Press Back, or tap outside the panel, to return to the book.
+
+<p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
+
+### 6.3 Japanese Books
+
+Copy a Japanese EPUB to the SD card and open it from the Library. A Japanese novel set to read right to left opens
+in vertical text, other Japanese books horizontally. To open every Japanese book one way, set **Tategaki (vertical
+Japanese)** in **Settings → Reader → Text Settings → Japanese** to **On** or **Off**. A book with no language set, or the wrong one, is recognised
+from its kana the first time you open it.
+
+**Furigana.** The reader shows the furigana that a book already has. It cannot add furigana itself. For a book
+without them, you can add them once on a computer before copying the book to the card:
+
+```bash
+python3 tools/furigana_ruby/add_furigana_ruby.py --ai --gemini-key-file gemini.key book.epub book-furigana.epub
+```
+
+The script sends the book's text to Google's Gemini, sentence by sentence, using your own API key (the same key
+Page Translation uses). Gemini reads each word in its sentence, which is needed because a kanji's reading depends
+on the word around it. Furigana the book already has stays as it is. A reading is added only when it fits the word
+as written (in 食べる, た goes over 食 and べる stays bare). Words that do not fit are left without furigana.
+
+**Switches.** For a Japanese book, **Reader Settings** has a **Vertical Text** and a **Furigana** switch. Open
+Reader Settings from the reader menu. Your choice is saved for that book and applies when you return to it.
 
 <p align="center">
   <img src="docs/images/screenshots/reader-settings.png" width="260" alt="Reader settings showing the vertical text and furigana toggles">
   <img src="docs/images/screenshots/vertical-text-furigana.png" width="260" alt="Vertical text with furigana beside the kanji">
 </p>
-<p align="center"><em>The toggles, and furigana set beside the kanji where the book provides it</em></p>
+<p align="center"><em>The switches, and furigana beside the kanji where the book has them</em></p>
 
-### 6.2 Word Lookup
+**Word Lookup in Japanese** (see 6.1):
 
-Reader menu → **Word Lookup**.
-
-In **vertical text**, lookup opens on the page you were reading, with the current word highlighted in place:
-
-| Button | Action |
-| --- | --- |
-| Side buttons (Up / Down) | Move to the previous / next word, down the column |
-| Left / Right | Jump to the next / previous column (Left runs forward, with the text) |
-| Look Up | Open the definition of the highlighted word |
-| Back | Return to reading |
-| Power (short click) | Leave lookup, when **Short power button click** is set to **Word Lookup** |
-
-From the definition, **Back** returns to the highlighted page rather than to the book, so looking up several
-words on one page costs a couple of presses each, and **Select** saves the word for sentence mining (see below).
-
-The cursor opens on the middle of the page, so any word is at most half a page of presses away, and the page is
-mapped starting from there — the half you are looking at is ready first. Mapping continues in the background
-while you choose: words it has not reached yet can still be selected, and the highlight moves as soon as it
-arrives. A page you have looked at before is mapped instantly from its cache, and the cursor returns to the
-word you left it on.
-
-No button labels are shown in this view: vertical text runs to the bottom of the screen, and a label bar there
-would cover the last line of every column. The buttons are the ones in the table above.
-
-In **horizontal text** and in manga, lookup opens directly in the definition view:
-
-| Button | Action |
-| --- | --- |
-| Left / Right | Move between matched words on the page |
-| Up / Down | Scroll a long definition |
-| Select | Save the word and its sentence for sentence mining (see below) |
-| Back | Return to reading |
-| Power (short click) | Go back, same as Back, when **Short power button click** is set to **Word Lookup** |
-
-The counter in the bottom-right corner shows your position (e.g. 10/35), next to the entry's type and dictionary
-(e.g. `Vocab | JMdict`) on the left. The page is pre-scanned, so you only ever land on a word the dictionary
-actually has.
-
-A word listed in both the vocabulary and the grammar dictionary shows both entries. In vertical text each gets its
-own page, and for short function words such as こと or よう the grammar page opens first; step to the other the way
-you page through an entry. Tapping a word in manga shows the grammar entry below the vocabulary one. Horizontal
-text, and manga lookups where you step from word to word, keep one entry per word so stepping stays quick: a short
-function word shows its grammar entry there, anything else its vocabulary entry.
+- **Conjugated forms are found.** 読んで finds 読む, and 食べませんでした finds 食べる. The entry shows the dictionary
+  form.
+- **Three dictionaries:** vocabulary, names and grammar. A word in both the vocabulary and the grammar dictionary
+  gets one page for each. For short grammar words such as こと or よう, the grammar page opens first.
+- **The book's own readings come first.** If the book puts furigana on a word, its entry starts with
+  "In this book:" and that reading (e.g. はやし). Names the book annotates are picked whole, even when the
+  dictionary only has their parts (緋 and 美津子 in 緋倉美津子).
+- **Words split across pages still work.** Lookup reads a few characters onto the next page, so picking the part
+  you can see finds the whole word.
 
 <p align="center">
   <img src="docs/images/screenshots/multi-dict-jp-vocab.png" width="240" alt="それなら: the vocabulary page, 1 of 2">
   <img src="docs/images/screenshots/multi-dict-jp-grammar.png" width="240" alt="それなら: the grammar page, 2 of 2">
 </p>
 
-A Japanese word broken by the page break still resolves: the lookup reads a few characters past the last one on
-screen, so selecting the part you can see gives the whole word. The highlight stays on the page, covering only
-the characters that are actually there.
+**Files.** Dictionaries go in `dictionaries/jp/` (see 6.7). A Japanese font is built in. A Noto Sans JP or Noto
+Serif JP font on the card looks better and adds rare kanji ([3.8](#38-custom-fonts-sd-card)). Saved words go to
+`sentences-ja.csv` with their kana reading.
 
-Enable **Settings → Controls → Navigate with Side Buttons in Word Lookup** to use the side buttons for moving
-between words and the front Left / Right buttons for scrolling. The swap is unavailable once both side buttons
-have custom actions, since there is then no shared side-button role left to arrange.
+### 6.4 Chinese Books
 
-In Reader Settings, **Word Lookup Font Size** offers Tiny, Small (default), Medium, and Large definition text.
+Chinese books work like Japanese ones once a dictionary and a font are on the card. The reader tells three kinds
+apart by the book's language:
 
-For one-press access, set **Settings → Controls → Short power button click** to **Word Lookup**. It then opens
-straight from the page, in both EPUBs and manga — and closes it again: the same click steps back out of a
-definition and out of word selection, so a whole lookup happens under the index finger of the hand already
-holding the device. Back still works as before, and the click only does this while the setting is **Word
-Lookup** (the other settings keep the click for sleep, page turns, refresh or footnotes).
+| | Mandarin, simplified | Mandarin, traditional | Cantonese |
+| --- | --- | --- | --- |
+| Book language | `zh-CN`, `zh-Hans`, `zh-SG` | `zh-TW`, `zh-Hant`, `zh-HK`, `zh-MO` | `yue`, `zh-yue` |
+| Dictionary folder | `dictionaries/zh/` | `dictionaries/zh/` | `dictionaries/yue/` |
+| Dictionary | CC-CEDICT | CC-CEDICT, with the MoE 重編國語辭典 entry below it | CC-Canto and CC-CEDICT together |
+| Reading in the entry | Pinyin | Pinyin and zhuyin | Pinyin and jyutping |
+| Level in the entry | HSK | TOCFL | none |
+| Font | Noto Sans SC | Noto Sans TC | Noto Sans TC |
+| Text direction | Horizontal | Vertical when the book reads right to left, otherwise horizontal | Same as traditional |
+| Punctuation in vertical text | 。，、 in the upper right of their square | 。，、 centred in their square | Same as traditional |
+| Saved words | `sentences-zh.csv` | `sentences-zh.csv` | `sentences-yue.csv` |
 
-#### Sentence mining
+A book marked only `zh` or `cmn` does not say which script it uses. The reader decides from its characters.
+A book marked `zh-HK` or `zh-MO`, or not marked at all, is read as Cantonese when its text uses Cantonese words
+such as 嘅, 咗, 冇, 喺 and 佢.
 
-Save a looked-up word with the sentence it came from, as a flashcard for [Anki](https://apps.ankiweb.net/). It
-works in Japanese books, in books in other languages, and in manga.
+A Cantonese book reads `dictionaries/yue/`. If only `dictionaries/zh/` is installed, it uses the Mandarin
+dictionary instead, which covers most of its words but not the Cantonese-only ones.
 
-The saved words are written as a CSV file made to be imported into Anki: it carries the header lines Anki's
-importer reads, so the import needs no setup (see **Importing into Anki** below). Being plain CSV, it also opens in
-a spreadsheet or another flashcard app, but Anki is what it is laid out for.
+The reading and level rows describe the ready-made dictionary packs in
+[docs/dictionary-setup.md](docs/dictionary-setup.md). If you convert a dictionary yourself, you choose what it
+shows: `--zhuyin` adds zhuyin, `--levels` adds a level and `--examples` adds example sentences.
 
-To save the word on screen, open its definition and:
+The `zh/` folder serves both scripts, because every word is stored in its simplified and its traditional form. So
+a simplified book works with the traditional pack, and the other way round. Install the one that matches what you
+study. Cantonese has its own folder because it has words a Mandarin dictionary does not list.
 
-- **On a touch device** (X4 Pro, Papermono, Sticky): tap the **+** in the top-right corner of the definition panel,
-  circled below.
-- **On a button device** (X4, X3, X4 Classic): press **Select**. The **+** is not shown there, since the button does the same.
+Without a converted Chinese dictionary, the reader falls back to the basic StarDict lookup, which picks only one
+character at a time. Install or convert the dictionary first (see 6.7).
 
-<p align="center"><img src="docs/images/screenshots/sentence-mining.png" width="260" alt="A definition panel for 用意 over a vertical page of たのしいムーミン一家, with the save button in its top-right corner circled"></p>
+#### Book Language
 
-The footer shows **Saved** (or **Could not save** if the SD card refused the write) until you move to another word,
-page or entry.
+When a book has no language set, or a language other than Japanese or Chinese, the reader checks its text the first
+time you open it. Kana mean Japanese. A page that is mostly Chinese characters means Chinese, simplified or
+traditional depending on the characters.
 
-Saved words go into the **sentence-mining** folder on the SD card, one file per language: `sentences-ja.csv`,
-`sentences-en.csv` and so on. The language is the dictionary's (for manga, the comic's), so each file can go into
-its own deck. Each line holds:
+If the guess or the book's own setting is wrong, open **Reader Settings → Book Language** and pick **Auto**,
+**Japanese**, **Chinese (Simplified)**, **Chinese (Traditional)** or **Cantonese**. The choice is saved for that
+book and applies when you return to it. The reader never guesses Cantonese, so set it here for a Cantonese book
+that is not marked `yue`.
 
-| Column | Contents |
+#### Word Lookup in Chinese
+
+Lookup works as described in 6.1. Some things are specific to Chinese:
+
+- **The page is split into dictionary words**, and the highlight lands only on words that have an entry. Chinese
+  words do not change form, so every word is looked up as written. If the dictionary was converted with a
+  `--frequency` list, the reader prefers the common split (结婚的和尚未结婚的 reads 和 + 尚未, not 和尚).
+- **The entry** shows the pinyin first (with zhuyin or jyutping after it), then the HSK or TOCFL level, then the
+  word in the other script when it differs (`說話 / 说话`), then the meanings, then up to two example sentences
+  with translations.
+- **Several readings or dictionaries** each get a page, e.g. 好 hǎo and 好 hào, or the CC-CEDICT and the MoE
+  entry. Use Left / Right to move between them.
+- **Names and grammar.** A dictionary converted with `--split-names` marks proper nouns as **Name** entries. A
+  Chinese grammar list, if installed, works like the Japanese one.
+
+#### Pinyin Above the Text
+
+Like furigana, pinyin (or zhuyin) above the characters has to be in the book. The reader cannot add it, and
+there is no setting for it. To add it, process the book once on a computer before copying it to the card:
+
+```bash
+python3 tools/pinyin_ruby/add_pinyin_ruby.py --cedict cedict_1_0_ts_utf-8_mdbg.txt book.epub book-pinyin.epub
+```
+
+Useful options:
+
+- `--ai --gemini-key-file gemini.key` lets Gemini pick each character's reading from its sentence. Recommended,
+  see below.
+- `--zhuyin` writes zhuyin (bopomofo) instead of pinyin.
+- `--frequency dict.txt --skip-top 1500` leaves the 1,500 most common words without pinyin, so only the words you
+  are likely to need get a reading.
+
+You need Python and the CC-CEDICT file ([docs/dictionary-setup.md](docs/dictionary-setup.md)). Copy the new EPUB to
+the card and open it. **Reader Settings → Pinyin / Zhuyin** shows or hides the readings and is saved per book. It
+is the same switch Japanese books call **Furigana**.
+
+**Why `--ai` helps.** Without it, readings come from the dictionary. Many characters have more than one reading,
+and a character on its own gets the first one listed, which is often wrong (石 comes out as *dàn* instead of
+*shí*). With `--ai`, the book's text is sent to Gemini, sentence by sentence, under your own API key (the same key
+Page Translation uses). Gemini picks each reading from the sentence. The script uses Gemini's reading only if
+CC-CEDICT lists it for that character, so it cannot add a made-up reading. This takes a while: roughly a minute
+per thousand characters, so a whole novel is a long run.
+
+<p align="center"><img src="docs/images/screenshots/pinyin-ruby.png" width="260" alt="A page of 紅樓夢 with pinyin above every character, added with --ai"></p>
+
+#### Vertical Text
+
+The layout follows the publisher. A book set to read right to left (common for novels from Taiwan) opens in
+vertical columns. Every other Chinese book opens horizontally. To open Chinese books one way, set **Zhípái (vertical Chinese)**
+in **Settings → Reader → Text Settings → Traditional Chinese** for Traditional Chinese books, or **Simplified
+Chinese** for Simplified ones, to **On** or **Off**. The **Vertical Text** switch in a book's **Reader
+Settings** overrides both and is saved per book.
+
+#### Fonts and the Interface
+
+The built-in font covers common Japanese characters only, so a Chinese book needs a font on the card: **Noto Sans
+SC** for simplified, **Noto Sans TC** for traditional and Cantonese. Convert one with the browser tool (README
+Setup step 3). When these fonts are published for download, **Manage Fonts** will offer them too. It is the last
+row of the font list in **Reader Settings → Text Settings**. The reader picks the font that matches the book's
+language, and each profile can also keep a font of its own.
+
+With only a Japanese font on the card, Chinese shows in Japanese letter shapes. It is readable, but it does not
+look like a printed Chinese book. With no font on the card, many everyday simplified characters show as empty
+boxes.
+
+Home, the Library, the file browser, the OPDS browser and the language list use the same font for names with
+characters the built-in font lacks, so Chinese titles show correctly there too.
+
+To switch the menus themselves to 简体中文 or 繁體中文, install a language pack
+([3.9](#39-language-packs-sd-card)).
+### 6.5 Books in Other Languages
+
+French, English, German and every other language use ordinary StarDict dictionaries, which need no conversion.
+Put each one in `dictionaries/<language>/<name>/` (see 6.7). A book tagged with that language then picks it
+automatically. Word Lookup (6.1), sentence mining and Page Translation (6.2) work as they do in a Japanese or
+Chinese book. One difference: the cursor stops on every word, including words the dictionary does not have.
+
+**Word forms.** Words on the page are often not in the form the dictionary lists. When a lookup finds nothing,
+the reader tries again with other forms of the word. It checks the dictionary's own `.syn` file first, if there
+is one, and then the rules for the book's language. In every language a capital letter at the start of a
+sentence is ignored, accents included, so `École` finds `école` and `Über` finds `über`.
+
+French has extra rules:
+
+| On the page | Looks up |
 | --- | --- |
-| Word | The word in its dictionary form, e.g. 漏らす |
-| Reading | Its reading, e.g. もらす (Japanese only) |
-| Sentence | The sentence it appeared in, with the word itself in bold |
-| Definition | The whole dictionary entry |
-| Book, Author | Where it came from |
-| Date | The day you saved it |
-| Dictionary | Which dictionary answered |
-| Tags | `matcha` and the book title |
+| `l'eau`, `qu'il`, `jusqu'ici` | `eau`, `il`, `ici` (the short article or pronoun is dropped) |
+| `journaux`, `bijoux`, `livres` | `journal`, `bijou`, `livre` |
+| `heureuse`, `chanteuse`, `nouvelle`, `première` | `heureux`, `chanteur`, `nouveau`, `premier` |
+| `parlaient`, `parlé`, `mangeons`, `commençait` | `parler`, `manger`, `commencer` |
+| `finissent`, `choisirait`, `vendu`, `attendait` | `finir`, `choisir`, `vendre`, `attendre` |
+| `éteignit`, `connaissons`, `conduisit`, `lentement` | `éteindre`, `connaître`, `conduire`, `lent` |
+| `songeai-je`, `pense-t-il` | two words you can select separately, `songeai` and `je`. Fixed compounds like `rendez-vous` stay one word. |
 
-**Importing into Anki:** copy the file to your computer and open it with **File → Import**. The first lines of the
-file describe its layout, so Anki sets the columns, HTML and tags up by itself. The files only ever grow: import
-the same file again later and Anki updates the cards it already has rather than duplicating them, because every
-card carries a stable ID. Saving the same word from the same sentence twice is harmless for the same reason.
+English, and every language without its own rules, gets basic rules for plurals, possessives and verb endings
+(`dogs` → `dog`, `stories` → `story`, `running` → `run`).
 
-A sentence cut off by the bottom of the page is finished from the start of the next page. In manga the sentence
-comes from the speech bubble the word is in.
+The rules only handle regular forms. Some French verbs look nothing like their infinitive (`est` and `fut` for
+*être*, `ont` and `eut` for *avoir*, `vais` for *aller*). No rule can find those. For them the dictionary needs a
+`.syn` file in its folder. Many dictionaries come with one; see [docs/dictionary.md](docs/dictionary.md).
 
-The date comes from the device clock, which sets itself whenever the device connects to Wi-Fi. Devices without a
-clock chip (the X4) lose the time on a restart, so until the next Wi-Fi connection the date can lag behind.
+### 6.6 Manga, Manhua and Comics
 
-### 6.3 Page Translation
+Japanese manga, Chinese manhua and comics in other languages all open in the same reader. You set the book's
+language when you convert it (`--language ja`, `zh`, `yue`, `fr` and so on). That language decides which
+dictionary is used for the speech bubbles.
 
-Reader menu → **Translate Page**. The translation opens in the floating panel over the page, like a dictionary
-entry: a long one is paged, with Left/Right, the page buttons or your touch page-turn gesture, and Back or a tap
-outside the panel returns to the page. The connection and "Translating…" show in the panel too. The last Wi-Fi
-network you used is joined straight away; only when there is none, or it does not answer, does the Wi-Fi list open,
-and the panel comes back over the page once you have picked a network. Needs a Gemini API key in
-`/system/gemini.key`. The folder can also be called `/.system/`, which hides it from the file
-browser; when both exist, `/.system/` is used.
+Looking up words inside the pictures works for Japanese, Mandarin and Cantonese, because it needs the converted
+dictionaries in `dictionaries/jp/`, `zh/` or `yue/`. A comic in another language still reads normally, but word
+lookup in its speech bubbles is not supported yet.
 
-<p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
-
-### 6.4 Reading Manga
-
-Convert your manga with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/), picking the X3 or
-X4 target so pages are scaled for the screen. Then copy the folder anywhere on the SD card, at any depth and under
-any folder name. It appears in the
-Library grid, on shelves, and in Continue Reading with its cover, title, author and progress.
+Convert the book with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) and pick the X3 or
+X4 target, so the pages are sized for your screen. Then copy the `.matcha` file (or, for older firmware, the
+folder; see below) anywhere on the SD card. Any name and depth works. The book shows up in the Library grid, on shelves and in Continue Reading with its cover, title,
+author and progress.
 
 | Button | Full-page view | Panel zoom |
 | --- | --- | --- |
-| Page turn | Enter panel zoom at the first panel | Next panel, then next page |
-| Confirm | Reader menu | Word lookup for this panel's text |
-| Back | Leave the book | Back to full-page view |
-| Hold Back | Jump to the file browser | Jump to the file browser |
+| Page turn | Zooms in on the first panel | Next panel, then the next page |
+| Confirm | Reader menu | Reader menu |
+| Back | Leave the book | Back to the full page |
+| Hold Back | Open the file browser at the book | Open the file browser at the book |
 
 <p align="center">
   <img src="docs/images/screenshots/manga-full-page.png" width="240" alt="Full page view">
@@ -1068,46 +1562,68 @@ Library grid, on shelves, and in Continue Reading with its cover, title, author 
 
 #### Looking up words in the picture
 
-You can pick a single word straight out of a speech bubble, on the full page or on a zoomed panel, including a
-panel turned sideways by Rotate Panels.
+You can pick a single word straight out of a speech bubble. This works on the full page and on a zoomed panel,
+also when **Rotate Panels** has turned the panel sideways.
 
-- **By touch:** hold the word. Its dictionary entry opens. A hold just beside a word, on the gap between two
-  columns or next to the furigana, still finds it; a hold on the artwork does nothing.
-- **With buttons:** open **Word Lookup** (reader menu, or the power button or a side button set to Word Lookup).
-  The page stays on screen with an outline around one word. The keys that turn the page move the outline word by
-  word, in the same direction they turn pages, and **Confirm** looks the word up. On the X4 Pro, the **Home** key
-  picks the word while the outline is showing. Closing the entry brings you back to the same word, so the next one
-  is a single press away. **Back** ends the selection.
+- **By touch:** hold your finger on the word and its dictionary entry opens. A hold slightly next to the word
+  still finds it, e.g. in the gap between two columns or beside the small reading characters (furigana). A hold on
+  the artwork does nothing.
+- **With buttons:** start **Word Lookup** from the reader menu, or with the power button or a side button set to
+  Word Lookup. The page stays on screen and one word gets a frame around it. The page-turn buttons move the frame
+  from word to word, in the same direction they turn pages. **Confirm** looks the word up. On the X4 Pro the
+  **Home** key does the same. When you close the entry you are back on the same word, so the next one is one
+  press away. **Back** stops selecting.
 
-The outline is a thin frame, so the word stays readable inside it. A word that continues into the next column gets
-a frame in each column.
+The frame is thin, so you can still read the word inside it. A word that runs on into the next column gets a frame
+in each column (or on each line, in horizontal text).
 
 <p align="center">
   <img src="docs/images/screenshots/manga-word-select.png" width="240" alt="A word in a speech bubble outlined for lookup">
   <img src="docs/images/screenshots/manga-word-lookup.png" width="240" alt="The dictionary entry for the outlined word">
 </p>
 
-This needs manga converted with the current [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/)
-or `convert_manga.py`, which records where every line of text sits on the page. Manga converted earlier keeps
-working as before: Word Lookup shows the panel's text as a list, and a hold does nothing. Convert it again to get
-word selection. Conversion sends each panel to Gemini once, so a book costs one OCR pass either way.
+Selecting single words needs manga converted with the current
+[Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) or `convert_manga.py`, because they save
+where each line of text sits on the page. Manga converted with an older version still works. There, Word Lookup
+shows the panel's text as a list, and holding a word does nothing. Convert the book again to get word selection.
+Converting again costs the same as the first time.
 
-Two options change how panels are shown. Both are per book and are remembered.
+Two options change how panels are shown:
 
 | Option | Where | Effect |
 | --- | --- | --- |
-| **Rotate Panels** | Settings → Reader | On by default. A panel whose shape does not match the screen is turned, so a wide panel fills the display and you rotate the device to read it. Switch it off and every panel is fitted upright inside the current orientation, smaller but never sideways. |
-| **Panels Only** | Reader menu | Skips the full page overviews and moves straight between panels. With it off, each page's overview comes first, then its panels. A page with no detected panel still shows as a full page either way. |
+| **Rotate Panels** | Settings → Reader | On by default, and applies to every manga. A panel whose shape does not fit the screen is turned sideways so it fills the display, and you turn the device to read it. When it is off, every panel stays upright. It is smaller, but you never have to turn the device. |
+| **Panels Only** | Reader menu | Saved per book. Skips the full-page view and goes straight from panel to panel. When it is off, you see each full page first and then its panels. A page with no panels found still shows as a full page. Only offered for books that have panels. |
 
-Manga converted without full page images enters panel mode on its own.
+Manga converted without full-page images always opens in panel view.
 
-Reaching the last page marks the manga finished in your reading stats, the same as an EPUB.
+#### One file instead of a folder (`.matcha`)
 
-### 6.5 Dictionary Files and Language Selection
+From firmware 2.0.0-rc-4, a converted book can be a single `.matcha` file instead of a folder. One file is much
+faster to copy to the card than a folder of hundreds of images. The reader opens it like the folder: same pages, panels, word lookup,
+cover and progress. Both forms keep working side by side.
 
-Which dictionary a book uses is decided by the book's own language tag, so you can keep several and never pick one
-by hand. Each dictionary lives in a folder named after its language: `de` for German, `en` for English, `fr` for
-French, and so on. Within the folder, put another folder with the name of your dictionary.
+- **New conversions:** the browser tool and `convert_manga.py` write a `.matcha` file. For firmware older than
+  2.0.0-rc-4, which cannot open `.matcha`, pick **Matcha Reader, legacy folder** in the browser tool, or add
+  `--legacy` to the script.
+- **Change an old folder into a `.matcha`:** run `python3 scripts/pack_matcha.py "<book folder>"`. It writes
+  `<book folder>.matcha` next to the folder. Copy that file to the card and delete the folder there.
+  Renaming a `.zip` you made yourself to `.matcha` does not work: the reader needs the index the script puts at
+  the start of the file, and stored (uncompressed) pages.
+- **Swapping keeps your place:** a `.matcha` counts as the folder it was packed from, so replacing one with
+  the other keeps your page, bookmarks and reading insights.
+- **Get the folder back:** a `.matcha` is a normal ZIP. Rename it to `.zip` and unzip it on your computer, e.g.
+  by double-clicking it in Finder or with **Extract All** in Windows. You get the book's files back in a folder,
+  plus one extra file, `matcha.idx`, which a folder book does not need.
+
+Reaching the last page marks the manga as finished in your reading insights, the same as an EPUB.
+
+### 6.7 Dictionary Files and Language Selection
+
+The reader picks the dictionary from the book's language tag, so you can keep several dictionaries and never
+switch by hand. Each dictionary goes into a folder named after its language code, e.g. `de` for German, `en` for
+English, `fr` for French. Inside that language folder, make one more folder with your dictionary's name and put the
+files there.
 
 ```
 dictionaries/
@@ -1117,150 +1633,219 @@ dictionaries/
     vocab.idx    vocab.dat    vocab.spx      # vocabulary (required)
     names.idx    names.dat    names.spx      # names (recommended)
     grammar.idx  grammar.dat  grammar.spx    # grammar reference (optional)
+  zh/                          # Mandarin, converted CC-CEDICT (simplified and traditional books alike)
+    vocab.idx    vocab.dat    vocab.spx    vocab.title    # vocabulary (required)
+    names.idx    names.dat    names.spx    names.title    # proper nouns (optional)
+    grammar.idx  grammar.dat  grammar.spx  grammar.title  # grammar patterns (optional)
+  yue/                         # Cantonese, converted CC-Canto + CC-CEDICT
+    vocab.idx    vocab.dat    vocab.spx    vocab.title
 ```
 
-Japanese works differently from the rest. It always uses the converted files in `dictionaries/jp/`, split into
-vocabulary, names and grammar, because lookup needs the readings and deinflection that a plain StarDict file does
-not carry. Convert them from [Jitendex](https://github.com/stephenmk/Jitendex), [JMnedict](https://github.com/JMdictProject)
-or any other Yomitan dictionary with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/),
-which also handles jmdict-simplified JSON and MDict `.mdx` input. Every other language uses ordinary StarDict, one
-folder per dictionary, with no conversion needed.
+StarDict files placed straight into `fr/` without a name folder are not picked up for French books.
 
-**Several dictionaries in one language.** Give each its own folder, such as `en/collins/` and `en/wiktionary/`. A
-lookup checks all of the book language's dictionaries, up to four, and shows every entry it finds as one run of
-pages: paging past the end of one dictionary's entry opens the next one's, and paging back from its first page returns
-to the previous entry's last. The footer names the dictionary on screen and its place among them (`Collins (1/2)`).
-The dictionary chosen in **Settings → Reader → Dictionary** comes first when it is in the book's language, then the
-others by folder name. Saving a sentence records the dictionary whose entry is showing. A dictionary added this way
-builds its index on its first lookup, so that one lookup is slower.
+**Unpack compressed StarDict dictionaries.** Many come as a compressed `.dict.dz`. Looking a word up in one needs a
+32 KB block of free memory, which a reader with a book open often lacks, and the lookup then fails with **Not Enough
+Memory**. An unpacked `.dict` needs no such block. When you upload a `.dict.dz` through **File Transfer**, keep
+**Unpack dictionary** ticked: the browser unpacks it, uploads only the `.dict`, and deletes an older `.dict.dz` of
+the same name from that folder. If you copy files to the card yourself, unpack it first: on macOS and Linux run
+`gzip -dc name.dict.dz > name.dict`. On Windows, 7-Zip's **Extract Here** does it; name the result `name.dict`. The
+`.dict` is about seven times larger. The reader uses it whenever it is there, so the `.dict.dz` can go.
+
+**Japanese and Chinese** need converted files in `dictionaries/jp/`, `dictionaries/zh/` and `dictionaries/yue/`.
+A plain StarDict file will not work for them, because the reader uses the dictionary to work out where each word
+on the page starts and ends.
+
+Japanese comes in three parts: vocabulary, names and grammar. Convert them with
+[Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) from
+[Jitendex](https://github.com/stephenmk/Jitendex), [JMnedict](https://github.com/JMdictProject) or any other
+Yomitan dictionary. The tool also accepts jmdict-simplified JSON and MDict `.mdx` files.
+
+Chinese converts in the same browser tool, or with the script in `tools/dict_convert/` and `--lang zh`. It accepts
+the CC-CEDICT text file, the MoE 重編國語辭典 JSON, a Yomitan zip or an `.mdx` file.
+[docs/dictionary-setup.md](docs/dictionary-setup.md) has the commands. One `zh/` folder serves simplified and
+traditional books alike: every entry can be found under both forms, and the entry shows the other form under the
+reading. `vocab.title` sets the dictionary name shown at the bottom of the entry.
+
+Ready-made Chinese packs, one simplified and one traditional, are linked from
+[docs/dictionary-setup.md](docs/dictionary-setup.md). Install only one of them, since both use the `zh/` folder.
+For Cantonese (`yue`), convert with `--lang yue`.
+
+**Several dictionaries in one language.** Give each one its own folder, e.g. `en/collins/` and `en/wiktionary/`.
+A lookup searches up to four dictionaries for the book's language and shows every entry it finds, one after the
+other. Page past the end of one entry and the next dictionary's entry opens. Page back from its first page and you
+return to the last page of the previous one. The bottom line names the dictionary and its place in the list, e.g.
+`Collins (1/2)`. The dictionary chosen under **Settings → Reader → Dictionary Settings → Fallback for other languages** comes first if it is in the
+book's language. The others follow in folder-name order. A saved sentence records the dictionary whose entry was on
+screen. The first lookup in a newly added dictionary takes longer, because the reader prepares the dictionary
+for searching.
 
 <p align="center">
   <img src="docs/images/screenshots/multi-dict-stardict-1.png" width="240" alt="cold: the first dictionary's entry, 1 of 2">
   <img src="docs/images/screenshots/multi-dict-stardict-2.png" width="240" alt="cold: the second dictionary's entry, 2 of 2">
 </p>
 
-The dictionary you choose in **Settings → Reader → Dictionary** is also the fallback. It is used when the book
-carries no language, or when nothing under `dictionaries/` matches the one it carries. Reader Settings shows the
-dictionary a book reads first, which is the quickest way to check a tag is being read.
+**Settings → Reader → Dictionary Settings → Fallback for other languages** is used when a book has no language tag, or when no folder under
+`dictionaries/` matches its language. Inside a book, the reader settings show a **Dictionary** row with the
+dictionary that book uses first. Use it to check that the book's language tag was recognised.
 
-The folder can also be called `.dictionaries/`, which keeps it out of the file browser. Everything above works the
-same there, including `jp/`. When both exist, StarDict dictionaries are picked up from either folder, while Japanese
-uses `.dictionaries/jp/` if it is present.
+You can also name the folder `.dictionaries/`, which hides it from the file browser. Everything above works the
+same there. If both folders exist, StarDict dictionaries are found in either one. For `jp/`, `zh/` and `yue/`,
+the copy in `.dictionaries/` wins.
 
-A flat pile of dictionary files directly under `dictionaries/`, and the older `dict/` folder, both still work.
+Older setups still work. A dictionary folder placed directly under `dictionaries/`, outside a language folder, can
+still be chosen as the fallback dictionary. Japanese files in the old `dict/` folder are still found.
 
-**Word forms.** A word on the page is rarely in the shape the dictionary lists it under, so a lookup that misses
-is retried before it gives up. The dictionary's own `.syn` file is consulted first if it has one, then the rules
-for the book's language. A word at the start of a sentence keeps its accented capital and is folded either way, in
-every language, so `École` finds `école` and `Über` finds `über`.
 
-French then gets its own rules:
+## 7. Reading Insights
 
-| On the page | Looks up |
-| --- | --- |
-| `l'eau`, `qu'il`, `jusqu'ici` | `eau`, `il`, `ici` — the elided article or pronoun is dropped |
-| `journaux`, `bijoux`, `livres` | `journal`, `bijou`, `livre` |
-| `heureuse`, `chanteuse`, `nouvelle`, `première` | `heureux`, `chanteur`, `nouveau`, `premier` |
-| `parlaient`, `parlé`, `mangeons`, `commençait` | `parler`, `manger`, `commencer` |
-| `finissent`, `choisirait`, `vendu`, `attendait` | `finir`, `choisir`, `vendre`, `attendre` |
+Reading time is saved every five minutes and again when you close a book. If the battery runs out or the device
+crashes, you lose at most the last few minutes. Manga counts the same as EPUBs.
 
-English, and any language without rules of its own, falls back to plurals, possessives and verb endings (`dogs` →
-`dog`, `stories` → `story`, `running` → `run`).
-
-The rules cover regular word forms. French verbs that share no stem with their infinitive — `est` and `fut` for
-*être*, `ont` and `eut` for *avoir*, `vais` for *aller* — cannot be reached by any rule, and need a `.syn` file
-in the dictionary folder instead. Many dictionaries ship one; see [docs/dictionary.md](docs/dictionary.md).
-
-## 7. Reading Stats
-
-Reading time is recorded as you go, every few minutes and again when you close a book, so a flat battery or a
-crash costs you the last few minutes rather than the whole session. Manga counts the same as EPUBs.
+With the CrossPoint sync server, **Sync Progress** also uploads these insights; see [Syncing While Reading](#syncing-while-reading).
 
 ### 7.1 Insights
 
-Home → **Insights**. Your current streak, minutes this week, books finished, days read, total time, longest
-streak, and a calendar of the days you read.
+Go to Home → **Insights**. It shows your current streak, minutes this week, books finished, days read, total
+reading time, your longest streak and a calendar of the days you read.
 
-A row of tabs across the top splits the same figures by the language of what you read. **All** is everything
-together; after it comes one tab per language the device has seen. Each tab keeps its own streak, calendar and
-totals, so a Japanese streak survives an evening spent with an English book.
+The tabs at the top split these numbers by language. **All** covers everything. After it comes one tab for each
+language you have read. Each tab has its own streak, calendar and totals, so reading an English book does not
+break your Japanese streak.
 
-Tabs are named where the firmware has a translation for the language, so `ja` shows as 日本語. A language it has
-no translation for keeps its tag, `ZH` for instance, rather than being given the wrong name. Books that declare no
-language at all — TXT, XTC and manga converted without `--language` — collect in an **Unknown** tab.
+To hide the language tabs and keep only the totals, turn off **Settings → Insights → Show language insights**. Books
+that declare no language get an **Unknown** tab only with **Hide unknown languages** turned off.
+
+A tab shows the language's name if the firmware has a translation for it, e.g. `ja` shows as 日本語. Otherwise it
+shows the language code, such as `ZH`. Books with no language tag (TXT, XTC and manga converted without
+`--language`) are collected in an **Unknown** tab.
 
 | Button | Action |
 | --- | --- |
-| Confirm | Next tab. Past the last one the cursor moves into the bottom tab bar (Cover Grid theme). |
-| Left / Right | Previous or next month, while the cursor is on the page. The button hints name the month they move to. |
-| Up / Down | Scroll. Down past the end of the page moves the cursor into the bottom tab bar; Down again returns to the top of the page, Up to its end. |
-| Back | Back one screen. Hold it to go home. |
+| Confirm | Next tab. After the last tab, the cursor moves into the bottom tab bar (Cover Grid theme). |
+| Left / Right | Previous or next month in the calendar. The button hints show which month you will move to. |
+| Up / Down | Scroll. At the end of the page, Down selects **Refresh Insights** and the next Down moves the cursor into the bottom tab bar. From there, Down goes back to the top of the page and Up to its end. |
+| Back | Back one screen. Hold it to go Home. |
 
-On a touch device, tap a tab, or flick left and right across the page to step through them.
+On a touch device, tap a tab or swipe left and right across the page to switch tabs. Tap the arrows next to the
+month to change it.
 
-<p align="center"><img src="docs/images/screenshots/insights.png" width="260" alt="Insights with streak, stat cards and calendar"></p>
+**Refresh Insights** at the bottom of the page syncs your insights with the CrossPoint sync server; see
+[Syncing Insights Between Devices](#74-syncing-insights-between-devices).
 
-### 7.2 Per-book Stats
+<p align="center"><img src="docs/images/screenshots/insights.png" width="260" alt="Insights with streak, insight cards and calendar"></p>
 
-Long press a book in the Library. Sessions, total time, average session, days read, words looked up, sentences saved,
-and a calendar of the days you read that book.
+### 7.2 Per-book Insights
 
-Words looked up counts each word whose definition you opened, once per visit to the lookup panel: stepping back and
-forth over the same word does not add to it. Sentences saved counts the cards written to your sentence-mining file.
+Long-press a book in the Library and choose **View Insights**. You see sessions, total reading time, average session,
+days read, words looked up, sentences saved and a calendar of the days you read that book. The header shows the
+day you started the book and the day you finished it, or "since" the start while you are still reading. On the
+calendar the start day has a dotted ring and the finish day a solid one.
 
-A session is one opening of the book. Opening the reader menu or settings partway through does not start another
-one. Waking the device back into a book does count as a new session, so an evening broken up by sleep shows as
-several.
+Dates are shown the way your interface language writes them, e.g. 17.10.2026 in German or 2026年10月17日 in
+Japanese (the end-of-book stamp uses the shorter 2026.10.17 there). The device stores them in one fixed format,
+so switching language changes only how they look.
 
-This history starts when you install the version that added it. A book you read before that says "No reading
-recorded yet" until you next open it. Your overall Insights numbers go back as far as they always did.
+**Words looked up** counts each word whose entry you opened, once each time you open the lookup screen. Moving
+back and forth over the same word does not count it twice. **Sentences saved** counts the cards added to your
+sentence-mining file.
 
-<p align="center"><img src="docs/images/screenshots/book-stats.png" width="260" alt="Per-book stats for one book"></p>
+A session is one opening of the book. Opening the reader menu or settings in between does not start a new one.
+Waking the device from sleep back into the book does, so an evening with a few sleeps in it shows as several
+sessions.
+
+Books you read before per-book insights existed show "No reading recorded yet" until you open them again. Your
+Insights totals still include that reading.
+
+<p align="center"><img src="docs/images/screenshots/book-stats.png" width="260" alt="Per-book insights for one book"></p>
 
 #### Finishing a book
 
-Turning past the last page opens the end-of-book screen, for every book type. It marks the book finished, says which
-book this is for you, overall and in the book's language, and shows its reading time, the days from your first reading
-day to your last, your current streak, and, if you used the dictionary, the words you looked up and sentences you saved.
-Below are up to three books from the same folder and **Go to Home**. A short press of Back returns to the last page.
+Turning past the last page opens the end-of-book screen, for every type of book. It marks the book as finished
+and tells you which number book this is for you, overall and in that language. The stamp on the cover (読了 for
+Japanese books) shows the day you started the book and, in bold, the day you finished it. Opening a finished book
+again keeps that day. The ticket below shows the reading time, the days from your first to your last reading day
+and, if any, the words you looked up and the sentences you saved. Below that you find the next book in the same folder under
+**Continue with:** and a **Go to Home** button. A short press of Back takes you back to the last page.
 
-<p align="center"><img src="docs/images/screenshots/end-of-book.png" width="260" alt="End-of-book screen with the book's stats and the next books"></p>
+Books finished before the finish day was saved show their last reading day before today instead.
+
+<p align="center"><img src="docs/images/screenshots/end-of-book.png" width="260" alt="End-of-book screen with the book's insights and the next books"></p>
 
 ### 7.3 What the Numbers Do Not Cover
 
-Worth knowing before you read too much into them.
+- Reading time counts in whole minutes. A very short sitting adds nothing, and the average session comes out a
+  little low.
+- Books finished per language can be too low. The device remembers the language of the 150 books you read most
+  recently. A book you finished long ago may have lost its language tag.
+- Days read before per-language tracking existed have no language and cannot get one now.
+- The device keeps about ten years of overall history and a few years of history per language. Older days are
+  dropped.
 
-- Reading time counts whole minutes, so a short sitting adds nothing and the average session runs slightly short.
-- Books finished per language can undercount. A book's language is kept in a list of the 150 most recently read
-  books, and a book finished long before that has lost its tag.
-- Days recorded before per-language tracking existed carry no language and cannot be assigned one now.
-- The device keeps roughly a decade of overall history and a few years of per-language history in memory. Older
-  days drop off the end. This is a limit of a device with 380KB of RAM, not a choice about what is interesting.
+### 7.4 Syncing Insights Between Devices
+
+With the CrossPoint sync server set up (see [Syncing While Reading](#syncing-while-reading)), select **Refresh Insights**
+at the bottom of Insights or **Settings → Insights → Sync Insights**. The device joins Wi-Fi, sends its insights and fetches
+the reading time saved on the server, shows **Done** and restarts back to where you started.
+
+What comes back is what any CrossPoint reader on your account uploaded:
+
+- your reading time per day for the last two years: the **All** tab's streak, days read, total time, week and
+  calendar;
+- the language tabs, from each book's days and language;
+- books finished, including ones not on this card;
+- how far you got in each book on other devices, for the badges in the Library and on Home;
+- each book's own insights (days, sessions, finished), for the books on the card. A book takes them in the next time you
+  open it or its insights.
+- how much you read in the morning, afternoon, evening and night, so the app's time-of-day chart keeps its history.
+  With two readers on one account, run **Sync Insights** on each from time to time: until then a reader's upload can
+  hide the other one's newest minutes in that chart.
+
+A day that already has more minutes on the device keeps them, so syncing twice never counts anything double. The
+numbers show after the restart that ends the sync. Dictionary lookups and saved sentences stay on the device that
+recorded them.
+
+Books are matched by file name, so keep the same name on every device. The server only has per-book days and
+languages if it supports them; an older server brings back the **All** tab only.
+
+With **Settings → Insights → Insights data** on **All devices** (the default), every sync that sends your stats,
+**Sync Progress** as well as **Refresh Insights**, also fetches the account's numbers as the CrossPoint app counts
+them, overall and per language: reading days, streaks, books finished, reading time and this week. Insights and the
+**Insights** sleep screen then show those, so a day read on any device or in the app counts, and a language read
+only elsewhere gets its own tab. What you read or finish on this reader after that sync is added on top until the
+next one; reading on other devices shows after your next sync. Other devices' numbers are only shown, never uploaded
+as this reader's. Until the account you are signed in with has synced once, Insights shows this device only.
 
 ## 8. Current Limitations & Roadmap
 
-Please note that this firmware is currently in active development. The following features are **not yet supported** but are planned for future updates:
+This firmware is still in active development. These things do not work fully yet:
 
-* **Cover Images:** Large cover images embedded into EPUB require several seconds (~10s for ~2000 pixel tall image) to convert for sleep screen and home screen thumbnail. Consider optimizing the EPUB with e.g. https://github.com/bigbag/epub-to-xtc-converter to speed this up.
-* **Unsupported Image Formats:** Most JPG and PNG images in EPUBs render correctly. GIFs are not supported and fall back to an `[Image]` placeholder. Progressive JPEGs do render, but only their DC coefficients are decoded — a preview at one-eighth resolution, scaled back up, so fine detail is lost. The one variant that is refused outright is a progressive JPEG that both splits its DC coefficients across one scan per component *and* uses chroma subsampling; re-encode those as baseline (`jpegtran -copy none -optimize`, or run the page through the manga converter).
-* 
-* **Dictionary Lookup:** Inline word lookup is not yet implemented.
+* **Cover images:** a large cover image in an EPUB can take several seconds to prepare for the sleep screen and
+  the Home thumbnail (around 10 seconds for an image about 2000 pixels tall). To speed this up, shrink the images
+  in the EPUB, e.g. with https://github.com/bigbag/epub-to-xtc-converter.
+* **Images in books:** most JPG, PNG and GIF images show correctly, book covers included. Animated GIFs show only
+  their first frame. Interlaced GIFs show a placeholder instead. Progressive JPEGs show at reduced sharpness, so
+  fine detail is lost. One rare kind of progressive JPEG does not show at all. If an image is missing, save it
+  again as a normal (baseline) JPEG, e.g. with `jpegtran -copy none -optimize`, or run the book through the manga
+  converter.
 
 ---
 
 ## 9. Troubleshooting Issues & Escaping Bootloop
 
-If an issue or crash is encountered while using Crosspoint, feel free to raise an issue ticket and attach the logs.
+If something goes wrong or the device crashes, please open an issue on GitHub and attach the logs.
 
-**Crash reports on SD card:** After a crash, CrossPoint automatically saves a crash report to the SD card (no USB connection needed). Check the root of the SD card for a crash log file and include it with any bug report.
+**Crash report on the SD card:** after a crash, the firmware saves a file called `crash_report.txt` in the top
+folder of the SD card. You do not need a USB cable for this. Attach the file to your bug report.
 
-**Serial monitor logs:** For more detailed debugging, connect the device to a computer and run the custom debugging monitor script (requires Python 3 with `pyserial`, `colorama`, and `matplotlib`; install via `pip3 install pyserial colorama matplotlib`):
+**Serial monitor logs:** for more detail, connect the device to a computer with USB and run the debugging monitor
+script. It needs Python 3 and a few packages, which you install with `pip3 install pyserial colorama matplotlib`
+(add `pillow` if you want screenshots saved as images):
 
 ```
 python3 scripts/debugging_monitor.py
 ```
 
-The script auto-detects the serial port. You can also specify one explicitly:
+The script finds the device on its own. You can also name the port yourself:
 
 ```
 python3 scripts/debugging_monitor.py /dev/ttyACM0        # Linux
@@ -1268,20 +1853,16 @@ python3 scripts/debugging_monitor.py /dev/tty.usbmodem1  # macOS
 python3 scripts/debugging_monitor.py COM7                # Windows
 ```
 
-**Features:**
-
-- Color-coded log output by category (errors, memory, display, EPUB parsing, etc.)
-- Live memory usage graph (free RAM, total RAM, max contiguous allocation) updated every second
-- Interactive command prompt — type a command and press Enter to send it to the device
-- Screenshot capture — saves the current display to `screenshot.bmp` when triggered by the device
+The monitor colours the log lines by topic and draws a live graph of free memory. You can type a command and
+press Enter to send it to the device. When the device sends a screenshot, the script saves it as `screenshot.bmp`.
 
 **Options:**
 
 | Option               | Description                                               |
 | -------------------- | --------------------------------------------------------- |
-| `--baud RATE`        | Baud rate (default: 115200)                               |
-| `--filter KEYWORD`   | Show only lines containing the keyword (case-insensitive) |
-| `--suppress KEYWORD` | Hide lines containing the keyword (case-insensitive)      |
+| `--baud RATE`        | Connection speed (default: 115200)                        |
+| `--filter KEYWORD`   | Show only lines that contain the keyword (case is ignored) |
+| `--suppress KEYWORD` | Hide lines that contain the keyword (case is ignored)     |
 
 **Examples:**
 
@@ -1293,8 +1874,13 @@ python3 scripts/debugging_monitor.py --filter MEM
 python3 scripts/debugging_monitor.py --suppress "[SD]"
 ```
 
-Press **Ctrl-C** or close the graph window to exit.
+To stop the monitor, press **Ctrl-C** or close the graph window.
 
-If the device is stuck in a bootloop, press and release the Reset button. Then, press and hold on to the configured Back button and the Power Button to boot to the Home Screen.
+**Stuck in a restart loop:** press and release the Reset button. Then hold the Back button (whichever button you
+set as Back) together with the Power button. The device starts on the Home screen instead of reopening the last
+book. If a book crashes while opening, the next start goes to Home on its own.
 
-There can be issues with broken cache or config. In this case, delete the `.crosspoint` directory on your SD card (or consider deleting only `settings.json`, `state.json`, or `epub_*` cache directories in the `.crosspoint/` folder).
+**Broken cache or settings:** delete the `.crosspoint` folder on the SD card. This also removes your reading
+positions, saved Wi-Fi networks and settings. Your reading insights are kept. To lose less, delete only part of it:
+`settings.json` resets your settings, `state.json` resets what the device remembers between restarts, and the
+`epub_*` folders hold each book's prepared pages and reading position.

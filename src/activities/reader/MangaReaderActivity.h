@@ -12,8 +12,11 @@
 #include "../../BookmarkEntry.h"
 #include "EndOfBookOptions.h"
 #include "EpubReaderMenuActivity.h"
+#include "ReaderSessionReporter.h"
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
+
+class WordSelectionScan;
 
 namespace PixelCacheIO {
 class Reader;
@@ -26,6 +29,7 @@ class MangaReaderActivity final : public Activity {
 
   void onEnter() override;
   void onExit() override;
+  void prepareForSleep() override;
   void loop() override;
   void render(RenderLock&&) override;
   bool isReaderActivity() const override { return true; }
@@ -50,10 +54,16 @@ class MangaReaderActivity final : public Activity {
   std::vector<manga::Panel> panels;
   bool panelsLoaded = false;
 
-  bool showTextOverlay = false;
   bool pendingScreenshot = false;
   bool ignoreNextConfirmRelease = false;
   unsigned long readingSessionStartMs = 0;
+  int enterPercent = -1;  // the book's saved progress when it was opened
+  bool syncedPositionOffered = false;
+  void jumpToPercent(int percent);
+  // Writes the position an Insights sync fetched from another device as this book's saved page and drops
+  // it (syncedPosition). False when there is none.
+  bool writeSyncedPosition();
+  int syncedPositionPercent();
 
   bool automaticPageTurnActive = false;
   unsigned long lastPageTurnTime = 0;
@@ -67,8 +77,14 @@ class MangaReaderActivity final : public Activity {
 
   ButtonNavigator buttonNavigator;
 
-  enum class ViewMode { FullPage, PanelZoom, TextOverlay };
+  enum class ViewMode { FullPage, PanelZoom };
   ViewMode viewMode = ViewMode::FullPage;
+
+  // Reading-session plugin events, reported the way the other readers report them.
+  ReaderSessionReporter sessionReporter_;
+  // Whole-book progress in basis points; the end screen is 100%.
+  int progressBasisPoints() const;
+  void flushReaderSession();
   // Per-book preference persisted as progress.bin byte 7. Books that physically omit page images
   // still enter their crops regardless of this preference.
   bool panelsOnlyMode = false;
@@ -178,6 +194,16 @@ class MangaReaderActivity final : public Activity {
   // Set by entering, moving or leaving the selection: the next render only swaps the outline.
   bool outlineOnlyUpdate_ = false;
   std::vector<const manga::TextBlock*> viewTextBlocks() const;
+  // viewTextBlocks() joined by line breaks: the text a lookup from this view scans.
+  std::string viewText() const;
+
+  // Word Lookup prescan (PSRAM boards): the view's text is segmented while the reader rests on it,
+  // so a hold opens on a cached scan. Keyed like the lookup's own cache: page, panel + 1.
+  std::unique_ptr<WordSelectionScan> prescan_;
+  uint32_t prescanPage_ = UINT32_MAX;
+  int prescanPanel_ = -1;
+  void stepLookupPrescan();
+  void dropLookupPrescan();
 
   FullPageGeom applyFullPageGeometry(int imgWidth, int imgHeight);
   // Pure fit/rotate math shared by applyFullPageGeometry (render path) and the prefetch worker.
@@ -367,7 +393,6 @@ class MangaReaderActivity final : public Activity {
   void loadCurrentPagePanels();
   void renderFullPage();
   void renderPanelZoom();
-  void renderTextOverlay();
 
   void nextPanel();
   void prevPanel();
@@ -388,9 +413,10 @@ class MangaReaderActivity final : public Activity {
   void updateBookmarkFlag();
   void addBookmark();
 
-  void launchWordLookup();
   void launchWordLookupCurrentView();
   void launchMenu();
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
+  bool launchSync(bool withClockAndInsights);
+  bool startShortcutSync() override;
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
 };

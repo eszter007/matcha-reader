@@ -51,7 +51,7 @@ class ParsedText {
   // Zero-based visible Unicode-codepoint offsets in the spine body, stored as
   // uint16_t deltas from a shared base to keep this layout-only metadata small.
   // Pathological spans wider than uint16_t use sparse rebases; rendered
-  // TextBlocks do not carry any of this metadata.
+  // TextBlocks retain absolute ranges for portable clipping anchors.
   struct VisibleOffsetRebase {
     size_t wordIndex;
     uint32_t base;
@@ -59,10 +59,28 @@ class ParsedText {
   std::vector<uint16_t> wordVisibleOffsetDeltas;
   uint32_t visibleOffsetBase = 0;
   std::vector<VisibleOffsetRebase> visibleOffsetRebases;
+  // Sparse NFC source positions, in small nothrow chunks rather than a large contiguous array.
+  struct AbsorbedSourceChunk {
+    std::unique_ptr<AbsorbedSourceChunk> next;
+    uint32_t base = 0;
+    uint16_t deltas[64] = {};
+    uint8_t begin = 0;
+    uint8_t count = 0;
+    ~AbsorbedSourceChunk() {
+      while (next) {
+        auto retired = std::move(next);
+        next = std::move(retired->next);
+      }
+    }
+  };
+  std::unique_ptr<AbsorbedSourceChunk> absorbedSourceHead;
+  AbsorbedSourceChunk* absorbedSourceTail = nullptr;
+  mutable const AbsorbedSourceChunk* absorbedSourceCursor = nullptr;
+  mutable uint32_t absorbedSourceCursorStart = 0;
   std::deque<std::string> rubyTexts;
   BlockStyle blockStyle;
   uint8_t wordSpacingPercent = 100;
-  bool extraParagraphSpacing;
+  uint8_t paragraphIndentSpaces;
   bool hyphenationEnabled;
   bool focusReadingEnabled;
   bool isNaturalAlign;
@@ -77,8 +95,12 @@ class ParsedText {
   // line" is spelled -- without this it would take the first-line text-indent a second time,
   // several lines into the paragraph.
   bool dropCapLinesEmitted = false;
+  // Lines of this paragraph after the one being emitted, or -1 when the end is not yet known
+  // (a soft flush, or the drop-cap lines).
+  int linesAfterCurrent = -1;
   // True once any word was dropped because the text arena could not allocate.
   bool droppedWords = false;
+  bool firstLineConsumed = false;
   std::vector<std::string> reorderedWordsScratch;
   std::vector<EpdFontFamily::Style> reorderedStylesScratch;
   std::vector<int32_t> reorderedFontsScratch;
@@ -91,6 +113,9 @@ class ParsedText {
   bool storeWord(std::string_view text, WordStore::StoredWord& out);
   uint32_t visibleOffsetBaseAt(size_t wordIndex) const;
   uint32_t visibleOffsetAt(size_t wordIndex) const;
+  uint32_t sourceOffsetAfter(uint32_t start, uint32_t renderedLength) const;
+  bool recordAbsorbedSourceOffset(uint32_t offset);
+  void retireAbsorbedSourceOffsets(uint32_t remainingStart);
   void pushVisibleOffset(uint32_t offset);
   void insertVisibleOffset(size_t wordIndex, uint32_t offset);
   void eraseVisibleOffsetPrefix(size_t count);
@@ -139,10 +164,12 @@ class ParsedText {
   void consumeWords(size_t consumed);
 
  public:
-  explicit ParsedText(const bool extraParagraphSpacing, const bool hyphenationEnabled = false,
-                      const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle())
+  [[nodiscard]] int linesAfterCurrentLine() const { return linesAfterCurrent; }
+  [[nodiscard]] bool hasDropCapLines() const { return dropCapLinesEmitted || blockStyle.hasDropCap(); }
+  explicit ParsedText(const bool hyphenationEnabled = false, const bool focusReadingEnabled = false,
+                      const BlockStyle& blockStyle = BlockStyle(), const uint8_t paragraphIndentSpaces = 2)
       : blockStyle(blockStyle),
-        extraParagraphSpacing(extraParagraphSpacing),
+        paragraphIndentSpaces(paragraphIndentSpaces),
         hyphenationEnabled(hyphenationEnabled),
         focusReadingEnabled(focusReadingEnabled),
         isNaturalAlign(false),
@@ -170,22 +197,15 @@ class ParsedText {
   void setRubyForWordAt(size_t index, const std::string& ruby);
   void setRubyGroupAt(size_t startIndex, size_t count, const std::string& ruby);
   EpdFontFamily::Style getWordStyleAt(size_t index) const {
-    return index < wordStyles.size() ? wordStyles[index] : EpdFontFamily::REGULAR;
+    return index < wordStyles.size()
+               ? static_cast<EpdFontFamily::Style>(wordStyles[index] & ~TextBlock::DISCRETIONARY_HYPHEN_FLAG)
+               : EpdFontFamily::REGULAR;
   }
   // Caller must check !isEmpty() first (used by the furigana-glossary harvest to pair a
   // just-closed <rt> reading with its base word).
   std::string_view lastWord() const { return wordStore.view(words.back()); }
   // Base text behind a ruby group, for the same harvest (a group ruby spans several words).
   std::string_view wordAt(const size_t i) const { return wordStore.view(words[i]); }
-  // Delegates so the sizing rule lives in ONE place: ensureRubyCapacity() only reserve()s, it
-  // does not resize, so writing rubyTexts.back() while the vector is still empty (no ruby seen
-  // in this block yet) wrote past the end -- device crash: Store access fault inside
-  // std::string::operator= during an incremental horizontal build, reached from the
-  // text-emphasis (bouten) path in flushPartWordBuffer.
-  void setLastWordRuby(const std::string& ruby) {
-    if (words.empty()) return;
-    setRubyForWordAt(words.size() - 1, ruby);
-  }
   std::string getRubyTextAt(size_t index) const { return index < rubyTexts.size() ? rubyTexts[index] : std::string(); }
   void ensureRubyCapacity();
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }

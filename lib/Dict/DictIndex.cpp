@@ -3,12 +3,14 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <ResidentFiles.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -76,6 +78,8 @@ bool g_heapLimited = false;
 // answer the caller's release-fonts-and-retry from the memo before it could reach the SD card.
 // Reset at the top of every lookupExact().
 bool g_lookupIncomplete = false;
+// Whether a headword longer than the last lookupExact() key may start with it (see longerHeadwordMayExist).
+bool g_longerMayExist = true;
 static uint32_t g_missMemoHits = 0;  // lookups answered from the negative memo (no SD traffic)
 uint32_t g_recordCacheHits = 0;
 uint32_t g_recordCacheMisses = 0;
@@ -119,6 +123,9 @@ struct DictFileHandles {
   size_t fineCacheBytes = 0;          // allocated size (cstride * SPX_KEY_SIZE)
   uint32_t fineCacheLo = UINT32_MAX;  // fine index of fineCache[0]; UINT32_MAX = empty
   size_t fineCacheCount = 0;          // number of 32-byte keys currently cached
+  // The whole fine tier, resident in PSRAM across lookup sessions (PSRAM boards): spxNarrow()
+  // then reads no SD at all. Invalid elsewhere, or once evicted.
+  ResidentFiles::Ref fineAll;
 
   // Free every cache and close every file, returning ALL memory to the pool. Next lookup relearns
   // lazily. Called via DictIndex::releaseCaches() when a Word Lookup activity exits.
@@ -142,6 +149,7 @@ struct DictFileHandles {
     fineCacheBytes = 0;
     fineCacheLo = UINT32_MAX;
     fineCacheCount = 0;
+    fineAll = {};
   }
 };
 
@@ -180,47 +188,89 @@ const char* datFor(const char* idxPath, std::string& cache) {
   return cache.c_str();
 }
 
-// The folder the Japanese dictionary lives in. Two spellings are accepted, the same way the font
+// The language folder the converted dictionary lives in: "jp" (the default, and the only one
+// with legacy locations) or "zh". Selected per book by DictIndex::setLanguageFolder().
+char g_languageFolder[8] = "jp";
+
+bool isJapaneseFolder() { return std::strcmp(g_languageFolder, "jp") == 0; }
+
+// The folder the dictionary lives in. Two spellings are accepted, the same way the font
 // registry accepts /.fonts beside /fonts: the dotted one keeps the folder out of the file browser
 // (hidden by default) and is preferred when both exist. Resolved once and cleared by
 // releaseCaches(), so a dictionary uploaded mid-session into the other root is picked up next
 // session rather than never.
-std::string g_jpRootResolved;
+std::string g_rootResolved;
 
-const char* jpRoot() {
-  if (g_jpRootResolved.empty()) {
-    g_jpRootResolved = Storage.exists("/.dictionaries/jp") ? "/.dictionaries/jp" : "/dictionaries/jp";
+const char* dictRoot() {
+  if (g_rootResolved.empty()) {
+    const std::string hidden = std::string("/.dictionaries/") + g_languageFolder;
+    g_rootResolved = Storage.exists(hidden.c_str()) ? hidden : std::string("/dictionaries/") + g_languageFolder;
   }
-  return g_jpRootResolved.c_str();
+  return g_rootResolved.c_str();
 }
 
 // A DictIndex path constant rewritten under the resolved root. The constants stay full paths
 // because a host-side tool reads them directly; only the folder half is substituted here.
-std::string underJpRoot(const char* path) {
+std::string underRoot(const char* path) {
   const char* leaf = strrchr(path, '/');
-  return std::string(jpRoot()) + (leaf ? leaf : "/");
+  return std::string(dictRoot()) + (leaf ? leaf : "/");
 }
+
+// Display names from the optional <root>/<slot>.title files the converter writes. Empty when
+// absent. Probed once per lookup session (releaseCaches() clears them). Index: 0 vocab, 1 grammar,
+// 2 names (the DICT_* bit position).
+char g_slotTitle[3][40] = {"", "", ""};
+bool g_slotTitleProbed[3] = {false, false, false};
 
 // Storage.exists() on the path as it will actually be opened -- under the resolved root.
 bool existsUnderRoot(const char* path, std::string& out) {
-  out = underJpRoot(path);
+  out = underRoot(path);
   return Storage.exists(out.c_str());
+}
+
+// Interned copy of a resolved path, so the pointer handed out stays valid for the process
+// lifetime. De-duplicated: books alternate between language folders, and each switch re-resolves.
+// A fixed table, not a vector: growing one allocates, and with -fno-exceptions a failed growth
+// aborts instead of returning. The set is bounded -- three slots of index, data and sparse-index
+// paths for each language folder, in the plain and the hidden root.
+const char* internPath(std::string&& v) {
+  static constexpr size_t MAX_INTERNED = 64;
+  static std::unique_ptr<std::string> interned[MAX_INTERNED];
+  static size_t internedCount = 0;
+  for (size_t i = 0; i < internedCount; i++) {
+    if (*interned[i] == v) return interned[i]->c_str();
+  }
+  if (internedCount == MAX_INTERNED) {
+    LOG_ERR("DICT", "Path table full; %s not interned", v.c_str());
+    return nullptr;
+  }
+  auto held = std::unique_ptr<std::string>(new (std::nothrow) std::string(std::move(v)));
+  if (!held) {
+    LOG_ERR("DICT", "OOM: dictionary path");
+    return nullptr;
+  }
+  interned[internedCount] = std::move(held);
+  return interned[internedCount++]->c_str();
 }
 
 const char* resolveIdxPath(const char*& cache, const char* preferred, const char* jpLegacy, const char* old,
                            const char* legacy) {
   if (cache) return cache;
-  // Probed under the resolved root; the winner is interned so the returned pointer stays valid.
-  static std::vector<std::unique_ptr<std::string>> interned;
   std::string candidate;
-  const auto intern = [](std::string&& v) -> const char* {
-    interned.push_back(std::unique_ptr<std::string>(new (std::nothrow) std::string(std::move(v))));
-    return interned.back() ? interned.back()->c_str() : nullptr;
-  };
+  // Only the Japanese folder has legacy filenames and the pre-folder /dict locations; any other
+  // language resolves under its own root alone, or it would silently fall back to the Japanese
+  // files through the plain paths below.
+  if (!isJapaneseFolder()) {
+    existsUnderRoot(preferred, candidate);
+    cache = internPath(std::move(candidate));
+    if (!cache) cache = preferred;  // OOM: a stable pointer matters more than the right folder
+    return cache;
+  }
+  // Probed under the resolved root; the winner is interned so the returned pointer stays valid.
   for (const char* p : {preferred, jpLegacy, old, legacy}) {
     if (!p) continue;
     if (existsUnderRoot(p, candidate)) {
-      if (const char* held = intern(std::move(candidate))) {
+      if (const char* held = internPath(std::move(candidate))) {
         if (p == legacy) LOG_INF("DICT", "Using legacy dictionary filename: %s", held);
         cache = held;
         return cache;
@@ -386,6 +436,9 @@ void loadSpx(DictFileHandles& h, const char* idxPath, size_t recordCount) {
   h.spxCStride = cstride;
   h.spxCoarseCount = coarseCount;
   h.spxOk = true;
+  // Matched on both counts, so a regenerated dictionary loads fresh.
+  h.fineAll = ResidentFiles::acquire(spxPath, idxCount * 31u + fineCount, h.spxFile, SPX_HEADER_SIZE,
+                                     static_cast<size_t>(fineCount) * SPX_KEY_SIZE);
   LOG_INF("DICT", "spx %s: %u checkpoints, %u coarse in RAM (%u B)", spxPath, fineCount,
           static_cast<unsigned>(coarseCount), static_cast<unsigned>(coarseCount * sizeof(CoarseEntry)));
 }
@@ -410,9 +463,13 @@ bool spxNarrow(DictFileHandles& h, const char* key, size_t recordCount, size_t& 
   const size_t sliceCount = fHi - fLo;
   if (sliceCount == 0 || sliceCount * SPX_KEY_SIZE > h.fineCacheBytes || !h.fineCache) return false;
 
-  // 2) Fetch the fine slice (from the one-slot cache when the coarse bracket is unchanged),
-  //    then binary-search it in RAM: largest f with fine[fLo+f] <= key.
-  if (h.fineCacheLo != fLo || h.fineCacheCount != sliceCount) {
+  // 2) The fine slice: straight from the resident tier when there is one, else fetched (from
+  //    the one-slot cache when the coarse bracket is unchanged).
+  const uint8_t* all = ResidentFiles::data(h.fineAll);
+  const uint8_t* slice = all ? all + static_cast<size_t>(fLo) * SPX_KEY_SIZE : nullptr;
+  if (slice) {
+    g_fineHits++;
+  } else if (h.fineCacheLo != fLo || h.fineCacheCount != sliceCount) {
     g_fineReads++;
     h.spxFile.seek(SPX_HEADER_SIZE + static_cast<size_t>(fLo) * SPX_KEY_SIZE);
     const size_t bytes = sliceCount * SPX_KEY_SIZE;
@@ -425,10 +482,12 @@ bool spxNarrow(DictFileHandles& h, const char* key, size_t recordCount, size_t& 
   } else {
     g_fineHits++;
   }
+  if (!slice) slice = h.fineCache.get();
+  // Binary-search the slice in RAM: largest f with fine[fLo+f] <= key.
   size_t flo = 0, fhi = sliceCount;
   while (flo < fhi) {
     const size_t mid = flo + (fhi - flo) / 2;
-    if (std::memcmp(h.fineCache.get() + mid * SPX_KEY_SIZE, key, SPX_KEY_SIZE) <= 0) {
+    if (std::memcmp(slice + mid * SPX_KEY_SIZE, key, SPX_KEY_SIZE) <= 0) {
       flo = mid + 1;
     } else {
       fhi = mid;
@@ -497,6 +556,67 @@ const char* DictIndex::grammarIdxPath() {
 const char* DictIndex::grammarDatPath() { return datFor(grammarIdxPath(), g_grammarDat); }
 
 bool DictIndex::isAvailable() { return Storage.exists(vocabIdxPath()) && Storage.exists(vocabDatPath()); }
+
+bool DictIndex::isInstalled(const char* folder) {
+  char previous[sizeof(g_languageFolder)];
+  std::strncpy(previous, g_languageFolder, sizeof(previous));
+  setLanguageFolder(folder);
+  const bool installed = isAvailable();
+  setLanguageFolder(previous);
+  return installed;
+}
+
+void DictIndex::setLanguageFolder(const char* folder) {
+  if (!folder || folder[0] == '\0') folder = "jp";
+  if (std::strcmp(g_languageFolder, folder) == 0) return;
+  // Everything cached below is per folder: handles, resolved paths, the miss memo.
+  releaseCaches();
+  std::strncpy(g_languageFolder, folder, sizeof(g_languageFolder) - 1);
+  g_languageFolder[sizeof(g_languageFolder) - 1] = '\0';
+  LOG_DBG("DICT", "Dictionary folder: %s", g_languageFolder);
+}
+
+const char* DictIndex::installedFolderFor(const char* folder) {
+  if (!folder || std::strcmp(folder, "yue") != 0 || isInstalled("yue") || !isInstalled("zh")) return folder;
+  LOG_INF("DICT", "No Cantonese dictionary; using the Mandarin one");
+  return "zh";
+}
+
+const char* DictIndex::languageFolder() { return g_languageFolder; }
+
+const char* DictIndex::slotTitle(const uint8_t dict) {
+  const int slot = dict == DICT_GRAMMAR ? 1 : dict == DICT_NAMES ? 2 : 0;
+  char* title = g_slotTitle[slot];
+  if (g_slotTitleProbed[slot]) return title;
+  g_slotTitleProbed[slot] = true;
+  title[0] = '\0';
+  static constexpr const char* kLeaf[3] = {"/vocab.title", "/grammar.title", "/names.title"};
+  const std::string path = std::string(dictRoot()) + kLeaf[slot];
+  HalFile f;
+  if (!Storage.openFileForRead("DICT", path.c_str(), f)) return title;
+  constexpr size_t kCap = sizeof(g_slotTitle[0]);
+  const int n = f.read(reinterpret_cast<uint8_t*>(title), kCap - 1);
+  if (n <= 0) return title;
+  title[n] = '\0';
+  // First line only.
+  for (int i = 0; i < n; i++) {
+    if (title[i] == '\r' || title[i] == '\n') {
+      title[i] = '\0';
+      break;
+    }
+  }
+  // Drop a trailing UTF-8 sequence the fixed-size read cut short.
+  const int len = static_cast<int>(std::strlen(title));
+  int start = len;
+  while (start > 0 && (static_cast<unsigned char>(title[start - 1]) & 0xC0) == 0x80) start--;
+  if (start > 0) {
+    start--;
+    const auto lead = static_cast<unsigned char>(title[start]);
+    const int need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+    if (len - start < need) title[start] = '\0';
+  }
+  return title;
+}
 
 bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const char* datPath, DictEntry& out,
                              bool needDefinition, uint8_t posMask) {
@@ -569,6 +689,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
     } else if (cmp > 0) {
       lo = mid + 1;
     } else {
+      g_longerMayExist = true;  // the headword exists, so longer ones may too; not checked
       // POS gate: a record with flags counts only if it intersects the caller's mask; a record
       // with posFlags==0 (no POS data, e.g. a pre-flags dict file) always counts. posMask==0
       // means the caller doesn't care (exact surface-form lookups).
@@ -692,9 +813,9 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       struct Entry {
         std::string def;
         uint8_t priority;
+        uint8_t posFlags;
       };
       std::vector<Entry> entries;
-      uint8_t bestFlags = 0;  // posFlags of the first (highest-priority) entry actually read
       constexpr int kMaxEntries = 5;
       for (size_t s = 0; s < sibs.size() && static_cast<int>(entries.size()) < kMaxEntries; s++) {
         // def.resize() is a bare allocation that abort()s on OOM under -fno-exceptions -- confirmed
@@ -717,15 +838,27 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
           g_lookupIncomplete = true;
           continue;
         }
-        if (entries.empty()) bestFlags = sibs[s].posFlags;
-        entries.push_back({std::move(def), sibs[s].priority});
+        entries.push_back({std::move(def), sibs[s].priority, sibs[s].posFlags});
       }
 
       if (entries.empty()) return false;
+      // Equal priority keeps index order, which put the suffix 中 (じゅう), the prefix 前 (ぜん)
+      // and the abbreviation 日 (にち, "Sunday") ahead of the nouns なか, まえ and ひ. A standalone
+      // match is rarely an affix or an abbreviation, so on a tie those go last.
+      const auto isAffix = [](const std::string& def) {
+        const size_t tagEnd = std::min<size_t>(def.size(), 96);
+        const std::string_view head(def.data(), tagEnd);
+        return head.find("[suffix]") != std::string_view::npos || head.find("[prefix]") != std::string_view::npos ||
+               head.find("[abbr.]") != std::string_view::npos;
+      };
+      std::stable_sort(entries.begin(), entries.end(), [&](const Entry& a, const Entry& b) {
+        if (a.priority != b.priority) return a.priority > b.priority;
+        return !isAffix(a.def) && isAffix(b.def);
+      });
 
       out.headword = headword;
       out.priority = entries[0].priority;
-      out.posFlags = bestFlags;
+      out.posFlags = entries[0].posFlags;
       if (entries.size() == 1) {
         out.definition = std::move(entries[0].def);
       } else {
@@ -751,6 +884,16 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
     }
   }
 
+  // A miss leaves lo at the key's insertion point: the record there is the next headword in sort
+  // order, and a longer word beginning with the key would sort right there.
+  if (lo < recordCount && !g_lookupIncomplete) {
+    if (!readIndexRecord(h, lo, recordCount, rec)) {
+      g_lookupIncomplete = true;
+    } else if (std::memcmp(rec.headword, key, len) == 0) {
+      g_longerMayExist = true;
+    }
+  }
+  if (g_lookupIncomplete) g_longerMayExist = true;
   return false;
 }
 
@@ -809,8 +952,11 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
   const uint64_t missTag = missTagFor(headword, dictMask, posMask);
   if (g_missMemo && g_missMemo[missTag % kMissMemoSlots] == missTag) {
     g_missMemoHits++;
+    g_longerMayExist = true;  // the memo keeps only the miss
     return false;
   }
+  // Each searched file that could hold a longer word sets it (lookupInFile).
+  g_longerMayExist = false;
   // No Storage.exists() pre-checks needed here -- lookupInFile()'s own open-once cache already
   // makes a missing optional dictionary (grammar, jmnedict) a cheap no-op after the first attempt,
   // and an existence check would itself be a filesystem call repeated on every lookup otherwise.
@@ -832,6 +978,10 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
   return false;
 }
 
+bool DictIndex::longerHeadwordMayExist() { return g_longerMayExist; }
+
+bool DictIndex::fitsInHeap(const size_t bytes) { return dictFitsWithReserve(bytes); }
+
 bool DictIndex::consumeHeapLimited() {
   const bool limited = g_heapLimited;
   g_heapLimited = false;
@@ -839,7 +989,8 @@ bool DictIndex::consumeHeapLimited() {
 }
 
 void DictIndex::releaseCaches() {
-  g_jpRootResolved.clear();  // re-probe /.dictionaries vs /dictionaries next session
+  g_rootResolved.clear();  // re-probe /.dictionaries vs /dictionaries next session
+  for (bool& probed : g_slotTitleProbed) probed = false;
   g_missMemo.reset();
   g_vocabHandles.release();
   g_grammarHandles.release();

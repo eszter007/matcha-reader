@@ -6,13 +6,18 @@
 #include <Memory.h>
 
 #include <cstdio>
+#include <tuple>
 
+#include "BookActivity.h"
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "components/StatsWidgets.h"
 #include "components/UITheme.h"
 #include "components/icons/dictionaryIcons.h"
 #include "components/icons/stats_icons.h"
 #include "fontIds.h"
+#include "stats/StatsSync.h"
+#include "util/DateFormat.h"
 
 namespace {
 // Adapters that let StatsWidgets read a BookStats without knowing the type.
@@ -35,7 +40,15 @@ void formatMinutes(char* buf, const size_t size, const uint32_t minutes) {
 
 void BookStatsActivity::onEnter() {
   Activity::onEnter();
-  stats.load(bookPath.c_str());
+  stats.load(bookPath.c_str(), /*withServerCopy=*/true);
+  // As Insights shows it: with "All devices" on, every device's history of the book. Never saved.
+  if (statsSync::insightsAccountKey() != 0) {
+    bookactivity::Book everyDevice;
+    std::vector<BookDay> otherDays;
+    if (bookactivity::find(bookPath, everyDevice, otherDays)) stats.showEveryDevice(everyDevice.started, otherDays);
+  }
+  // A title with a rare kanji or Chinese characters needs the SD companion.
+  sdFontSystem.addUiCjkNeededFor(renderer, bookTitle.c_str());
   const StatsWidgets::Today today = StatsWidgets::getToday();
   calYear = today.year;
   calMonth = today.month;
@@ -98,8 +111,9 @@ void BookStatsActivity::render(RenderLock&&) {
   const int cardX = screen.x + cardMargin;
   const int cardW = screen.width - 2 * cardMargin;
 
-  const StatsWidgets::Today today = StatsWidgets::getToday();
+  StatsWidgets::Today today = StatsWidgets::getToday();
   int y = contentTop + 8;
+  char dateLine[64] = {};
 
   // Four zeroes and a blank calendar read as a bug; say there is nothing yet instead.
   if (stats.getSessions() == 0 && stats.getDaysRead() == 0) {
@@ -124,10 +138,38 @@ void BookStatsActivity::render(RenderLock&&) {
         {lookupsBuf, tr(STR_STAT_LOOKUPS), DictLookupIcon, false},
         {sentencesBuf, tr(STR_STAT_SENTENCES), DictAddCardIcon, false},
     };
+    // The first reading day and, once stored, the finish day: in the header and as rings on the
+    // calendar.
+    StatsWidgets::DayMarks marks;
+    if (!stats.getDays().empty()) {
+      const BookDay& first = stats.getDays().front();
+      const bool finished = stats.getFinishDay(marks.finishYear, marks.finishMonth, marks.finishDay);
+      // A finish stored before any minute was recorded can precede the first reading day; the start
+      // is then unknown rather than shown after the finish.
+      const bool startKnown = !finished || std::tie(first.year, first.month, first.day) <=
+                                               std::tie(marks.finishYear, marks.finishMonth, marks.finishDay);
+      char start[24] = {};
+      if (startKnown) {
+        marks.startYear = first.year;
+        marks.startMonth = first.month;
+        marks.startDay = first.day;
+        formatDate(start, sizeof(start), tr(STR_DATE_FORMAT), first.year, first.month, first.day);
+      }
+      if (finished) {
+        char finish[24];
+        formatDate(finish, sizeof(finish), tr(STR_DATE_FORMAT), marks.finishYear, marks.finishMonth, marks.finishDay);
+        snprintf(dateLine, sizeof(dateLine), startKnown ? "%s – %s" : "%s%s", start, finish);
+      } else {
+        snprintf(dateLine, sizeof(dateLine), tr(STR_STAT_SINCE_FORMAT), start);
+      }
+      // A finished book's calendar is history: no "today" outline on it.
+      if (finished) today = StatsWidgets::Today{};
+    }
+
     y += StatsWidgets::drawTileGrid(renderer, cardX, y, cardW, tiles, 6) + 8;
 
     const StatsWidgets::MonthSource source{&stats, bookMonthStatus, bookDaysReadInMonth};
-    y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source);
+    y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source, nullptr, &marks);
 
     // Content bottom minus the visible band, leaving room for the button hints.
     const int contentEndY = y + 10;
@@ -138,7 +180,7 @@ void BookStatsActivity::render(RenderLock&&) {
   // Header last, over the scrolled content, so text cannot bleed through.
   renderer.fillRect(0, 0, screen.width, headerLineY, false);
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                 bookTitle.c_str());
+                 bookTitle.c_str(), dateLine[0] ? dateLine : nullptr);
 
   // Hints name the months Left/Right land on, as on the other two stats screens.
   char prevBuf[16], nextBuf[16];

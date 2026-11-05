@@ -28,8 +28,7 @@ bool deletePathRecursive(const std::string& path) {
 
   if (!file.isDirectory()) {
     file.close();
-    clearBookCache(path);
-    return Storage.remove(path.c_str());
+    return removeBookFile(path);
   }
   file.close();
 
@@ -89,8 +88,7 @@ bool deletePathRecursive(const std::string& path) {
       if (isDir) {
         stack.push_back({std::move(entryPath), false});
       } else {
-        clearBookCache(entryPath);
-        if (!Storage.remove(entryPath.c_str())) {
+        if (!removeBookFile(entryPath)) {
           LOG_ERR("DEL", "Failed to remove file: %s", entryPath.c_str());
           return false;
         }

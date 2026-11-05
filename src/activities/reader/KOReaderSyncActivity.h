@@ -10,6 +10,18 @@
 #include "activities/Activity.h"
 #include "components/UiAppHost.h"
 
+// A book read by page (XTC/XTCH, manga). Its position is a page index, and KOReader's convention for
+// paged documents applies: the progress string is the 1-based page number.
+struct PagedSyncBook {
+  uint32_t page = 0;  // 0-based
+  uint32_t pageCount = 0;
+  std::string title;
+  std::string author;
+  std::string language;  // empty when unknown
+  std::string series;    // empty when unknown
+  std::optional<float> seriesIndex;
+};
+
 /**
  * Activity for syncing reading progress with KOReader sync server.
  *
@@ -24,12 +36,16 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
  public:
   explicit KOReaderSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& epubPath,
                                 CrossPointPosition localPosition, SavedProgressPosition localKoPos,
-                                std::string localChapterName);
+                                std::string localChapterName, const bool pluginEventsOnly = false);
+  KOReaderSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& path,
+                       PagedSyncBook book);
 
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  // Also syncs the clock and downloads Insights on the same connection (the button shortcut).
+  void alsoSyncClockAndInsights() { withClockAndInsights = true; }
   bool preventAutoSleep() override { return state == CONNECTING || state == SYNCING || state == UPLOADING; }
 
  private:
@@ -55,6 +71,10 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   std::string statusMessage;
   std::string documentHash;
 
+  // Set for a paged book; the EPUB-only members above then stay unused.
+  std::optional<PagedSyncBook> paged;
+  uint32_t remotePage = 0;
+
   // Remote progress data
   bool hasRemoteProgress = false;
   KOReaderProgress remoteProgress;
@@ -76,6 +96,13 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   // which makes WiFi.getMode() return WIFI_MODE_NULL.
   bool wifiActivated = false;
 
+  // Reuses the KOReader WiFi connect/drain/return flow without a server: flush
+  // plugged-outbox events instead of syncing progress.
+  bool pluginEventsOnly = false;
+  bool withClockAndInsights = false;
+  // This sync applied, confirmed or uploaded the book's position (not a plugin-events-only run).
+  bool positionSettled = false;
+
   void onWifiSelectionComplete(bool success);
   void performSync();
   void performUpload();
@@ -83,6 +110,8 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   void markAutoReturn();
   void completeAlreadySynced();
   void ensureEpubLoaded();
+  KOReaderSyncClient::Error fetchTwinProgress();
+  void decidePaged(bool fromTwin);
   void saveProgressAndReturn(int spineIndex, int page);
   void returnToReader();
 

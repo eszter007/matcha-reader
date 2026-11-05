@@ -17,17 +17,22 @@ class LanguageSelectActivity final : public UiListActivity {
   void onEnter() override;
 
  private:
-  int listCount() const override { return totalItems; }
+  int listCount() const override { return totalItems + updateRow; }
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
   const char* headerTitle() const override;
 
   constexpr static uint8_t totalItems = getLanguageCount();
+  // 1 when the "Update language packs" row heads the list, so list index - updateRow is the
+  // language row.
+  uint8_t updateRow = 0;
+
+  void downloadPack(Language target);
 
   // Row storage: totalItems is a compile-time constant, so a fixed-capacity
   // array avoids any heap allocation for the row list. Built once in
   // onEnter() — activateIndex() finishes the activity immediately on
   // selection, so buildScreen() never needs to see a different "Selected"
   // row within one visit.
-  freeink::ui::ListItem rowItems[totalItems]{};
+  freeink::ui::ListItem rowItems[totalItems + 1]{};
 };

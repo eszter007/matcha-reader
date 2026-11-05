@@ -3,15 +3,19 @@
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Memory.h>
+#include <Utf8.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <algorithm>
 #include <cctype>
 #include <climits>
+#include <cstdint>
 #include <cstdlib>
 
 #include "BookStats.h"
 #include "DictionaryDefinitionActivity.h"
+#include "HapticFeedback.h"
 #include "ReaderUtils.h"
 #include "WordSelectionScan.h"
 #include "components/UITheme.h"
@@ -19,8 +23,6 @@
 namespace {
 
 constexpr unsigned long POPUP_DURATION_MS = 1500;
-constexpr unsigned long WORD_REPEAT_START_MS = 500;
-constexpr unsigned long WORD_REPEAT_INTERVAL_MS = 500;
 
 // A token is selectable when it has an ASCII alphanumeric or a non-ASCII
 // codepoint outside U+2000-U+206F (dashes, bullets and other General
@@ -41,11 +43,35 @@ bool isSelectableToken(const char* text) {
 
 void indexBuildYield(void*) { vTaskDelay(1); }
 
+// Separates the words of a selection: ASCII spaces and punctuation other than the apostrophe and
+// hyphen inside words (don't, don’t, well-known), and the typographic quotes, dashes and ellipsis.
+bool separatesWords(const uint32_t cp) {
+  if (cp < 0x80)
+    return cp != '\'' && cp != '-' && (std::isspace(static_cast<int>(cp)) || std::ispunct(static_cast<int>(cp)));
+  // U+2019 is also the typographic apostrophe (don’t); a quote left at a word's edge is stripped
+  // by the dictionary's own word cleanup.
+  return cp == 0xA0 || cp == 0xAB || cp == 0xBB || cp == 0x2013 || cp == 0x2014 || cp == 0x2018 ||
+         (cp >= 0x201A && cp <= 0x201F) || cp == 0x2026;
+}
+
 }  // namespace
 
 void DictionaryWordSelectActivity::onEnter() {
   Activity::onEnter();
   lineHeight = renderer.getLineHeight(fontId);
+  if (!lookupText.empty()) {
+    // The screen still holds the selection bar and handles; the definition opens over the page.
+    {
+      RenderLock lock(*this);
+      renderer.clearScreen();
+      auto scope = renderer.getFontCacheManager()->createPrewarmScope();
+      page->render(renderer, fontId, marginLeft, marginTop);
+      scope.endScanAndPrewarm();
+      page->render(renderer, fontId, marginLeft, marginTop);
+    }
+    performLookup();
+    return;
+  }
   // No null check: a failed allocation just disables the differential
   // fast path (drawHighlightWithSnapshot skips the read), keeping the
   // full-repaint path as the fallback.
@@ -64,13 +90,25 @@ void DictionaryWordSelectActivity::onEnter() {
     const int hit = wordAt(lookupAtX, lookupAtY);
     if (hit >= 0) {
       selected = hit;
+      {
+        // The definition opens over the reader's page without this screen ever rendering, so mark
+        // the word on that page here: it then reads as selected beside the handles.
+        RenderLock lock(*this);
+        const WordBox& word = words[selected];
+        renderer.getFontCacheManager()->prewarmCache(
+            word.fontId, word.text, static_cast<uint8_t>(1u << (static_cast<uint8_t>(word.style) & 0x03)));
+        drawHighlightWithSnapshot();
+      }
       requestUpdate();
       performLookup();
       return;
     }
     // Missed: from here this is ordinary selection, which the reader is now driving themselves.
-    // Forgetting the press keeps the close behaviour ordinary too -- otherwise a definition they
-    // opened by hand would still return to the page instead of back to the words.
+    // Start it on the word nearest the press, so they see where it landed. Forgetting the press
+    // keeps the close behaviour ordinary too -- otherwise a definition they opened by hand would
+    // still return to the page instead of back to the words.
+    int distance = 0;
+    if (const int nearest = nearestWord(lookupAtX, lookupAtY, distance); nearest >= 0) selected = nearest;
     lookupAtX = -1;
     lookupAtY = -1;
   }
@@ -206,19 +244,34 @@ int DictionaryWordSelectActivity::wordHeight(const WordBox& word) const {
   return word.fontId == fontId ? lineHeight : renderer.getLineHeight(word.fontId);
 }
 
-// Index of the word whose box (with finger-sized slop) contains the touch
-// point; -1 when the touch lands on no word. Boxes never overlap after the
-// slop grows them, at worst they touch, so first hit wins.
+// Index of the word the touch is meant for. A fingertip is not a stylus: a touch between two lines
+// or just off a short word takes the nearest word within about a line, as the vertical lookup
+// does. -1 when no word is that close (a margin, a blank stretch of page).
 int DictionaryWordSelectActivity::wordAt(const int x, const int y) const {
-  constexpr int SLOP = 4;  // matches the highlight box (+2) plus finger error
+  int distance = 0;
+  const int nearest = nearestWord(x, y, distance);
+  return nearest >= 0 && distance <= wordHeight(words[nearest]) ? nearest : -1;
+}
+
+// The word whose box is closest to the point, as the gap to its nearest edge (0 inside).
+// Chebyshev, so "within a line" means the same across a line as along it. -1 without words.
+int DictionaryWordSelectActivity::nearestWord(const int x, const int y, int& outDistance) const {
+  int best = -1;
+  int bestDistance = INT_MAX;
   for (int i = 0; i < static_cast<int>(words.size()); i++) {
     const WordBox& word = words[i];
-    if (x >= word.x - SLOP && x < word.x + word.width + SLOP && y >= word.y - SLOP &&
-        y < word.y + wordHeight(word) + SLOP) {
-      return i;
+    const int right = word.x + word.width;
+    const int bottom = word.y + wordHeight(word);
+    const int dx = x < word.x ? word.x - x : (x >= right ? x - right + 1 : 0);
+    const int dy = y < word.y ? word.y - y : (y >= bottom ? y - bottom + 1 : 0);
+    const int distance = std::max(dx, dy);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = i;
     }
   }
-  return -1;
+  outDistance = bestDistance;
+  return best;
 }
 
 // Index of the word in `row` whose horizontal center is closest to centerX;
@@ -331,54 +384,57 @@ void DictionaryWordSelectActivity::performLookup() {
   // Every dictionary is asked; each that has the word adds an entry, in dictionary order. The
   // failure reported when none does is the first dictionary's that could not answer.
   std::string joined;
-  const char* word = lookupTextFor(static_cast<size_t>(selected), joined);
+  const char* word = !lookupText.empty() ? lookupText.c_str() : lookupTextFor(static_cast<size_t>(selected), joined);
+  // A touch selection of several words: the other words follow as further entries, looked up
+  // one per tick by the definition view while it is already showing (nextSelectionWord).
+  const bool selection = !lookupText.empty() && mappedInput.hasTouch();
   std::vector<DictionaryDefinitionActivity::Entry> entries;
-  entries.reserve(dictCount);
-  bool ok = false;
-  Dictionary::IndexResult indexResult = Dictionary::IndexResult::Ok;
-  Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
-  for (size_t d = 0; d < dictCount; d++) {
-    auto& slot = dicts[d];
-    if (!slot.openOk) continue;
-    if (slot.needsIndex) {
-      Dictionary::IndexResult built = Dictionary::IndexResult::Ok;
-      slot.needsIndex = !slot.dict.buildIndex(&indexBuildYield, nullptr, &built);
-      if (slot.needsIndex) {  // a failed build retries on the next word
-        if (!ok && indexResult == Dictionary::IndexResult::Ok) indexResult = built;
-        continue;
-      }
-    }
-    ok = true;
-    DictionaryDefinitionActivity::Entry entry;
-    Dictionary::LookupResult lookupResult = Dictionary::LookupResult::NotFound;
-    if (!slot.dict.lookup(word, entry.definition, entry.headword, &lookupResult)) {
-      if (result == Dictionary::LookupResult::NotFound) result = lookupResult;
-      continue;
-    }
-    entry.html = slot.dict.definitionsAreHtml();
-    entry.dictName = slot.dict.getBookName();
-    auto& draft = entry.draft;
-    draft.card.word = entry.headword;
-    draft.card.sentence = miningSentence(word);
-    draft.card.book = mining_.bookTitle;
-    draft.card.author = mining_.bookAuthor;
-    draft.card.dictionary = entry.dictName;
-    draft.language = sentencemining::languageForDictionary(slot.folder, language);
-    draft.bookPath = mining_.bookPath;
-    entries.push_back(std::move(entry));
-  }
+  entries.reserve(dictCount * (selection ? 1 + MAX_SELECTION_WORDS : 1));
+  LookupStatus status;
+  selectionHeldBytes = 0;
+  // A selection is not on the page's word list: its card sentence is the selection itself.
+  const std::string sentence = lookupText.empty() ? miningSentence(word)
+                               : selection        ? sentencemining::sentenceHtml("", lookupText, "")
+                                                  : std::string();
+  lookUpInto(word, sentence, {}, entries, SIZE_MAX, status);
+  selectionStatus = status;
+  selectionWordPos = 0;
+  selectionWordsDone = 0;
+  selectionByteLimit = std::max(selectionHeldBytes, MAX_SELECTION_BYTES);
+  const bool moreWords = selection && hasSeveralWords();
 
-  if (!entries.empty()) {
+  if (!entries.empty() || moreWords) {
     popup = Popup::None;
-    BookStats::addCounts(mining_.bookPath.c_str(), 1, 0);
+    if (!entries.empty()) BookStats::addCounts(mining_.bookPath.c_str(), 1, 0);
     auto definitionView = makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(entries));
     if (!definitionView) {
       LOG_ERR("DICT", "OOM: definition view");
       return;
     }
+    definitionView->setPageTurnReversed(pageTurnReversed);
+    if (moreWords) {
+      definitionView->setMoreEntries(
+          {this, &DictionaryWordSelectActivity::nextSelectionWord, &DictionaryWordSelectActivity::selectionFailure});
+    }
+    // A lookup of selected text (lookupText) never extracts the page's words, so it has no box.
+    if (mappedInput.hasTouch() && selected >= 0 && static_cast<size_t>(selected) < words.size()) {
+      const WordBox& box = words[selected];
+      const Rect wordRect{box.x, box.y, box.width, wordHeight(box)};
+      LookupClipHandles handles;
+      handles.set(wordRect, wordRect, /*isVertical=*/false);
+      definitionView->setClipHandles(handles);
+    }
     startActivityForResult(std::move(definitionView), [this](const ActivityResult& result) {
-      // The definition view cancels when its power click asked to leave the dictionary
-      // entirely, rather than step back to this selection.
+      // A drag on the word's handles: the reader opens clip selection on it.
+      if (std::holds_alternative<ClipStartResult>(result.data)) {
+        ActivityResult forward;
+        forward.data = result.data;
+        setResult(std::move(forward));
+        finish();
+        return;
+      }
+      // The definition view cancels when its power click or a tap outside it asked to leave
+      // the dictionary entirely, rather than step back to this selection.
       if (result.isCancelled) {
         finish();
         return;
@@ -386,7 +442,7 @@ void DictionaryWordSelectActivity::performLookup() {
       // A long press opened the definition directly, so closing it returns to the
       // page. Word selection was never a step the reader asked for, and stopping
       // here would strand them in a screen they did not open.
-      if (lookupAtX >= 0 && lookupAtY >= 0) {
+      if ((lookupAtX >= 0 && lookupAtY >= 0) || !lookupText.empty()) {
         finish();
         return;
       }
@@ -394,46 +450,8 @@ void DictionaryWordSelectActivity::performLookup() {
     });
     return;
   }
-  // Name the failure: a genuine miss is "Not found"; a word that WAS found but
-  // couldn't be read is a real error — and we distinguish decompression from a
-  // low-memory allocation from a generic read error.
-  if (!ok) {
-    popup = Popup::Error;
-    // An index build allocates a scan buffer, so it fails the same way lookups
-    // do on a fragmented heap — name that rather than a generic error.
-    switch (indexResult) {
-      case Dictionary::IndexResult::LowMemory:
-        popupMsg = StrId::STR_DICT_LOW_MEMORY;
-        break;
-      case Dictionary::IndexResult::ReadError:
-        popupMsg = StrId::STR_DICT_READ_FAILED;
-        break;
-      case Dictionary::IndexResult::Ok:
-      default:
-        popupMsg = StrId::STR_DICT_ERROR;  // dict.open() failed, not the index
-        break;
-    }
-  } else {
-    switch (result) {
-      case Dictionary::LookupResult::Decompress:
-        popup = Popup::Error;
-        popupMsg = StrId::STR_DICT_DECOMPRESS_ERROR;
-        break;
-      case Dictionary::LookupResult::LowMemory:
-        popup = Popup::Error;
-        popupMsg = StrId::STR_DICT_LOW_MEMORY;
-        break;
-      case Dictionary::LookupResult::ReadError:
-        popup = Popup::Error;
-        popupMsg = StrId::STR_DICT_READ_FAILED;
-        break;
-      case Dictionary::LookupResult::NotFound:
-      default:
-        popup = Popup::NotFound;
-        popupMsg = StrId::STR_DICT_NOT_FOUND;
-        break;
-    }
-  }
+  popupMsg = failureMessage(status);
+  popup = popupMsg == StrId::STR_DICT_NOT_FOUND ? Popup::NotFound : Popup::Error;
   popupTime = millis();
   requestUpdate();
 }
@@ -472,6 +490,14 @@ void DictionaryWordSelectActivity::loop() {
 
   if (words.empty()) return;
 
+  // A press on one of the highlighted word's handles: the reader opens clip selection on it.
+  if (ClipStartResult clip; pageHandles.pressed(renderer, mappedInput, clip, /*panelShown=*/false)) {
+    ActivityResult result;
+    result.data = clip;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
   // Touch: a touch-down moves the highlight to the touched word (differential
   // repaint), a tap on a word selects and looks it up in one go.
   int tx = 0;
@@ -487,33 +513,39 @@ void DictionaryWordSelectActivity::loop() {
   if (mappedInput.wasScreenTapped(tx, ty)) {
     const int hit = wordAt(tx, ty);
     if (hit >= 0) {
+      haptic_feedback::touchAction();
       selected = hit;
       performLookup();
     }
     return;
   }
 
-  const bool hasNextWord = selected + 1 < static_cast<int>(words.size());
-  const unsigned long now = millis();
-  const bool repeat =
-      mappedInput.getHeldTime() >= WORD_REPEAT_START_MS && now - lastHorizontalMoveTime >= WORD_REPEAT_INTERVAL_MS;
-  const bool moveLeft = mappedInput.wasPressed(MappedInputManager::Button::ScreenLeft) ||
-                        (repeat && mappedInput.isPressed(MappedInputManager::Button::ScreenLeft));
-  const bool moveRight = mappedInput.wasPressed(MappedInputManager::Button::ScreenRight) ||
-                         (repeat && mappedInput.isPressed(MappedInputManager::Button::ScreenRight));
-  if (moveLeft && selected > 0) {
-    selected--;
-    lastHorizontalMoveTime = now;
-    requestUpdate();
-  } else if (moveRight && hasNextWord) {
-    selected++;
-    lastHorizontalMoveTime = now;
-    requestUpdate();
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::ScreenUp)) {
-    moveVertical(-1);
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::ScreenDown)) {
-    moveVertical(1);
+  // Remapped page bindings (side actions, power-as-page) step the word, as in the Japanese panel.
+  const auto panelStep = ReaderUtils::lookupPanelStep(mappedInput);
+  if (panelStep != ReaderUtils::PanelStep::None) {
+    stepWord(panelStep == ReaderUtils::PanelStep::Next ? 1 : -1);
+    return;
   }
+  // Every pair reads the same way, so one pair alone (Picco, touch off) reaches every word: a
+  // press steps to the next word, onto the next line at the end of one; a hold jumps a line.
+  int delta = 0;
+  switch (ReaderUtils::lookupPressAny(mappedInput, delta)) {
+    case ReaderUtils::LookupPress::Press:
+      stepWord(delta);
+      break;
+    case ReaderUtils::LookupPress::Hold:
+      moveVertical(delta);
+      break;
+    case ReaderUtils::LookupPress::None:
+      break;
+  }
+}
+
+void DictionaryWordSelectActivity::stepWord(const int delta) {
+  const int target = selected + delta;
+  if (target < 0 || target >= static_cast<int>(words.size())) return;
+  selected = target;
+  requestUpdate();
 }
 
 // Saves the pixels under words[selected]'s highlight box, then draws the
@@ -541,7 +573,29 @@ bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
     hy = 0;
   }
 
+  // The black box stays the word's own; the saved region below may grow past it.
+  const int boxX = hx;
+  const int boxY = hy;
+  const int boxW = hw;
+  const int boxH = hh;
+
   bool saved = false;
+  // The handles sit outside the word's box; the saved region covers them too, so a move of the
+  // highlight restores the page under the old handles along with the old highlight.
+  refreshPageHandles();
+  if (pageHandles.valid()) {
+    int right = hx + hw;
+    int bottom = hy + hh;
+    for (const bool start : {true, false}) {
+      const Rect h = pageHandles.handle(renderer, start);
+      hx = std::max(0, std::min(hx, h.x));
+      hy = std::max(0, std::min(hy, h.y));
+      right = std::min(renderer.getScreenWidth(), std::max(right, h.x + h.width));
+      bottom = std::min(renderer.getScreenHeight(), std::max(bottom, h.y + h.height));
+    }
+    hw = right - hx;
+    hh = bottom - hy;
+  }
   if (!partner && snapshot && hw > 0 && hh > 0) {
     saved = renderer.readFramebufferRegion(hx, hy, hw, hh, snapshot.get(), SNAPSHOT_CAPACITY) > 0;
   }
@@ -551,7 +605,7 @@ bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
   snapshotH = static_cast<int16_t>(hh);
   snapshotIdx = saved ? selected : -1;
 
-  renderer.fillRect(hx, hy, hw, hh, true);
+  renderer.fillRect(boxX, boxY, boxW, boxH, true);
   // word.fontId, NOT the reader's font: the box was measured with the font the page laid this
   // word out in, so drawing it in a different size spills white glyphs past the black panel and
   // over the neighbouring words (the page's own ink is only erased inside the box).
@@ -574,7 +628,18 @@ bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
       renderer.drawText(partner->fontId, partner->x, partner->y, partner->text, false, partner->style);
     }
   }
+  pageHandles.draw(renderer);
   return saved;
+}
+
+void DictionaryWordSelectActivity::refreshPageHandles() {
+  if (!mappedInput.hasTouch() || words.empty() || selected < 0 || selected >= static_cast<int>(words.size())) {
+    pageHandles = LookupClipHandles{};
+    return;
+  }
+  const WordBox& box = words[selected];
+  const Rect rect{box.x, box.y, box.width, wordHeight(box)};
+  pageHandles.set(rect, rect, /*isVertical=*/false);
 }
 
 // Front-button bar (Back/Confirm/Left/Right). Drawn last on every repaint
@@ -642,4 +707,145 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
     return;
   }
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
+// Every dictionary's entry for `text`, appended to `out`. A headword the same dictionary already
+// gave (in `shown` or `out`) is not repeated, and an entry that would take the definition text
+// held past `byteLimit` is left out.
+void DictionaryWordSelectActivity::lookUpInto(const char* text, const std::string& sentence,
+                                              const std::vector<DictionaryDefinitionActivity::Entry>& shown,
+                                              std::vector<DictionaryDefinitionActivity::Entry>& out,
+                                              const size_t byteLimit, LookupStatus& status) {
+  const auto repeated = [](const std::vector<DictionaryDefinitionActivity::Entry>& list,
+                           const DictionaryDefinitionActivity::Entry& entry) {
+    for (const auto& found : list) {
+      if (found.dictSlot == entry.dictSlot && found.headword == entry.headword) return true;
+    }
+    return false;
+  };
+  for (size_t d = 0; d < dictCount; d++) {
+    auto& slot = dicts[d];
+    if (!slot.openOk) continue;
+    if (slot.needsIndex) {
+      Dictionary::IndexResult built = Dictionary::IndexResult::Ok;
+      slot.needsIndex = !slot.dict.buildIndex(&indexBuildYield, nullptr, &built);
+      if (slot.needsIndex) {  // a failed build retries on the next word
+        if (!status.ok && status.indexResult == Dictionary::IndexResult::Ok) status.indexResult = built;
+        continue;
+      }
+    }
+    status.ok = true;
+    DictionaryDefinitionActivity::Entry entry;
+    Dictionary::LookupResult lookupResult = Dictionary::LookupResult::NotFound;
+    if (!slot.dict.lookup(text, entry.definition, entry.headword, &lookupResult)) {
+      if (status.result == Dictionary::LookupResult::NotFound) status.result = lookupResult;
+      continue;
+    }
+    entry.dictSlot = static_cast<uint8_t>(d);
+    if (repeated(shown, entry) || repeated(out, entry)) continue;
+    if (selectionHeldBytes + entry.definition.size() > byteLimit) continue;
+    selectionHeldBytes += entry.definition.size();
+    entry.dictName = slot.dict.getBookName();
+    entry.html = slot.dict.definitionsAreHtml();
+    auto& draft = entry.draft;
+    draft.card.word = entry.headword;
+    draft.card.sentence = sentence;
+    draft.card.book = mining_.bookTitle;
+    draft.card.author = mining_.bookAuthor;
+    draft.card.dictionary = entry.dictName;
+    draft.language = sentencemining::languageForDictionary(slot.folder, language);
+    draft.bookPath = mining_.bookPath;
+    out.push_back(std::move(entry));
+  }
+}
+
+// The selection's next word from selectionWordPos on: separators skipped, then everything up to
+// the next one. False at the end of the text.
+bool DictionaryWordSelectActivity::nextSelectionWordText(std::string& word, size_t& start) {
+  start = selectionWordPos;
+  size_t end = selectionWordPos;
+  while (selectionWordPos < lookupText.size()) {
+    const auto* at = reinterpret_cast<const unsigned char*>(lookupText.c_str() + selectionWordPos);
+    const auto* next = at;
+    const uint32_t cp = utf8NextCodepoint(&next);
+    if (cp == 0 || next == at) {
+      selectionWordPos = lookupText.size();
+      break;
+    }
+    const bool separator = separatesWords(cp);
+    if (separator && end > start) break;
+    selectionWordPos += static_cast<size_t>(next - at);
+    if (separator) start = selectionWordPos;
+    end = selectionWordPos;
+  }
+  if (end == start) return false;
+  word.assign(lookupText, start, end - start);
+  return true;
+}
+
+// Whether the selection holds more than the one word already looked up as the whole text.
+bool DictionaryWordSelectActivity::hasSeveralWords() {
+  std::string word;
+  size_t start = 0;
+  const bool first = nextSelectionWordText(word, start);
+  const bool several = first && nextSelectionWordText(word, start);
+  selectionWordPos = 0;
+  return several;
+}
+
+bool DictionaryWordSelectActivity::nextSelectionWord(void* ctx,
+                                                     const std::vector<DictionaryDefinitionActivity::Entry>& shown,
+                                                     std::vector<DictionaryDefinitionActivity::Entry>& fresh) {
+  auto* self = static_cast<DictionaryWordSelectActivity*>(ctx);
+  std::string word;
+  size_t start = 0;
+  if (self->selectionWordsDone >= MAX_SELECTION_WORDS || self->selectionHeldBytes >= self->selectionByteLimit ||
+      !self->nextSelectionWordText(word, start)) {
+    return false;
+  }
+  self->selectionWordsDone++;
+  const std::string& text = self->lookupText;
+  const std::string sentence =
+      sentencemining::sentenceHtml(text.substr(0, start), word, text.substr(start + word.size()));
+  LookupStatus status;
+  self->lookUpInto(word.c_str(), sentence, shown, fresh, self->selectionByteLimit, status);
+  // The first failure that is not a plain miss is kept, for the view to name if nothing is found.
+  auto& kept = self->selectionStatus;
+  if (!status.ok && kept.ok) kept = status;
+  if (status.ok && kept.ok && kept.result == Dictionary::LookupResult::NotFound) kept.result = status.result;
+  return true;
+}
+
+StrId DictionaryWordSelectActivity::selectionFailure(void* ctx) {
+  return failureMessage(static_cast<DictionaryWordSelectActivity*>(ctx)->selectionStatus);
+}
+
+// What a lookup that found nothing should say: a genuine miss is "Not found"; a word that WAS
+// found but couldn't be read is a real error -- decompression, a low-memory allocation, or a
+// generic read error.
+StrId DictionaryWordSelectActivity::failureMessage(const LookupStatus& status) {
+  if (!status.ok) {
+    // An index build allocates a scan buffer, so it fails the same way lookups
+    // do on a fragmented heap -- name that rather than a generic error.
+    switch (status.indexResult) {
+      case Dictionary::IndexResult::LowMemory:
+        return StrId::STR_DICT_LOW_MEMORY;
+      case Dictionary::IndexResult::ReadError:
+        return StrId::STR_DICT_READ_FAILED;
+      case Dictionary::IndexResult::Ok:
+      default:
+        return StrId::STR_DICT_ERROR;  // dict.open() failed, not the index
+    }
+  }
+  switch (status.result) {
+    case Dictionary::LookupResult::Decompress:
+      return StrId::STR_DICT_DECOMPRESS_ERROR;
+    case Dictionary::LookupResult::LowMemory:
+      return StrId::STR_DICT_LOW_MEMORY;
+    case Dictionary::LookupResult::ReadError:
+      return StrId::STR_DICT_READ_FAILED;
+    case Dictionary::LookupResult::NotFound:
+    default:
+      return StrId::STR_DICT_NOT_FOUND;
+  }
 }

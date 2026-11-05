@@ -3,7 +3,7 @@
 #include <BoardConfig.h>
 #include <FreeInkUICore.h>
 #include <GfxRenderer.h>
-#include <HalFrontlight.h>
+#include <HalHaptics.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -16,6 +16,7 @@
 namespace fui = freeink::ui;
 
 void MappedInputManager::update(const bool deferHomeButtonAction) const {
+  remoteInput.reset();
   gpio.update();
   // Any front-button press, hold, or release restarts the ghost window that
   // sideReleaseAlone() enforces for custom side-button actions.
@@ -25,6 +26,15 @@ void MappedInputManager::update(const bool deferHomeButtonAction) const {
       gpio.wasReleased(HalGPIO::BTN_RIGHT)) {
     lastFrontActivityMs = millis();
   }
+  // Touch first: a board that synthesizes Confirm from a tap reports both in one frame.
+  if (gpio.wasTouchActivity()) {
+    buttonsInUse = false;
+  } else if (gpio.wasAnyPressed()) {
+    buttonsInUse = true;
+  }
+  const bool pagePressed =
+      SETTINGS.vibration == CrossPointSettings::VIBRATION_TOUCH_PAGE && gpio.wasCapacitivePagePressed();
+  HalHaptics::feedback(SETTINGS.vibration != CrossPointSettings::VIBRATION_OFF, pagePressed, SETTINGS.hapticIntensity);
   homeAction = HomeButtonAction::Ignore;
   if (gpio.hasHomeKey()) {
     homeAction = homeButtonInput.update(millis(), gpio.wasHomeKeyTapped(), gpio.wasHomeKeyLongPressed(),
@@ -32,6 +42,34 @@ void MappedInputManager::update(const bool deferHomeButtonAction) const {
                                         static_cast<HomeButtonAction>(SETTINGS.homeButtonTapAction),
                                         static_cast<HomeButtonAction>(SETTINGS.homeButtonDoubleTapAction),
                                         static_cast<HomeButtonAction>(SETTINGS.homeButtonLongPressAction));
+    if (gpio.wasHomeKeyLongPressed() && homeAction != HomeButtonAction::Ignore) {
+      HalHaptics::longPress(SETTINGS.vibration != CrossPointSettings::VIBRATION_OFF, SETTINGS.hapticIntensity);
+    } else if (homeAction != HomeButtonAction::Ignore) {
+      HalHaptics::feedback(SETTINGS.vibration != CrossPointSettings::VIBRATION_OFF, true, SETTINGS.hapticIntensity);
+    }
+  }
+  // A short power click can carry a home-button action (see SHORT_PWRBTN): the reader shortcuts
+  // for touch boards without a Home key, and the syncs on every board.
+  if (homeAction == HomeButtonAction::Ignore && mapButton(Button::Power, &HalGPIO::wasReleased)) {
+    switch (SETTINGS.shortPwrBtn) {
+      case CrossPointSettings::PWR_BOOKMARK:
+        homeAction = HomeButtonAction::Bookmark;
+        break;
+      case CrossPointSettings::PWR_SYNC:
+        homeAction = HomeButtonAction::Sync;
+        break;
+      case CrossPointSettings::PWR_READER_MENU:
+        homeAction = HomeButtonAction::ReaderMenu;
+        break;
+      case CrossPointSettings::PWR_SYNC_STATS_CLOCK:
+        homeAction = HomeButtonAction::SyncStatsClock;
+        break;
+      case CrossPointSettings::PWR_SYNC_CLOCK:
+        homeAction = HomeButtonAction::SyncClock;
+        break;
+      default:
+        break;
+    }
   }
   if (deferHomeButtonAction) {
     // Keep the first action observed during a synchronous transfer. Home must
@@ -171,6 +209,7 @@ bool MappedInputManager::sideRoleSuppressed(const uint8_t physical) const {
 // trip the Lower action. Deliberately reads raw GPIO -- the logical names are suppressed above.
 bool MappedInputManager::sideActionFired(const uint8_t action) const {
   if (action == CrossPointSettings::SIDE_BTN_DEFAULT || action == CrossPointSettings::SIDE_BTN_NONE) return false;
+  if (comboAction == action) return true;
   if (gpio.isPressed(HalGPIO::BTN_POWER) || gpio.wasReleased(HalGPIO::BTN_POWER)) return false;
   if (!sideReleaseAlone()) return false;
   return (SETTINGS.sideButtonActionForUp() == action && gpio.wasReleased(HalGPIO::BTN_UP)) ||
@@ -255,6 +294,14 @@ bool MappedInputManager::wasScreenTapped(int& x, int& y) const {
   return true;
 }
 
+bool MappedInputManager::wasScreenTouchPressed(int& x, int& y) const {
+  float nx = 0.0f;
+  float ny = 0.0f;
+  if (!gpio.wasTouchDown(nx, ny)) return false;
+  renderer.tapToLogical(nx, ny, x, y);
+  return true;
+}
+
 bool MappedInputManager::wasScreenTouchDown(int& x, int& y) const {
   float nx = 0.0f;
   float ny = 0.0f;
@@ -286,12 +333,6 @@ bool MappedInputManager::isScreenTouchHeld(int& x, int& y) const {
 }
 
 bool MappedInputManager::wasScreenTouchReleased() const { return gpio.wasTouchReleased(); }
-
-bool MappedInputManager::wasTapInRect(const int x, const int y, const int width, const int height) const {
-  int tx = 0;
-  int ty = 0;
-  return wasScreenTapped(tx, ty) && tx >= x && tx < x + width && ty >= y && ty < y + height;
-}
 
 MappedInputManager::RowTouch MappedInputManager::rowTouch(int& row, const int top, const int rowStep,
                                                           const int rowCount, const int xStart, const int xEnd,
@@ -342,12 +383,14 @@ bool MappedInputManager::decodeSwipe(int& sx, int& sy, int& ex, int& ey) const {
   return true;
 }
 
-MappedInputManager::SwipeDir MappedInputManager::wasSwipe() const {
+MappedInputManager::SwipeDir MappedInputManager::wasSwipe(int* startX, int* startY) const {
   int sx = 0;
   int sy = 0;
   int ex = 0;
   int ey = 0;
   if (!decodeSwipe(sx, sy, ex, ey)) return SwipeDir::None;
+  if (startX) *startX = sx;
+  if (startY) *startY = sy;
   switch (fui::swipeDirection(sx, sy, ex, ey)) {
     case fui::SwipeDir::Left:
       return SwipeDir::Left;
@@ -403,16 +446,20 @@ bool MappedInputManager::wasBottomEdgeUpSwipe() const { return wasEdgeSwipe(fui:
 
 bool MappedInputManager::wasMenuGesture() const { return wasTopEdgeDownSwipe(); }
 
+bool MappedInputManager::wasCoverPageKey(const bool prevPage, const bool onRelease) const {
+  // Same Up/Down choice as Button::PageBack / PageForward.
+  const bool up = prevPage != isNavDirectionSwapped();
+  const uint8_t button = up ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN;
+  return onRelease ? gpio.wasCapacitivePageKeyReleased(button) : gpio.wasCapacitivePageKeyPressed(button);
+}
+
 bool MappedInputManager::wasReaderMenuSwipeUp() const { return gpio.hasHomeKey() && wasBottomEdgeUpSwipe(); }
 
 bool MappedInputManager::wasHomeGesture() const {
   return gpio.hasHomeKey() ? homeAction == HomeButtonAction::Home : wasBottomEdgeUpSwipe();
 }
 
-bool MappedInputManager::wasLightPanelGesture() const {
-  // On lightless boards the same edge remains available to the reader menu.
-  return Frontlight.present() && wasTopEdgeDownSwipe();
-}
+bool MappedInputManager::wasLightPanelGesture() const { return wasTopEdgeDownSwipe(); }
 
 #if FREEINK_CAP_TOUCH
 bool MappedInputManager::wasPowerConfirmClick() const {
@@ -425,7 +472,18 @@ bool MappedInputManager::wasPowerConfirmClick() const {
 }
 #endif
 
+bool MappedInputManager::injectRemoteClick(const RemoteButton button) {
+  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || isPressed(Button::Confirm) || isPressed(Button::Back))
+    return false;
+  return remoteInput.click(button);
+}
+
 bool MappedInputManager::wasPressed(const Button button) const {
+  if (button == Button::Confirm && remoteInput.button == RemoteButton::Confirm) return true;
+  if (button == Button::Back && remoteInput.button == RemoteButton::Back) return true;
+  if ((button == Button::NavNext || button == Button::Right) && remoteInput.button == RemoteButton::Next) return true;
+  if ((button == Button::NavPrevious || button == Button::Left) && remoteInput.button == RemoteButton::Previous)
+    return true;
   if (button == Button::Confirm && homeAction == HomeButtonAction::Confirm) return true;
   if (button == Button::Back && wasBackGesture()) return true;
 #if FREEINK_CAP_TOUCH
@@ -435,6 +493,11 @@ bool MappedInputManager::wasPressed(const Button button) const {
 }
 
 bool MappedInputManager::wasReleased(const Button button) const {
+  if (button == Button::Confirm && remoteInput.button == RemoteButton::Confirm) return true;
+  if (button == Button::Back && remoteInput.button == RemoteButton::Back) return true;
+  if ((button == Button::NavNext || button == Button::Right) && remoteInput.button == RemoteButton::Next) return true;
+  if ((button == Button::NavPrevious || button == Button::Left) && remoteInput.button == RemoteButton::Previous)
+    return true;
   if (button == Button::Confirm && homeAction == HomeButtonAction::Confirm) return true;
   if (button == Button::Back && wasBackGesture()) return true;
 #if FREEINK_CAP_TOUCH
@@ -449,6 +512,9 @@ bool MappedInputManager::wasLongPressed(const Button button, const unsigned long
   if ((longPressFiredButtons & held) != 0 || getHeldTime() < thresholdMs) return false;
   longPressFiredButtons |= held;
   suppressNextRelease(held);
+  if (mapButton(button, &HalGPIO::isCapacitivePagePressed)) {
+    HalHaptics::longPress(SETTINGS.vibration == CrossPointSettings::VIBRATION_TOUCH_PAGE, SETTINGS.hapticIntensity);
+  }
   return true;
 }
 
@@ -470,6 +536,8 @@ bool MappedInputManager::isPressed(const Button button) const { return mapButton
 
 bool MappedInputManager::wasAnyPressed() const { return gpio.wasAnyPressed(); }
 
+bool MappedInputManager::buttonCursorShown() { return !BoardConfig::hasTouch() || buttonsInUse; }
+
 bool MappedInputManager::sideReleaseAlone() const {
   return side_button::loneRelease(millis(), lastFrontActivityMs, SIDE_GHOST_WINDOW_MS);
 }
@@ -478,7 +546,7 @@ bool MappedInputManager::wasAnyReleased() const { return gpio.wasAnyReleased(); 
 
 unsigned long MappedInputManager::getHeldTime() const {
   // A mapped action has its own meaning, independent of the contact duration.
-  if (homeAction != HomeButtonAction::Ignore) return 0;
+  if (hasRemoteClick() || homeAction != HomeButtonAction::Ignore) return 0;
   if (!gpio.wasAnyPressed() && !gpio.wasAnyReleased() && touchHeldOverrideValid &&
       millis() - touchHeldOverrideAt <= TOUCH_HELD_OVERRIDE_WINDOW_MS) {
     return touchHeldOverrideMs;

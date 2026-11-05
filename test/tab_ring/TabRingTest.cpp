@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "GfxRenderer.h"
+#include "HapticFeedback.h"
 #include "MappedInputManager.h"
 #include "components/TabRing.h"
 
@@ -52,6 +53,7 @@ class TabRingTest : public ::testing::Test {
     HomeTabBar::hitSlot = -1;
     HomeTabBar::hitTapped = false;
     HomeTabBar::activated = -1;
+    haptic_feedback::taps = 0;
   }
 
   TabRing::Result press(const Button button) {
@@ -280,6 +282,17 @@ TEST_F(TabRingTest, ATapOnTheBarActivatesTheSlot) {
   input = {};
   EXPECT_EQ(TabRing::handleInput(host, input, renderer), TabRing::Result::Handled);
   EXPECT_EQ(HomeTabBar::activated, static_cast<int>(HomeTab::Settings));
+  EXPECT_EQ(haptic_feedback::taps, 1);
+}
+
+// The tab already showing swallows the tap and goes nowhere, so there is nothing to confirm.
+TEST_F(TabRingTest, ATapOnTheBarsOwnSlotDoesNotTap) {
+  HomeTabBar::hitSlot = static_cast<int>(host.ringBottomTab());
+  HomeTabBar::hitTapped = true;
+  input = {};
+  EXPECT_EQ(TabRing::handleInput(host, input, renderer), TabRing::Result::Handled);
+  EXPECT_EQ(HomeTabBar::activated, -1);
+  EXPECT_EQ(haptic_feedback::taps, 0);
 }
 
 TEST_F(TabRingTest, AFingerStillDownOnTheBarIsSwallowedWithoutActivating) {
@@ -288,5 +301,6 @@ TEST_F(TabRingTest, AFingerStillDownOnTheBarIsSwallowedWithoutActivating) {
   input = {};
   EXPECT_EQ(TabRing::handleInput(host, input, renderer), TabRing::Result::Handled);
   EXPECT_EQ(HomeTabBar::activated, -1);
+  EXPECT_EQ(haptic_feedback::taps, 0);
 }
 }  // namespace

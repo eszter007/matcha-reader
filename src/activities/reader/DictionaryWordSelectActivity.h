@@ -6,7 +6,9 @@
 #include <memory>
 #include <vector>
 
+#include "DictionaryDefinitionActivity.h"
 #include "activities/Activity.h"
+#include "clippings/LookupClipHandles.h"
 #include "util/Dictionary.h"
 #include "util/SentenceMining.h"
 
@@ -45,12 +47,18 @@ class DictionaryWordSelectActivity final : public Activity {
 
   // The book and the next page's text, so a looked-up word can be saved for sentence mining.
   void setMiningContext(sentencemining::BookContext context) { mining_ = std::move(context); }
+  // Looks this text up straight away instead of a word on the page (a clipping selection's
+  // Look Up); closing the definition returns to the page.
+  void setLookupText(std::string text) { lookupText = std::move(text); }
 
+  // The book behind the panel reverses its page turns (Reversed Page Turn in a vertical book).
+  void setPageTurnReversed(const bool reversed) { pageTurnReversed = reversed; }
   void onEnter() override;
   void loop() override;
   void render(RenderLock&&) override;
 
  private:
+  bool pageTurnReversed = false;
   // Screen box of one selectable word. `text` points into the owned Page's
   // TextBlock arena (NUL-terminated), valid for this activity's lifetime.
   struct WordBox {
@@ -85,9 +93,15 @@ class DictionaryWordSelectActivity final : public Activity {
   // Hit-test / highlight height for a word: the line height of its own font when CSS gave it
   // one, the page's otherwise.
   int wordHeight(const WordBox& word) const;
+  // Touch: drag handles on the highlighted word, as the definition card has, so a hold that
+  // finds no entry (or a picker the reader is browsing) can still be dragged into a clipping.
+  LookupClipHandles pageHandles;
+  void refreshPageHandles();
   int closestInRow(uint16_t row, int centerX) const;
   int wordAt(int x, int y) const;
+  int nearestWord(int x, int y, int& outDistance) const;
   void moveVertical(int direction);
+  void stepWord(int delta);
   void performLookup();
   bool drawHighlightWithSnapshot();
   void drawHints() const;
@@ -114,7 +128,32 @@ class DictionaryWordSelectActivity final : public Activity {
   std::string miningSentence(std::string_view surface) const;
   uint16_t rowCount = 0;
   bool confirmPressSeen = false;
-  unsigned long lastHorizontalMoveTime = 0;
+  std::string lookupText;
+  // A touch selection's other words, looked up one per call while the definition view shows the
+  // first ones. Capped in count and in definition text held, since every entry stays in RAM until
+  // the view closes.
+  static constexpr size_t MAX_SELECTION_WORDS = 10;
+  static constexpr size_t MAX_SELECTION_BYTES = 16 * 1024;
+  size_t selectionWordPos = 0;
+  size_t selectionWordsDone = 0;
+  size_t selectionHeldBytes = 0;
+  size_t selectionByteLimit = MAX_SELECTION_BYTES;
+  struct LookupStatus {
+    bool ok = false;  // some dictionary could answer
+    Dictionary::IndexResult indexResult = Dictionary::IndexResult::Ok;
+    Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
+  };
+  // The phrase's outcome, then the first real failure of a word: what an empty view names.
+  LookupStatus selectionStatus;
+  static StrId failureMessage(const LookupStatus& status);
+  static StrId selectionFailure(void* ctx);
+  void lookUpInto(const char* text, const std::string& sentence,
+                  const std::vector<DictionaryDefinitionActivity::Entry>& shown,
+                  std::vector<DictionaryDefinitionActivity::Entry>& out, size_t byteLimit, LookupStatus& status);
+  bool nextSelectionWordText(std::string& word, size_t& start);
+  bool hasSeveralWords();
+  static bool nextSelectionWord(void* ctx, const std::vector<DictionaryDefinitionActivity::Entry>& shown,
+                                std::vector<DictionaryDefinitionActivity::Entry>& fresh);
 
   // One dictionary of the lookup, opened (and its index built) the first time a word is looked up.
   struct DictSlot {

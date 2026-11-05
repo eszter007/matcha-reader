@@ -130,6 +130,11 @@ BmpReaderError Bitmap::parseHeaders() {
   if (colorsUsed == 0 && bpp <= 8) colorsUsed = 1u << bpp;
   if (colorsUsed > 256u) return BmpReaderError::PaletteTooLarge;
   file.seekCur(4);  // biClrImportant
+  hasAlpha = false;
+  if (bpp == 32 && biSize >= 56) {
+    file.seekCur(12);  // red, green and blue masks
+    hasAlpha = readLE32(file) == 0xFF000000u;
+  }
 
   if (width <= 0 || height <= 0) return BmpReaderError::BadDimensions;
 
@@ -220,6 +225,19 @@ bool Bitmap::preload() const {
 }
 
 // packed 2bpp output, 0 = black, 1 = dark gray, 2 = light gray, 3 = white
+BmpReaderError Bitmap::skipRow() const {
+  if (preloadBuf) {
+    if (preloadPos + static_cast<size_t>(rowBytes) > static_cast<size_t>(rowBytes) * height) {
+      return BmpReaderError::ShortReadRow;
+    }
+    preloadPos += rowBytes;
+  } else if (!file.seekCur(rowBytes)) {
+    return BmpReaderError::ShortReadRow;
+  }
+  prevRowY += 1;
+  return BmpReaderError::Ok;
+}
+
 BmpReaderError Bitmap::readNextRow(uint8_t* data, uint8_t* rowBuffer) const {
   // Note: rowBuffer should be pre-allocated by the caller to size 'rowBytes'
   if (preloadBuf) {
@@ -247,7 +265,7 @@ BmpReaderError Bitmap::readNextRow(uint8_t* data, uint8_t* rowBuffer) const {
     } else if (fsDitherer) {
       color = fsDitherer->processPixel(adjustPixel(lum), currentX);
     } else {
-      if (nativePalette) {
+      if (nativePalette || evenLevels) {
         // Palette matches native gray levels: direct mapping (still apply brightness/contrast/gamma)
         color = static_cast<uint8_t>(adjustPixel(lum) >> 6);
       } else {
@@ -271,8 +289,10 @@ BmpReaderError Bitmap::readNextRow(uint8_t* data, uint8_t* rowBuffer) const {
   switch (bpp) {
     case 32: {
       const uint8_t* p = rowBuffer;
+      const bool overWhite = transparentAsWhite && hasAlpha;
       for (int x = 0; x < width; x++) {
         lum = (77u * p[2] + 150u * p[1] + 29u * p[0]) >> 8;
+        if (overWhite) lum = static_cast<uint8_t>((lum * p[3] + 255u * (255u - p[3])) / 255u);
         packPixel(lum);
         p += 4;
       }
@@ -329,6 +349,38 @@ BmpReaderError Bitmap::readNextRow(uint8_t* data, uint8_t* rowBuffer) const {
   // Flush remaining bits if width is not a multiple of 4
   if (bitShift != 6) *outPtr = currentOutByte;
 
+  return BmpReaderError::Ok;
+}
+
+BmpReaderError Bitmap::readRowGray(const int y, uint8_t* gray, uint8_t* rowBuffer) const {
+  const uint32_t fileRow = topDown ? y : height - 1 - y;
+  if (!file.seek(bfOffBits + fileRow * rowBytes)) return BmpReaderError::SeekPixelDataFailed;
+  if (file.read(rowBuffer, rowBytes) != rowBytes) return BmpReaderError::ShortReadRow;
+
+  switch (bpp) {
+    case 32:
+    case 24: {
+      const int step = bpp / 8;
+      const uint8_t* p = rowBuffer;
+      for (int x = 0; x < width; x++, p += step) gray[x] = (77u * p[2] + 150u * p[1] + 29u * p[0]) >> 8;
+      break;
+    }
+    case 8:
+      for (int x = 0; x < width; x++) gray[x] = paletteLum[rowBuffer[x]];
+      break;
+    case 4:
+      for (int x = 0; x < width; x++)
+        gray[x] = paletteLum[(x & 1) ? (rowBuffer[x >> 1] & 0x0F) : (rowBuffer[x >> 1] >> 4)];
+      break;
+    case 2:
+      for (int x = 0; x < width; x++) gray[x] = paletteLum[(rowBuffer[x >> 2] >> (6 - ((x & 3) * 2))) & 0x03];
+      break;
+    case 1:
+      for (int x = 0; x < width; x++) gray[x] = paletteLum[(rowBuffer[x >> 3] & (0x80 >> (x & 7))) ? 1 : 0];
+      break;
+    default:
+      return BmpReaderError::UnsupportedBpp;
+  }
   return BmpReaderError::Ok;
 }
 

@@ -1,5 +1,6 @@
 #include "FrontlightPanelActivity.h"
 
+#include <BlePageTurner.h>
 #include <FreeInkUIIcon.h>
 #include <GfxRenderer.h>
 #include <HalFrontlight.h>
@@ -8,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <iterator>
 
 #include "CrossPointSettings.h"
@@ -18,6 +20,7 @@
 #include "components/icons/listIcons.h"
 #include "components/icons/panelIcons.h"
 #include "fontIds.h"
+#include "util/SlideSwitch.h"
 
 namespace fui = freeink::ui;
 
@@ -113,7 +116,7 @@ void FrontlightPanelActivity::onBrightnessEvent(const fui::ActionEvent& event, v
   if (event.dragPermille < 0) return;
   self->brightness = std::max(MIN_BRIGHTNESS, percentFromPermille(event.dragPermille));
   Frontlight.setBrightness(self->brightness);
-  if (!self->lightOn) {
+  if (!self->lightOn && !slideSwitchOwnsLight()) {
     self->lightOn = true;
     self->lightOnChanged = true;
     Frontlight.setOn(true);
@@ -190,10 +193,20 @@ void FrontlightPanelActivity::runTile(const int idx) {
       SETTINGS.saveToFile();
       requestUpdate();
       break;
+    case kQuickBluetooth:  // Bluetooth page turner
+      if (!bleturner::status().compiledIn) break;
+      SETTINGS.ble.enabled = SETTINGS.ble.enabled ? 0 : 1;
+      // The panel suspends the radio; tick() reconnects in an eligible screen.
+      if (!SETTINGS.ble.enabled) bleturner::switchOff();
+      SETTINGS.saveToFile();
+      requestUpdate();
+      break;
     default:
       break;
   }
 }
+
+int FrontlightPanelActivity::quickCount() { return bleturner::status().compiledIn ? kQuickMax : kQuickMax - 1; }
 
 void FrontlightPanelActivity::adjustBrightness(const int delta) {
   int next = static_cast<int>(brightness) + delta;
@@ -202,7 +215,7 @@ void FrontlightPanelActivity::adjustBrightness(const int delta) {
   if (next == brightness) return;
   brightness = static_cast<uint8_t>(next);
   Frontlight.setBrightness(brightness);
-  if (!lightOn) {
+  if (!lightOn && !slideSwitchOwnsLight()) {
     lightOn = true;
     lightOnChanged = true;
     Frontlight.setOn(true);
@@ -221,6 +234,7 @@ void FrontlightPanelActivity::adjustWarmth(const int delta) {
 }
 
 void FrontlightPanelActivity::toggleLight() {
+  if (slideSwitchOwnsLight()) return;  // the slide switch turns the light on and off
   lightOn = !lightOn;
   lightOnChanged = true;
   Frontlight.setOn(lightOn);
@@ -266,7 +280,11 @@ void FrontlightPanelActivity::loop() {
     }
   }
   if (draggingSlider) {
-    if (!touch.snap.touchHeld) draggingSlider = false;
+    if (!touch.snap.touchHeld) {
+      draggingSlider = false;
+      cleanRefreshPending = true;
+      requestUpdate();
+    }
     return;
   }
 
@@ -275,7 +293,7 @@ void FrontlightPanelActivity::loop() {
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    toggleLight();
+    if (!slideSwitchOwnsLight()) toggleLight();
     return;
   }
 
@@ -411,7 +429,7 @@ void FrontlightPanelActivity::buildPanelScreen(UiScreen& screen) {
     // No lamp button on the row: the light switch is one of the quick buttons below, so the
     // panel has a single place that turns it on and off.
     addSliderRow(screen, PanelBrightnessIcon, brightness, ACTION_BRIGHTNESS, ACTION_BRIGHTNESS_STEP,
-                 /*showToggle=*/!mappedInput.hasTouch());
+                 /*showToggle=*/!mappedInput.hasTouch() && !slideSwitchOwnsLight());
     if (Frontlight.hasColorTemperature()) {
       addSliderRow(screen, PanelWarmthIcon, warmth, ACTION_WARMTH, ACTION_WARMTH_STEP, /*showToggle=*/false);
     }
@@ -438,10 +456,13 @@ void FrontlightPanelActivity::drawQuickRow() {
   const int nextOrientation = (SETTINGS.orientation + 1) % 4;
   const bool nextIsLandscape = nextOrientation % 2 == 1;
   // Every glyph names the action, not the state: tap the moon to go dark, the sun to come back.
-  const uint8_t* icons[kQuickCount] = {SETTINGS.screenInverted ? PanelSunIcon : PanelMoonIcon, PanelRefreshIcon,
-                                       nextIsLandscape ? PanelLandscapeIcon : PanelPortraitIcon,
-                                       touchOn ? PanelTouchOffIcon : PanelTouchOnIcon,
-                                       lightOn ? PanelBulbOffIcon : PanelBulbIcon};
+  const bool bluetoothOn = SETTINGS.ble.enabled != 0;
+  const uint8_t* icons[kQuickMax] = {SETTINGS.screenInverted ? PanelSunIcon : PanelMoonIcon,
+                                     PanelRefreshIcon,
+                                     nextIsLandscape ? PanelLandscapeIcon : PanelPortraitIcon,
+                                     touchOn ? PanelTouchOffIcon : PanelTouchOnIcon,
+                                     lightOn ? PanelBulbOffIcon : PanelBulbIcon,
+                                     bluetoothOn ? PanelBluetoothOffIcon : PanelBluetoothIcon};
   static constexpr StrId kOrientNames[4] = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW,
                                             StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW};
   // Every caption names what the tap DOES, like the glyph above it, and all five say it the same
@@ -455,13 +476,16 @@ void FrontlightPanelActivity::drawQuickRow() {
   char lightLabel[64];
   snprintf(lightLabel, sizeof(lightLabel), "%s %s", I18N.get(lightOn ? StrId::STR_TURN_OFF : StrId::STR_TURN_ON),
            tr(STR_LIGHT));
-  const char* labels[kQuickCount] = {I18N.get(SETTINGS.screenInverted ? StrId::STR_LIGHT_MODE : StrId::STR_DARK_MODE),
-                                     tr(STR_FORCE_REFRESH), I18N.get(kOrientNames[nextOrientation]), touchLabel,
-                                     lightLabel};
+  const char* labels[kQuickMax] = {I18N.get(SETTINGS.screenInverted ? StrId::STR_LIGHT_MODE : StrId::STR_DARK_MODE),
+                                   tr(STR_FORCE_REFRESH), I18N.get(kOrientNames[nextOrientation]), touchLabel,
+                                   lightLabel,
+                                   // "Turn On Bluetooth" does not fit a sixth of the panel; the icon shows the action.
+                                   tr(STR_BLUETOOTH)};
+  const int count = quickCount();
 
-  const int slot = quickRowRect.width / kQuickCount;
+  const int slot = quickRowRect.width / count;
   const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  for (int i = 0; i < kQuickCount; ++i) {
+  for (int i = 0; i < count; ++i) {
     const int cx = quickRowRect.x + i * slot + slot / 2;
     const int circleX = cx - kQuickCircle / 2;
     renderer.drawRoundedRect(circleX, quickRowRect.y, kQuickCircle, kQuickCircle, /*lineWidth=*/2, kQuickCircle / 2,
@@ -469,11 +493,18 @@ void FrontlightPanelActivity::drawQuickRow() {
     renderer.drawIcon(icons[i], cx - kQuickIcon / 2, quickRowRect.y + (kQuickCircle - kQuickIcon) / 2, kQuickIcon);
     // Two lines: "Night Mode" and "Refresh Screen" do not fit a fifth of the panel on one, and
     // truncating them to "Night M..." says less than the icon above already does.
-    const auto lines = renderer.wrappedText(SMALL_FONT_ID, labels[i], slot - 4, kQuickLabelLines);
+    // A one-word caption ("Bluetooth") is never split mid-word; it may be wider than its slot.
+    const auto lines = std::strchr(labels[i], ' ') == nullptr
+                           ? std::vector<std::string>{labels[i]}
+                           : renderer.wrappedText(SMALL_FONT_ID, labels[i], slot - 4, kQuickLabelLines);
     int labelY = quickRowRect.y + kQuickCircle + kQuickLabelGap;
     for (const auto& line : lines) {
       const int labelWidth = renderer.getTextWidth(SMALL_FONT_ID, line.c_str());
-      renderer.drawText(SMALL_FONT_ID, cx - labelWidth / 2, labelY, line.c_str(), true);
+      // The last caption, if wider than its slot, ends at the row's edge instead of reaching into its
+      // neighbour.
+      const bool alignRight = i == count - 1 && labelWidth > slot - 4;
+      const int labelX = alignRight ? quickRowRect.x + quickRowRect.width - labelWidth : cx - labelWidth / 2;
+      renderer.drawText(SMALL_FONT_ID, labelX, labelY, line.c_str(), true);
       labelY += lineHeight;
     }
   }
@@ -482,14 +513,15 @@ void FrontlightPanelActivity::drawQuickRow() {
 int FrontlightPanelActivity::quickButtonAt(const int x, const int y) const {
   if (quickRowRect.width <= 0) return -1;
   if (y < quickRowRect.y || y >= quickRowRect.y + quickRowRect.height) return -1;
-  const int slot = quickRowRect.width / kQuickCount;
+  const int count = quickCount();
+  const int slot = quickRowRect.width / count;
   if (slot <= 0 || x < quickRowRect.x) return -1;
   const int idx = (x - quickRowRect.x) / slot;
-  return idx >= 0 && idx < kQuickCount ? idx : -1;
+  return idx >= 0 && idx < count ? idx : -1;
 }
 
 void FrontlightPanelActivity::runQuickButton(const int idx) {
-  if (idx == kQuickCount - 1) {
+  if (idx == kQuickLight) {
     toggleLight();
     return;
   }

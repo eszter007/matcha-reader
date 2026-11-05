@@ -27,12 +27,15 @@ class EpubReaderFootnotesActivity final : public Activity {
         currentSpineIndex(currentSpineIndex),
         startIndex(startIndex) {}
 
+  // The book behind the panel reverses its page turns (Reversed Page Turn in a vertical book).
+  void setPageTurnReversed(const bool reversed) { pageTurnReversed = reversed; }
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
 
  private:
+  bool pageTurnReversed = false;
   const std::vector<FootnoteEntry>& footnotes;
   Epub* epub;
   int currentSpineIndex;

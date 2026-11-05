@@ -7,6 +7,10 @@ If CrossPoint enables external RAM on your device, you can load `.ttf`, `.otf`,
 and `.ttc` files directly. Otherwise, convert them to `.cpfont` files first.
 All devices can use `.cpfont` files.
 
+The font releases include a `LICENSE` file with the original font notices.
+If you distribute font copies, keep the applicable notices with those copies.
+The source notices are in [licenses/fonts.txt](../licenses/fonts.txt).
+
 ## Installing Fonts
 
 There are three ways to install `.cpfont` fonts. Direct TTF/OTF/TTC loading uses
@@ -68,8 +72,8 @@ they widen puts the same typeface on the font list twice, so they are folded
 into the base row instead — one typeface, one entry.
 
 A family is treated as a variant when its name is another family's name plus
-`Extended` or `IPA`, **and** that base family exists: either a built-in
-(`NotoSerif`, `NotoSans`) or another family installed on the card. A variant
+`Extended` or `IPA`, **and** that base family exists: either the built-in
+`NotoSerif` or another family installed on the card. A variant
 whose base is not installed keeps its own row, so hiding a row can never put
 its characters out of reach.
 
@@ -109,31 +113,54 @@ file in the same family folder takes priority over TTF/OTF/TTC files, so keep
 the two formats in separate folders. If both font roots contain the same family
 name, the copy in `/.fonts/` takes priority.
 
+The dictionary panel falls back to the selected direct font at the panel's size
+for characters its built-in font lacks (IPA, rarer Latin), except in a CJK book,
+where the CJK companion font takes that place.
+
 Direct fonts use the standard reader sizes: 12, 14, 16, and 18 pt. The **Fonts**
 tab in File Transfer accepts `.cpfont` files only. Copy direct fonts to the SD
 card instead. To remove a loose font file, delete that file from the SD card.
 The Fonts page can delete families stored in subfolders.
 
+## Paired CJK fonts (Noto Sans / Noto Serif)
+
+Some folder names pair a font with an entry that is already in the list instead of adding one of their own: `NotoSansJP` / `NotoSerifJP`, `NotoSansSC` / `NotoSerifSC` and `NotoSansTC` / `NotoSerifTC` (or `…HK`) become the Japanese, simplified-Chinese and traditional-Chinese halves of **Noto Sans** / **Noto Serif**, picked by the book's language, and a `…Extended` name widens the font it is named after. The sans halves pair with a `NotoSans` family; without one, the first installed (JP, then SC, then TC/HK) is listed as **Noto Sans** itself. A paired font's sizes are offered on the entry it pairs with, so a book that font carries can be read at any size you install — put `NotoSansJP_20.cpfont` on the card and 20 pt appears under Noto Sans. A book it does not carry (an English one, for a Japanese font) renders at the nearest size the main font ships instead. When no `NotoSans` family is installed, **Noto Sans** is made of its CJK halves, and while a book is open the size list shows the sizes of the half that book uses: a Chinese book offers the `NotoSansSC` sizes, even if `NotoSansJP` has more.
+
 ## CJK in the User Interface
 
 The built-in UI fonts are Latin-only, so by default the interface (book titles
 in the library, file names in the browser, list rows, headers) shows
-replacement boxes for Chinese/Japanese/Korean text even when book *content*
-renders correctly with a selected SD-card font.
+replacement boxes for non-Latin text — CJK, Greek, Cyrillic, Armenian, and any
+other script the SD-font converter ships an interval for — even when book
+*content* renders correctly with a selected SD-card font.
 
-To avoid shipping a large CJK glyph set in flash, CrossPoint instead reuses the
-SD-card font you already selected: when a UI string contains a CJK character
+To avoid shipping every script's glyph set in flash, CrossPoint instead reuses
+the SD-card font you already selected: when a UI string contains a character
 the built-in font cannot draw, that whole string is rendered with your selected
 SD-card font instead.
 
 The fallback is **size-matched**. The built-in UI fonts render at 8 pt
 (small/author lines), 10 pt (list rows) and 12 pt (book-cover titles, headers),
 so CrossPoint loads your SD family at those sizes too and maps each UI font to
-its same-size SD font. CJK book names therefore appear at the same size as the
-Latin text around them. A `.cpfont` family must contain files at sizes
-**8, 10 and 12** for this UI fallback (in addition to the reader sizes 12–18).
-Any missing UI size keeps showing boxes for CJK at that size. Direct
-TTF/OTF/TTC families use the same file at all three UI sizes.
+its same-size SD font. Non-Latin book names therefore appear at the same size
+as the Latin text around them. A `.cpfont` family must contain files at sizes
+**8, 10 and 12** for this UI fallback (in addition to the reader sizes 12–18) —
+**missing these is the most common reason non-Latin UI text still shows
+replacement boxes even though the book itself renders fine.** Any missing UI
+size keeps showing boxes for that script at that size. Direct TTF/OTF/TTC
+families use the same file at all three UI sizes.
+
+A CJK family (one with Chinese, Japanese or Korean characters) is the exception.
+Each loaded size of a CJK font costs several KB to tens of KB of RAM, so the UI draws it at the
+reading size, scaled down to each UI size, instead of loading three more sizes.
+A CJK family does not need 8, 10 and 12 pt files; installed ones only add
+reading sizes to the list. The 8, 10 and 12 pt advice still applies to fonts
+for other scripts, such as Greek or Cyrillic.
+
+These UI sizes only take effect if the reader-size font also matches one of
+CrossPoint's built-in fallback-detection codepoints — see `kFallbackProbes` in
+`src/SdCardFontSystem.cpp` for the current list. A script outside that list
+gets no UI fallback even with the correct `.cpfont` sizes present.
 
 For `.cpfont` families, **Settings > Reader > Font Size** lists every size the family ships,
 so a family built at 8,10,12,14,16,18 offers all six as reading sizes — the UI
@@ -141,31 +168,33 @@ sizes are not hidden from the list. Reading at 8 pt is your call; if you would
 rather not see the small sizes there, convert two families (one with the UI
 sizes for fallback, one with only the reading sizes you want).
 
-When converting your own font, include the UI sizes:
+When converting your own CJK font, the reading sizes are enough:
 
     python3 lib/EpdFont/scripts/fontconvert_sdcard.py \
       MyCJKFont-Regular.otf \
       --intervals cjk \
-      --sizes 8,10,12,14,16,18 \
+      --sizes 12,14,16,18 \
       --style regular \
       --name MyCJKFont \
       --output-dir ./MyCJKFont/
 
 What this means in practice:
 
-- Select a CJK-capable SD font under **Settings > Reader > Font Family**
-  (see [Installing Fonts](#installing-fonts) and the `cjk` / `hangul` presets
-  for `.cpfont` under [Converting Custom Fonts](#converting-custom-fonts)). That single
-  selection drives both book content *and* size-matched CJK fallback in the UI.
+- Select a non-Latin-capable SD font under **Settings > Reader > Font Family**
+  (see [Installing Fonts](#installing-fonts) and the interval presets for
+  `.cpfont` under [Converting Custom Fonts](#converting-custom-fonts)). That
+  single selection drives both book content *and* size-matched fallback in
+  the UI.
 - Pure-Latin UI strings keep the crisp built-in font; only strings that
-  actually contain CJK are routed to the SD font.
+  actually contain a character the built-in font lacks are routed to the SD
+  font.
 - The fallback is per *string*, not per glyph: a mixed title such as
   `三体 Vol.1` renders entirely in the SD font (including the Latin part). If
   that SD font is a `Mono` family, the Latin portion will appear half/full
   width.
 - If no SD font is selected (a built-in reading font is active), there is no
-  CJK fallback and the UI again shows boxes for CJK — pick a CJK SD font to
-  restore it.
+  fallback and the UI again shows boxes for non-Latin text — pick an SD font
+  covering that script to restore it.
 
 ## Available Pre-Built Fonts
 
@@ -202,13 +231,19 @@ To make `.cpfont` files for any device, convert your TrueType/OpenType fonts:
       --name MyFont \
       --output-dir ./MyFont/
 
+> **Using this font for non-Latin UI fallback too?** The examples above only
+> include the reader sizes (12–18). For a non-CJK script, to also get fallback
+> for this font's script in the library, headers, and file browser (see
+> [Non-Latin Scripts Fallback in the User Interface](#non-latin-scripts-fallback-in-the-user-interface)),
+> add the UI sizes: `--sizes 8,10,12,14,16,18`.
+
 ### Available Unicode interval presets
 
 | Preset | Coverage |
 |--------|----------|
 | `ascii` | U+0020–U+007E (Basic Latin) |
 | `latin1` | U+0080–U+00FF (Latin-1 Supplement) |
-| `latin-ext` | European languages (Latin + Extended-A/B + punctuation + ligatures) |
+| `latin-ext` | European languages (Latin + Extended-A/B + punctuation + currency + letterlike symbols such as ™ and № + minus sign + ligatures) |
 | `greek` | Greek + Extended Greek |
 | `cyrillic` | Cyrillic + Supplement |
 | `hebrew` | Hebrew + Alphabetic Presentation Forms |
@@ -230,7 +265,7 @@ To make `.cpfont` files for any device, convert your TrueType/OpenType fonts:
 Combine presets with commas: `--intervals latin-ext,greek,cyrillic`
 
 You can also specify arbitrary Unicode ranges directly:
-`--intervals latin-ext,(0x2100-0x214F)`
+`--intervals 'latin-ext,(0x2190-0x21FF)'`
 
 To list all presets with codepoint counts:
 

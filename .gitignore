@@ -1,6 +1,8 @@
 .pio
 .idea
 .DS_Store
+__MACOSX/
+._*
 .vscode
 .zed
 open-x4-sdk
@@ -41,5 +43,6 @@ gemini.key
 /dependencies.lock
 /sdkconfig.*
 sdkconfig.sticky
+sdkconfig.x4pro
 flake.*
 .devctl/

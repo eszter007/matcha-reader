@@ -1,0 +1,12 @@
+# Manifest for src/components/icons/readerDockToolIcons.h — regenerate with:
+#   python3 scripts/convert_icon.py --manifest src/components/icons/readerDockToolIcons.manifest \
+#     --svgdir assets/icons/tabler --size 32 --out src/components/icons/readerDockToolIcons.h --upright
+# then ./bin/clang-format-fix -g. Needs cairosvg and Pillow. Upright: drawn as FreeInkUI bitmaps.
+#
+# Tabler icons (MIT), vendored in assets/icons/tabler/. The toolbar reader menu's tool row, larger
+# than the dock's other icons (readerDockIcons.manifest).
+DockToolContentsIcon = list-details
+DockToolTextIcon = typography
+DockToolPageIcon = file-text
+DockToolTranslateIcon = language
+DockToolMoreIcon = dots

@@ -34,7 +34,8 @@ void extractEntryMetadata(std::string& text, const std::string& fallbackHeadword
 // Turn the dictionary's plain bullet stream into the compact entry layout: numbered gloss rows,
 // gray arrow notes, and indented example pairs. It is intentionally plain-text so the existing
 // low-allocation wrapper can keep ownership of scrolling and line measurement.
-void formatEntryBody(std::string& text, const std::string& omitLeading = {});
+// `headerGrammar` is the tag list drawn above the senses; a sense repeats only tags it lacks.
+void formatEntryBody(std::string& text, const std::string& omitLeading = {}, const std::string& headerGrammar = {});
 
 // Prewarm each paragraph in the style and fallback font the shared wrapper will use.
 // This keeps the compressed font below its four page-buffer-slot limit.

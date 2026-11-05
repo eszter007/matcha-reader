@@ -9,7 +9,6 @@
 #include <I18n.h>
 
 #include <algorithm>
-#include <cstdio>
 #include <string>
 #include <utility>
 
@@ -30,18 +29,17 @@ CssTextAlign toCssAlign(uint8_t align) {
 }
 
 // Lay the sample text out through the reader engine into layout.lines
-void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, int textWidth) {
+void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, int textWidth, const char* text) {
   layout.lines.clear();
 
   BlockStyle style;
   style.alignment = toCssAlign(SETTINGS.paragraphAlignment);
   style.textAlignDefined = true;  // honor the user's choice; RTL auto-detected from text
 
-  ParsedText parsed(SETTINGS.extraParagraphSpacing != 0, SETTINGS.hyphenationEnabled != 0,
-                    SETTINGS.focusReadingEnabled != 0, style);
+  ParsedText parsed(SETTINGS.hyphenationEnabled != 0, SETTINGS.focusReadingEnabled != 0, style,
+                    SETTINGS.paragraphIndentSpaces);
 
   // Feed one space-separated word at a time; addWord handles NFC/CJK/RTL/focus splitting
-  const char* text = I18N.get(StrId::STR_FONT_PREVIEW_TEXT);
   std::string word;
   for (const char* p = text;; p++) {
     if (*p == ' ' || *p == '\0') {
@@ -63,39 +61,40 @@ void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, in
 
 }  // namespace
 
-void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, int top,
-                   int height, const char* familyName, const char* sizeName, const int fontId) {
-  const int left = previewPadding;
-  const int width = renderer.getScreenWidth() - (previewPadding * 2);
-  if (width <= 0 || height <= 0) return;
+int renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, Rect bounds,
+                  const char* caption, const int fontId, const char* sample) {
+  const int top = bounds.y;
+  const int height = bounds.height;
+  const int left = bounds.x + previewPadding;
+  const int width = bounds.width - (previewPadding * 2);
+  if (width <= 0 || height <= 0) return top;
 
-  const int labelH = renderer.getTextHeight(UI_10_FONT_ID);
-  const int labelReserved = labelH + labelGap + previewPadding;
+  // No caption: the sample fills the pane down to its bottom padding.
+  int labelReserved = previewPadding;
+  if (caption && caption[0] != '\0') {
+    const int labelH = renderer.getTextHeight(UI_10_FONT_ID);
+    labelReserved = labelH + labelGap + previewPadding;
+    renderer.drawText(UI_10_FONT_ID, left, top + height - previewPadding - labelH, caption);
+  }
 
-  char labelBuf[128];
-  snprintf(labelBuf, sizeof(labelBuf), "%s \"%s, %s\"", tr(STR_PREVIEW), familyName, sizeName);
-  const int labelY = top + height - previewPadding - labelH;
-  renderer.drawText(UI_10_FONT_ID, left, labelY, labelBuf);
-
-  if (fontId == 0) return;
+  if (fontId == 0) return top;
 
   const int lineH = renderer.getTextHeight(fontId);
-  if (lineH <= 0) return;
+  if (lineH <= 0) return top;
 
   const int textLeft = left + SETTINGS.screenMargin;
   const int textWidth = width - 2 * SETTINGS.screenMargin;
-  if (textWidth <= 0) return;
+  if (textWidth <= 0) return top;
 
   const float compression = SETTINGS.getReaderLineCompression();
   const int lineAdvance = std::max(1, renderer.getLineHeight(fontId, compression));
   const int paragraphGap = SETTINGS.extraParagraphSpacing ? lineAdvance / 2 : 0;
 
   // Re-lay-out (and re-prewarm glyphs) only when a layout-affecting setting or the
-  // geometry changed; else reuse the cache. The prewarm inputs are (fontId, constant
-  // sample text, styleMask<-focusReading), all of which are key fields, so a matching
-  // key means an identical prewarm call. This relies on nothing else evicting the SD
-  // glyph cache while this activity is up — true today: the only evictor is
-  // FontCacheManager::PrewarmScope, used solely by the reader/dictionary activities.
+  // geometry changed; else reuse the cache. The prewarm inputs are (fontId, sample, styleMask<-focusReading), all of
+  // which are key fields, so a matching key means an identical prewarm call. This relies on nothing else evicting the
+  // SD glyph cache while this activity is up — true today: the only evictor is FontCacheManager::PrewarmScope, used
+  // solely by the reader/dictionary activities.
   const PreviewKey key{.fontId = fontId,
                        .fontPointSize = SETTINGS.fontPointSize,
                        .screenMargin = SETTINGS.screenMargin,
@@ -103,29 +102,34 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
                        .lineCompression = compression,
                        .alignment = SETTINGS.paragraphAlignment,
                        .extraParagraphSpacing = SETTINGS.extraParagraphSpacing != 0,
+                       .paragraphIndentSpaces = SETTINGS.paragraphIndentSpaces,
                        .characterSpacing = SETTINGS.getCharacterSpacing(),
                        .wordSpacingPercent = SETTINGS.wordSpacing,
                        .focusReading = SETTINGS.focusReadingEnabled != 0,
-                       .hyphenation = SETTINGS.hyphenationEnabled != 0};
+                       .hyphenation = SETTINGS.hyphenationEnabled != 0,
+                       .sample = sample};
   if (key != layout.key) {
     if (auto* fcm = renderer.getFontCacheManager()) {
-      fcm->prewarmCache(fontId, I18N.get(StrId::STR_FONT_PREVIEW_TEXT), SETTINGS.focusReadingEnabled ? 0x03 : 0x01);
+      fcm->prewarmCache(fontId, sample, SETTINGS.focusReadingEnabled ? 0x03 : 0x01);
     }
-    relayout(layout, renderer, fontId, textWidth);
+    relayout(layout, renderer, fontId, textWidth, sample);
     layout.key = key;
   }
 
   // Draw the sample twice so the paragraph gap is visible
   int y = top + previewPadding;
+  int textBottom = top;
   const int textBottomLimit = top + height - labelReserved;
   for (int paragraph = 0; paragraph < 2; paragraph++) {
     for (const auto& line : layout.lines) {
-      if (y + lineH > textBottomLimit) return;
+      if (y + lineH > textBottomLimit) return textBottom;
       line->render(renderer, fontId, textLeft, y);
+      textBottom = y + lineH;
       y += lineAdvance;
     }
     y += paragraphGap;
   }
+  return textBottom;
 }
 
 }  // namespace textsettings

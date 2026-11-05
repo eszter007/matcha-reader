@@ -10,6 +10,12 @@ inline const uint8_t bayer4x4[4][4] = {
     {15, 7, 13, 5},
 };
 
+// See RenderConfig::whitenPaper. 1088/1024 approximates 255/240 without a divide.
+inline uint8_t whitenPaper(uint8_t gray) {
+  if (gray >= 240) return 255;
+  return static_cast<uint8_t>((gray * 1088) >> 10);
+}
+
 // Apply Bayer dithering and quantize to 4 levels (0-3)
 // Stateless - works correctly with any pixel processing order
 inline uint8_t applyBayerDither4Level(uint8_t gray, int x, int y) {

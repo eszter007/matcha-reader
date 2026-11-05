@@ -14,6 +14,7 @@ enum class WordCondition : uint8_t {
   VK = 3,     // kuru verb (来る)
   ADJ_I = 4,  // i-adjective (美しい)
   DICT = 5,   // any dictionary form (terminal)
+  STEM = 6,   // a bare て/で/く form between rules: continued like DICT, never looked up itself
 };
 
 struct DeinflectionCandidate {

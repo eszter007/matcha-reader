@@ -1,10 +1,13 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
+
+#include "fontIds.h"
 
 class Bitmap;
 class GfxRenderer;
@@ -12,6 +15,7 @@ struct RecentBook;
 namespace freeink {
 namespace ui {
 struct HeaderProps;
+struct Rect;
 struct BitmapRef;
 struct ListItem;
 }  // namespace ui
@@ -157,6 +161,7 @@ enum UIIcon {
   Settings,
   Transfer,
   Library,
+  Plugins,
   Wifi,
   Hotspot,
   Bookmark,
@@ -171,7 +176,7 @@ enum UIIcon {
 namespace BaseMetrics {
 constexpr ThemeMetrics values = {.batteryWidth = 15,
                                  .batteryHeight = 12,
-                                 .topPadding = 5,
+                                 .topPadding = 10,
                                  .batteryBarHeight = 20,
                                  .headerHeight = 84,
                                  .verticalSpacing = 10,
@@ -249,7 +254,6 @@ class BaseTheme {
   virtual ~BaseTheme() = default;
 
   // Component drawing methods
-  static freeink::ui::BitmapRef checkboxIcon(bool checked);
   static void setCheckboxRow(freeink::ui::ListItem& item, bool checked);
   static void drawCoverPlaceholder(const GfxRenderer& renderer, Rect rect);
   // Draws a pre-dithered cover thumb 1:1, centered and clipped to fill the
@@ -264,7 +268,7 @@ class BaseTheme {
   // Shared by every theme's drawButtonHints(): centres a hint label in its box,
   // wrapping to two lines rather than overflowing when it's too wide to fit.
   static void drawHintLabel(const GfxRenderer& renderer, int fontId, const char* label, int x, int boxWidth, int boxTop,
-                            int boxHeight, int singleLineYOffset);
+                            int boxHeight);
   virtual void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const;
   // Menu row height as DRAWN by drawButtonMenu. HomeActivity builds its touch
   // grid from this, so hit bands always match the visuals (RoundedRaff derives
@@ -279,7 +283,8 @@ class BaseTheme {
                         const std::function<std::string(int index)>& rowValue = nullptr, bool highlightValue = false,
                         const std::function<bool(int index)>& rowDimmed = nullptr, bool showScrollbar = true) const;
   // Also draws the wall clock opposite the battery when the user enabled
-  // SETTINGS.clockShowInHeader and an RTC is present. On touch boards a
+  // SETTINGS.clockShowInHeader and the device has a time (from its clock chip, or the system clock
+  // on boards without one). On touch boards a
   // tappable back button leads the band (see HeaderBackTapTarget); root
   // screens that own their stack bottom pass backButton = false.
   // underline: -1 leaves it to the theme (the Cover Grid theme draws no rule under any header),
@@ -294,6 +299,14 @@ class BaseTheme {
   // drawHeader). The label strings point at internal static buffers refreshed
   // per call (headers draw on the single render task).
   static void applyHeaderStatus(const GfxRenderer& renderer, freeink::ui::HeaderProps& props);
+  // The header band every screen draws in: the caller's full-width rect inset
+  // by the board's side insets, its top edge lowered by the board's
+  // headerOffsetY (bottom edge fixed, so content below keeps its boundary).
+  // Sets props.bleed so the band's fill and rule still span `rect`, and widens
+  // the status line's edge inset to clear rounded corners. Call after
+  // applyHeaderStatus.
+  static freeink::ui::Rect headerBand(const GfxRenderer& renderer, freeink::ui::Rect rect,
+                                      freeink::ui::HeaderProps& props);
   // Edge inset drawHeader uses for the clock/battery status line (detached
   // layouts hug the corner with a legacy 12px inset instead of the padding).
   static int headerStatusInset();
@@ -314,12 +327,38 @@ class BaseTheme {
   virtual void drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                               const std::function<std::string(int index)>& buttonLabel,
                               const std::function<UIIcon(int index)>& rowIcon) const;
+  // A selection handle: a white disc with a black outline and one square corner, the corner being
+  // the point that aims at the selected text.
+  enum class HandleCorner : uint8_t { TopLeft, TopRight, BottomLeft, BottomRight };
+  static void drawSelectionHandle(const GfxRenderer& renderer, Rect rect, HandleCorner corner);
+  static int selectionHandleSize();
+  // Selection action bar: a 32px outline icon over its label in each slot (see drawSelectionActions).
+  static constexpr int SELECTION_ACTION_COUNT = 4;
+  // Labels in the status bar's 8pt font: the icons lead, the words confirm them.
+  static constexpr int SELECTION_ACTION_FONT_ID = SMALL_FONT_ID;
+  static constexpr int SELECTION_ACTION_ICON_PX = 32;
+  static constexpr int SELECTION_ACTION_GAP_PX = 4;
+  // Air above the icons and below the labels.
+  static constexpr int SELECTION_ACTION_VPAD_PX = 12;
+  // The pointer on the bar's edge: this tall, twice this wide, aimed at anchorX.
+  static constexpr int SELECTION_ACTION_TAIL_PX = 12;
+  // Between the widest slot and its neighbours, and from the end labels to the card's sides.
+  static constexpr int SELECTION_ACTION_SLOT_GAP_PX = 2;
+  static constexpr int SELECTION_ACTION_EDGE_PX = 16;
+  static constexpr int SELECTION_ACTION_RADIUS_PX = 12;
+  // Each slot's width: its label or its icon, whichever is wider.
+  using SelectionActionWidths = std::array<int, SELECTION_ACTION_COUNT>;
+  static SelectionActionWidths selectionActionWidths(const GfxRenderer& renderer);
+  // Outline of the card and its pointer.
+  static constexpr int SELECTION_ACTION_LINE_PX = 2;
+  // anchorX < 0 draws no pointer.
+  static void drawSelectionActions(const GfxRenderer& renderer, Rect rect, int anchorX = -1, bool pointUp = false);
   virtual Rect drawPopup(const GfxRenderer& renderer, const char* message) const;
   virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const;
   static void drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage, const int pageCount,
                             std::string title, const int paddingBottom = 0, const int textYOffset = 0,
                             const bool fillMargin = true, const bool isPageBookmarked = false,
-                            const bool pageCountEstimated = false);
+                            const bool pageCountEstimated = false, int timeLeftSeconds = -1);
   static void drawHelpText(const GfxRenderer& renderer, Rect rect, const char* label);
   virtual void drawTextField(const GfxRenderer& renderer, Rect rect, const int textWidth, bool cursorMode = false,
                              int contentStartX = 0, int contentWidth = 0) const;

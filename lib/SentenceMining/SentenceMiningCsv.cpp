@@ -1,7 +1,9 @@
 #include "SentenceMiningCsv.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 namespace sentencemining {
 
@@ -259,6 +261,40 @@ std::string capUtf8(std::string_view text, const size_t maxBytes) {
   std::string out(text.substr(0, cut));
   out += ELLIPSIS;
   return out;
+}
+
+GuidFinder::GuidFinder(const std::string_view guid) {
+  const size_t guidLen = std::min(guid.size(), MAX_NEEDLE - 2);
+  needle[0] = '\n';
+  memcpy(needle + 1, guid.data(), guidLen);
+  needle[guidLen + 1] = ',';
+  needleLen = guidLen + 2;
+}
+
+bool GuidFinder::feed(const std::string_view chunk) {
+  if (found) return true;
+  const std::string_view target(needle, needleLen);
+  const size_t keep = needleLen - 1;
+  // The previous chunk's tail joined to this chunk's head: where a match can straddle the two.
+  char edge[MAX_NEEDLE * 2];
+  const size_t head = std::min(chunk.size(), keep);
+  memcpy(edge, tail, tailLen);
+  memcpy(edge + tailLen, chunk.data(), head);
+  const size_t edgeLen = tailLen + head;
+  if (std::string_view(edge, edgeLen).find(target) != std::string_view::npos ||
+      chunk.find(target) != std::string_view::npos) {
+    found = true;
+    return true;
+  }
+  if (chunk.size() >= keep) {
+    memcpy(tail, chunk.data() + chunk.size() - keep, keep);
+    tailLen = keep;
+  } else {  // a short chunk: edge holds the old tail and all of it
+    const size_t start = edgeLen > keep ? edgeLen - keep : 0;
+    memcpy(tail, edge + start, edgeLen - start);
+    tailLen = edgeLen - start;
+  }
+  return false;
 }
 
 std::string formatRow(const Card& card) {

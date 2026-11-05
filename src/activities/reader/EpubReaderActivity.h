@@ -5,6 +5,7 @@
 #include <Epub/Section.h>
 #include <Epub/VerticalSection.h>
 #include <Epub/blocks/ImageBlock.h>
+#include <HalMemory.h>
 
 #include <atomic>
 #include <memory>
@@ -12,11 +13,15 @@
 
 #include "BookmarkEntry.h"
 #include "ChapterPosition.h"
+#include "ClipSelectionActivity.h"
 #include "EpubReaderMenuActivity.h"
+#include "LinkNoteTitle.h"
 #include "ProgressMapper.h"
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
+#include "WordSelectionScan.h"
 #include "components/OptionPopup.h"
+#include "util/CjkScript.h"
 
 class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
@@ -49,34 +54,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // moves the draw origin but the cached line layout keeps the old width, so text
   // overflows one side until the book is reopened. render() compares this against
   // the current settings and reflows in place on a mismatch.
-  struct LayoutSig {
-    int fontId = -1;
-    uint16_t viewportWidth = 0;
-    uint16_t viewportHeight = 0;
-    float lineCompression = 0.0f;
-    uint8_t paragraphAlignment = 0;
-    bool extraParagraphSpacing = false;
-    bool hyphenationEnabled = false;
-    bool embeddedStyle = false;
-    uint8_t imageRendering = 0;
-    bool focusReadingEnabled = false;
-    bool bookCssMargins = false;
-    // Vertical-only inputs. These key the vertical cache FILE, so they must be here too -- otherwise a
-    // resident section built with the old values keeps being served and a mid-book line-spacing change
-    // does not take effect until the book is reopened.
-    uint8_t lineSpacing = 0;
-    bool furigana = false;
-    bool operator==(const LayoutSig& o) const {
-      return fontId == o.fontId && viewportWidth == o.viewportWidth && viewportHeight == o.viewportHeight &&
-             lineCompression == o.lineCompression && paragraphAlignment == o.paragraphAlignment &&
-             extraParagraphSpacing == o.extraParagraphSpacing && hyphenationEnabled == o.hyphenationEnabled &&
-             embeddedStyle == o.embeddedStyle && imageRendering == o.imageRendering &&
-             focusReadingEnabled == o.focusReadingEnabled && bookCssMargins == o.bookCssMargins &&
-             lineSpacing == o.lineSpacing && furigana == o.furigana;
-    }
-    bool operator!=(const LayoutSig& o) const { return !(*this == o); }
-  };
-  LayoutSig sectionLayoutSig;
+  // The spec the resident section was laid out with: the same struct the section caches key on,
+  // so a setting that invalidates the cache file also reflows the page in place.
+  ReaderRenderSpec sectionLayoutSpec;
 
   // Per-book reader preferences. The global settings page (opened from home)
   // holds the DEFAULTS: a book with no prefs file opens with them. Once a book
@@ -102,7 +82,19 @@ class EpubReaderActivity final : public ReaderActivity {
     uint8_t orientation = 0;
     bool operator==(const ReaderPrefs&) const = default;
   };
+  std::string paceFilePath() const override { return epub ? epub->getCachePath() + "/pace.bin" : std::string(); }
   ReaderPrefs globalPrefsSnapshot;
+  // Text profiles: a book reads with its script's profile (CrossPointSettings::textProfile).
+  // latinTextProfile_ is the Latin profile as it was on open; openTextProfile_ the values the book
+  // opened with, so on close only what the reader changed goes back into the book's profile.
+  CrossPointSettings::TextProfileId bookTextProfile_ = CrossPointSettings::TextProfileId::Latin;
+  bool bookPrefsApplied_ = false;
+  CrossPointSettings::TextProfile latinTextProfile_{};
+  CrossPointSettings::TextProfile openTextProfile_{};
+  void applyBookTextProfile();
+  void storeBookTextProfile();
+  // Pins the reading settings to the book and puts the global ones back. Needs epub.
+  void restoreGlobalReaderSettings();
   static ReaderPrefs capturePrefsFromSettings();
   static void applyPrefsToSettings(const ReaderPrefs& prefs);
   bool loadBookPrefs(ReaderPrefs& out) const;
@@ -122,6 +114,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // most one turn — mashing collapses to the latest direction — and is
   // executed by loop() once the render task is idle again.
   int8_t pendingManualTurn = 0;
+  bool pendingManualTurnTouch = false;
   // Signals that the next render should reposition within the newly loaded section
   // based on a cross-book percentage jump.
   bool pendingPercentJump = false;
@@ -140,6 +133,11 @@ class EpubReaderActivity final : public ReaderActivity {
   bool showDictionaryMessage = false;
   unsigned long dictionaryMessageTime = 0UL;
   bool ignoreNextConfirmRelease = false;
+  bool showFontDamagedMessage = false;
+  unsigned long fontDamagedMessageTime = 0UL;
+  bool showClippingMessage = false;
+  StrId clippingMessage = StrId::STR_CLIPPING_SAVED;
+  unsigned long clippingMessageTime = 0UL;
   bool currentPageBookmarked = false;
   // Idle-time glyph prewarm: after a page settles, scan the LIKELY next page
   // (scan mode draws nothing) and load its missing glyphs from SD during idle,
@@ -157,6 +155,13 @@ class EpubReaderActivity final : public ReaderActivity {
   int8_t verticalOverride = -1;
   // Per-book furigana override: -1 = auto (on by default), 0 = off, 1 = on
   int8_t furiganaOverride = -1;
+  // Per-book language (cjk::LanguageChoice): LANG_AUTO follows the tag, else the user's pick for a
+  // mis-tagged book. Kept with the sniff result in the book's language.bin.
+  uint8_t languageOverride = 0;
+  // What the content sniff found when the tag named no CJK language: 0 = not yet sniffed,
+  // a LanguageChoice, or LANGUAGE_SNIFFED_NONE for a Latin book (so it is not sniffed again).
+  uint8_t detectedLanguage = 0;
+  static constexpr uint8_t LANGUAGE_SNIFFED_NONE = 0xFF;
   unsigned long bookmarkMessageTime = 0UL;
   // Set when the reader is left at end-of-book and SETTINGS.moveFinishedToReadFolder is on.
   // Consumed in onExit() to relocate the finished book into /Read/.
@@ -164,12 +169,22 @@ class EpubReaderActivity final : public ReaderActivity {
 
   // Toolbar reader menu (SETTINGS.readerMenuStyle == READER_MENU_TOOLBAR): drawn
   // over the page instead of pushing the full-screen list menu. Select opens the
-  // Toolbar; its tools open the Contents/Text/More bottom-sheet panels.
-  enum class Overlay { None, Toolbar, Contents, Text, More };
+  // dock; its tools open the Contents/Text/More bottom-sheet panels or translate the page.
+  enum class Overlay { None, Toolbar, Contents, Text, Page, More };
+  // Each dock tool's panel; Translate is an action and has none.
+  static constexpr Overlay kToolPanels[] = {Overlay::Contents, Overlay::Text, Overlay::Page, Overlay::None,
+                                            Overlay::More};
+  static_assert(std::size(kToolPanels) == ReaderToolbarUi::kToolCount, "one panel entry per dock tool");
+  // The Text and Page panels: control rows instead of a list.
+  bool controlPanelOpen() const { return overlay == Overlay::Text || overlay == Overlay::Page; }
+  // The glyph slab only while a panel is up: page text is prewarmed and never uses it, and its
+  // 24KB split the heap the page and Word Lookup need; panels keep their fast redraws.
+  bool wantsGlyphSlab() const override { return overlay != Overlay::None; }
   Overlay overlay = Overlay::None;
-  int focusedTool = 0;     // toolbar tool focus: 0=Contents, 1=Text, 2=More
-  int toolbarControl = 2;  // 0=previous chapter, 1=next chapter, 2..4=tools
-  int panelIndex = 0;      // selected row within the active panel
+  int focusedTool = 0;  // the open panel's tool: 0=Contents, 1=Text, 2=Page, 4=More
+  // Dock button cursor, a ReaderToolbarUi::kFocus* value: chapter steps, bookmark, then the tools.
+  int toolbarControl = ReaderToolbarUi::kFocusFirstTool;
+  int panelIndex = 0;  // selected row within the active panel
   // Panel list navigation: a tap steps one row, a hold jumps PANEL_HOLD_STEP rows in one go
   // (a contents list runs to hundreds of chapters). One jump per hold, not a repeat -- every
   // step repaints the panel, so repeating is bounded by the e-ink refresh anyway and reads as
@@ -180,6 +195,8 @@ class EpubReaderActivity final : public ReaderActivity {
   // Whether the panel draws its cursor row. Button boards always do; touch
   // boards only once a button has moved it, so a tapped row is not left inverted.
   bool panelCursorShown = false;
+  // The panel's button cursor is on its tool row (toolbarControl names the tool), below the rows.
+  bool panelToolRowFocused = false;
   // FreeInkUI chrome + tap targets for the overlay; created when it opens,
   // released when it closes.
   std::unique_ptr<ReaderToolbarUi> toolbarUi;
@@ -191,6 +208,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // overlay, letting panel->toolbar steps restore the page without a full
   // re-render. Discarded on close / whenever the page under the overlay changes.
   bool overlayPageStored = false;
+  // A background build step lent the framebuffer: it came back white while the panel still shows the
+  // page. Until renderBook() redraws, nothing may be painted straight onto it. Set by the loop task,
+  // cleared by the render task.
+  std::atomic<bool> pageBufferStale{false};
   // True while a deferred overlay chrome refresh (pushOverlayRefresh) may still
   // be running on the panel. settleOverlayRefresh() must run before the
   // framebuffer is touched or another differential refresh is pushed.
@@ -199,6 +220,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void settleOverlayRefresh();
   int autoTurnOption = 0;  // current auto page-turn rate index (More panel)
   std::vector<EpubReaderMenuActivity::MenuItem> moreItems;
+  EpubReaderMenuActivity::MenuAction selectedMenuAction = EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER;
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
@@ -223,6 +245,10 @@ class EpubReaderActivity final : public ReaderActivity {
   static constexpr int MAX_FOOTNOTE_DEPTH = 3;
   SavedPosition savedPositions[MAX_FOOTNOTE_DEPTH] = {};
   int footnoteDepth = 0;
+  // The back-stack outlives the reader (sleep, home) in links.bin so Back
+  // still returns to where a followed link was tapped.
+  void saveLinkStack() const;
+  void loadLinkStack();
 
   // --- Background image-cache warm (render-task tail) ---
   // After a page is fully displayed, the render task warms the NEXT page's image .pxc pixel
@@ -238,6 +264,7 @@ class EpubReaderActivity final : public ReaderActivity {
   //      when no new button press is involved.
   std::atomic<uint32_t> imageWarmInputStamp_{0};
   uint32_t imageWarmStampSnapshot_ = 0;  // render task only: stamp value at warm start
+  uint32_t renderInputStamp_ = 0;        // render task only: stamp value when render() began
   // The chapter whose every image cache the idle warm has already visited, so later render tails
   // only check the pages around the reader. Render task only.
   struct ImageWarmScope {
@@ -267,6 +294,9 @@ class EpubReaderActivity final : public ReaderActivity {
   static constexpr uint32_t NO_IMAGE_REFINE = UINT32_MAX;
   std::atomic<uint32_t> pendingImageRefine_{NO_IMAGE_REFINE};
   std::atomic<uint32_t> requestedImageRefine_{NO_IMAGE_REFINE};
+  // The page last redrawn in full because its B/W pass could not decode an image (readerLoop).
+  std::atomic<uint32_t> imageRetryKey_{NO_IMAGE_REFINE};
+  std::atomic<bool> imageRetryRequested_{false};  // the next image-page render is that redraw
   // A grayscale refine is waiting for the render task: the chapter-wide image warm yields to it.
   bool imageRefinePending() const {
     return pendingImageRefine_.load(std::memory_order_relaxed) != NO_IMAGE_REFINE ||
@@ -429,6 +459,18 @@ class EpubReaderActivity final : public ReaderActivity {
   // Loading notice for UI actions waiting behind a running build. Called between pages on the
   // render task, so it shares the framebuffer with the page render rather than racing it.
   static void buildNoticeThunk(void* ctx);
+  // One slice of a vertical chapter build that render() left running; finishes it when done.
+  void tickVerticalBuild();
+  // Set by tickVerticalBuild() when the build finished: the next render() positions the page in the
+  // finished section instead of loading it. Loop and render task share it under the RenderLock.
+  bool verticalBuildFinished_ = false;
+  // The page the last forward turn during a vertical build asked for, until the build shows it;
+  // -1 when none. Loop task only (turns, ticks, and the early render run inside a tick).
+  int midBuildTurnTarget_ = -1;
+  // Background-build accounting, logged when it finishes: ticks, time inside slices, wall time.
+  uint32_t verticalTickCount_ = 0;
+  uint32_t verticalTickBusyMs_ = 0;
+  uint32_t verticalTickWallStartMs_ = 0;
   void requestVerticalBuildNotice();
   void earlyRenderVerticalPage(const VerticalPage& page, int pageIndex);
   // True while a vertical chapter build runs on the render task. Read by pageTurn() on the
@@ -436,6 +478,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // would misread every press as "past the last page" and jump to the next spine (observed:
   // a press during the build teleported the reader to the end of the book).
   std::atomic<bool> verticalBuildInProgress_{false};
+  // Totals the early-rendered page's status bar showed; see refreshEarlyPageStatusBar().
+  int earlyShownChapterPages_ = 0;
+  int earlyShownBookPages_ = 0;
+  void refreshEarlyPageStatusBar();
   // True when the page currently on the panel drew images. Overlays opened on top
   // of it need a HALF pass to scrub the charge a FAST diff leaves behind.
   bool shownPageHasImages_ = false;
@@ -504,10 +550,25 @@ class EpubReaderActivity final : public ReaderActivity {
   // A pause this long, caches already released, means the build's own context holds the heap below
   // the floors and no tick will ever run: suspend it (the partial stays) instead of holding it.
   static constexpr uint32_t BACKGROUND_BUILD_STALL_MS = 3000;
+  // A background build failed in this spine. The error would likely recur, so from then on the
+  // spine is built only as far as the reader goes; pages from earlier build steps stay readable.
+  int backgroundBuildFailedSpine = -1;
+  // Bluetooth page turner: every chapter build stops the radio until the chapter is built and its
+  // page is shown. False: the radio still holds or is taking the heap, and the build must not run.
+  std::atomic<bool> radioReleasedForBuild{false};
+  bool makeRoomForChapterBuild();
+  static constexpr uint32_t BUILD_ROOM_WAIT_MS = 5000;
+  static constexpr uint32_t BUILD_ROOM_STEP_MS = 50;
+  bool inputOverPage() const override { return overlay != Overlay::None || ReaderActivity::inputOverPage(); }
+  // "Connecting Bluetooth…" or "Bluetooth failed" in place of the status bar title.
+  mutable LinkNoteTitle linkNoteTitle;
   // Heap floor for optional render-adjacent work (idle prewarm). Page
   // deserialization (TextBlock word vectors/strings) and glyph caching allocate
   // through throwing paths that abort() on OOM; skip deferrable work below it.
   static constexpr size_t RENDER_MIN_FREE_HEAP = 24 * 1024;
+  // Below this much free heap the end-of-book cover decode borrows the SD fonts' memory: the JPEG
+  // decoder asks for ~52 KB (MIN_FREE_HEAP_FOR_JPEG), and a little more leaves the ticket room.
+  static constexpr uint32_t END_OF_BOOK_COVER_FREE_HEAP = 56 * 1024;
   // How many pages to keep laid out ahead of the reader for a still-building section. A page
   // turn is ~1s on e-ink and a page builds in ~30ms, so the reader can't out-click the builder
   // -- a tiny buffer is enough. The background build stops once the watermark is this far
@@ -551,7 +612,12 @@ class EpubReaderActivity final : public ReaderActivity {
   void clearDeferredReposition();
   void rememberCurrentContentOffset();
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
-  void jumpToPercent(int percent);
+  void jumpToPercent(int percent) override;
+  bool writeSyncedPosition() override;
+  int syncedPositionPercent() override;
+  // The book position an Insights-synced position maps to, and its percent here; false when the book has
+  // none, or has been read past it here (then it is dismissed).
+  bool mapSyncedPosition(CrossPointPosition& out, int& percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   // Live section position, or the values cached before a child screen
   // released the section.
@@ -568,19 +634,61 @@ class EpubReaderActivity final : public ReaderActivity {
   void renderOverlay();
   std::string currentChapterTitle() const;
   int currentTocIndex() const;
-  // Text panel rows (font, size, line spacing, alignment, focus reading, and for
-  // Japanese content this fork's vertical text / furigana toggles).
-  int textRowCount() const;
-  int textRowAt(int visibleIndex) const;
-  std::string textRowName(int row) const;
-  std::string textRowValue(int row) const;
-  void showTextRowPopup(int row);
+  // The open control panel's controls, in the order shown. Text: size, font, Focus Reading or
+  // Furigana, more settings; Page: spacing, margins, alignment, orientation, writing. Alignment and
+  // Focus Reading are for non-CJK books; Writing and Furigana for books that can be read vertically.
+  enum class TextControl : uint8_t {
+    Size,
+    Font,
+    LineSpacing,
+    Margins,
+    Alignment,
+    Orientation,
+    Writing,
+    Furigana,
+    FocusReading,
+    MoreSettings
+  };
+  static constexpr int kMaxTextControls = 10;
+  int textControls(TextControl* out) const;
+  // The open panel's rows, kept here rather than on the render task's stack.
+  ReaderToolbarUi::TextRow panelRows_[kMaxTextControls];
+  TextControl panelControls_[kMaxTextControls];
+  // A Text or Page change applied live but not yet written to the SD card: written once the
+  // panel closes, not on every step.
+  bool textSettingsDirty = false;
+  void saveTextSettingsIfDirty();
+  // option >= 0: the tapped option cell (a stepper's 0 = smaller, 1 = larger); otherwise step
+  // the value by `step` (a tap on the row's label, or a button on a Text toggle).
+  void changeTextControl(TextControl control, int option, int step);
+  // Page panel on button boards: Left/Right edit this draft and only the panel redraws. It is
+  // applied in one re-layout when the toolbar closes (Confirm on a Page row, Back, or leaving).
+  struct PageDraft {
+    bool active = false;
+    uint8_t lineSpacing = 0;
+    uint8_t screenMargin = 0;
+    uint8_t paragraphAlignment = 0;
+    uint8_t orientation = 0;
+    int8_t vertical = 0;
+  };
+  PageDraft pageDraft_;
+  void stepPageDraft(TextControl control, int step);
+  void applyPageDraft();
+  void showSizePopup();
+  void showFontPopup();
+  void openTextSettingsFromPanel();
+  // The text on the page on screen, empty for an image-only page.
+  std::string currentPageText();
+  // Dock tools: Contents, Text, Page and More open their panel; Translate runs straight away.
+  void openTool(int tool);
+  // Closes the overlay and runs an action that leaves the page (a screen, a popup, a dialog).
+  void runOverlayLeafAction(EpubReaderMenuActivity::MenuAction action);
   // Persist + re-paginate + re-render under the open panel (live preview).
   void applyTextSettingLive();
   void paintOverlayPopup();
   // Persist the reader text settings, (re)load the selected SD font, and
   // re-paginate the current chapter so changes apply without re-opening the book.
-  void applyReaderTextSettings();
+  void applyReaderTextSettings(bool persist = true);
   // More panel rows.
   void buildMoreActions();
   std::string moreRowName(int row) const;
@@ -588,19 +696,49 @@ class EpubReaderActivity final : public ReaderActivity {
   void activateMoreRow(int row);
   void openFootnoteSelect(bool reopenMenuOnCancel);
   void openDictionaryWordSelect();
+  // initialX/Y selects the word there; dragX/Y (a lookup handle's press) keeps following the finger.
+  void startClipSelection(int initialX = -1, int initialY = -1, int dragX = -1, int dragY = -1);
+  // Result of a word-lookup panel: a drag on its word handles opens clip selection there.
+  void onLookupPanelResult(const ActivityResult& result);
+  int clippingAtPoint(const Page& page, int x, int y) const;
+  // True when (x, y) is on or near a word of the page on screen; a margin is not.
+  bool textAtPoint(int x, int y);
+  // The horizontal page's text lines as the render task drew them, so textAtPoint() can answer on
+  // the loop task without the render lock, which the render task holds for the whole e-ink refresh.
+  // 64 lines x 8 bytes live in the activity; a page with more falls back to the locked scan.
+  struct TapLine {
+    int16_t left, top, right, bottom;
+  };
+  static constexpr uint8_t MAX_TAP_LINES = 64;
+  TapLine tapLines_[MAX_TAP_LINES] = {};
+  uint8_t tapLineCount_ = 0;
+  bool tapLinesValid_ = false;  // under tapLinesMux_; entries are only written while it is false
+  int16_t tapSlop_ = 0;
+  portMUX_TYPE tapLinesMux_ = portMUX_INITIALIZER_UNLOCKED;
+  void recordTapLines(const Page& page, int fontId, int marginTop, int marginLeft);
+  // Vertical pages: the same selection over character cells (ClipSelectionActivity, vertical form).
+  void startVerticalClipSelection(int initialX, int initialY, int dragX, int dragY);
+  int verticalClippingAtPoint(const VerticalPage& vpage, int x, int y) const;
+  void drawVerticalClippingHighlights(const VerticalPage& vpage, int orientedMarginTop, int orientedMarginLeft) const;
+  void openClippings();
+  void applyProgressChange(const ProgressChangeResult& progress);
   unsigned long confirmLongPressThreshold() const;
   // pageOnScreen: the framebuffer still holds the reader page, so the vertical word-lookup panel
   // can draw its cursor straight onto it instead of paying for a page repaint first. False when
   // something else was on screen (the reader menu).
   // lookupAtX/Y: screen point of a long press on a word. -1 opens ordinary word
   // selection; a point selects that word and shows its definition immediately.
-  void openDictionaryWordSelect(bool pageOnScreen, int lookupAtX = -1, int lookupAtY = -1);
+  void openDictionaryWordSelect(bool pageOnScreen, int lookupAtX = -1, int lookupAtY = -1,
+                                const std::string& lookupText = {});
   // Returns true if sync acted (launched, or surfaced a save error); false if it was a no-op
   // because no KOReader credentials are stored.
-  bool launchKOReaderSync();
+  bool launchKOReaderSync(bool withClockAndInsights = false);
+  bool startShortcutSync() override;
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
-  void pageTurn(bool isForwardTurn);
+  // True when the reader moved (or, mid-build, when the page was requested).
+  bool pageTurn(bool isForwardTurn) override;
+  void interruptBackgroundWork() override { imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed); }
   void loadCachedBookmarks();
   void addBookmark();
   void updateBookmarkFlag();
@@ -608,7 +746,20 @@ class EpubReaderActivity final : public ReaderActivity {
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
   void openFootnotesPanel();
-  void openWordLookupPanel(bool pageOnScreen, int lookupAtX = -1, int lookupAtY = -1);
+  void openWordLookupPanel(bool pageOnScreen, int lookupAtX = -1, int lookupAtY = -1,
+                           const std::string& selectionText = "");
+  // The next page's opening characters as lookup context (and, when asked, the longer mining
+  // tail); returns their paragraph. Callers hold the render lock (getPage() re-faults the slot).
+  uint32_t verticalLookupTail(std::string& lookupTail, std::string* miningTail);
+  // The next page's opening characters, flattened as initFromPage() flattens a page.
+  void horizontalLookupTail(int pageIndex, std::string& lookupTail, std::string& miningTail);
+  // Word Lookup's page scan, run while the reader rests on a vertical page and saved to the scan
+  // cache, so the first lookup there opens without the multi-second dictionary walk.
+  std::unique_ptr<WordSelectionScan> prescan_;
+  int prescanSpine_ = -1;
+  int prescanPage_ = -1;
+  unsigned long prescanStartMs_ = 0;
+  void stepLookupPrescan();
   // Footnotes and translation float over the page. Picked from the reader menu, the framebuffer
   // still holds the menu, so they wait for render() to put the page back first: render() sets
   // panelPageReady once the page is drawn, and the next readerLoop() opens the panel.
@@ -617,12 +768,43 @@ class EpubReaderActivity final : public ReaderActivity {
   std::atomic<bool> panelPageReady{false};
   void openPanelAfterRender(PanelAfterRender panel);
   void openTranslationPanel();
-  // Repaints the current vertical page (body + status bar) for the word-lookup panel's select
-  // view, which owns no page of its own -- a VerticalPage copy would cost ~15KB, the same
-  // headroom the scan and the dictionary caches need. Called from the panel's render(), i.e.
-  // under the render lock, which is what the section's shared single-page slot requires.
-  static bool repaintVerticalPageForPanelThunk(void* ctx);
-  bool repaintVerticalPageForPanel();
+  // Opens the translation panel on the given text, releasing the section first (see the .cpp).
+  void openTranslationFor(std::string text, StrId title);
+  // A selection to translate instead of the page; consumed by openTranslationPanel() once the
+  // page has been repainted without the selection UI.
+  std::string pendingTranslationText;
+  // Repaints the current page, vertical or horizontal (body + status bar), for the word-lookup
+  // panel's select view, which owns no page of its own -- a VerticalPage copy would cost ~15KB,
+  // the same headroom the scan and the dictionary caches need. Called from the panel's render(),
+  // i.e. under the render lock, which is what the section's shared single-page slot requires.
+  static bool repaintPageForPanelThunk(void* ctx);
+  // Clip selection on a vertical page: the text range [start, end) its handles span, painted by
+  // drawVerticalClippingHighlights() under the text exactly like a saved clipping. start >= end
+  // clears it.
+  static void setLiveSelectionThunk(void* ctx, uint32_t start, uint32_t end);
+  uint32_t liveSelectionStart = UINT32_MAX;
+  uint32_t liveSelectionEnd = 0;
+  bool repaintPageForPanel();
+  // A copy of the last text-page body, either direction (PSRAM boards only), so closing a lookup or clip
+  // panel puts the page back without laying it out again. Used only while armed: a panel opened
+  // from that page, with nothing on it changed since.
+  HalMemory::PsramBuffer pageSnapshot_;
+  int pageSnapshotSpine_ = -1;
+  int pageSnapshotPage_ = -1;
+  uint32_t pageSnapshotSignature_ = 0;
+  bool pageSnapshotArmed_ = false;
+  uint32_t pageSnapshotSignature() const;
+  int pageSnapshotIndex() const;
+  void savePageSnapshot();
+  bool restorePageSnapshot();
+  void invalidatePageSnapshot() {
+    pageSnapshotSpine_ = -1;
+    pageSnapshotArmed_ = false;
+  }
+  // The page a lookup opened during a vertical build took with it when the build was dropped;
+  // the panel repaints from it until it closes. Empty otherwise.
+  VerticalPage lookupPage_;
+  bool lookupPageHeld_ = false;
   static constexpr uint16_t kSpineProbeFailed = 0xFFFF;  // session marker: cache probe failed, don't retry
   // Page numbering across the logical ToC chapter: spine files without their own ToC entry
   // (inline illustration files etc.) inherit the previous entry's tocIndex, so the "page X/Y"
@@ -645,6 +827,8 @@ class EpubReaderActivity final : public ReaderActivity {
     int count;
   };
   SectionPageSpan sectionPageSpan() const;
+  // The status bar's span when a lookup dropped the vertical build; see lookupPage_.
+  SectionPageSpan lookupSpan_{1, 1};
   int pageBasedPercent(int spineIndex, int sectionPage) const;  // sectionPage is 1-based
   mutable int chapterSpanSpine = -1;
   mutable int chapterSpanLivePages = -1;
@@ -654,6 +838,7 @@ class EpubReaderActivity final : public ReaderActivity {
   mutable bool chapterSpanBuildActive = false;
   mutable int chapterPagesBefore = 0;
   mutable int chapterPagesTotal = 0;
+  mutable float chapterEndProgress = 1.0f;            // book progress (0-1) where the ToC chapter on screen ends
   mutable std::vector<uint16_t> spinePagesReal;       // 0 = not indexed yet
   mutable std::vector<uint16_t> spinePagesEffective;  // real or byte-estimated, never 0
   mutable int bookPagesBefore = 0;
@@ -689,9 +874,40 @@ class EpubReaderActivity final : public ReaderActivity {
 
   bool useFurigana() const;
   bool isJapaneseBook() const;
+  bool isChineseBook() const;
+  // Japanese or Chinese: contiguous CJK text that uses the scan-based word lookup, the vertical
+  // layout engine and a CJK companion font.
+  bool isCjkBook() const { return bookScript() != CjkScript::None; }
+  // From dc:language. None for every non-CJK tag.
+  CjkScript bookScript() const;
+  // Recomputed where the language settles (after the open-time sniff, and on an override):
+  // bookScript() sits on the render path and must not build the language tag each call.
+  void refreshBookScript();
+  // Everything that follows from the book's language: its script, the companion font, the
+  // dictionary folder and the vertical punctuation mode. Run at open and on an override.
+  void applyLanguageState();
+  CjkScript bookScript_ = CjkScript::None;
+  std::string effectiveLanguage_;
+  // What the page is set in: the book's script, or Japanese when vertical text is forced on a
+  // book with no CJK tag (the same signal useVerticalText() reads).
+  CjkScript fontScript() const;
   bool showVerticalToggle() const;
+  bool hideGenericLookup() const;
   void applyVerticalFuriganaOverride(int8_t verticalOverrideIn, int8_t furiganaOverrideIn);
+  // The language the book is read as: the override, else the EPUB tag when it names a CJK
+  // language, else what the content sniff found, else the tag as written (possibly empty).
+  std::string effectiveLanguage() const;
+  // Book Language from Reader Settings: re-tags the book and rebuilds the layout for it.
+  void applyLanguageOverride(int8_t choice);
+  // Decide a tagless or mis-tagged book's language from its text, once per book.
+  void sniffLanguageIfNeeded();
+  void loadLanguageChoice();
+  void saveLanguageChoice() const;
+  // Drop the laid-out sections, keeping the reading position for the rebuild (a layout-affecting
+  // per-book setting changed).
+  void dropSectionsKeepingPosition();
 
+  void drawClippingHighlights(const Page& page, int fontId, int orientedMarginTop, int orientedMarginLeft) const;
   // The orientation the current layout was built for. The control center's
   // orientation tile can move SETTINGS.orientation while this reader sits on
   // the activity stack, and Pop restores it without onEnter(), so the drift has
@@ -706,17 +922,40 @@ class EpubReaderActivity final : public ReaderActivity {
   // saves (seconds to tens of seconds on a long chapter).
   static constexpr uint32_t kOrientationSettleMs = 400;
 
+  // Modal shown when a protected book refuses to open (loan expired /
+  // date unverified); OK exits, "Sync time" (when offered) verifies the
+  // clock over Wi-Fi and reopens the book.
+  OptionPopup loadFailurePopup;
+  // Protection error captured by loadBook() for handleLoadFailure(); the
+  // failed Epub itself does not outlive loadBook().
+  std::string loadProtectionError;
+
   bool loadBook() override;
   bool hasBook() const override { return epub != nullptr; }
   std::string getBookTitle() const override { return epub ? epub->getTitle() : ""; }
   std::string getBookAuthor() const override { return epub ? epub->getAuthor() : ""; }
   std::string getBookThumbBmpPath() const override { return epub ? epub->getThumbBmpPath() : ""; }
-  const char* getBookLanguage() const override { return epub ? epub->getLanguage().c_str() : nullptr; }
+  std::string prepareEndOfBookCover(int height) override;
+  // The language the book is read as (override, tag or sniff), so stats and sentence mining file
+  // a sniffed Chinese book under zh, not under its wrong tag.
+  const char* getBookLanguage() const override {
+    if (!epub) return nullptr;
+    return effectiveLanguage_.empty() ? epub->getLanguage().c_str() : effectiveLanguage_.c_str();
+  }
   void onReaderEnter() override;
   void onReaderExit() override;
   void readerLoop() override;
   bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;
+  bool handleLoadFailure() override;
+  bool handleLoadFailureInput() override;
+  // Wi-Fi join + SNTP for a loan whose date could not be verified, then a
+  // clean re-open of the book.
+  void beginLoanTimeSync();
+  int getProgressBasisPoints() const override;
+  bool hasTextProgress() const override { return textProgress() >= 0.0f; }
+  // Book progress (0-1) at the top of the page on screen, by share of text; -1 while unknown.
+  float textProgress() const;
 
  public:
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
@@ -740,10 +979,14 @@ class EpubReaderActivity final : public ReaderActivity {
   // will actually run this pass" instead. Read unlocked like the other power heuristics
   // (setPowerSaving/lightSleep): a stale read costs at most one loop pass either way.
   bool skipLoopDelay() override {
-    return overlay != Overlay::None ||
+    // A vertical chapter build left running by render() advances one slice per loop pass: no delay
+    // between passes, or the chapter takes several times as long to finish.
+    // A lookup prescan runs in slices too; idle pacing would stretch a 2 s scan to minutes.
+    return overlay != Overlay::None || verticalBuildInProgress_.load(std::memory_order_relaxed) || prescan_ ||
            (section && section->isBuilding() && !buildHeapPaused &&
             (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD));
   }
+  bool remoteShortcut(bool readerMenu) override;
   ScreenshotInfo getScreenshotInfo() const override;
   CrossPointPosition getCurrentPosition() const;
 };

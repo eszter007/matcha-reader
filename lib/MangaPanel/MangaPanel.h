@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -62,14 +63,22 @@ class MangaBook {
   explicit MangaBook(std::string folderPath) : folderPath(std::move(folderPath)) {}
 
   bool load();
+  // Reads only meta.bin (title, author, language, series). False when the file exists but could
+  // not be read now; true when it was read or the book has none.
+  bool loadMeta();
 
   uint32_t getPageCount() const { return pageCount; }
   const std::string& getFolder() const { return folderPath; }
   std::string getTitle() const;
+  // Title from meta.bin only; empty when it has none (getTitle() falls back to the file name).
+  const std::string& getMetaTitle() const { return metaTitle; }
   const std::string& getAuthor() const { return author; }
   // BCP-47/ISO-639 tag from meta.bin's optional trailer ("ja", "en", ...). Empty when the
   // folder was converted before convert_manga.py wrote one, or the source carried no language.
   const std::string& getLanguage() const { return language; }
+  // Series from meta.bin, empty when unknown; the index is the volume number in it.
+  const std::string& getSeries() const { return series; }
+  std::optional<float> getSeriesIndex() const { return seriesIndex; }
 
   bool loadPagePanels(uint32_t pageIndex, std::vector<Panel>& panels) const;
   // panels.idx is loaded once on open. Any non-empty record means this book has real panel
@@ -106,12 +115,17 @@ class MangaBook {
   bool hasToc() const { return !tocEntries.empty(); }
 
   static bool isMangaFolder(const std::string& folderPath);
+  // The book's cache directory. A .matcha volume shares it with the folder it was packed from, so
+  // replacing one with the other keeps progress and bookmarks.
+  static std::string cachePathFor(const std::string& bookPath);
 
  private:
   std::string folderPath;
   std::string metaTitle;
   std::string author;
   std::string language;
+  std::string series;
+  std::optional<float> seriesIndex;
   uint32_t pageCount = 0;
   uint32_t formatVersion = 0;
   std::vector<PageInfo> pageIndex;
@@ -125,7 +139,6 @@ class MangaBook {
   // price scales with everything else in the folder. False when the layout is not canonical.
   bool buildCanonicalPageList();
   void loadToc();
-  void loadMeta();
 };
 
 }  // namespace manga
