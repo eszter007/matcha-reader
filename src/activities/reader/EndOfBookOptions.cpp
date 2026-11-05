@@ -28,6 +28,7 @@
 #include "components/icons/eobStamp.h"
 #include "components/icons/tabBarIcons.h"
 #include "fontIds.h"
+#include "stats/StatsSync.h"
 #include "util/ButtonNavigator.h"
 #include "util/CjkScript.h"
 #include "util/DateFormat.h"
@@ -360,6 +361,8 @@ void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* book
       totals.languageBooksFinished++;
     }
   }
+  // As Insights counts them: with "All devices" on, the books finished on the account's other readers too.
+  ReadingStatsStore::countAccountFinished(statsSync::insightsAccountKey(), bookLanguage, totals);
   summary.booksFinished = totals.booksFinished;
   stamp_ = stampFor(bookLanguage);
 
@@ -656,7 +659,9 @@ void EndOfBookOptions::drawTicket(const Rect& safe, const int bottom) const {
 void EndOfBookOptions::drawButtons(const int x, const int y, const int w, const int h, const int selected) const {
   constexpr int RADIUS = 10;
   constexpr int ICON = 32;
-  const bool homeSelected = isHomeIndex(selected);
+  // A touch board fills no button until one is pressed (see buttonCursorShown).
+  const bool cursorShown = MappedInputManager::buttonCursorShown();
+  const bool homeSelected = cursorShown && isHomeIndex(selected);
   const int homeW = nextName.empty() ? w : h;  // a square beside Continue
   homeRect = {x, y, homeW, h};
   if (homeSelected) {
@@ -685,7 +690,7 @@ void EndOfBookOptions::drawButtons(const int x, const int y, const int w, const 
   const int cx = x + homeW + 12;
   const int cw = w - homeW - 12;
   continueRect = {cx, y, cw, h};
-  const bool sel = !homeSelected;
+  const bool sel = cursorShown && !isHomeIndex(selected);
   if (sel) {
     renderer.fillRoundedRect(cx, y, cw, h, RADIUS, Color::Black);
   } else {

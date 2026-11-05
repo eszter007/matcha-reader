@@ -1561,6 +1561,26 @@ uint32_t ReadingStatsStore::accountMinutes(const char* language, const StatsDige
   return g.minutes + since(localMinutes(language), g.baselineMinutes);
 }
 
+void ReadingStatsStore::countAccountFinished(const uint32_t accountKey, const char* language, Summary& summary) {
+  if (accountKey == 0) return;
+  // The overview is about 21 digests (2.7 KB), read for the end-of-book screen only.
+  std::vector<StatsDigest> digests;
+  uint32_t key = 0;
+  if (!readAccountFile(digests, key) || key != accountKey || digests.empty()) return;
+  // summary's counts are this card's own, as localFinished() gives them: the same arithmetic as accountFinished().
+  const StatsDigest& all = digests[0];
+  summary.booksFinished = static_cast<uint16_t>(
+      std::min<uint32_t>(all.booksFinished + since(summary.booksFinished, all.baselineFinished), UINT16_MAX));
+  char lang[4];
+  normalizeLanguage(language ? language : "", lang);
+  if (lang[0] == '\0') return;
+  const auto it = std::find_if(digests.begin() + 1, digests.end(),
+                               [&lang](const StatsDigest& g) { return memcmp(g.code, lang, sizeof(lang)) == 0; });
+  if (it == digests.end()) return;
+  summary.languageBooksFinished = static_cast<uint16_t>(
+      std::min<uint32_t>(it->booksFinished + since(summary.languageBooksFinished, it->baselineFinished), UINT16_MAX));
+}
+
 uint32_t ReadingStatsStore::accountFinished(const char* language, const StatsDigest& g) const {
   return g.booksFinished + since(localFinished(language), g.baselineFinished);
 }
