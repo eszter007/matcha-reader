@@ -354,7 +354,7 @@ class BwFrameKeeper {
   ~BwFrameKeeper() {
     if (keep && stored) renderer.restoreBwBuffer();
   }
-  // False when the B/W frame could not be kept; callers must skip the gray passes.
+  // False when the B/W frame could not be kept, so the framebuffer will end up holding a gray plane.
   bool ready() const { return stored; }
   BwFrameKeeper(const BwFrameKeeper&) = delete;
   BwFrameKeeper& operator=(const BwFrameKeeper&) = delete;
@@ -366,7 +366,8 @@ class BwFrameKeeper {
 };
 
 // The gray logo passes leave a nudge plane in the framebuffer too. Only the Picco updates the retained
-// sleep frame afterwards (the USB charge strip), so only it pays for the 48 KB copy.
+// sleep frame afterwards (the USB charge strip, holdSleepWhileUsbPowered in main.cpp), so only it
+// pays for the 48 KB copy.
 #if FREEINK_DEVICE_PICCO
 constexpr bool kKeepBwFrameUnderGrayLogo = true;
 #else
