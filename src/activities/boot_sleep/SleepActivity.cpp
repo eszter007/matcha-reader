@@ -354,7 +354,7 @@ class BwFrameKeeper {
   ~BwFrameKeeper() {
     if (keep && stored) renderer.restoreBwBuffer();
   }
-  // False when the B/W frame could not be kept; callers must skip the gray passes.
+  // False when the B/W frame could not be kept, so the framebuffer will end up holding a gray plane.
   bool ready() const { return stored; }
   BwFrameKeeper(const BwFrameKeeper&) = delete;
   BwFrameKeeper& operator=(const BwFrameKeeper&) = delete;
@@ -364,6 +364,15 @@ class BwFrameKeeper {
   const bool keep;
   const bool stored;
 };
+
+// The gray logo passes leave a nudge plane in the framebuffer too. Only the Picco updates the retained
+// sleep frame afterwards (the USB charge strip, holdSleepWhileUsbPowered in main.cpp), so only it
+// pays for the 48 KB copy.
+#if FREEINK_DEVICE_PICCO
+constexpr bool kKeepBwFrameUnderGrayLogo = true;
+#else
+constexpr bool kKeepBwFrameUnderGrayLogo = false;
+#endif
 
 bool beginOverlayGrayPlane(GfxRenderer& renderer, const Bitmap* grayCover, const GfxRenderer::RenderMode plane,
                            const bool absolute) {
@@ -854,6 +863,8 @@ void SleepActivity::renderDefaultSleepScreen() const {
   renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - GrayLogo::STATUS_FROM_BOTTOM, tr(STR_SLEEPING));
 
   if (inverted) renderer.invertScreen();
+  const BwFrameKeeper bwFrame(renderer, kKeepBwFrameUnderGrayLogo);
+  if (!bwFrame.ready()) LOG_ERR("SLP", "B/W sleep frame not kept; the charge strip will show the gray plane");
   renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
   GrayLogo::flushGrayPasses(renderer, logoX, logoY, inverted);
 }
@@ -1340,6 +1351,8 @@ void SleepActivity::renderDeparturesSleepScreen() const {
     renderer.displayBuffer(kSleepClean);
     return;
   }
+  const BwFrameKeeper bwFrame(renderer, kKeepBwFrameUnderGrayLogo);
+  if (!bwFrame.ready()) LOG_ERR("SLP", "B/W sleep frame not kept; the charge strip will show the gray plane");
   renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
   GrayLogo::flushGrayPasses(renderer, catX, catY, true, cat->size);
 }

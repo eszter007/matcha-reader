@@ -52,7 +52,7 @@ void drawBase(const GfxRenderer& renderer, int x, int y, bool invertedScreen, Si
 // pixels on the boot screen itself made every unlock slow AND left the logo ghosting through
 // the next activity's partial refresh.
 void drawBw(const GfxRenderer& renderer, int x, int y);
-// Call AFTER displayGrayscaleBase(). Destroys the BW framebuffer contents (plane scratch),
-// same as the sleep-cover flow -- callers redraw from scratch anyway. Restores BW render mode.
+// Call AFTER displayGrayscaleBase(). Destroys the BW framebuffer contents (plane scratch);
+// a caller that updates the frame afterwards keeps a copy (SleepActivity BwFrameKeeper). Restores BW render mode.
 void flushGrayPasses(GfxRenderer& renderer, int x, int y, bool invertedScreen, Size size = Size::Regular);
 }  // namespace GrayLogo
