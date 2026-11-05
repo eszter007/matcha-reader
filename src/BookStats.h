@@ -80,8 +80,8 @@ class BookStats {
   // The counts when the book was finished; the current ones before that.
   uint32_t getLookupsAtFinish() const { return hasFinishCounts ? finishLookups : lookups; }
   uint32_t getSentencesAtFinish() const { return hasFinishCounts ? finishSentences : sentencesSaved; }
-  // The read that finished the book, up to and including the finish day: its minutes, and the calendar
-  // days from its first reading day to the finish (0 with none). Reopenings after it add nothing.
+  // The read that finished the book, up to and including the finish day: its minutes, and its reading
+  // days (days with time, or another device's opens after showEveryDevice()). Reopenings after it add nothing.
   void readUntil(uint16_t year, uint8_t month, uint8_t day, uint32_t& minutes, int& daysToFinish) const;
   uint32_t getTotalMinutes() const;
   int getDaysRead() const { return static_cast<int>(days.size()); }
@@ -94,6 +94,11 @@ class BookStats {
 
   const std::vector<BookDay>& getDays() const { return days; }
 
+  // Display only: every device's history of this book (bookactivity) on top of this card's. A day keeps
+  // the larger time; a day another device only opened the book is a reading day with no time; the
+  // earlier start wins. save() refuses afterwards: that history must never become this card's upload.
+  void showEveryDevice(const BookDay& started, const std::vector<BookDay>& otherDays);
+
   static std::string filePathFor(const char* bookPath);
 
  private:
@@ -103,6 +108,7 @@ class BookStats {
   bool loadLocal(const char* bookPath);
   // Set by load(): the server's copy changed this book and calls it finished.
   bool restoredFinished = false;
+  bool everyDevice = false;  // showEveryDevice() ran: not this card's history any more
 
   std::string bookPath;
   uint32_t sessions = 0;

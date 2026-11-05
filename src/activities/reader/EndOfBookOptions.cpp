@@ -12,6 +12,7 @@
 #include <cstring>
 #include <tuple>
 
+#include "BookActivity.h"
 #include "BookStats.h"
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
@@ -369,6 +370,13 @@ void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* book
   BookStats stats;
   const bool haveStats =
       BookStats::recordFinish(bookPath.c_str(), today.year, today.month, today.day, firstFinish, stats);
+  // As Insights shows it: with "All devices" on, every device's history of the book (after recordFinish
+  // saved this card's own, which it must not include).
+  if (haveStats && statsSync::insightsAccountKey() != 0) {
+    bookactivity::Book everyDevice;
+    std::vector<BookDay> otherDays;
+    if (bookactivity::find(bookPath, everyDevice, otherDays)) stats.showEveryDevice(everyDevice.started, otherDays);
+  }
   // The stamp keeps the day the book was first finished, and the read that finished it: reopening the
   // book later, or looking words up in it, adds nothing.
   uint16_t year = today.year;

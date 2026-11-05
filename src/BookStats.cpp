@@ -200,6 +200,10 @@ bool BookStats::mergeDownloaded(bool& finishedOnServer) {
 
 bool BookStats::save() const {
   if (bookPath.empty()) return false;
+  if (everyDevice) {
+    LOG_ERR("BSTAT", "not saving another device's history for %s", bookPath.c_str());
+    return false;
+  }
   Storage.mkdir(statsDir().c_str(), true);
 
   const std::string file = filePathFor(bookPath.c_str());
@@ -361,25 +365,33 @@ bool BookStats::getFinishDay(uint16_t& year, uint8_t& month, uint8_t& day) const
   return true;
 }
 
+void BookStats::showEveryDevice(const BookDay& started, const std::vector<BookDay>& otherDays) {
+  everyDevice = true;
+  const auto put = [this](const BookDay& d) {
+    const auto it = std::lower_bound(days.begin(), days.end(), d, byDate);
+    if (it != days.end() && !byDate(d, *it)) {
+      it->minutes = std::max(it->minutes, d.minutes);
+    } else {
+      days.insert(it, d);
+    }
+  };
+  for (const BookDay& d : otherDays) {
+    if (d.year >= 2020) put(d);
+  }
+  if (started.year >= 2020 && (days.empty() || byDate(started, days.front())))
+    put({started.year, started.month, started.day, 0});
+}
+
 void BookStats::readUntil(const uint16_t year, const uint8_t month, const uint8_t day, uint32_t& minutes,
                           int& daysToFinish) const {
-  // Days since 0000-03-01 (Howard Hinnant's days_from_civil), enough for a difference.
-  const auto serial = [](const uint16_t yy, const uint8_t mm, const uint8_t dd) {
-    const int y = yy - (mm <= 2 ? 1 : 0);
-    const int era = y / 400;
-    const int yoe = y - era * 400;
-    const int doy = (153 * (mm + (mm > 2 ? -3 : 9)) + 2) / 5 + dd - 1;
-    return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  };
   minutes = 0;
   daysToFinish = 0;
-  const BookDay* first = nullptr;
   for (const BookDay& d : days) {
     if (std::tie(d.year, d.month, d.day) > std::tie(year, month, day)) break;  // days run oldest first
     minutes += d.minutes;
-    if (!first && d.minutes > 0) first = &d;
+    // A day this card read with no time is not one; another device's open (showEveryDevice) is.
+    if (d.minutes > 0 || everyDevice) daysToFinish++;
   }
-  if (first) daysToFinish = serial(year, month, day) - serial(first->year, first->month, first->day) + 1;
 }
 
 uint32_t BookStats::getTotalMinutes() const {

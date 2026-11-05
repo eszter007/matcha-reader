@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "BookActivity.h"
 #include "BookStats.h"
 #include "BookStatsDownload.h"
 #include "ReadingStatsStore.h"
@@ -439,7 +440,7 @@ TEST_F(StatsTest, Version2FileLoadsWithZeroCounters) {
   EXPECT_EQ(b.getSentencesSaved(), 0u);
 }
 
-// The stamp tells how long the read took, from its first reading day to the finish, and a reopening
+// The stamp tells how long the read took: its time and its reading days up to the finish. A reopening
 // after the finish day adds nothing to it.
 TEST_F(StatsTest, ReadUntilTheFinish) {
   BookStats b;
@@ -455,9 +456,52 @@ TEST_F(StatsTest, ReadUntilTheFinish) {
   b.recordMinutes(2026, 10, 27, 3);  // reopened after finishing
   b.readUntil(2026, 10, 24, minutes, days);
   EXPECT_EQ(minutes, 1335u);
-  EXPECT_EQ(days, 5) << "the 20th to the 24th";
+  EXPECT_EQ(days, 3) << "the 20th, 22nd and 24th: days read, not the span";
   b.readUntil(2027, 3, 2, minutes, days);
-  EXPECT_EQ(days, 134) << "across a year end and a non-leap February";
+  EXPECT_EQ(days, 4);
+}
+
+// Every device's history (bookactivity) shows on top of this card's: the server's earlier start, another
+// device's opens as reading days, the larger time per day. It is never saved into this card's file.
+TEST_F(StatsTest, EveryDeviceHistoryShowsButIsNeverSaved) {
+  const std::string path = "/Japanese/everywhere.epub";
+  {
+    BookStats b;
+    ASSERT_TRUE(b.load(path.c_str()));
+    b.recordMinutes(2026, 10, 23, 3);
+    b.recordMinutes(2026, 10, 24, 8);
+    ASSERT_TRUE(b.save());
+  }
+  const auto fileBefore = std::filesystem::file_size(testRoot() + BookStats::filePathFor(path.c_str()));
+
+  bookactivity::Writer w;
+  ASSERT_TRUE(w.begin());
+  const BookDay other[] = {{2026, 5, 24, 0}, {2026, 7, 1, 0}, {2026, 10, 24, 20}};
+  ASSERT_TRUE(w.addBook({bookNameHash("x.epub", 6), {2026, 1, 1, 0}, {}}, other, 1));  // another book
+  ASSERT_TRUE(w.addBook({bookNameHash(path.data(), path.size()), {2026, 5, 24, 0}, {2026, 11, 3, 0}}, other, 3));
+  ASSERT_TRUE(w.commit());
+
+  bookactivity::Book book;
+  std::vector<BookDay> days;
+  ASSERT_TRUE(bookactivity::find(path, book, days));
+  EXPECT_EQ(book.started.month, 5);
+  EXPECT_EQ(book.finished.day, 3);
+  ASSERT_EQ(days.size(), 3u);
+  EXPECT_FALSE(bookactivity::find("/Japanese/never-synced.epub", book, days));
+
+  BookStats b;
+  ASSERT_TRUE(b.load(path.c_str()));
+  ASSERT_TRUE(bookactivity::find(path, book, days));
+  b.showEveryDevice(book.started, days);
+  uint32_t minutes = 0;
+  int read = 0;
+  b.readUntil(2026, 11, 3, minutes, read);
+  EXPECT_EQ(read, 4) << "24 May and 1 Jul (opened elsewhere), 23 and 24 Oct";
+  EXPECT_EQ(minutes, 23u) << "3 + max(8, 20)";
+  EXPECT_EQ(b.getDays().front().month, 5) << "started when another device first opened it";
+
+  EXPECT_FALSE(b.save());
+  EXPECT_EQ(std::filesystem::file_size(testRoot() + BookStats::filePathFor(path.c_str())), fileBefore);
 }
 
 // What the reader records goes to the journal; a load replays it, and compact() folds it into the

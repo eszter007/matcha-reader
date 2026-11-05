@@ -22,6 +22,7 @@ add_executable(ReadingStatsTest
   ${REPO_ROOT}/src/ReadingStatsStore.cpp
   ${REPO_ROOT}/src/BookStats.cpp
   ${REPO_ROOT}/src/BookStatsDownload.cpp
+  ${REPO_ROOT}/src/BookActivity.cpp
   ${REPO_ROOT}/lib/FsHelpers/FsHelpers.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp
   ${REPO_ROOT}/lib/I18n/I18n.cpp
