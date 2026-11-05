@@ -10,8 +10,10 @@ from convert_manga import (
     PANEL_RETRY_COVER_FRAC,
     _panel_cover_frac,
     _webtoon_cut_points,
+    assign_blocks_to_panels,
     build_panel_ocr_prompt,
     expand_panels_over_text,
+    mokuro_text_blocks,
     sort_panels_reading_order,
     split_frames_over_subpanels,
     text_pad_px,
@@ -322,6 +324,65 @@ def test_panelled_page_stays_above_the_gate():
 
 def test_no_boxes_covers_nothing():
     assert _panel_cover_frac([], 1200, 1700) == 0.0
+
+
+# A real block from Mokuro's own test volume (vol1.mokuro, page 001a.jpg, 827x1170).
+MOKURO_BLOCK = {
+    "box": [688, 26, 718, 161], "vertical": True, "font_size": 24,
+    "lines_coords": [[[688.0, 26.0], [712.0, 26.0], [715.0, 161.0], [691.0, 161.0]]],
+    "lines": ["すごいのハッ"],
+}
+
+
+def test_mokuro_block_keeps_text_and_line_boxes():
+    (block,) = mokuro_text_blocks([MOKURO_BLOCK], lambda x, y: (int(x), int(y)))
+    assert block["text"] == "すごいのハッ"
+    assert block["box"] == [688, 26, 718, 161]
+    assert block["lines"] == [[688, 26, 715, 161]]  # the quad's bounding box
+    assert block["vertical"] is True
+
+
+def test_mokuro_block_follows_the_page_resize():
+    half = lambda x, y: (int(x / 2), int(y / 2))  # noqa: E731
+    (block,) = mokuro_text_blocks([MOKURO_BLOCK], half)
+    assert block["box"] == [344, 13, 359, 80]
+    assert block["lines"] == [[344, 13, 357, 80]]
+
+
+def test_mokuro_lines_join_in_order():
+    two = dict(MOKURO_BLOCK, lines=["あの", "田舎とかに"],
+               lines_coords=[[[700, 10], [720, 10], [720, 60], [700, 60]],
+                             [[670, 10], [690, 10], [690, 120], [670, 120]]])
+    (block,) = mokuro_text_blocks([two], lambda x, y: (int(x), int(y)))
+    assert block["text"] == "あの\n田舎とかに"
+    assert len(block["lines"]) == 2
+
+
+def test_mokuro_block_without_line_quads_keeps_its_text():
+    """No usable geometry: the device falls back to the whole block, as with Gemini OCR."""
+    bare = dict(MOKURO_BLOCK, lines=["あの", "田舎とかに"], lines_coords=[])
+    (block,) = mokuro_text_blocks([bare], lambda x, y: (int(x), int(y)))
+    assert block["text"] == "あの田舎とかに"
+    assert block["lines"] == []
+
+
+def test_mokuro_empty_block_is_dropped():
+    assert mokuro_text_blocks([dict(MOKURO_BLOCK, lines=["  "])], lambda x, y: (x, y)) == []
+
+
+def test_blocks_go_to_the_panel_holding_their_centre():
+    panels = [[0, 0, 500, 400], [0, 400, 500, 800]]
+    top = {"box": [100, 100, 120, 200]}
+    bottom = {"box": [100, 450, 120, 600]}
+    gutter = {"box": [100, 390, 120, 405]}  # centre at y=397.5: the top panel
+    owned = assign_blocks_to_panels([top, bottom, gutter], panels)
+    assert owned == [[top, gutter], [bottom]]
+
+
+def test_block_outside_every_panel_goes_to_the_nearest():
+    panels = [[0, 0, 100, 100], [400, 400, 500, 500]]
+    stray = {"box": [380, 380, 390, 390]}
+    assert assign_blocks_to_panels([stray], panels) == [[], [stray]]
 
 
 if __name__ == "__main__":
