@@ -544,7 +544,7 @@ void MangaBook::loadToc() {
   LOG_DBG("MNG", "Loaded toc.idx: %u chapter(s)", static_cast<unsigned>(tocEntries.size()));
 }
 
-void MangaBook::loadMeta() {
+bool MangaBook::loadMeta() {
   metaTitle.clear();
   author.clear();
   language.clear();
@@ -553,28 +553,28 @@ void MangaBook::loadMeta() {
   if (metaPath.back() != '/') metaPath += '/';
   metaPath += "meta.bin";
 
-  if (!Storage.exists(metaPath.c_str())) return;
+  if (!Storage.exists(metaPath.c_str())) return true;
 
   HalFile f;
-  if (!Storage.openFileForRead("MNG", metaPath, f)) return;
+  if (!Storage.openFileForRead("MNG", metaPath, f)) return false;
 
   uint8_t hdr[8];
-  if (f.read(hdr, 8) != 8) return;
+  if (f.read(hdr, 8) != 8) return false;
 
   // uint32 version, uint16 titleLen, uint16 authorLen
   const uint32_t version = readU32(hdr);
-  if (version != 1) return;
+  if (version != 1) return true;
   const uint16_t titleLen = readU16(hdr + 4);
   const uint16_t authorLen = readU16(hdr + 6);
 
   if (titleLen > 0) {
     auto buf = makeUniqueNoThrow<char[]>(titleLen);
-    if (!buf || f.read(reinterpret_cast<uint8_t*>(buf.get()), titleLen) != titleLen) return;
+    if (!buf || f.read(reinterpret_cast<uint8_t*>(buf.get()), titleLen) != titleLen) return false;
     metaTitle.assign(buf.get(), titleLen);
   }
   if (authorLen > 0) {
     auto buf = makeUniqueNoThrow<char[]>(authorLen);
-    if (!buf || f.read(reinterpret_cast<uint8_t*>(buf.get()), authorLen) != authorLen) return;
+    if (!buf || f.read(reinterpret_cast<uint8_t*>(buf.get()), authorLen) != authorLen) return false;
     author.assign(buf.get(), authorLen);
   }
 
@@ -611,6 +611,7 @@ void MangaBook::loadMeta() {
   }
 
   LOG_DBG("MNG", "Loaded meta.bin: title=%s author=%s lang=%s", metaTitle.c_str(), author.c_str(), language.c_str());
+  return true;
 }
 
 }  // namespace manga

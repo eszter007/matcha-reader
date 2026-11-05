@@ -128,6 +128,33 @@ TEST_F(LibraryBuilderTest, MangaFolderIsOneBookTitledByItsName) {
   EXPECT_EQ(title, "Vol. 2");
 }
 
+TEST_F(LibraryBuilderTest, MangaTitleAndAuthorComeFromMetaBin) {
+  fake::add("/Manga/vol02/panels.idx", "index");
+  fake::add("/Manga/packed.matcha", "volume");
+  bookMetadata["/Manga/vol02"] = {"Yotsuba&! 2", "Azuma Kiyohiko", true};
+  bookMetadata["/Manga/packed.matcha"] = {"Yotsuba&! 3", "Azuma Kiyohiko", true};
+  initial();
+
+  LibraryIndexFile index;
+  ASSERT_TRUE(index.open(INDEX));
+  int seen = 0;
+  for (uint16_t ordinal = 0; ordinal < index.header().bookCount; ordinal++) {
+    ClixRecord record{};
+    std::string path;
+    std::string title;
+    std::string author;
+    ASSERT_TRUE(index.readRecord(ordinal, record));
+    ASSERT_TRUE(index.readPath(record, path));
+    if (path != "/Manga/vol02" && path != "/Manga/packed.matcha") continue;
+    ASSERT_TRUE(index.readTitle(record, title));
+    ASSERT_TRUE(index.readAuthor(record, author));
+    EXPECT_EQ(title, bookMetadata[path].title);
+    EXPECT_EQ(author, bookMetadata[path].author);
+    seen++;
+  }
+  EXPECT_EQ(seen, 2);
+}
+
 TEST_F(LibraryBuilderTest, XtcTitleAndAuthorComeFromTheFile) {
   fake::add("/Comics/one.xtc");
   fake::add("/Comics/two.xtch");

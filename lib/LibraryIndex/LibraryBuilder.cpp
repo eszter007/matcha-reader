@@ -7,6 +7,7 @@
 #include <HalStorage.h>
 #include <HiddenItems.h>
 #include <Logging.h>
+#include <MangaPanel.h>
 #include <Memory.h>
 #include <Utf8.h>
 #include <Xtc.h>
@@ -307,7 +308,8 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
   const int priorIndex = findPrior(st, entry.pathHash);
 
   const bool isXtc = FsHelpers::hasXtcExtension(name);
-  const bool extractionExpected = st.readMetadata && (FsHelpers::hasEpubExtension(name) || isXtc);
+  const bool isManga = folderBook || FsHelpers::hasMatchaExtension(name);
+  const bool extractionExpected = st.readMetadata && (FsHelpers::hasEpubExtension(name) || isXtc || isManga);
   const uint8_t expectedStatus = extractionExpected ? CLIX_METADATA_EXTRACTED : CLIX_METADATA_NOT_ATTEMPTED;
   bool reuseMetadata = false;
   ClixRecord priorRecord{};
@@ -349,7 +351,15 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
     st.stats->parsed++;
     std::string bookTitle;
     bool loaded = false;
-    if (isXtc) {
+    if (isManga) {
+      // meta.bin only: no page scan and no panels.idx.
+      manga::MangaBook book(fullPath);
+      loaded = book.loadMeta();
+      if (loaded) {
+        bookTitle = book.getMetaTitle();
+        author = book.getAuthor();
+      }
+    } else if (isXtc) {
       // XTC/XTCH carry title and author in their own header block; load() reads that and the
       // page table header, and writes no cache.
       Xtc xtc(fullPath, CACHE_DIR);
