@@ -95,7 +95,7 @@ Any StarDict dictionary works, picked by the book's language. A missed lookup is
 
 ### Manga, manhua and comics
 
-Read panel by panel, each scaled to the screen, and look up words in the speech bubbles offline. Convert a CBZ, ZIP or PDF in the browser with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) and copy the `.matcha` file to the card. See [Guide §6.6](USER_GUIDE.md#66-manga-manhua-and-comics).
+Read panel by panel, each scaled to the screen, and look up words in the speech bubbles offline. Convert a CBZ, ZIP or PDF in the browser with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) and copy the `.matcha` file to the card. Manga already read with Mokuro converts with [the script](docs/manga-conversion.md#manga-already-read-by-mokuro), no Gemini key needed. See [Guide §6.6](USER_GUIDE.md#66-manga-manhua-and-comics).
 
 <p align="center">
   <img src="docs/images/screenshots/manga-full-page.png" width="200" alt="Full page view">

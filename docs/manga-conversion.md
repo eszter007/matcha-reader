@@ -26,7 +26,7 @@ python3 tools/manga_convert/convert_manga.py \
 
 Set `--language` on every book. It splits your reading time by language, and it tells the OCR pass which language to expect. Most manga carries no language of its own. The tag is read at conversion time, so a book converted without it counts as unknown until you convert it again.
 
-`--input` takes an image folder, `.cbz`, `.zip`, `.epub` or PDF. The flags worth knowing:
+`--input` takes an image folder, `.cbz`, `.zip`, `.epub`, PDF, or a Mokuro volume's `.mokuro` file (see below). Pages can be JPEG, PNG, WebP, AVIF or BMP. WebP and AVIF are converted to JPEG, because the device cannot decode them. The flags worth knowing:
 
 | Flag | Effect |
 | --- | --- |
@@ -43,6 +43,19 @@ Set `--language` on every book. It splits your reading time by language, and it 
 | `--series` / `--series-index` | Series name and volume number. Read from a CBZ's ComicInfo (`<Series>`, `<Number>`) or an EPUB's series metadata when present. Sent with your progress to sync servers set to **Other**. |
 
 Panels are found with a YOLO model trained on Manga109 ([leoxs22/manga-panel-detector-yolo26n](https://huggingface.co/leoxs22/manga-panel-detector-yolo26n)), falling back to a white-gutter heuristic without `ultralytics`. Gemini then reads and translates each panel.
+
+### Manga already read by Mokuro
+
+[Mokuro](https://github.com/kha-white/mokuro) volumes already have their text read, so they need no Gemini key. Point `--input` at the `.mokuro` file. Its image folder must sit next to it with the same name, as Mokuro writes it:
+
+```bash
+python3 tools/manga_convert/convert_manga.py \
+  --input "/path/to/Series/vol1.mokuro" \
+  --output-dir /path/to/sd/manga/Series-vol1/ \
+  --x4
+```
+
+The text, its boxes and every printed column come from Mokuro, so word lookup in the speech bubbles works as with Gemini. Panels are still found on your computer, so panel zoom works too. There are no translations. The title comes from the `.mokuro` file (series name and volume), and the language is set to Japanese.
 
 Western comics work too. Pass `--ltr` so panels within a row are walked left-to-right. The panel detector was trained on manga but handles strip layouts well; page turn direction is a device setting (Reversed page turn), not a conversion one.
 
