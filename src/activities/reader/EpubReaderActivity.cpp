@@ -876,6 +876,7 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
     return;
   }
   wordSelect->setMiningContext({getBookTitle(), getBookAuthor(), std::move(nextPageText), {}, bookPath});
+  wordSelect->setPageTurnReversed(useReversedPageTurn());
   if (!lookupText.empty()) wordSelect->setLookupText(lookupText);
   startActivityForResult(std::move(wordSelect), [this](const ActivityResult& result) { onLookupPanelResult(result); });
 }
@@ -6264,6 +6265,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         } else {
           lookup->setMiningContext(
               {getBookTitle(), getBookAuthor(), std::move(miningTail), effectiveLanguage(), bookPath});
+          lookup->setPageTurnReversed(useReversedPageTurn());
           panel = std::move(lookup);
         }
       }
@@ -6339,6 +6341,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         return;
       }
       lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail), effectiveLanguage(), bookPath});
+      lookup->setPageTurnReversed(useReversedPageTurn());
       startActivityForResult(std::move(lookup), [this](const ActivityResult& result) { onLookupPanelResult(result); });
     }
   }
@@ -6392,9 +6395,10 @@ void EpubReaderActivity::openTranslationFor(std::string text, const StrId title)
     verticalSection.reset();
     releaseReloadableMemory();
   }
-  startActivityForResult(
-      std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(text), "", false, title),
-      [this](const ActivityResult&) { requestUpdate(); });
+  auto translation =
+      std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(text), "", false, title);
+  translation->setPageTurnReversed(useReversedPageTurn());
+  startActivityForResult(std::move(translation), [this](const ActivityResult&) { requestUpdate(); });
 }
 
 // The long-press shortcut's entry point. This reader shows footnotes as the panel the menu opens,
@@ -6425,15 +6429,16 @@ void EpubReaderActivity::openFootnotesPanel() {
   }
   if (footnotePanelEntries.empty()) return;
 
-  startActivityForResult(std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, footnotePanelEntries,
-                                                                       epub.get(), currentSpineIndex, startIndex),
-                         [this](const ActivityResult& result) {
-                           if (!result.isCancelled) {
-                             const auto& footnoteResult = std::get<FootnoteResult>(result.data);
-                             navigateToHref(footnoteResult.href, true);
-                           }
-                           requestUpdate();
-                         });
+  auto footnotes = std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, footnotePanelEntries,
+                                                                 epub.get(), currentSpineIndex, startIndex);
+  footnotes->setPageTurnReversed(useReversedPageTurn());
+  startActivityForResult(std::move(footnotes), [this](const ActivityResult& result) {
+    if (!result.isCancelled) {
+      const auto& footnoteResult = std::get<FootnoteResult>(result.data);
+      navigateToHref(footnoteResult.href, true);
+    }
+    requestUpdate();
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -306,7 +306,7 @@ void DictionaryDefinitionActivity::loop() {
     return;
   }
 
-  switch (const auto touch = PanelTouch::read(renderer, mappedInput, miningAvailable())) {
+  switch (const auto touch = PanelTouch::read(renderer, mappedInput, miningAvailable(), pageTurnReversed)) {
     case PanelTouch::Action::Close: {
       // A tap outside the card means "back to the book", as in the Japanese panel.
       ActivityResult result;

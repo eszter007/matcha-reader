@@ -86,7 +86,7 @@ void EpubReaderFootnotesActivity::loop() {
 
   // A few lines short of a full panel, so the last lines read stay in view as context.
   const int scrollStep = std::max(1, textPages.visibleLines() - 2);
-  switch (PanelTouch::read(renderer, mappedInput)) {
+  switch (PanelTouch::read(renderer, mappedInput, false, pageTurnReversed)) {
     case PanelTouch::Action::Close:
       cancel();
       return;

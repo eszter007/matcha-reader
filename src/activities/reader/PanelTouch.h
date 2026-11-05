@@ -8,14 +8,16 @@
 // Touch input shared by the floating panels (dictionary definition, footnotes, translation), so
 // each answers the same gestures: a tap outside the card puts it away, a tap on its corner
 // button saves, up/down swipes scroll whatever the page-turn setting says, and page turns follow
-// the reader's own touch setting (tap zones, inverted zones, swipes, or nothing).
+// the reader's own touch setting (tap zones, inverted zones, swipes, or nothing), reversed when
+// the book behind the panel reverses its page turns.
 namespace PanelTouch {
 
 // ScrollDown/ScrollUp are the vertical swipes, apart from Next/Previous (the reader's page-turn
 // gesture) for a panel that scrolls within an entry and pages between entries.
 enum class Action : uint8_t { None, Close, AddButton, Next, Previous, ScrollDown, ScrollUp };
 
-inline Action read(const GfxRenderer& renderer, const MappedInputManager& input, const bool hasAddButton = false) {
+inline Action read(const GfxRenderer& renderer, const MappedInputManager& input, const bool hasAddButton = false,
+                   const bool pageTurnReversed = false) {
   // Checked before paging so a tap outside and a page turn cannot both claim one contact.
   int tx = 0;
   int ty = 0;
@@ -35,7 +37,7 @@ inline Action read(const GfxRenderer& renderer, const MappedInputManager& input,
   if (const int scroll = ReaderUtils::definitionScrollSwipe(input)) {
     return scroll > 0 ? Action::ScrollDown : Action::ScrollUp;
   }
-  const auto turn = ReaderUtils::detectTouchPageTurn(renderer, input);
+  const auto turn = ReaderUtils::detectTouchPageTurn(renderer, input, false, pageTurnReversed);
   if (turn.next) return Action::Next;
   if (turn.prev) return Action::Previous;
   return Action::None;

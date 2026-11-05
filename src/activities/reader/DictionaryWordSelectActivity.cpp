@@ -411,6 +411,7 @@ void DictionaryWordSelectActivity::performLookup() {
       LOG_ERR("DICT", "OOM: definition view");
       return;
     }
+    definitionView->setPageTurnReversed(pageTurnReversed);
     if (moreWords) {
       definitionView->setMoreEntries(
           {this, &DictionaryWordSelectActivity::nextSelectionWord, &DictionaryWordSelectActivity::selectionFailure});

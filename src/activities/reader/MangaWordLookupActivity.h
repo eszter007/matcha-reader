@@ -28,6 +28,8 @@ class MangaWordLookupActivity final : public Activity {
   // The book, so a looked-up word can be saved for sentence mining (the sentence is the bubble's).
   void setMiningContext(sentencemining::BookContext context) { mining_ = std::move(context); }
 
+  // The book behind the panel reverses its page turns (Reversed Page Turn in a vertical book).
+  void setPageTurnReversed(const bool reversed) { pageTurnReversed = reversed; }
   void onEnter() override;
   void onExit() override;
   void loop() override;
@@ -36,6 +38,7 @@ class MangaWordLookupActivity final : public Activity {
   bool skipLoopDelay() override { return !scan.isDone(); }
 
  private:
+  bool pageTurnReversed = false;
   WordSelectionScan scan;
 
   int cursorIndex = 0;

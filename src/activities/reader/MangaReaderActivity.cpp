@@ -598,10 +598,10 @@ void MangaReaderActivity::loop() {
 
   if (translationPageReady.exchange(false, std::memory_order_acquire)) {
     translationAfterRender.store(false, std::memory_order_relaxed);
-    startActivityForResult(
-        std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(pendingTranslationSource),
-                                                        std::move(pendingTranslation)),
-        [this](const ActivityResult&) { requestUpdate(); });
+    auto translation = std::make_unique<EpubReaderTranslationActivity>(
+        renderer, mappedInput, std::move(pendingTranslationSource), std::move(pendingTranslation));
+    translation->setPageTurnReversed(SETTINGS.reversePageTurn != 0);
+    startActivityForResult(std::move(translation), [this](const ActivityResult&) { requestUpdate(); });
     return;
   }
 
@@ -1886,6 +1886,7 @@ void MangaReaderActivity::launchWordLookupAt(std::string combined, const int gly
     return;
   }
   lookup->setMiningContext({book->getTitle(), book->getAuthor(), {}, book->getLanguage(), book->getFolder()});
+  lookup->setPageTurnReversed(SETTINGS.reversePageTurn != 0);
   startActivityForResult(std::move(lookup), [this, returnMode](const ActivityResult&) {
     {
       RenderLock lock;

@@ -87,6 +87,8 @@ class EpubReaderWordLookupActivity final : public Activity {
   using MiningContext = sentencemining::BookContext;
   void setMiningContext(MiningContext context) { mining_ = std::move(context); }
 
+  // The book behind the panel reverses its page turns (Reversed Page Turn in a vertical book).
+  void setPageTurnReversed(const bool reversed) { pageTurnReversed = reversed; }
   void onEnter() override;
   void onExit() override;
   void loop() override;
@@ -99,6 +101,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   bool wantsGlyphSlab() const override { return false; }
 
  private:
+  bool pageTurnReversed = false;
   WordSelectionScan scan;
 
   // Select: the page with a highlight box on the current word. Definition: the full-screen

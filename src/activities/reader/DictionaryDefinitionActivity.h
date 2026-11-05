@@ -50,12 +50,15 @@ class DictionaryDefinitionActivity final : public Activity {
   void setMoreEntries(const MoreEntries& source) { more = source; }
   bool skipLoopDelay() override { return more.next != nullptr; }
 
+  // The book behind the panel reverses its page turns (Reversed Page Turn in a vertical book).
+  void setPageTurnReversed(const bool reversed) { pageTurnReversed = reversed; }
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
 
  private:
+  bool pageTurnReversed = false;
   LookupClipHandles clipHandles;
   MoreEntries more;
   // Past the last entry while more are coming: a Loading page the reader can step onto, which the

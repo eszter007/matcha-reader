@@ -2306,7 +2306,7 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
   // card closes the whole panel rather than stepping back to select mode: the gesture means "back
   // to the book", and Back is still there for the page. Up/down swipes read on like a button press;
   // a page turn skips to the neighbouring entry page like a hold.
-  switch (const auto touch = PanelTouch::read(renderer, mappedInput, hasResult)) {
+  switch (const auto touch = PanelTouch::read(renderer, mappedInput, hasResult, pageTurnReversed)) {
     case PanelTouch::Action::Close: {
       ActivityResult result;
       result.isCancelled = true;
