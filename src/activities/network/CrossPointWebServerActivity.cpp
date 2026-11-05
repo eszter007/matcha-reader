@@ -135,6 +135,9 @@ void CrossPointWebServerActivity::onExit() {
   state = WebServerActivityState::SHUTTING_DOWN;
   stopDnsServer();
   MDNS.end();
+  // Close the sockets while the network stack is still up: touch boards turn
+  // WiFi off below without rebooting, and the destructor runs after that.
+  webServer.reset();
 
   // Web uploads may have installed or removed plugins. Non-touch devices
   // reboot below (setup() re-reads everything), but touch devices end the

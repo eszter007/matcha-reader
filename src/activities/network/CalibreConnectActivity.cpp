@@ -57,6 +57,9 @@ void CalibreConnectActivity::onExit() {
   Activity::onExit();
 
   MDNS.end();
+  // Close the sockets while the network stack is still up: touch boards turn
+  // WiFi off below without rebooting, and the destructor runs after that.
+  webServer.reset();
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
