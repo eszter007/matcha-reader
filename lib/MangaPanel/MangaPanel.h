@@ -63,10 +63,15 @@ class MangaBook {
   explicit MangaBook(std::string folderPath) : folderPath(std::move(folderPath)) {}
 
   bool load();
+  // Reads only meta.bin (title, author, language, series). False when the file exists but could
+  // not be read now; true when it was read or the book has none.
+  bool loadMeta();
 
   uint32_t getPageCount() const { return pageCount; }
   const std::string& getFolder() const { return folderPath; }
   std::string getTitle() const;
+  // Title from meta.bin only; empty when it has none (getTitle() falls back to the file name).
+  const std::string& getMetaTitle() const { return metaTitle; }
   const std::string& getAuthor() const { return author; }
   // BCP-47/ISO-639 tag from meta.bin's optional trailer ("ja", "en", ...). Empty when the
   // folder was converted before convert_manga.py wrote one, or the source carried no language.
@@ -134,7 +139,6 @@ class MangaBook {
   // price scales with everything else in the folder. False when the layout is not canonical.
   bool buildCanonicalPageList();
   void loadToc();
-  void loadMeta();
 };
 
 }  // namespace manga

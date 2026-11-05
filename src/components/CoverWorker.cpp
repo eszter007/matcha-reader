@@ -107,7 +107,12 @@ void CoverWorker::runJob() {
   const bool isEpub = FsHelpers::hasEpubExtension(result.book.path);
   const bool isXtc = FsHelpers::hasXtcExtension(result.book.path);
   if (!isEpub && !isXtc) {
-    const manga::MangaBook mangaBook(result.book.path);
+    manga::MangaBook mangaBook(result.book.path);
+    // Title and author from meta.bin, as the EPUB and XTC branches read theirs.
+    if (mangaBook.loadMeta()) {
+      if (!mangaBook.getMetaTitle().empty()) result.book.title = mangaBook.getMetaTitle();
+      if (!mangaBook.getAuthor().empty()) result.book.author = mangaBook.getAuthor();
+    }
     for (const int targetHeight : job_.targetHeights) {
       if (targetHeight <= 0 || shouldCancel(this)) continue;
       if (thumbHeightValid(mangaBook.getThumbBmpPath(targetHeight), targetHeight)) continue;
