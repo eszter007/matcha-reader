@@ -57,6 +57,9 @@ struct HalHaptics {
   static void feedback(bool, bool, int) {}
   static void longPress(bool, int) {}
 };
+namespace BoardConfig {
+inline bool hasTouch() { return false; }
+}
 bool MappedInputManager::mapButton(Button b, bool (HalGPIO::*fn)(uint8_t) const) const {
   return (gpio.*fn)(static_cast<uint8_t>(b));
 }
