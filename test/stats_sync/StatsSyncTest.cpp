@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "stats/BookActivityParser.h"
 #include "stats/BookListParser.h"
 #include "stats/DailyStatsParser.h"
 #include "stats/OverviewParser.h"
@@ -219,6 +220,47 @@ void bookList() {
   assert(last.until() == 1761300100u);
   assert(parser.until() == 0);  // a server without it
 }
+// The server's per-book activity, recorded from crosspoint-sync for a book a position-only reader opened in
+// May and this reader read in October: every reading day (a sync with no time counts), the start and finish,
+// and the requested hash it answers -- which comes last, so the book is only passed at its end.
+void bookActivity() {
+  const std::string body =
+      R"({"books":[{"document":"7c1d785169444f0dde4828055d3e3d58","started_at":1779616800,"last_at":1782900000,)"
+      R"("percentage":0.2,"finished_at":1793703600,"completed":true,"page_count":null,"pages_read":null,)"
+      R"("days_to_finish":164,"start_manual":false,"finish_manual":false,)"
+      R"("reading_days":["2026-05-24","2026-07-01","2026-10-23","2026-10-24","2026-11-03"],"days":[)"
+      R"({"day":"2026-05-24","syncs":1,"pages":0,"seconds":0,"from":0.02,"to":0.02},)"
+      R"({"day":"2026-07-01","syncs":1,"pages":0,"seconds":0,"from":0.02,"to":0.2},)"
+      R"({"day":"2026-09-30","started":true,"syncs":0,"pages":0,"seconds":0,"from":0,"to":0},)"  // a chosen start only
+      R"({"day":"2026-10-23","syncs":0,"pages":0,"seconds":180,"from":0,"to":0},)"
+      R"({"day":"2026-10-24","syncs":0,"pages":0,"seconds":480,"from":0,"to":0},)"
+      R"({"day":"2026-11-03","syncs":0,"pages":0,"seconds":2700,"from":0.2,"to":0.2}],)"
+      R"("requested":["7c1d785169444f0dde4828055d3e3d58","not-a-hash"]},)"
+      R"({"document":"0123456789abcdef0123456789abcdef","started_at":0,"finished_at":null,"days":[],)"
+      R"("requested":[]}]})";  // no usable key: skipped
+  struct Log {
+    std::string calls;
+  } log;
+  const BookActivityParser::Sink sink{
+      &log, [](void* c, const uint32_t* keys, const size_t n, const int64_t started, const int64_t finished,
+               const BookDay* days, const size_t count) {
+        auto& l = static_cast<Log*>(c)->calls;
+        for (size_t i = 0; i < n; i++) l += std::to_string(keys[i]) + " ";
+        l += std::to_string(started) + " " + std::to_string(finished) + ":";
+        for (size_t i = 0; i < count; i++) {
+          l += " " + std::to_string(days[i].month) + "-" + std::to_string(days[i].day) + "/" +
+               std::to_string(days[i].minutes);
+        }
+        l += ";";
+        return true;
+      }};
+  BookActivityParser parser(sink);
+  for (size_t i = 0; i < body.size(); i += 7) parser.feed(body.data() + i, std::min<size_t>(7, body.size() - i));
+  assert(parser.complete());
+  assert(parser.books() == 1);
+  assert(log.calls == "2082306129 1779616800 1793703600: 5-24/0 7-1/0 10-23/3 10-24/8 11-3/45;");
+}
+
 // A page of the progress feed: each document's keys (hash, then aliases) and its percentage, in any chunking.
 void progressChanges() {
   const std::string body =
@@ -274,6 +316,7 @@ int main() {
   overview();
   bookList();
   progressChanges();
+  bookActivity();
   puts("stats sync tests passed");
   return 0;
 }

@@ -13,8 +13,11 @@
 #include <TrustedTime.h>
 
 #include <algorithm>
+#include <cstring>
 #include <ctime>
 
+#include "BookActivity.h"
+#include "BookActivityParser.h"
 #include "BookListParser.h"
 #include "BookStatsDownload.h"
 #include "CrossPointSettings.h"
@@ -229,6 +232,94 @@ bool downloadBooks(freeink::SecureHttpClient& http) {
   return true;
 }
 
+// A book whose every-device history is asked for: the hashes the server may know it by.
+struct ActivityBook {
+  char hashes[2][33];  // filename MD5, and the content MD5 with binary matching; "" when unused
+  uint32_t keys[2];    // remoteProgress::keyOf() of each, 0 when unused
+  uint32_t nameHash;   // bookNameHash(), the key of the saved file
+};
+
+// Books per GET /stats/activity/books; two hashes each keeps the query under 1 KB.
+constexpr size_t ACTIVITY_BOOKS_PER_REQUEST = 12;
+// Books asked about per sync: the most recently read, which are the ones a finish screen can show.
+constexpr size_t MAX_ACTIVITY_BOOKS = 40;
+
+// Unix seconds as a local calendar date; year 0 for none.
+BookDay localDate(const int64_t at) {
+  if (at <= 0) return {};
+  const time_t t = static_cast<time_t>(at);
+  tm local{};
+  localtime_r(&t, &local);
+  return {static_cast<uint16_t>(local.tm_year + 1900), static_cast<uint8_t>(local.tm_mon + 1),
+          static_cast<uint8_t>(local.tm_mday), 0};
+}
+
+// Every device's history of `books` into bookactivity's file. Display only, like the overview. Best
+// effort: a server without the endpoint (404) or a failure keeps the previous file.
+void downloadActivity(freeink::SecureHttpClient& http, const std::vector<ActivityBook>& books) {
+  if (books.empty()) return;
+  if (HalMemory::getDefaultHeap().largestBlockBytes < BookActivityParser::MAX_DAYS * sizeof(BookDay) + 2048) {
+    LOG_ERR("STATS", "Not enough heap for book activity");
+    return;
+  }
+  bookactivity::Writer writer;
+  if (!writer.begin()) return;
+  struct Ctx {
+    const std::vector<ActivityBook>* books;
+    bookactivity::Writer* writer;
+  } ctx{&books, &writer};
+  const BookActivityParser::Sink sink{
+      &ctx, [](void* p, const uint32_t* keys, const size_t keyCount, const int64_t startedAt, const int64_t finishedAt,
+               const BookDay* days, const size_t dayCount) {
+        auto& c = *static_cast<Ctx*>(p);
+        const auto it = std::find_if(c.books->begin(), c.books->end(), [&](const ActivityBook& b) {
+          return std::any_of(keys, keys + keyCount,
+                             [&b](const uint32_t k) { return k == b.keys[0] || k == b.keys[1]; });
+        });
+        if (it == c.books->end()) return true;  // not one asked about
+        return c.writer->addBook({it->nameHash, localDate(startedAt), localDate(finishedAt)}, days, dayCount);
+      }};
+  const int tz = utcOffsetMinutes();
+  int saved = 0;
+  for (size_t from = 0; from < books.size(); from += ACTIVITY_BOOKS_PER_REQUEST) {
+    std::string path = "/api/v1/stats/activity/books?tz=" + std::to_string(tz) + "&documents=";
+    bool first = true;
+    for (size_t i = from; i < std::min(books.size(), from + ACTIVITY_BOOKS_PER_REQUEST); i++) {
+      for (const auto& h : books[i].hashes) {
+        if (!h[0]) continue;
+        if (!first) path += ',';
+        path += h;
+        first = false;
+      }
+    }
+    auto parser = makeUniqueNoThrow<BookActivityParser>(sink);
+    if (!parser || !begin(http, path.c_str())) {
+      writer.abort();
+      return;
+    }
+    const int status = http.sendRequest("GET", nullptr, 0, [&](const uint8_t* data, const size_t length) {
+      parser->feed(reinterpret_cast<const char*>(data), length);
+      return true;
+    });
+    if (status == 404 && from == 0) {
+      LOG_INF("STATS", "Server has no per-book activity; every-device history not downloaded");
+      writer.abort();
+      return;
+    }
+    if (status != 200 || !http.responseComplete() || !parser->complete()) {
+      LOG_ERR("STATS", "Book activity download failed: HTTP %d", status);
+      writer.abort();
+      return;
+    }
+    saved += parser->books();
+  }
+  if (!writer.commit()) {
+    LOG_ERR("STATS", "Book activity not saved");
+    return;
+  }
+  LOG_INF("STATS", "Downloaded every-device history of %d books", saved);
+}
+
 // Changes per page of the progress feed; the server also stops a page before 8 KB.
 constexpr int CHANGES_PER_PAGE = 20;
 // Pages read per sync at most: the first one goes through every book on the account, and what is left
@@ -399,6 +490,10 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
   }
   books.reserve(ReadingStatsStore::MAX_BOOKS);
   std::vector<AccountBaseline> baselines;
+  std::vector<ActivityBook> activityBooks;
+  if (HalMemory::getDefaultHeap().largestBlockBytes >= MAX_ACTIVITY_BOOKS * sizeof(ActivityBook) + 1024) {
+    activityBooks.reserve(MAX_ACTIVITY_BOOKS);
+  }
   uint32_t ownTimeOfDay[ReadingStatsStore::TIME_OF_DAY_BUCKETS] = {};
   const int32_t booksFrom = KOREADER_STORE.getStatsBooksDay();
   {
@@ -433,6 +528,30 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
     for (const auto& b : READING_STATS_STORE.getBooks()) {
       if (b.lastReadDay >= booksFrom || b.path == bookPath) {
         books.push_back({b.path, b.language, b.lastReadDay, READING_STATS_STORE.isFinished(b.path)});
+      }
+    }
+    // The most recently read books, for every device's history of them (display only).
+    if (activityBooks.capacity() > 0) {
+      std::vector<const BookReading*> recent;
+      recent.reserve(READING_STATS_STORE.getBooks().size());
+      for (const auto& b : READING_STATS_STORE.getBooks()) recent.push_back(&b);
+      std::sort(recent.begin(), recent.end(),
+                [](const BookReading* a, const BookReading* b) { return a->lastReadDay > b->lastReadDay; });
+      const bool binary = KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::BINARY;
+      for (size_t i = 0; i < recent.size() && activityBooks.size() < MAX_ACTIVITY_BOOKS; i++) {
+        const std::string& p = recent[i]->path;
+        ActivityBook a{};
+        a.nameHash = bookNameHash(p.data(), p.size());
+        const std::string byName = KOReaderDocumentId::calculateFromFilename(p);
+        const std::string byContent = binary ? KOReaderDocumentId::calculate(p) : std::string();
+        int n = 0;
+        for (const std::string* h : {&byName, &byContent}) {
+          if (h->size() != 32) continue;
+          memcpy(a.hashes[n], h->c_str(), 33);
+          a.keys[n] = remoteProgress::keyOf(h->data(), h->size());
+          n++;
+        }
+        if (n > 0) activityBooks.push_back(a);
       }
     }
   }
@@ -497,6 +616,7 @@ bool statsSync::run(const std::string& bookPath, const std::string& documentHash
   }
   // Only after a complete upload: then the server holds everything the baselines count.
   if (ok) downloadOverview(*http, baselines);
+  downloadActivity(*http, activityBooks);
   if (feedReady) pullProgress(*http, feed);
   // Free the TLS session before the progress request that follows.
   http->end();
