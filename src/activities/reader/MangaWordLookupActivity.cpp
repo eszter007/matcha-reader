@@ -499,7 +499,7 @@ void MangaWordLookupActivity::loop() {
   // The gestures every floating panel answers, read in one place (PanelTouch): a tap outside the
   // card puts it away, up/down swipes read on like a button press, and a page turn skips to the
   // previous/next word like a hold.
-  switch (const auto touch = PanelTouch::read(renderer, mappedInput, hasResult)) {
+  switch (const auto touch = PanelTouch::read(renderer, mappedInput, hasResult, pageTurnReversed)) {
     case PanelTouch::Action::Close: {
       ActivityResult result;
       result.isCancelled = true;

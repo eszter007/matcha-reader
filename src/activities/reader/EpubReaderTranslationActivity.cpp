@@ -473,7 +473,7 @@ void EpubReaderTranslationActivity::loop() {
     return;
   }
 
-  switch (PanelTouch::read(renderer, mappedInput)) {
+  switch (PanelTouch::read(renderer, mappedInput, false, pageTurnReversed)) {
     case PanelTouch::Action::Close:
       cancel();
       return;
