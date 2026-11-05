@@ -288,6 +288,10 @@ class ReadingStatsStore {
   // first finish from a reopening.
   Summary summarize(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay, const char* language,
                     const char* finishedPath = nullptr);
+  // Counts a summary's finished books the way Insights does with "All devices" (Loaded with accountKey):
+  // the account's books plus what this card finished since the overview. Unchanged for accountKey 0 or
+  // without that account's overview (a language the server has no group for keeps its own count).
+  static void countAccountFinished(uint32_t accountKey, const char* language, Summary& summary);
 
   // Holds the full tables for as long as it lives (a stats screen). loaded() is false when they
   // could not be read or did not fit the heap.

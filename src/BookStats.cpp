@@ -327,7 +327,8 @@ bool BookStats::recordFinish(const char* path, const uint16_t year, const uint8_
                              const bool firstFinish, BookStats& out) {
   if (!path || !*path) return false;
   std::lock_guard<std::mutex> lock(fileMutex());
-  if (!out.load(path)) return false;
+  // With the server copy: days read on other devices since this book was last opened here count too.
+  if (!out.load(path, /*withServerCopy=*/true)) return false;
   const auto freezeCounts = [&out] {
     out.hasFinishCounts = true;
     out.finishLookups = out.lookups;
