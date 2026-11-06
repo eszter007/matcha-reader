@@ -162,6 +162,7 @@ A wallpaper over the page you were reading. The book shows through. See [Guide Â
 ### Also in this fork
 
 - Jump Back: after a jump (to a chapter, a percentage, a bookmark or a clipping, or with Chapter Skip), the reader menu shows **Jump Back** at the top, with where it leads: a percentage in books, a page in manga. Choose it to return; choose it again to undo. It is kept through sleep and when you reopen the book. Books and manga, not XTC
+- Last 5 pages read: the reader menu (and the toolbar's More panel) lists the last five places you read in the book, such as "Page 396 - 12:32 PM". Turning pages keeps one place; a jump, a link or a sync starts a new one. Choose a place to go back there. Kept through sleep and when you reopen the book. Books only
 - Clippings and highlights work in vertical text too
 - Translate the selected text from the touch selection bar
 - Optimize EPUB on upload: splits single-file novels into chapters and fits images to the screen

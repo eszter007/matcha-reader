@@ -22,12 +22,14 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
     const bool hasBookmarks, const bool hasWordLookup, const bool verticalEnabled, const bool furiganaEnabled,
     const bool hasPageText, const bool imageReaderMinimal, const bool mangaMode, const bool hideGenericLookup,
     const bool showPanelsOnlyToggle, const bool panelsOnlyEnabled, const bool scrubOnEnter, const bool hasClippings,
-    const char* jumpBackTarget)
+    const char* jumpBackTarget, std::vector<std::string> recentPageLabels)
     : UiListActivity("EpubReaderMenu", renderer, mappedInput),
       scrubOnEnter_(scrubOnEnter),
       menuItems(buildMenuItems(hasFootnotes, hasBookmarks, hasWordLookup, imageReaderMinimal, mangaMode,
-                               hideGenericLookup, showPanelsOnlyToggle, hasClippings, jumpBackTarget != nullptr)),
+                               hideGenericLookup, showPanelsOnlyToggle, hasClippings, jumpBackTarget != nullptr,
+                               !recentPageLabels.empty())),
       hasPageText(hasPageText),
+      recentPageLabels(std::move(recentPageLabels)),
       title(title),
       pendingOrientation(currentOrientation),
       pendingVerticalEnabled(verticalEnabled),
@@ -77,7 +79,7 @@ void EpubReaderMenuActivity::buildMenuRowItems() {
 
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(
     bool hasFootnotes, bool hasBookmarks, bool hasWordLookup, bool imageReaderMinimal, bool mangaMode,
-    bool hideGenericLookup, bool showPanelsOnlyToggle, bool hasClippings, bool hasJumpBack) {
+    bool hideGenericLookup, bool showPanelsOnlyToggle, bool hasClippings, bool hasJumpBack, bool hasRecentPages) {
   std::vector<MenuItem> items;
   items.reserve(MAX_MENU_ITEMS);
 
@@ -98,6 +100,9 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   // First, so an accidental jump is one press away from being undone.
   if (hasJumpBack) {
     items.push_back({MenuAction::JUMP_BACK, StrId::STR_JUMP_BACK});
+  }
+  if (hasRecentPages) {
+    items.push_back({MenuAction::RECENT_PAGES, StrId::STR_RECENT_PAGES});
   }
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
@@ -204,6 +209,17 @@ void EpubReaderMenuActivity::activateIndex(const int index) {
                        selectedPageTurnOption = idx;
                        requestUpdate();
                      });
+    requestUpdate();
+    return;
+  }
+
+  if (selectedAction == MenuAction::RECENT_PAGES) {
+    optionPopup.show(StrId::STR_RECENT_PAGES, recentPageLabels, 0, [this](int idx) {
+      MenuResult result{static_cast<int>(MenuAction::RECENT_PAGES), pendingOrientation, selectedPageTurnOption};
+      result.recentPageIndex = static_cast<int8_t>(idx);
+      setResult(std::move(result));
+      finish();  // deferred by ActivityManager, so this popup outlives its callback
+    });
     requestUpdate();
     return;
   }

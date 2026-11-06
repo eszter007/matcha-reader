@@ -9,7 +9,10 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "BookmarkEntry.h"
 #include "ChapterPosition.h"
@@ -23,6 +26,7 @@
 #include "components/OptionPopup.h"
 #include "util/CjkScript.h"
 #include "util/SentenceMining.h"
+#include "util/RecentPages.h"
 
 class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
@@ -641,6 +645,19 @@ class EpubReaderActivity final : public ReaderActivity {
   // Kept in jump.bin across sleep and reopening, consumed on load like links.bin.
   void saveJumpOrigin() const;
   void loadJumpOrigin();
+  // Last 5 pages read: written by saveProgress() on the render task, read on the loop task.
+  RecentPages recentPages;
+  mutable std::mutex recentPagesMutex;
+  // The place picked in the Last 5 pages read popup, for onReaderMenuConfirm(); 0 is the newest.
+  int pendingRecentPageIndex = -1;
+  void noteRecentPage(int spineIndex, int page, int pageCount, uint8_t percent, std::optional<uint32_t> offset);
+  // Places before the page on screen, as "Page 396 - 12:32 PM"; empty when there are none.
+  std::vector<std::string> recentPageLabels() const;
+  bool hasRecentPages() const;
+  void goToRecentPage(int index);
+  // Kept in recent.bin; rewritten when the book closes.
+  void saveRecentPages() const;
+  void loadRecentPages();
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent) override;
   bool writeSyncedPosition() override;
@@ -867,6 +884,8 @@ class EpubReaderActivity final : public ReaderActivity {
   // The status bar's span when a lookup dropped the vertical build; see lookupPage_.
   SectionPageSpan lookupSpan_{1, 1};
   int pageBasedPercent(int spineIndex, int sectionPage) const;  // sectionPage is 1-based
+  // 1-based page in the whole book, 0 while the page model is unavailable. sectionPage is 1-based.
+  int bookPageFor(int spineIndex, int sectionPage) const;
   mutable int chapterSpanSpine = -1;
   mutable int chapterSpanLivePages = -1;
   mutable bool chapterSpanVertical = false;
