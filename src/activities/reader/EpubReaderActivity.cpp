@@ -1956,14 +1956,14 @@ void EpubReaderActivity::dropSectionsKeepingPosition() {
     cachedSpineIndex = currentSpineIndex;
     nextPageNumber = verticalSection->currentPage;
     cachedChapterTotalPageCount = verticalSection->pageCount;
-    cachedVisibleTextOffset = verticalSection->getVisibleTextOffsetForPage(verticalSection->currentPage);
+    cachedVisibleTextOffset = visibleOffsetForPage(verticalSection->currentPage);
   } else if (section) {
     cachedSpineIndex = currentSpineIndex;
     nextPageNumber = section->currentPage;
     // estimatedTotalPages(), not pageCount: mid-build the watermark sits barely ahead of
     // currentPage, so the ratio would be ~1.0 and land the reader at the chapter's end.
     cachedChapterTotalPageCount = section->estimatedTotalPages();
-    cachedVisibleTextOffset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(section->currentPage));
+    cachedVisibleTextOffset = visibleOffsetForPage(section->currentPage);
   }
   section.reset();
   verticalSection.reset();
@@ -4497,32 +4497,16 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
 bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride,
                                       int8_t furiOverride) {
   const uint8_t percent = static_cast<uint8_t>(pageBasedPercent(spineIndex, currentPage + 1));
-  std::optional<uint32_t> offset;
-  if (verticalSection && spineIndex == currentSpineIndex && currentPage >= 0 &&
-      currentPage < verticalSection->pageCount) {
-    // Vertical records the same content offset horizontal does, so progress saved while
-    // reading vertically resolves exactly when the book is next opened horizontally (and the
-    // other way round). Without this the two modes could only meet through page proportions.
-    offset = verticalSection->getVisibleTextOffsetForPage(currentPage);
-  } else if (section && spineIndex == currentSpineIndex && currentPage >= 0 && currentPage < section->pageCount) {
-    // The on-screen page's offset was captured at load; reuse it to avoid a fresh section-file
-    // open on every page turn. Any other page (rare) falls back to a direct lookup.
-    offset = (currentPage == section->currentPage && currentPageVisibleOffset.has_value())
-                 ? currentPageVisibleOffset
-                 : section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage));
-  }
+  // The content offset lets the position survive re-pagination, and lets progress saved in one
+  // layout (vertical or horizontal) resolve exactly in the other.
+  const std::optional<uint32_t> offset =
+      spineIndex == currentSpineIndex ? visibleOffsetForPage(currentPage) : std::nullopt;
   return EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, vertOverride, furiOverride, percent,
                                        offset);
 }
 
 void EpubReaderActivity::rememberCurrentContentOffset() {
-  cachedVisibleTextOffset.reset();
-  if (verticalSection && verticalSection->currentPage >= 0 &&
-      verticalSection->currentPage < verticalSection->pageCount) {
-    cachedVisibleTextOffset = verticalSection->getVisibleTextOffsetForPage(verticalSection->currentPage);
-  } else if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
-    cachedVisibleTextOffset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(section->currentPage));
-  }
+  cachedVisibleTextOffset = visibleOffsetForPage(shownPage(-1));
 }
 void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int orientedMarginTop,
                                         const int orientedMarginRight, const int orientedMarginBottom,
@@ -7779,15 +7763,13 @@ void EpubReaderActivity::addBookmark() {
     currentPageBookmarked = false;
   } else {
     std::string pageText;
-    std::optional<uint32_t> verticalOffset;
+    std::optional<uint32_t> offset;
     if (verticalSection) {
       // The render task's warm tail re-faults the section's single page slot; read it under the lock.
       RenderLock lock(*this);
       const VerticalPage* vp = verticalSection->getPage();
       if (vp) pageText = PageTextExtractor::fromVerticalPage(*vp);
-      if (currentPage >= 0 && currentPage < verticalSection->pageCount) {
-        verticalOffset = verticalSection->getVisibleTextOffsetForPage(currentPage);
-      }
+      offset = visibleOffsetForPage(currentPage);
     } else if (section && currentPage >= 0 && currentPage < pageCount) {
       pageText = section->getTextFromSectionFile();
     }
@@ -7798,18 +7780,8 @@ void EpubReaderActivity::addBookmark() {
     entry.computedSpineIndex = currentSpineIndex;
     entry.computedChapterPageCount = pageCount;
     entry.computedChapterProgress = currentPage;
-    // Record the exact content offset so the bookmark lands correctly after any re-pagination.
-    // The two layouts own different section objects; never touch `section` while a vertical page
-    // is active (it is null in that mode).
-    std::optional<uint32_t> offset;
-    if (verticalSection) {
-      offset = verticalOffset;
-    } else if (section && currentPage >= 0 && currentPage < section->pageCount) {
-      // currentPageVisibleOffset was captured for this very page at its last render.
-      offset = currentPageVisibleOffset.has_value()
-                   ? currentPageVisibleOffset
-                   : section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage));
-    }
+    // The exact content offset, so the bookmark lands correctly after any re-pagination.
+    if (!verticalSection) offset = visibleOffsetForPage(currentPage);
     if (offset.has_value()) {
       entry.visibleTextOffset = *offset;
       entry.hasVisibleTextOffset = true;
@@ -7883,6 +7855,14 @@ int EpubReaderActivity::getProgressBasisPoints() const {
   return std::clamp(static_cast<int>(progress * 10000.0f + 0.5f), 0, 10000);
 }
 
+std::optional<uint32_t> EpubReaderActivity::visibleOffsetForPage(const int page) const {
+  if (page < 0 || page >= builtPageCount(0)) return std::nullopt;
+  if (verticalSection) return verticalSection->getVisibleTextOffsetForPage(page);
+  // The page on screen had its offset captured at load; reuse it rather than reopen the section file.
+  if (page == section->currentPage && currentPageVisibleOffset.has_value()) return currentPageVisibleOffset;
+  return section->getVisibleTextOffsetForPage(static_cast<uint16_t>(page));
+}
+
 int EpubReaderActivity::shownPage(const int fallback) const {
   return verticalSection ? verticalSection->currentPage : section ? section->currentPage : fallback;
 }
@@ -7910,20 +7890,10 @@ CrossPointPosition EpubReaderActivity::getCurrentPosition() const {
   CrossPointPosition localPos = {currentSpineIndex, currentPage, totalPages};
   localPos.hasResolvedSpineIndex = true;
   localPos.hasMappedPage = true;
-  // The vertical section reports the same offset units as the horizontal one, so a Japanese
-  // book read vertically anchors on exact content like any other. Querying only `section` here
-  // left every vertical position falling back to page/percentage, which re-paginates wrong when
-  // the layout settings change.
-  if (verticalSection && currentPage >= 0 && currentPage < verticalSection->pageCount) {
-    if (const auto offset = verticalSection->getVisibleTextOffsetForPage(currentPage)) {
-      localPos.visibleTextOffset = *offset;
-      localPos.hasVisibleTextOffset = true;
-    }
-  } else if (section && currentPage >= 0 && currentPage < section->pageCount) {
-    if (const auto offset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage))) {
-      localPos.visibleTextOffset = *offset;
-      localPos.hasVisibleTextOffset = true;
-    }
+  // Both layouts report the same offset units, so a position anchors on exact content in either.
+  if (const auto offset = visibleOffsetForPage(currentPage)) {
+    localPos.visibleTextOffset = *offset;
+    localPos.hasVisibleTextOffset = true;
   }
   if (paragraphIndex.has_value()) {
     localPos.paragraphIndex = *paragraphIndex;

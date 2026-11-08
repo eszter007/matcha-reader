@@ -33,6 +33,8 @@ class EpubReaderActivity final : public ReaderActivity {
   int builtPageCount(int fallback) const;
   // The chapter's page total: estimated while a horizontal chapter builds, exact otherwise.
   int chapterPageTotal(int fallback) const;
+  // Content offset of a page of the current chapter in the active layout; nullopt past the built pages.
+  std::optional<uint32_t> visibleOffsetForPage(int page) const;
   // Spine index whose vertical section last failed to build (e.g. transient low-heap allocation
   // failure). Prevents an immediate automatic retry loop: without this, verticalSection.reset()
   // on failure leaves `!verticalSection` true, so the very next render() call retries the same
