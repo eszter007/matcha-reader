@@ -34,6 +34,8 @@ namespace {
 // reader and word-select. Bigger definitions take the span-based plain-text
 // path, which holds no per-page copies.
 constexpr size_t MAX_STYLED_HTML_BYTES = 16 * 1024;
+// Free heap a background page count leaves for the panel, on top of what the layout takes.
+constexpr size_t MEASURE_HEAP_HEADROOM = 24 * 1024;
 
 // Contiguous heap a nested lookup needs before it starts: the next panel lays out a definition of
 // up to MAX_STYLED_HTML_BYTES while this one keeps its own pages.
@@ -138,16 +140,70 @@ void DictionaryDefinitionActivity::fetchMoreEntries() {
   if (!fresh.empty() || !moreToCome) requestUpdate();
 }
 
-std::string DictionaryDefinitionActivity::footerLabel() const {
-  if (!showingEntry()) return {};
-  std::string label = entries[currentEntry].dictName;
-  if (entries.size() > 1) {
-    char place[16];
-    snprintf(place, sizeof(place), " (%u/%u)", static_cast<unsigned>(currentEntry + 1),
-             static_cast<unsigned>(entries.size()));
-    label += place;
+void DictionaryDefinitionActivity::notePages(const size_t index, const int count) {
+  if (entryPages.size() < entries.size()) entryPages.resize(entries.size(), 0);
+  if (index < entryPages.size()) entryPages[index] = static_cast<uint16_t>(std::max(1, std::min(count, 0xFFFF)));
+}
+
+void DictionaryDefinitionActivity::formatCounter(char* out, const size_t size) const {
+  out[0] = '\0';
+  if (!showingEntry()) return;
+  // An entry not laid out yet counts as one page, and marks the numbers as estimates.
+  bool estimate = static_cast<bool>(more.next);
+  int before = 0;
+  int total = 0;
+  for (size_t i = 0; i < entries.size(); i++) {
+    const int pagesOf = i == currentEntry ? totalPages : (i < entryPages.size() ? entryPages[i] : 0);
+    estimate = estimate || pagesOf == 0;
+    const int counted = std::max(1, pagesOf);
+    if (i < currentEntry) before += counted;
+    total += counted;
   }
-  return label;
+  if (total <= 1 && !estimate) return;
+  snprintf(out, size, "%s%d/%d", estimate ? "~" : "", before + currentPage + 1, total);
+}
+
+// Lays the entry out the way showEntry() does, only to count its pages; nothing is kept.
+int DictionaryDefinitionActivity::measureEntryPages(const Entry& entry) {
+  const BodyArea body = bodyArea();
+  if (body.width <= 0 || body.height <= 0) return 0;
+  std::string text = entry.definition;
+  std::replace(text.begin(), text.end(), '\0', '\n');
+  if (entry.definitionText) {
+    const Rect area{body.x, body.y, body.width, body.height};
+    const int fontId = DefinitionText::wordLookupFontId();
+    const uint16_t scale = DefinitionText::wordLookupFontScale();
+    const int lineHeight = std::max(1, renderer.getLineHeightScaled(fontId, scale));
+    const int metadataLines = DefinitionText::entryMetadataLineCount(renderer, area, fontId, scale,
+                                                                     {entry.reading, entry.grammar, std::string()});
+    const auto wrap =
+        DefinitionText::drawWrapped(renderer, fontId, text, body.x, body.y, lineHeight, body.width, body.y, 0, scale);
+    const int lines = std::max(1, body.height / lineHeight);
+    return std::max(1, (metadataLines + wrap.totalLines + lines - 1) / lines);
+  }
+  if (entry.html && text.size() <= MAX_STYLED_HTML_BYTES) {
+    std::vector<std::unique_ptr<Page>> scratch;
+    renderer.ensureSdCardFontReady(definitionFontId(), text.c_str(), 0x07);
+    if (buildDictionaryHtmlPages(renderer, text, static_cast<uint16_t>(body.width), static_cast<uint16_t>(body.height),
+                                 definitionFontId(), scratch)) {
+      return static_cast<int>(scratch.size());
+    }
+  }
+  PanelTextPages scratch;
+  scratch.layout(renderer, definitionFontId(), htmlToPlainText(text), body.width, body.height);
+  return scratch.pageCount();
+}
+
+void DictionaryDefinitionActivity::measureNextEntry() {
+  for (size_t i = 0; i < entries.size(); i++) {
+    if (i == currentEntry || (i < entryPages.size() && entryPages[i] != 0)) continue;
+    // The layout holds a copy of the text and its pages for a moment: skip it while the heap is
+    // short, so it is measured on a later tick rather than starving the panel.
+    if (ESP.getMaxAllocHeap() < entries[i].definition.size() * 3 + MEASURE_HEAP_HEADROOM) return;
+    RenderLock lock;  // layout measures with the fonts the render task draws with
+    notePages(i, measureEntryPages(entries[i]));
+    return;
+  }
 }
 
 void DictionaryDefinitionActivity::onEnter() {
@@ -190,6 +246,7 @@ void DictionaryDefinitionActivity::showEntry(const size_t index, const bool atLa
     definitionTextLines = std::max(1, body.height / lineHeight);
     totalPages = std::max(1, (metadataLines + wrap.totalLines + definitionTextLines - 1) / definitionTextLines);
     currentPage = atLastPage ? totalPages - 1 : 0;
+    notePages(index, totalPages);
     miningFeedback_.clear();
     return;
   }
@@ -200,6 +257,7 @@ void DictionaryDefinitionActivity::showEntry(const size_t index, const bool atLa
     totalPages = textPages.pageCount();
   }
   currentPage = atLastPage ? totalPages - 1 : 0;
+  notePages(index, totalPages);
   miningFeedback_.clear();
 }
 
@@ -239,6 +297,7 @@ bool DictionaryDefinitionActivity::stepWord(const int direction, const bool atEn
     RenderLock lock;  // the step moves the word the backdrop draws, and the render task reads it
     if (!steps.step(steps.ctx, direction, next) || next.empty()) return false;
     entries = std::move(next);
+    entryPages.clear();
     for (auto& entry : entries) prepareDraft(entry);
     showEntry(direction > 0 ? 0 : entries.size() - 1, atEnd);
   }
@@ -332,7 +391,11 @@ void DictionaryDefinitionActivity::saveSentence() {
 void DictionaryDefinitionActivity::loop() {
   if (miningFeedback_.popupExpired(millis())) requestUpdate();
   // One word per tick; input below still runs every tick, so Back closes the view at once.
-  if (more.next && !RenderLock::peek()) fetchMoreEntries();
+  if (more.next && !RenderLock::peek()) {
+    fetchMoreEntries();
+  } else if (!RenderLock::peek()) {
+    measureNextEntry();
+  }
   if (ClipStartResult clip; clipHandles.pressed(renderer, mappedInput, clip)) {
     ActivityResult result;
     result.data = clip;
@@ -444,13 +507,11 @@ void DictionaryDefinitionActivity::drawBody(const int fontId, const int x, const
 void DictionaryDefinitionActivity::render(RenderLock&&) {
   // No clearScreen: the panel floats over the page the word-select activity left in the
   // framebuffer, and its own fill is opaque, so a re-render overwrites the previous one.
-  char counter[16] = "";
-  if (showingEntry() && totalPages > 1) {
-    snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, totalPages);
-  }
+  char counter[16];
+  formatCounter(counter, sizeof(counter));
   if (backdrop.draw) backdrop.draw(backdrop.ctx);
   const char* headword = showingEntry() ? entries[currentEntry].headword.c_str() : "";
-  const std::string label = footerLabel();
+  const std::string& label = showingEntry() ? entries[currentEntry].dictName : emptyLabel;
   const char* kind = showingEntry() && entries[currentEntry].kind != StrId::STR_NONE_OPT
                          ? I18N.get(entries[currentEntry].kind)
                          : nullptr;
