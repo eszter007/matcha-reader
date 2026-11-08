@@ -124,29 +124,6 @@ int dictionaryRowOrder(const SettingInfo& setting) {
 constexpr size_t EXTRA_ROWS_PER_SECTION = 8;
 }  // namespace
 
-void SettingsActivity::rebuildLibraryIndex() {
-  // Prevent SD-backed fonts from opening a second reader while EPUB metadata is scanned.
-  // Keep the popup static because an e-ink refresh per folder would dominate the rebuild.
-  RenderLock lock(*this);
-  GUI.drawPopup(renderer, tr(STR_LIBRARY_REBUILDING));
-
-  library::BuildStats stats;
-  const bool ok = library::buildLibraryIndex("/", stats, SETTINGS.libraryUseMetadata != 0);
-  if (ok) {
-    LOG_INF("LIB", "rebuild: %u books (%u new, %u renamed, %u removed, %u enriched) in %ums",
-            static_cast<unsigned>(stats.books), static_cast<unsigned>(stats.added),
-            static_cast<unsigned>(stats.renamed), static_cast<unsigned>(stats.removed),
-            static_cast<unsigned>(stats.enriched), static_cast<unsigned>(stats.walkMs));
-    if (stats.dedupDegraded) LOG_ERR("LIB", "rebuild completed without duplicate detection");
-  } else {
-    LOG_ERR("LIB", "index rebuild failed");
-  }
-
-  GUI.drawPopup(renderer, ok ? tr(STR_LIBRARY_REBUILD_DONE) : tr(STR_LIBRARY_REBUILD_FAILED));
-  delay(1200);
-  requestUpdate(true);
-}
-
 void SettingsActivity::rebuildSettings() {
   // Pick up any fonts uploaded/deleted over the web server since the last
   // reader activity ran — otherwise the font-family picker shows stale list.
@@ -246,10 +223,7 @@ SettingsActivity::SettingsActivity(GfxRenderer& renderer, MappedInputManager& ma
 void SettingsActivity::onEnter() {
   UiListActivity::onEnter();
 
-  preserveQuickResumeTimeoutOn =
-      SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
-  quickResumeTimeoutAutoEnabled = false;
-  syncQuickResumeTimeoutForSleepScreen(/*sleepScreenChanged=*/true, /*quickResumeTimeoutChanged=*/false);
+  editor.beginQuickResumeSync();
 
   rebuildSettings();
 }
@@ -301,6 +275,14 @@ bool SettingsActivity::handleCustomInput() {
   return optionPopup.handleInput(mappedInput, [this] { requestUpdate(); });
 }
 
+void SettingsActivity::saveSettings() { SETTINGS.saveToFile(); }
+
+void SettingsActivity::commitSettingChange(uint8_t CrossPointSettings::* valuePtr) {
+  SETTINGS.saveToFile();
+  rebuildSettings();
+  applyUiSettingChange(valuePtr);
+}
+
 void SettingsActivity::toggleSelectedSetting() {
   mappedInput.resetHomeButtonInput();
   const int selectedSetting = nav.selected;
@@ -309,287 +291,58 @@ void SettingsActivity::toggleSelectedSetting() {
   }
 
   const auto& setting = settings[selectedSetting];
-  const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen;
-  const bool quickResumeTimeoutChanged = setting.valuePtr == &CrossPointSettings::quickResumeSleepScreen;
-
-  if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
-    openSleepTimeoutPicker();
+  if (setting.type != SettingType::ACTION) {
+    if (editor.editValue(setting) == SettingRowEditor::EditResult::Changed) {
+      // Rows can appear/disappear with a change (e.g. the footnote-back toggle).
+      nav.selected = std::min(selectedSetting, static_cast<int>(settings.size()) - 1);
+    }
     return;
   }
 
-  if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
-    // Toggle the boolean value using the member pointer
-    const bool currentValue = SETTINGS.*(setting.valuePtr);
-    SETTINGS.*(setting.valuePtr) = !currentValue;
-  } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
-    const auto valuePtr = setting.valuePtr;
-    if (editEnumSetting(optionPopup, setting, [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged] {
-          syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-          SETTINGS.saveToFile();
-          rebuildSettings();
-          applyUiSettingChange(valuePtr);
-        })) {
-      requestUpdate();
+  switch (setting.action) {
+    case SettingAction::ShortcutsSettings:
+    case SettingAction::DictionarySettings: {
+      const StrId page = setting.action == SettingAction::ShortcutsSettings ? StrId::STR_CAT_SHORTCUTS
+                                                                            : StrId::STR_DICTIONARY_SETTINGS;
+      auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, section, page);
+      if (!activity) {
+        LOG_ERR("SET", "OOM: settings sub-screen");
+        return;
+      }
+      startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
       return;
     }
-  } else if (setting.type == SettingType::ENUM && setting.valueGetter && setting.valueSetter) {
-    const uint8_t totalValues = setting.enumStringValues.empty()
-                                    ? static_cast<uint8_t>(setting.enumLabels().size())
-                                    : static_cast<uint8_t>(setting.enumStringValues.size());
-    const uint8_t cur = setting.valueGetter();
-    if (totalValues > 2) {
-      const auto valueSetter = setting.valueSetter;
-      auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
-        valueSetter(idx);
-        syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-        SETTINGS.saveToFile();
-        rebuildSettings();
-      };
-      if (!setting.enumStringValues.empty()) {
-        optionPopup.show(setting.nameId, setting.enumStringValues, cur, std::move(onSelect));
-      } else {
-        const auto enumLabels = setting.enumLabels();
-        optionPopup.show(setting.nameId, enumLabels.data(), static_cast<int>(enumLabels.size()), cur,
-                         std::move(onSelect));
+    case SettingAction::SyncStats:
+      startActivityForResult(
+          std::make_unique<StatsSyncActivity>(renderer, mappedInput, StatsSyncActivity::Origin::Settings),
+          [](const ActivityResult&) { SETTINGS.saveToFile(); });
+      return;
+    case SettingAction::Bluetooth: {
+      auto activity = makeUniqueNoThrow<BleSettingsActivity>(renderer, mappedInput);
+      if (!activity) {
+        LOG_ERR("SETTINGS", "OOM: BleSettingsActivity");
+        return;
       }
-      requestUpdate();
+      startActivityForResult(std::move(activity), [](const ActivityResult&) { SETTINGS.saveToFile(); });
       return;
     }
-    setting.valueSetter((cur + 1) % totalValues);
-  } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
-    const int8_t currentValue = SETTINGS.*(setting.valuePtr);
-    if (currentValue + setting.valueRange.step > setting.valueRange.max) {
-      SETTINGS.*(setting.valuePtr) = setting.valueRange.min;
-    } else {
-      SETTINGS.*(setting.valuePtr) = currentValue + setting.valueRange.step;
-    }
-  } else if (setting.type == SettingType::ACTION) {
-    auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
-
-    switch (setting.action) {
-      case SettingAction::ShortcutsSettings:
-      case SettingAction::DictionarySettings: {
-        const StrId page = setting.action == SettingAction::ShortcutsSettings ? StrId::STR_CAT_SHORTCUTS
-                                                                              : StrId::STR_DICTIONARY_SETTINGS;
-        auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, section, page);
-        if (!activity) {
-          LOG_ERR("SET", "OOM: settings sub-screen");
-          return;
-        }
-        startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
-        return;
-      }
-      case SettingAction::HomeButton: {
-        // Activities must outlive this call and are owned by the activity stack.
-        auto activity = makeUniqueNoThrow<HomeButtonSettingsActivity>(renderer, mappedInput);
-        if (!activity) {
-          LOG_ERR("SET", "OOM: Home button settings");
-          return;
-        }
-        startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
-        return;
-      }
-      case SettingAction::RemapFrontButtons:
-        startActivityForResult(std::make_unique<ButtonRemapActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::CustomiseStatusBar:
-        startActivityForResult(std::make_unique<StatusBarSettingsActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::ClockSettings:
-        if (auto activity = makeUniqueNoThrow<ClockSettingsActivity>(renderer, mappedInput)) {
-          startActivityForResult(std::move(activity), resultHandler);
-        } else {
-          LOG_ERR("SETTINGS", "OOM: ClockSettingsActivity");
-        }
-        break;
-      case SettingAction::KOReaderSync:
-        startActivityForResult(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::SyncStats:
-        startActivityForResult(
-            std::make_unique<StatsSyncActivity>(renderer, mappedInput, StatsSyncActivity::Origin::Settings),
-            resultHandler);
-        break;
-      case SettingAction::OPDSBrowser:
-        startActivityForResult(std::make_unique<OpdsServerListActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::Network: {
-        auto activity = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput, false);
-        if (!activity) {
-          LOG_ERR("SETTINGS", "OOM: WifiSelectionActivity");
-          return;
-        }
-        startActivityForResult(std::move(activity), [](const ActivityResult&) {
-          SETTINGS.saveToFile();
-          // Every other WiFi consumer hands the radio to a session it owns;
-          // these rows only save credentials, so nothing here would ever
-          // release the driver's heap. The scan alone brings it up, so tear
-          // down whether or not the user joined a network.
-          if (WiFi.getMode() == WIFI_MODE_NULL) return;
-          WiFi.disconnect(false);
-          delay(30);
-          // Unlike the onExit() teardowns, this runs from the loop task with
-          // no lock held; the restart popup paints straight to the panel.
-          RenderLock lock;
-          silentRestartToSettings();
-        });
-        break;
-      }
-      case SettingAction::Bluetooth: {
-        auto activity = makeUniqueNoThrow<BleSettingsActivity>(renderer, mappedInput);
-        if (!activity) {
-          LOG_ERR("SETTINGS", "OOM: BleSettingsActivity");
-          return;
-        }
-        startActivityForResult(std::move(activity), resultHandler);
-        break;
-      }
-      case SettingAction::RebuildLibraryIndex:
-        rebuildLibraryIndex();
-        return;
-      case SettingAction::ClearCache:
-        startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::CheckForUpdates:
-        startActivityForResult(std::make_unique<OtaUpdateActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::SdFirmwareUpdate:
-        startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::DownloadFonts:
-        startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput),
-                               [this](const ActivityResult&) {
-                                 SETTINGS.saveToFile();
-                                 rebuildSettings();
-                               });
-        break;
-      case SettingAction::TextSettings:
-        startActivityForResult(std::make_unique<TextProfileMenuActivity>(renderer, mappedInput),
-                               [this](const ActivityResult&) { rebuildSettings(); });
-        break;
-      case SettingAction::Language:
-        // Row labels are translated once in rebuildRowItems() and don't
-        // re-run on Pop (see ActivityManager::loop()), so a language switch
-        // needs an explicit rebuild here rather than the generic resultHandler.
-        startActivityForResult(std::make_unique<LanguageSelectActivity>(renderer, mappedInput),
-                               [this](const ActivityResult&) {
-                                 SETTINGS.saveToFile();
-                                 rebuildSettings();
-                               });
-        break;
-      case SettingAction::Plugins:
-        // A switch row: flips in place.
-        SETTINGS.pluginsEnabled = SETTINGS.pluginsEnabled ? 0 : 1;
-        // Turning plugins on brings back a dismissed Plugin Hub install row.
-        if (SETTINGS.pluginsEnabled) SETTINGS.pluginHubPromptHidden = 0;
-        SETTINGS.saveToFile();
-        // Applies to event delivery now, not after a reboot.
-        pluginevents::refreshSubscriptions();
-        return;
-      case SettingAction::KeyboardLayouts:
-        if (auto activity = makeUniqueNoThrow<KeyboardLayoutsActivity>(renderer, mappedInput)) {
-          startActivityForResult(std::move(activity), nullptr);
-        } else {
-          LOG_ERR("SETTINGS", "OOM: KeyboardLayoutsActivity");
-        }
-        break;
-      case SettingAction::About:
-        if (auto activity = makeUniqueNoThrow<AboutActivity>(renderer, mappedInput)) {
-          startActivityForResult(std::move(activity), nullptr);
-        } else {
-          LOG_ERR("SETTINGS", "OOM: AboutActivity");
-        }
-        break;
-      case SettingAction::None:
-        // Do nothing
-        break;
-    }
-    return;  // Results will be handled in the result handler, so we can return early here
-  } else {
-    return;
+    case SettingAction::TextSettings:
+      startActivityForResult(std::make_unique<TextProfileMenuActivity>(renderer, mappedInput),
+                             [this](const ActivityResult&) { rebuildSettings(); });
+      return;
+    case SettingAction::Plugins:
+      // A switch row: flips in place.
+      SETTINGS.pluginsEnabled = SETTINGS.pluginsEnabled ? 0 : 1;
+      // Turning plugins on brings back a dismissed Plugin Hub install row.
+      if (SETTINGS.pluginsEnabled) SETTINGS.pluginHubPromptHidden = 0;
+      SETTINGS.saveToFile();
+      // Applies to event delivery now, not after a reboot.
+      pluginevents::refreshSubscriptions();
+      return;
+    default:
+      editor.launchSharedAction(setting.action);
+      return;
   }
-
-  syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-  SETTINGS.saveToFile();
-  const auto valuePtr = setting.valuePtr;  // rebuildSettings() replaces `setting`
-  rebuildSettings();
-  applyUiSettingChange(valuePtr);
-  // Rows can appear/disappear with a change (e.g. the footnote-back toggle).
-  nav.selected = std::min(selectedSetting, static_cast<int>(settings.size()) - 1);
-}
-
-void SettingsActivity::syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged) {
-  if (quickResumeTimeoutChanged) {
-    preserveQuickResumeTimeoutOn =
-        SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
-    quickResumeTimeoutAutoEnabled = false;
-  }
-
-  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME) {
-    if (SETTINGS.quickResumeSleepScreen != CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT) {
-      SETTINGS.quickResumeSleepScreen = CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
-      quickResumeTimeoutAutoEnabled = !preserveQuickResumeTimeoutOn;
-    } else if (sleepScreenChanged && !preserveQuickResumeTimeoutOn) {
-      quickResumeTimeoutAutoEnabled = true;
-    }
-    return;
-  }
-
-  if (sleepScreenChanged && quickResumeTimeoutAutoEnabled && !preserveQuickResumeTimeoutOn) {
-    SETTINGS.quickResumeSleepScreen = CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_NEVER;
-    quickResumeTimeoutAutoEnabled = false;
-  }
-}
-
-void SettingsActivity::openSleepTimeoutPicker() {
-  startActivityForResult(
-      std::make_unique<IntervalSelectionActivity>(
-          renderer, mappedInput, "SleepTimeoutInterval", StrId::STR_TIME_TO_SLEEP, SETTINGS.sleepTimeoutMinutes,
-          CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES, CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1, 5,
-          StrId::STR_SLEEP_TIMER_VALUE_FORMAT, false, StrId::STR_SLEEP_NEVER),
-      [this](const ActivityResult& result) {
-        if (!result.isCancelled) {
-          SETTINGS.sleepTimeoutMinutes = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
-          SETTINGS.saveToFile();
-        }
-        requestUpdate();
-      });
-}
-
-std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
-  if (setting.action == SettingAction::HomeButton) return tr(STR_CONFIGURE);
-  if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
-    // Guard like the valueGetter branch below: a corrupt/migrated settings
-    // byte must not index past the enum table.
-    const uint8_t value = SETTINGS.*(setting.valuePtr);
-    const auto enumLabels = setting.enumLabels();
-    if (value >= enumLabels.size()) return "";
-    return I18N.get(enumLabels[value]);
-  }
-  if (setting.type == SettingType::ENUM && setting.valueGetter) {
-    const uint8_t value = setting.valueGetter();
-    if (!setting.enumStringValues.empty() && value < setting.enumStringValues.size()) {
-      return setting.enumStringValues[value];
-    }
-    const auto enumLabels = setting.enumLabels();
-    if (value < enumLabels.size()) {
-      return I18N.get(enumLabels[value]);
-    }
-    return "";
-  }
-  if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
-    if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
-      if (SETTINGS.sleepTimeoutMinutes >= CrossPointSettings::SLEEP_TIMEOUT_NEVER_MINUTES) {
-        return tr(STR_SLEEP_NEVER);
-      }
-      char valueBuffer[32];
-      snprintf(valueBuffer, sizeof(valueBuffer), tr(STR_SLEEP_TIMER_VALUE_FORMAT),
-               static_cast<unsigned int>(SETTINGS.*(setting.valuePtr)));
-      return valueBuffer;
-    }
-    return std::to_string(SETTINGS.*(setting.valuePtr));
-  }
-  return "";
 }
 
 void SettingsActivity::buildScreen(UiScreen& screen) {
@@ -616,7 +369,7 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
       rowValues_[i].clear();
       GUI.setCheckboxRow(rowItems_[i], checked);
     } else {
-      rowValues_[i] = settingValueText(setting);
+      rowValues_[i] = SettingRowEditor::valueText(setting);
       rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
     }
   }

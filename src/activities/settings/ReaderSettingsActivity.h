@@ -10,11 +10,12 @@
 
 #include "CrossPointSettings.h"
 #include "SettingInfo.h"
+#include "SettingRowEditor.h"
 #include "activities/UiTabListActivity.h"
 #include "components/OptionPopup.h"
 #include "util/CjkScript.h"
 
-class ReaderSettingsActivity final : public UiTabListActivity {
+class ReaderSettingsActivity final : public UiTabListActivity, private SettingRowEditor::Host {
   int initialCategory = 0;
   bool finishOnBack = false;
   // Script of the book that pushed this screen (None from Home or a Latin book). CJK books use
@@ -62,12 +63,11 @@ class ReaderSettingsActivity final : public UiTabListActivity {
   std::vector<SettingInfo> submenuSettings;
   const std::vector<SettingInfo>* currentSettings = nullptr;
 
-  bool preserveQuickResumeTimeoutOn = false;
-  bool quickResumeTimeoutAutoEnabled = false;
   // Home settings remain global. Reader-launched settings hide controls that only apply to manga.
   bool hideMangaOnlySettings = false;
 
   OptionPopup optionPopup;
+  SettingRowEditor editor{*this, renderer, mappedInput, *this, optionPopup};
 
   // Row structure (label/actionValue) for *currentSettings, rebuilt only when
   // the active category or a category's setting list changes
@@ -100,7 +100,6 @@ class ReaderSettingsActivity final : public UiTabListActivity {
   bool handleButtons() override;
   bool handleCustomInput() override;
 
-  static std::string settingValueText(const SettingInfo& setting);
   // True when the row is an on/off setting, so it draws a switch instead of a value string.
   // Covers both TOGGLE forms and the two-value {OFF, ON} enums, which already flip in place
   // rather than opening the option popup.
@@ -117,11 +116,9 @@ class ReaderSettingsActivity final : public UiTabListActivity {
   void applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr);
 
   void toggleCurrentSetting();
-  void openSleepTimeoutPicker();
-  void rebuildLibraryIndex();
   void rebuildSettingsLists();
-  void saveSettings();
-  void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
+  void saveSettings() override;
+  void commitSettingChange(uint8_t CrossPointSettings::* valuePtr) override;
 
   void drawChrome() override;
   void drawFooter() override;
