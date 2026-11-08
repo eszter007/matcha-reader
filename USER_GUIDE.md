@@ -1639,7 +1639,7 @@ cover and progress. Both forms keep working side by side.
   by double-clicking it in Finder or with **Extract All** in Windows. You get the book's files back in a folder,
   plus one extra file, `matcha.idx`, which a folder book does not need.
 
-Reaching the last page marks the manga as finished in your reading insights, the same as an EPUB.
+Turning past the last page opens the end-of-book screen and marks the manga as finished, the same as an EPUB.
 
 ### 6.7 Dictionary Files and Language Selection
 

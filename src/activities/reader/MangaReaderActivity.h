@@ -9,9 +9,8 @@
 #include <string>
 #include <vector>
 
-#include "../../BookmarkEntry.h"
 #include "EpubReaderMenuActivity.h"
-#include "ReaderActivity.h"
+#include "PagedReaderActivity.h"
 #include "util/ButtonNavigator.h"
 
 class WordSelectionScan;
@@ -20,13 +19,13 @@ namespace PixelCacheIO {
 class Reader;
 }
 
-class MangaReaderActivity final : public ReaderActivity {
+class MangaReaderActivity final : public PagedReaderActivity {
  public:
   explicit MangaReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath)
-      : ReaderActivity("MangaReader", renderer, mappedInput, std::move(bookPath), /*allowFastInitialRefresh=*/false) {}
+      : PagedReaderActivity("MangaReader", renderer, mappedInput, std::move(bookPath),
+                            /*allowFastInitialRefresh=*/false) {}
 
   void render(RenderLock&&) override;
-  ScreenshotInfo getScreenshotInfo() const override;
 
  protected:
   bool loadBook() override;
@@ -57,29 +56,14 @@ class MangaReaderActivity final : public ReaderActivity {
   std::string pendingTranslationSource;
   std::string pendingTranslation;
 
-  uint32_t currentPage = 0;
   int currentPanel = -1;  // -1 = full page view, 0+ = zoomed panel
 
   std::vector<manga::Panel> panels;
   bool panelsLoaded = false;
 
-  bool pendingScreenshot = false;
-  bool ignoreNextConfirmRelease = false;
-  void jumpToPercent(int percent) override;
-  // Writes the position an Insights sync fetched from another device as this book's saved page and drops
-  // it (syncedPosition). False when there is none.
-  bool writeSyncedPosition() override;
-  int syncedPositionPercent() override;
-
   bool automaticPageTurnActive = false;
   unsigned long lastPageTurnTime = 0;
   unsigned long pageTurnDuration = 0;
-
-  bool currentPageBookmarked = false;
-  bool showBookmarkMessage = false;
-  bool bookmarkRemoved = false;  // true when last toggle removed (controls popup text)
-  unsigned long bookmarkMessageTime = 0UL;
-  std::vector<BookmarkEntry> cachedBookmarks;
 
   ButtonNavigator buttonNavigator;
 
@@ -400,21 +384,23 @@ class MangaReaderActivity final : public ReaderActivity {
   void nextPage(bool keepPanelMode = false);
   void prevPage(bool keepPanelMode = false);
   int findPanelWithCrop(int start, int step) const;
-  bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;
   bool renderMangaEndOfBook();
 
-  void saveProgress() const;
-  void loadProgress();
-
-  void loadCachedBookmarks();
-  void updateBookmarkFlag();
-  void addBookmark();
+  void saveProgress() const override;
+  void loadProgress() override;
+  uint32_t pageCount() const override { return book ? book->getPageCount() : 0; }
+  // Bookmarks, the synced position and the saved page are keyed by the book folder.
+  std::string positionKey() const override { return book ? book->getFolder() : bookPath; }
+  void goToPage(uint32_t page) override;
+  std::string bookmarkSummary() const override;
+  std::vector<manga::TocEntry> bookmarkToc() const override {
+    return book ? book->getToc() : std::vector<manga::TocEntry>{};
+  }
+  void fillSyncBook(PagedSyncBook& paged) const override;
 
   void launchWordLookupCurrentView();
   void launchMenu();
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
-  bool launchSync(bool withClockAndInsights);
-  bool startShortcutSync() override;
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
 };

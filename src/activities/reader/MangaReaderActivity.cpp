@@ -24,19 +24,16 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
-#include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderTranslationActivity.h"
 #include "HapticFeedback.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
-#include "MangaBookmarksActivity.h"
 #include "MangaChapterSelectionActivity.h"
 #include "MangaWordLookupActivity.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "QrDisplayActivity.h"
 #include "ReaderUtils.h"
-#include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "WordSelectionScan.h"
@@ -44,13 +41,10 @@
 #include "components/SyncedPositionPrompt.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/BookProgress.h"
-#include "util/BookmarkFile.h"
 #include "util/BookmarkUtil.h"
 #include "util/CjkScript.h"
 #include "util/RemoteProgress.h"
 #include "util/ScreenshotUtil.h"
-#include "util/SyncedPosition.h"
 
 namespace {
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
@@ -146,7 +140,6 @@ void MangaReaderActivity::onReaderEnter() {
   if (KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART) writeSyncedPosition();
   loadProgress();
   loadCachedBookmarks();
-  updateBookmarkFlag();
 
   // Background prefetch worker (see the header doc block). Same priority as the loop and render
   // tasks so it timeslices instead of starving either; stack mirrors the render task, which runs
@@ -183,18 +176,6 @@ void MangaReaderActivity::onReaderExit() {
       vTaskDelay(1);
     }
     prefetchTaskHandle = nullptr;
-  }
-
-  // On the last page or the end-screen sentinel, regardless of how long this
-  // particular session lasted.
-  // Previously this was nested inside `minutes > 0` AND compared against
-  // pageCount instead of pageCount-1, so it could never fire -- manga never
-  // got marked finished even at 100% progress, unlike Epub/Txt readers.
-  const bool atLastPage = book && book->getPageCount() > 0 && currentPage >= book->getPageCount() - 1;
-  if (atLastPage) {
-    ReadingStatsStore::Change update;
-    update.finishedPath = book->getFolder().c_str();
-    READING_STATS_STORE.record(update);
   }
 
   dropLookupPrescan();
@@ -415,24 +396,14 @@ void MangaReaderActivity::prevPage(const bool keepPanelMode) {
   }
 }
 
-bool MangaReaderActivity::isAtEndOfBook() const { return book && currentPage >= book->getPageCount(); }
-
-void MangaReaderActivity::jumpToPercent(const int percent) {
-  if (!book || book->getPageCount() == 0) return;
-  currentPage =
-      std::min<uint32_t>(static_cast<uint32_t>(percent) * book->getPageCount() / 100, book->getPageCount() - 1);
-  currentPanel = -1;
-  viewMode = ViewMode::FullPage;
-  loadCurrentPagePanels();
-  requestUpdate();
-}
-
-void MangaReaderActivity::onReturnFromEndOfBook() {
-  currentPage = book && book->getPageCount() > 0 ? book->getPageCount() - 1 : 0;
+void MangaReaderActivity::goToPage(const uint32_t page) {
+  currentPage = page;
   currentPanel = -1;
   viewMode = ViewMode::FullPage;
   loadCurrentPagePanels();
 }
+
+void MangaReaderActivity::onReturnFromEndOfBook() { goToPage(pageCount() > 0 ? pageCount() - 1 : 0); }
 
 bool MangaReaderActivity::renderMangaEndOfBook() {
   if (!isAtEndOfBook()) return false;
@@ -525,10 +496,7 @@ void MangaReaderActivity::readerLoop() {
 
   if (wordSelect_ && handleWordSelectInput()) return;
 
-  if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
-    showBookmarkMessage = false;
-    requestUpdate();
-  }
+  if (expireBookmarkMessage()) requestUpdate();
 
   if (automaticPageTurnActive) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
@@ -1797,75 +1765,16 @@ void MangaReaderActivity::loadProgress() {
   }
 }
 
-void MangaReaderActivity::loadCachedBookmarks() {
-  cachedBookmarks.clear();
-  if (!book) {
-    currentPageBookmarked = false;
-    return;
-  }
-
-  BookmarkFile::load(book->getFolder(), cachedBookmarks);
-}
-
-// Manga has a flat page index (no chapters/xpath like Epub), so bookmarks
-// reuse BookmarkEntry with computedSpineIndex fixed at 0 and
-// computedChapterPageCount/computedChapterProgress holding the book's total
-// page count / bookmarked page directly.
-void MangaReaderActivity::updateBookmarkFlag() {
-  if (!book || cachedBookmarks.empty()) {
-    currentPageBookmarked = false;
-    return;
-  }
-  const uint32_t pageCount = book->getPageCount();
-  currentPageBookmarked = std::any_of(cachedBookmarks.begin(), cachedBookmarks.end(), [&](const BookmarkEntry& b) {
-    return b.computedSpineIndex == 0 && b.computedChapterPageCount == pageCount &&
-           b.computedChapterProgress == currentPage;
-  });
-}
-
-void MangaReaderActivity::addBookmark() {
-  if (!book) return;
-  const uint32_t pageCount = book->getPageCount();
-  if (pageCount == 0) return;
-
-  const size_t countBefore = cachedBookmarks.size();
-  cachedBookmarks.erase(std::remove_if(cachedBookmarks.begin(), cachedBookmarks.end(),
-                                       [&](const BookmarkEntry& b) {
-                                         return b.computedSpineIndex == 0 && b.computedChapterPageCount == pageCount &&
-                                                b.computedChapterProgress == currentPage;
-                                       }),
-                        cachedBookmarks.end());
-  if (cachedBookmarks.size() != countBefore) {
-    bookmarkRemoved = true;
-    currentPageBookmarked = false;
-  } else {
-    std::string pageText;
-    for (const auto& panel : panels) {
-      for (const auto& tb : panel.textBlocks) {
-        if (!pageText.empty()) pageText += '\n';
-        pageText += tb.text;
-      }
+// The page's OCR text, or "Page N" when it has none.
+std::string MangaReaderActivity::bookmarkSummary() const {
+  std::string pageText;
+  for (const auto& panel : panels) {
+    for (const auto& tb : panel.textBlocks) {
+      if (!pageText.empty()) pageText += '\n';
+      pageText += tb.text;
     }
-    BookmarkEntry entry;
-    entry.percentage = static_cast<float>(currentPage) / static_cast<float>(pageCount);
-    if (pageText.empty()) {
-      char buf[32];
-      snprintf(buf, sizeof(buf), tr(STR_PAGE_NUMBER_FORMAT), currentPage + 1);
-      entry.summary = buf;
-    } else {
-      entry.summary = BookmarkUtil::sanitizeBookmarkSummary(pageText);
-    }
-    entry.computedSpineIndex = 0;
-    entry.computedChapterPageCount = static_cast<uint16_t>(std::min<uint32_t>(pageCount, 0xFFFF));
-    entry.computedChapterProgress = static_cast<uint16_t>(std::min<uint32_t>(currentPage, 0xFFFF));
-    cachedBookmarks.insert(cachedBookmarks.begin(), entry);
-    bookmarkRemoved = false;
-    currentPageBookmarked = true;
   }
-
-  if (!BookmarkFile::save(book->getFolder(), cachedBookmarks)) {
-    LOG_ERR("MNG", "Failed to save bookmarks for: %s", book->getFolder().c_str());
-  }
+  return pageText.empty() ? PagedReaderActivity::bookmarkSummary() : BookmarkUtil::sanitizeBookmarkSummary(pageText);
 }
 
 void MangaReaderActivity::launchMenu() {
@@ -1925,29 +1834,7 @@ void MangaReaderActivity::launchMenu() {
 }
 
 void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
-  // Reusable lambda for jumping to a page by percent (shared by SELECT_CHAPTER and GO_TO_PERCENT)
-  auto launchPercentJump = [this]() {
-    if (!book || book->getPageCount() == 0) return;
-    const int totalPages = static_cast<int>(book->getPageCount());
-    const int initialPercent = totalPages > 0 ? static_cast<int>((currentPage + 1) * 100 / totalPages) : 0;
-    startActivityForResult(std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent,
-                                                                                /*scrubOnEnter=*/true),
-                           [this](const ActivityResult& result) {
-                             if (!result.isCancelled && book) {
-                               const int percent = std::get<PercentResult>(result.data).percent;
-                               const uint32_t totalPages = book->getPageCount();
-                               uint32_t targetPage = static_cast<uint32_t>(static_cast<float>(percent) / 100.0f *
-                                                                           static_cast<float>(totalPages));
-                               if (targetPage >= totalPages && totalPages > 0) targetPage = totalPages - 1;
-                               currentPage = targetPage;
-                               currentPanel = -1;
-                               viewMode = ViewMode::FullPage;
-                               loadCurrentPagePanels();
-                               requestUpdate();
-                             }
-                           });
-  };
-
+  if (handlePagedMenuAction(action)) return;
   switch (action) {
     case EpubReaderMenuActivity::MenuAction::READER_SETTINGS: {
       // Manga keeps Rotate Panels and the other applicable Reader settings, while hiding
@@ -1984,12 +1871,7 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
             [this](const ActivityResult& result) {
               if (!result.isCancelled && book) {
                 const uint32_t targetPage = std::get<PageResult>(result.data).page;
-                if (targetPage < book->getPageCount()) {
-                  currentPage = targetPage;
-                  currentPanel = -1;
-                  viewMode = ViewMode::FullPage;
-                  loadCurrentPagePanels();
-                }
+                if (targetPage < book->getPageCount()) goToPage(targetPage);
               }
               requestUpdate();
             });
@@ -2039,30 +1921,6 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
       }
       break;
     }
-    case EpubReaderMenuActivity::MenuAction::BOOKMARKS: {
-      if (!book) break;
-      startActivityForResult(
-          std::make_unique<MangaBookmarksActivity>(renderer, mappedInput, book->getFolder(), book->getToc()),
-          [this](const ActivityResult& result) {
-            if (!result.isCancelled && book) {
-              const uint32_t targetPage = std::get<PageResult>(result.data).page;
-              if (targetPage < book->getPageCount()) {
-                currentPage = targetPage;
-                currentPanel = -1;
-                viewMode = ViewMode::FullPage;
-                loadCurrentPagePanels();
-              }
-            }
-            requestUpdate();
-          });
-      return;
-    }
-    case EpubReaderMenuActivity::MenuAction::TOGGLE_BOOKMARK: {
-      addBookmark();
-      showBookmarkMessage = true;
-      bookmarkMessageTime = millis();
-      break;
-    }
     case EpubReaderMenuActivity::MenuAction::ROTATE_SCREEN:
       // Orientation already applied in the callback above
       break;
@@ -2077,14 +1935,6 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
       }
       saveProgress();
       break;
-    case EpubReaderMenuActivity::MenuAction::GO_TO_PERCENT:
-      launchPercentJump();
-      break;
-    case EpubReaderMenuActivity::MenuAction::SCREENSHOT: {
-      pendingScreenshot = true;
-      requestUpdate();
-      break;
-    }
     case EpubReaderMenuActivity::MenuAction::GO_HOME: {
       onGoHome();
       return;
@@ -2124,29 +1974,11 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
       requestUpdate();
       break;
     }
-    case EpubReaderMenuActivity::MenuAction::SYNC:
-      if (launchSync(false)) return;
-      break;
     default:
       // AUTO_PAGE_TURN handled above in launchMenu(); FOOTNOTES,
       // TOGGLE_VERTICAL, TOGGLE_FURIGANA are not applicable for manga.
       break;
   }
-}
-
-ScreenshotInfo MangaReaderActivity::getScreenshotInfo() const {
-  ScreenshotInfo info;
-  info.readerType = ScreenshotInfo::ReaderType::Xtc;  // reuse XTC type for now
-  if (book) {
-    snprintf(info.title, sizeof(info.title), "%s", book->getTitle().c_str());
-    info.totalPages = static_cast<int>(book->getPageCount());
-    info.currentPage = static_cast<int>(currentPage) + 1;
-    info.progressPercent =
-        book->getPageCount() > 0 ? static_cast<int>((currentPage + 1) * 100 / book->getPageCount()) : 0;
-    // The percent already counts the visible page as read.
-    info.endProgressPercent = info.progressPercent;
-  }
-  return info;
 }
 
 bool MangaReaderActivity::enterWordSelect() {
@@ -2384,52 +2216,8 @@ bool MangaReaderActivity::updateOutlineInPlace() {
   return true;
 }
 
-bool MangaReaderActivity::writeSyncedPosition() {
-  syncedPosition::Position position;
-  const uint32_t count = book ? book->getPageCount() : 0;
-  if (syncedPositionPercent() < 0 || !syncedPosition::load(book->getFolder(), position)) return false;
-  if (!writePageProgress(book->getFolder(), syncedPosition::pageOf(position, count))) return false;
-  syncedPosition::dismiss(book->getFolder());
-  // The page in memory too: leaving the reader saves it over the record otherwise.
-  RenderLock lock(*this);
-  loadProgress();
-  return true;
-}
-
-int MangaReaderActivity::syncedPositionPercent() {
-  syncedPosition::Position position;
-  const uint32_t count = book ? book->getPageCount() : 0;
-  if (count == 0 || !syncedPosition::load(book->getFolder(), position)) return -1;
-  const uint32_t targetPage = syncedPosition::pageOf(position, count);
-  // Read past it here since it was fetched: going there would be going back. Pages, not the rounded
-  // percentages, which put neighbouring pages of a long book on the same whole number.
-  uint32_t ownPage = 0;
-  if (readPageProgress(book->getFolder(), ownPage) && targetPage <= ownPage) {
-    syncedPosition::dismiss(book->getFolder());
-    return -1;
-  }
-  return static_cast<int>(targetPage * 100 / count);
-}
-
-bool MangaReaderActivity::startShortcutSync() { return KOREADER_STORE.hasCredentials() && launchSync(true); }
-
-bool MangaReaderActivity::launchSync(const bool withClockAndInsights) {
-  if (!book) return false;
-  saveProgress();
-  PagedSyncBook paged;
-  paged.page = currentPage;
-  paged.pageCount = book->getPageCount();
-  paged.title = book->getTitle();
-  paged.author = book->getAuthor();
+void MangaReaderActivity::fillSyncBook(PagedSyncBook& paged) const {
   paged.language = book->getLanguage();
   paged.series = book->getSeries();
   paged.seriesIndex = book->getSeriesIndex();
-  auto sync = makeUniqueNoThrow<KOReaderSyncActivity>(renderer, mappedInput, book->getFolder(), std::move(paged));
-  if (!sync) {
-    LOG_ERR("SYNC", "OOM: sync activity");
-    return false;
-  }
-  if (withClockAndInsights) sync->alsoSyncClockAndInsights();
-  activityManager.replaceActivity(std::move(sync));
-  return true;
 }
