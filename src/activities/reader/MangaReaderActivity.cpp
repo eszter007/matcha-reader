@@ -85,46 +85,52 @@ CjkScript mangaScript(const manga::MangaBook* book) {
 }
 }  // namespace
 
-void MangaReaderActivity::onEnter() {
-  Activity::onEnter();
+// Manga renders no book text: the reader font is released while it is open, and the companion
+// policy dropped explicitly, since releaseAllResidentFonts() frees memory without deciding what
+// should come back. A book that fails to load puts the user's font back at once.
+bool MangaReaderActivity::loadBook() {
+  // Retires renderer font registrations, so it cannot run beside the render task.
+  {
+    RenderLock lock;
+    sdFontSystem.releaseAllResidentFonts(renderer);
+    sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
+  }
+  const auto restoreFonts = [this] {
+    RenderLock lock;
+    sdFontSystem.ensureLoaded(renderer);
+  };
+  book = makeUniqueNoThrow<manga::MangaBook>(bookPath);
+  if (!book) {
+    LOG_ERR("MRA", "Failed to allocate MangaBook");
+    restoreFonts();
+    return false;
+  }
+  if (!book->load()) {
+    LOG_ERR("MRA", "Failed to load manga: %s", book->getFolder().c_str());
+    book.reset();
+    restoreFonts();
+    return false;
+  }
+  // The converted dictionary lives in a per-language folder; pick the comic's before the first
+  // DictIndex::isAvailable() decides whether Word Lookup is offered.
+  DictIndex::setLanguageFolder(
+      DictIndex::installedFolderFor(cjk::dictFolderFor(book->getLanguage(), mangaScript(book.get()))));
+  return true;
+}
 
+// Author from meta.bin; failing that, whatever recents already has for the book.
+std::string MangaReaderActivity::getBookAuthor() const {
+  if (!book) return {};
+  std::string author = book->getAuthor();
+  if (!author.empty()) return author;
+  const auto& books = RECENT_BOOKS.getBooks();
+  const auto r = std::find_if(books.begin(), books.end(), [this](const auto& b) { return b.path == bookPath; });
+  return r != books.end() ? r->author : std::string();
+}
+
+void MangaReaderActivity::onReaderEnter() {
   // Press-driven entry leaves a release pending; release/touch-driven entry does not.
   ignoreNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
-
-  if (!book) {
-    // Retires renderer font registrations, so it cannot run beside the render task.
-    // Manga renders no book text: drop the Japanese companion policy explicitly, since
-    // releaseAllResidentFonts() frees memory without deciding what should come back.
-    {
-      RenderLock lock;
-      sdFontSystem.releaseAllResidentFonts(renderer);
-      sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
-    }
-    book = makeUniqueNoThrow<manga::MangaBook>(std::move(pendingBookPath));
-    if (!book) {
-      LOG_ERR("MRA", "Failed to allocate MangaBook");
-      {
-        RenderLock lock;
-        sdFontSystem.ensureLoaded(renderer);
-      }
-      finish();
-      return;
-    }
-    if (!book->load()) {
-      LOG_ERR("MRA", "Failed to load manga: %s", book->getFolder().c_str());
-      book.reset();
-      {
-        RenderLock lock;
-        sdFontSystem.ensureLoaded(renderer);
-      }
-      finish();
-      return;
-    }
-    // The converted dictionary lives in a per-language folder; pick the comic's before the first
-    // DictIndex::isAvailable() decides whether Word Lookup is offered.
-    DictIndex::setLanguageFolder(
-        DictIndex::installedFolderFor(cjk::dictFolderFor(book->getLanguage(), mangaScript(book.get()))));
-  }
 
   // Which layout this book's panel crops use. Newer conversions put them in a subfolder so the
   // book folder holds only page images: MangaBook::scanImages() walks every entry on open, and on
@@ -157,28 +163,6 @@ void MangaReaderActivity::onEnter() {
   loadCachedBookmarks();
   updateBookmarkFlag();
 
-  APP_STATE.openEpubPath = book->getFolder();
-  APP_STATE.saveToFile();
-
-  // Use author from meta.bin; fall back to any author already in recents.
-  std::string bookAuthor = book->getAuthor();
-  if (bookAuthor.empty()) {
-    const auto& books = RECENT_BOOKS.getBooks();
-    const auto r =
-        std::find_if(books.begin(), books.end(), [this](const auto& b) { return b.path == book->getFolder(); });
-    if (r != books.end()) bookAuthor = r->author;
-  }
-  // The [HEIGHT]-templated thumb path, like Epub and Xtc record -- NOT the raw first page.
-  // Storing the raw page here overwrote the thumb path on every open, so the home screen found
-  // no cover, showed its progress popup and "generated" a thumbnail that was already on the card
-  // (device report: Loading on every return from a manga). Drawing it also meant scaling a
-  // full-size page into the card instead of blitting the cached one.
-  RECENT_BOOKS.addBook(book->getFolder(), book->getTitle(), bookAuthor, book->getThumbBmpPath());
-  BookStats::recordOpen(book->getFolder().c_str());
-  enterPercent = mangaProgressPercent(book->getFolder());
-
-  readingSessionStartMs = millis();
-
   // Background prefetch worker (see the header doc block). Same priority as the loop and render
   // tasks so it timeslices instead of starving either; stack mirrors the render task, which runs
   // these same decode paths. Creation failure (OOM) just disables prefetching -- postPrefetchJob
@@ -196,10 +180,9 @@ void MangaReaderActivity::onEnter() {
   }
 
   loadCurrentPagePanels();
-  requestUpdate();
 }
 
-void MangaReaderActivity::onExit() {
+void MangaReaderActivity::onReaderExit() {
   // Join the prefetch worker FIRST, before any teardown below: it may be mid-decode against book
   // paths and activity members. The exit flag makes the decode's cancel probe abort within one
   // MCU block/scanline (partial tmp dropped by the converter), so this spin is short -- worst
@@ -215,11 +198,6 @@ void MangaReaderActivity::onExit() {
     prefetchTaskHandle = nullptr;
   }
 
-  // Record the sub-interval tail of the session; whole minutes were already flushed
-  // periodically from loop() (see ReaderUtils::flushReadingStats).
-  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true, book ? book->getFolder().c_str() : nullptr,
-                                 book ? book->getLanguage().c_str() : nullptr);
-
   // On the last page or the end-screen sentinel, regardless of how long this
   // particular session lasted.
   // Previously this was nested inside `minutes > 0` AND compared against
@@ -234,19 +212,8 @@ void MangaReaderActivity::onExit() {
 
   dropLookupPrescan();
   saveProgress();
-  if (book) remoteProgress::readHere(book->getFolder(), enterPercent, mangaProgressPercent(book->getFolder()));
-  flushReaderSession();
-  endOfBookOptionsReady.store(false, std::memory_order_release);
-  endOfBookOptions.reset();
   panels.clear();
   book.reset();
-
-  // Reset orientation back to portrait for the rest of the UI (matches
-  // EpubReaderActivity/TxtReaderActivity) -- Home/Library never call
-  // applyOrientation themselves, so any rotation left active here (from the
-  // reading orientation setting, or a page/panel that triggered the
-  // fill-the-screen rotate) would otherwise leak into their layout.
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
   // Home/Library and the next text reader need the user's selected font again. The manga entry
   // released it only from RAM; ensureLoaded() restores the unchanged saved selection here.
@@ -255,8 +222,6 @@ void MangaReaderActivity::onExit() {
     sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
     sdFontSystem.ensureLoaded(renderer);
   }
-
-  Activity::onExit();
 }
 
 void MangaReaderActivity::loadCurrentPagePanels() {
@@ -473,14 +438,6 @@ void MangaReaderActivity::prevPage(const bool keepPanelMode) {
 
 bool MangaReaderActivity::isAtEndOfBook() const { return book && currentPage >= book->getPageCount(); }
 
-void MangaReaderActivity::clearEndOfBookOptionsIfNeeded() {
-  if (isAtEndOfBook() || !endOfBookOptionsReady.load(std::memory_order_acquire)) return;
-  RenderLock lock{RenderLock::Try{}};
-  if (!lock.held()) return;
-  endOfBookOptionsReady.store(false, std::memory_order_release);
-  endOfBookOptions.reset();
-}
-
 void MangaReaderActivity::jumpToPercent(const int percent) {
   if (!book || book->getPageCount() == 0) return;
   currentPage =
@@ -498,70 +455,11 @@ void MangaReaderActivity::onReturnFromEndOfBook() {
   loadCurrentPagePanels();
 }
 
-bool MangaReaderActivity::handleEndOfBookMenu() {
-  if (!isAtEndOfBook() || !endOfBookOptionsReady.load(std::memory_order_acquire) || !endOfBookOptions->menuActive()) {
-    return false;
-  }
-
-  std::string openPath;
-  switch (endOfBookOptions->handleMenuInput(mappedInput, &openPath)) {
-    case EndOfBookOptions::Action::OpenBook:
-      activityManager.goToReader(openPath);
-      return true;
-    case EndOfBookOptions::Action::GoHome:
-      onGoHome();
-      return true;
-    case EndOfBookOptions::Action::LastPage:
-      onReturnFromEndOfBook();
-      requestUpdate();
-      return true;
-    case EndOfBookOptions::Action::Redraw:
-      requestUpdate();
-      return true;
-    case EndOfBookOptions::Action::None:
-      return false;
-  }
-  return false;
-}
-
-bool MangaReaderActivity::handleEndOfBookPageTurn(const bool prevTriggered, const bool nextTriggered) {
-  if (!isAtEndOfBook()) return false;
-  if (endOfBookOptionsReady.load(std::memory_order_acquire) && endOfBookOptions->menuActive()) return true;
-  if (nextTriggered) {
-    onGoHome();
-  } else if (prevTriggered) {
-    onReturnFromEndOfBook();
-    requestUpdate();
-  }
-  return true;
-}
-
-bool MangaReaderActivity::renderEndOfBook() {
+bool MangaReaderActivity::renderMangaEndOfBook() {
   if (!isAtEndOfBook()) return false;
   displayedRotated_ = false;  // this screen is drawn in the base orientation, whatever preceded it
   displayedMap_.valid = false;
-  if (!endOfBookOptions) {
-    endOfBookOptions = makeUniqueNoThrow<EndOfBookOptions>(renderer);
-    if (!endOfBookOptions) LOG_ERR("MRA", "OOM: EndOfBookOptions");
-    endOfBookOptionsReady.store(endOfBookOptions != nullptr, std::memory_order_release);
-  }
-  renderer.clearScreen();
-  if (endOfBookOptions) {
-    // The stamp counts the read up to this screen, so its last minutes go in first.
-    if (!endOfBookOptions->menuActive()) {
-      ReaderUtils::flushReadingStats(readingSessionStartMs, true, book->getFolder().c_str(),
-                                     book->getLanguage().c_str(), true);
-    }
-    endOfBookOptions->loadOnce(book->getFolder(), book->getTitle(), book->getLanguage().c_str(), "");
-    endOfBookOptions->render(renderer, mappedInput);
-  } else {
-    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() * 3 / 8, tr(STR_END_OF_BOOK), true,
-                              EpdFontFamily::BOLD);
-  }
-  renderer.displayBuffer();
-  // Credits the last page's dwell and brings the session's progress to the end of the book.
-  sessionReporter_.pageRendered(progressBasisPoints());
-  return true;
+  return renderEndOfBook("MRA");
 }
 
 void MangaReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption) {
@@ -574,27 +472,11 @@ void MangaReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOptio
   automaticPageTurnActive = true;
 }
 
-void MangaReaderActivity::loop() {
-  // Crash-proof stats: flush whole minutes every few minutes so an exit path that
-  // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day. The end-of-book
-  // screen is not reading: what came before it is recorded, its own time is not.
-  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/isAtEndOfBook(),
-                                 book ? book->getFolder().c_str() : nullptr,
-                                 book ? book->getLanguage().c_str() : nullptr, /*pause=*/isAtEndOfBook());
-
+void MangaReaderActivity::readerLoop() {
   // Publish any finished prefetch-worker result (panelDims slot + done flags) under the loop
   // task's normal locking rules. Runs before everything else so a completed warm is visible to
   // this very tick's input handling, and so the single job slot frees up for the next post.
   applyPrefetchResult();
-
-  if (!syncedPositionOffered && book && !isAtEndOfBook()) {
-    syncedPositionOffered = true;
-    if (SyncedPositionPrompt::offer(*this, renderer, mappedInput, book->getFolder(), syncedPositionPercent(), [this] {
-          if (writeSyncedPosition()) activityManager.goToReader(book->getFolder());  // reopens there
-        })) {
-      return;
-    }
-  }
 
   if (translationPageReady.exchange(false, std::memory_order_acquire)) {
     translationAfterRender.store(false, std::memory_order_relaxed);
@@ -818,20 +700,11 @@ void MangaReaderActivity::loop() {
 
   const bool moved = currentPage != pageBefore || currentPanel != panelBefore || viewMode != modeBefore;
   // A panel step is reading, the same as a page turn.
-  sessionReporter_.noteTurn(nextTriggered && !prevTriggered, moved);
+  notePageTurn(nextTriggered && !prevTriggered, moved);
   if (moved && (touch.prev || touch.next)) haptic_feedback::touchAction();
 }
 
-void MangaReaderActivity::prepareForSleep() { flushReaderSession(); }
-
-// A manga book is a folder, so its document id comes from the panel index inside it: one file
-// per book, written once at conversion.
-void MangaReaderActivity::flushReaderSession() {
-  if (!book) return;
-  sessionReporter_.flush(book->getFolder(), book->getFolder() + "/panels.idx");
-}
-
-int MangaReaderActivity::progressBasisPoints() const {
+int MangaReaderActivity::getProgressBasisPoints() const {
   if (!book || book->getPageCount() == 0) return 0;
   if (currentPage >= book->getPageCount()) return 10000;
   return static_cast<int>(static_cast<uint64_t>(currentPage) * 10000 / book->getPageCount());
@@ -848,7 +721,7 @@ void MangaReaderActivity::render(RenderLock&&) {
   pageInFramebuffer_ = false;
   drawnOutline_.clear();
 
-  if (renderEndOfBook()) return;
+  if (renderMangaEndOfBook()) return;
 
   switch (viewMode) {
     case ViewMode::FullPage:
@@ -860,7 +733,7 @@ void MangaReaderActivity::render(RenderLock&&) {
   }
 
   saveProgress();
-  sessionReporter_.pageRendered(progressBasisPoints());
+  markPageRendered();
 
   if (translationAfterRender.load(std::memory_order_relaxed)) {
     translationPageReady.store(true, std::memory_order_release);
