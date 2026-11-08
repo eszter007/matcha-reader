@@ -8,6 +8,7 @@
 
 #include "CrossPointSettings.h"
 #include "SettingInfo.h"
+#include "SettingRowEditor.h"
 #include "SettingsSection.h"
 #include "activities/UiListActivity.h"
 #include "components/OptionPopup.h"
@@ -15,15 +16,13 @@
 // The rows of one SettingsSection; activating a row toggles/cycles it, opens
 // its option popup, or launches its sub-screen. With a subCategory (Shortcuts)
 // it lists only that category's rows, reached from a row in section.
-class SettingsActivity final : public UiListActivity {
+class SettingsActivity final : public UiListActivity, private SettingRowEditor::Host {
   const SettingsSection section;
   const StrId subCategory;
   std::vector<SettingInfo> settings;
 
-  bool preserveQuickResumeTimeoutOn = false;
-  bool quickResumeTimeoutAutoEnabled = false;
-
   OptionPopup optionPopup;
+  SettingRowEditor editor{*this, renderer, mappedInput, *this, optionPopup};
 
   // Row structure (label/actionValue), rebuilt only when the setting list
   // changes; rowValues_ holds the live value text, refreshed every
@@ -32,13 +31,11 @@ class SettingsActivity final : public UiListActivity {
   std::vector<freeink::ui::ListItem> rowItems_;
 
   void rebuildSettings();
-  void rebuildLibraryIndex();
   void rebuildRowItems();
   void toggleSelectedSetting();
-  void openSleepTimeoutPicker();
   void applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr);
-  void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
-  static std::string settingValueText(const SettingInfo& setting);
+  void saveSettings() override;
+  void commitSettingChange(uint8_t CrossPointSettings::* valuePtr) override;
 
   int listCount() const override { return static_cast<int>(settings.size()); }
   void buildScreen(UiScreen& screen) override;
