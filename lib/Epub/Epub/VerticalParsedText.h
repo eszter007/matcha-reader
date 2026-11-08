@@ -355,6 +355,12 @@ class VerticalParsedText {
     // blockParamsQueue_ is NOT cleared: entries are consumed by the layout loop in marker
     // order, and a carried start marker still owns its queued params.
     oom_ = false;
+    // The decode scratch serves one batch; between batches the heap belongs to the page writes.
+    std::vector<size_t>().swap(scratchOffsets_);
+    std::vector<uint32_t>().swap(scratchCps_);
+    std::vector<uint32_t>().swap(scratchCpIndex_);
+    std::vector<size_t>().swap(scratchBreaks_);
+    std::vector<uint32_t>().swap(scratchRuby_);
   }
   // Styled-block boundaries, called by the extraction sink in stream order. A styled block wraps
   // whole columns: the layout forces a column break at each boundary, applies the params to its
@@ -525,7 +531,9 @@ class VerticalParsedText {
   void appendBoxRectToPage(VerticalPage& p, uint16_t startCol, uint16_t endCol, bool openLeft, bool openRight) const;
   // Width of each column on the page being filled (0 = nothing measured: one body em), and the
   // previous page's, for a character pulled back onto it. Text larger than the body widens its column.
-  static constexpr uint16_t MAX_PAGE_COLUMNS = VerticalGlyph::MAX_GRID_CELLS + 1;
+  // Columns tracked per page: far more than a page holds (about 40 at the smallest font in
+  // landscape); any past it are taken as body width.
+  static constexpr uint16_t MAX_PAGE_COLUMNS = 64;
   mutable uint16_t pendingColW_[MAX_PAGE_COLUMNS] = {};
   uint16_t prevPageColW_[MAX_PAGE_COLUMNS] = {};
   // Whether any column on the page (the previous page) is wider than a body em. Most pages are all
@@ -599,7 +607,8 @@ class VerticalParsedText {
   struct LayoutCursor;
 
   void reserveStreamFor(size_t utf8Bytes);
-  // Per-run decode scratch for addAnnotatedParagraph(), reused across runs (see there).
+  // Per-run decode scratch for addAnnotatedParagraph(), reused across the runs of one batch and
+  // released by reset() (see there).
   std::vector<size_t> scratchOffsets_;
   std::vector<uint32_t> scratchCps_;
   std::vector<uint32_t> scratchCpIndex_;

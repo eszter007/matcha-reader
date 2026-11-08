@@ -421,6 +421,7 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
           renderer.drawCharVerticalRotatedInCell(rubyFontId, rubyX, centre - cell / 2, cell, cp,
                                                  Kinsoku::verticalShiftType(cp), black, rubyStyle);
         } else {
+          // SUP would override the scale, so its half size is folded into the scale instead.
           renderer.drawCharVerticalRotatedInCell(rubyFontId, rubyX, centre - cell / 2, cell, cp,
                                                  Kinsoku::verticalShiftType(cp), black, EpdFontFamily::REGULAR, nullptr,
                                                  nullptr, static_cast<uint16_t>(rubyScale / 2));

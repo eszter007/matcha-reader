@@ -1935,8 +1935,10 @@ CssParser::VerticalBlockStyle CssParser::verticalBlockStyleOf(const CssStyle& cs
   if (css.defined.textAlign && css.textAlign == CssTextAlign::Right) vs.alignEnd = true;
   if (css.defined.border) vs.borderEdges = CssStyle::edgeMaskOf(css.borderEdges);
   // Resolved as horizontal text resolves it, so %, em, px and keywords mean the same in both layouts.
-  vs.fontScale = cssFontSizeScale(css);
-  vs.fontScaleOfParent = cssFontSizeIsParentRelative(css);
+  if (const float scale = cssFontSizeScale(css); scale > 0) {
+    vs.fontScale32 = static_cast<uint8_t>(std::clamp<long>(std::lround(scale * 32), 1, 255));
+    vs.fontScaleOfParent = cssFontSizeIsParentRelative(css);
+  }
   return vs;
 }
 
@@ -1992,8 +1994,8 @@ void CssParser::addVerticalRule(std::vector<VerticalBlockRule>& out, std::string
     if (vs.blockAlign != 0) existing.blockAlign = vs.blockAlign;
     if (vs.borderEdges != 0) existing.borderEdges = vs.borderEdges;
     if (vs.indentEm >= 0) existing.indentEm = vs.indentEm;
-    if (vs.fontScale > 0) {
-      existing.fontScale = vs.fontScale;
+    if (vs.fontScale32 != 0) {
+      existing.fontScale32 = vs.fontScale32;
       existing.fontScaleOfParent = vs.fontScaleOfParent;
     }
     return;

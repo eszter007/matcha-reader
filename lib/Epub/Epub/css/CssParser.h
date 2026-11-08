@@ -284,21 +284,23 @@ class CssParser {
    * layout converts em -> cells). Populated from unscoped rules plus the EBPAJ "v|" scope.
    */
   struct VerticalBlockStyle {
-    float startEm = 0;         // v margin-top: every column of the block starts this many cells down
-    float beforeEm = 0;        // v margin-right: extra gap before the block's first column
-    float afterEm = 0;         // v margin-left: extra gap after the block's last column
-    float hangEm = 0;          // v padding-top + negative text-indent: hanging indent for wrapped lines
-    bool alignCenter = false;  // text-align: center -> column content vertically centered
-    bool alignEnd = false;     // text-align: right/end -> each column ends at the foot
-    uint8_t blockAlign = 0;    // VERTICAL_BLOCK_*: auto head/foot margins place the whole block
-    uint8_t borderEdges = 0;   // CssStyle::BORDER_* edge mask; vertical rendering stays solid
-    float indentEm = -1;       // text-indent: a paragraph's first column starts this far down; -1 = not set
-    // font-size as a multiple of the parent's size (em, %) or the body's (px, rem, keywords); 0 = not set.
-    float fontScale = 0;
-    bool fontScaleOfParent = false;
+    float startEm = 0;             // v margin-top: every column of the block starts this many cells down
+    float beforeEm = 0;            // v margin-right: extra gap before the block's first column
+    float afterEm = 0;             // v margin-left: extra gap after the block's last column
+    float hangEm = 0;              // v padding-top + negative text-indent: hanging indent for wrapped lines
+    float indentEm = -1;           // text-indent: a paragraph's first column starts this far down; -1 = not set
+    bool alignCenter : 1 = false;  // text-align: center -> column content vertically centered
+    bool alignEnd : 1 = false;     // text-align: right/end -> each column ends at the foot
+    // font-size relative to the parent's size (em, %) rather than the body's (px, rem, keywords).
+    bool fontScaleOfParent : 1 = false;
+    uint8_t blockAlign = 0;   // VERTICAL_BLOCK_*: auto head/foot margins place the whole block
+    uint8_t borderEdges = 0;  // CssStyle::BORDER_* edge mask; vertical rendering stays solid
+    // font-size as a multiple of that size, in 32nds; 0 = not set. A byte keeps the rule at 32 bytes.
+    uint8_t fontScale32 = 0;
+    [[nodiscard]] float fontScale() const { return fontScale32 / 32.0f; }
     [[nodiscard]] bool any() const {
       return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || alignEnd || blockAlign != 0 ||
-             borderEdges != 0 || indentEm >= 0 || fontScale > 0;
+             borderEdges != 0 || indentEm >= 0 || fontScale32 != 0;
     }
   };
 
@@ -310,6 +312,7 @@ class CssParser {
     uint32_t classHash = 0;
     VerticalBlockStyle style;
   };
+  static_assert(sizeof(VerticalBlockRule) == 32, "the vertical build holds 256 of these");
 
   // What the vertical engine takes from a style: its block indents, hanging indent, text-indent,
   // centring and borders, in em. The rules in the cache and a style="" attribute map the same way.

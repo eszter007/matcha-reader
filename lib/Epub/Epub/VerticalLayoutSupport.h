@@ -59,7 +59,7 @@ void reserveIfAffordable(std::vector<T>& vec, const size_t count) {
 // codepoint for well-formed UTF-8; malformed/truncated bytes still count as one step). One pass,
 // no allocation. Japanese sits at ~3 bytes per codepoint, where reserving by byte count instead
 // asks for ~3x the heap.
-size_t countUtf8Codepoints(const std::string& text) {
+inline size_t countUtf8Codepoints(const std::string& text) {
   size_t count = 0;
   for (size_t i = 0; i < text.size();) {
     const unsigned char c0 = static_cast<unsigned char>(text[i]);

@@ -322,6 +322,12 @@ struct TextExtractor {
   int fontScaleOpenedAt[MAX_STYLE_STACK] = {};
   int fontScaleCount = 0;
   float currentFontScale() const { return fontScaleCount > 0 ? fontScales[fontScaleCount - 1] : 1.0f; }
+  void closeFontScaleAt(int depth) {
+    if (fontScaleCount > 0 && fontScaleOpenedAt[fontScaleCount - 1] - 1 == depth) {
+      flushCurrentText();
+      fontScaleCount--;
+    }
+  }
   // The size in eighths of the body, snapped as horizontal text snaps it (fontScaleTagForScale).
   uint8_t currentScale8() const {
     const int32_t tag = fontScaleTagForScale(currentFontScale());
@@ -333,16 +339,16 @@ struct TextExtractor {
     if (blockStyles && !blockStyles->empty()) {
       const uint32_t tagHash = CssParser::blockSelectorHash(name, strlen(name));
       for (const auto& rule : *blockStyles) {
-        if (rule.style.fontScale <= 0 || (rule.tagHash != 0 && rule.tagHash != tagHash)) continue;
+        if (rule.style.fontScale32 == 0 || (rule.tagHash != 0 && rule.tagHash != tagHash)) continue;
         if (rule.classHash != 0 && !hasClassHash(atts, rule.classHash)) continue;
-        scale = rule.style.fontScale;
+        scale = rule.style.fontScale();
         ofParent = rule.style.fontScaleOfParent;
         found = true;
       }
     }
     CssParser::VerticalBlockStyle own;
-    if (inlineBlockStyle(atts, own) && own.fontScale > 0) {
-      scale = own.fontScale;
+    if (inlineBlockStyle(atts, own) && own.fontScale32 != 0) {
+      scale = own.fontScale();
       ofParent = own.fontScaleOfParent;
       found = true;
     }
@@ -775,7 +781,9 @@ struct TextExtractor {
     {
       float scale = 0;
       bool ofParent = false;
-      if (self->fontScaleCount < MAX_STYLE_STACK && self->resolveFontScale(name, atts, scale, ofParent)) {
+      // Annotation size is fixed relative to its base, so <rt>/<rp> sizes are ignored.
+      if (!self->inRt && !self->inRp && self->fontScaleCount < MAX_STYLE_STACK &&
+          self->resolveFontScale(name, atts, scale, ofParent)) {
         // Before the change, so the run built so far keeps the OLD size.
         self->flushCurrentText();
         self->fontScales[self->fontScaleCount] = ofParent ? self->currentFontScale() * scale : scale;
@@ -939,12 +947,10 @@ struct TextExtractor {
       // Furigana-dense text accumulates many small runs without currentText ever growing;
       // stream them onward at the same cadence as the byte bound (see SOFT_FLUSH_RUNS).
       if (self->currentRuns.size() >= SOFT_FLUSH_RUNS) self->emitRuns(false);
+      self->closeFontScaleAt(self->elementDepth);
       return;
     }
-    if (self->fontScaleCount > 0 && self->fontScaleOpenedAt[self->fontScaleCount - 1] - 1 == self->elementDepth) {
-      self->flushCurrentText();
-      self->fontScaleCount--;
-    }
+    self->closeFontScaleAt(self->elementDepth);
     if (self->boldStack.closesHere(self->elementDepth)) {
       self->flushCurrentText();
       self->boldStack.close();
