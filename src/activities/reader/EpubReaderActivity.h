@@ -27,6 +27,12 @@ class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
   std::unique_ptr<Section> section = nullptr;
   std::unique_ptr<VerticalSection> verticalSection = nullptr;
+  // Position in the active layout (vertical or horizontal); `fallback` when no chapter is loaded.
+  int shownPage(int fallback) const;
+  // Pages laid out so far; while a horizontal chapter builds, only up to its build watermark.
+  int builtPageCount(int fallback) const;
+  // The chapter's page total: estimated while a horizontal chapter builds, exact otherwise.
+  int chapterPageTotal(int fallback) const;
   // Spine index whose vertical section last failed to build (e.g. transient low-heap allocation
   // failure). Prevents an immediate automatic retry loop: without this, verticalSection.reset()
   // on failure leaves `!verticalSection` true, so the very next render() call retries the same
