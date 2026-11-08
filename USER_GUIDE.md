@@ -650,12 +650,14 @@ Which rows you see depends on your device. Touch devices hide the rows that only
     - The **Inverted** choices swap these. For vertical books and manga, **Reversed page turn** does the same and
       also covers the buttons.
 
-- **Show Reader Menu** (devices with a Home key only): How the reader menu opens: **Off**, **Tap** (default, tap the
-  centre) or **Swipe Up**. With **Off** you can still open it through the Home key.
+- **Show Reader Menu** (touch devices): How the reader menu opens: **Off**, **Tap** (default, tap the centre) or,
+  on devices with a Home key, **Swipe Up**. With **Off** you can still open it by swiping down from the top edge,
+  with the Home key, or with a button set to open it.
 
 - **Tap to look up** (no setting of its own): When neither page direction uses taps, a short tap on a word looks it
   up, and holding a word starts a clipping that you drag out with your finger. Tapping a link still follows it, and
-  tapping empty space in the centre opens the reader menu. In manga, holding inside a speech bubble still looks up
+  tapping empty space in the centre opens the reader menu. In the centre, a tap up to a line away from text still
+  looks up the nearest word, so a slightly missed word does not open the menu. In manga, holding inside a speech bubble still looks up
   the text.
 
 - **Quick return from links** (on by default, in Shortcuts): Only shown while **Short Power Button Click** is

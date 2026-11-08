@@ -1541,10 +1541,13 @@ void EpubReaderActivity::readerLoop() {
   }
 
   // A tap on a word looks it up, ahead of the menu's centre tap; a tap on empty space still opens the menu.
+  // In the menu's zone a near miss still means the word: a full line around text, not half, so only
+  // clearly empty space opens the menu.
   if (!atEndOfBook && tapLooksUp) {
     int tapX = 0;
     int tapY = 0;
-    if (mappedInput.wasScreenTapped(tapX, tapY) && textAtPoint(tapX, tapY)) {
+    if (mappedInput.wasScreenTapped(tapX, tapY) &&
+        textAtPoint(tapX, tapY, ReaderUtils::isInTouchMenuZone(renderer, tapX, tapY) ? 2 : 1)) {
       openDictionaryWordSelect(/*pageOnScreen=*/true, tapX, tapY);
       return;
     }
@@ -5441,7 +5444,7 @@ void EpubReaderActivity::recordTapLines(const Page& page, const int fontId, cons
   portEXIT_CRITICAL(&tapLinesMux_);
 }
 
-bool EpubReaderActivity::textAtPoint(const int x, const int y) {
+bool EpubReaderActivity::textAtPoint(const int x, const int y, const int reach) {
   if (!verticalSection) {
     // The lines recorded when the page was drawn, so a tap during its refresh still counts. A
     // fingertip is not a stylus: up to half a line around a line of text is still on it, and the
@@ -5453,8 +5456,8 @@ bool EpubReaderActivity::textAtPoint(const int x, const int y) {
       valid = true;
       for (uint8_t i = 0; i < tapLineCount_ && !hit; ++i) {
         const TapLine& line = tapLines_[i];
-        hit = x >= line.left - tapSlop_ && x < line.right + tapSlop_ && y >= line.top - tapSlop_ &&
-              y < line.bottom + tapSlop_;
+        const int slop = tapSlop_ * reach;
+        hit = x >= line.left - slop && x < line.right + slop && y >= line.top - slop && y < line.bottom + slop;
       }
     }
     portEXIT_CRITICAL(&tapLinesMux_);
@@ -5472,8 +5475,9 @@ bool EpubReaderActivity::textAtPoint(const int x, const int y) {
     struct Hit {
       int x;
       int y;
+      int reach;
       bool found;
-    } hit{x, y, false};
+    } hit{x, y, reach, false};
     const VerticalPage* vpage = verticalSection->getPage();
     // A chapter still being laid out cannot serve its page here; the lookup panel can (it drops
     // the build and keeps the page), and finds no word if the tap was not on one.
@@ -5481,8 +5485,10 @@ bool EpubReaderActivity::textAtPoint(const int x, const int y) {
     forEachVerticalClipCell(renderer, *vpage, fontId, left + SETTINGS.screenMargin, top + SETTINGS.screenMargin, &hit,
                             [](void* ctx, const VerticalClipCell& cell) {
                               auto& h = *static_cast<Hit*>(ctx);
-                              h.found = h.x >= cell.x && h.x < cell.x + cell.width && h.y >= cell.y &&
-                                        h.y < cell.y + cell.height;
+                              // Half a cell per step of reach beyond the cell itself.
+                              const int slop = (h.reach - 1) * cell.width / 2;
+                              h.found = h.x >= cell.x - slop && h.x < cell.x + cell.width + slop &&
+                                        h.y >= cell.y - slop && h.y < cell.y + cell.height + slop;
                               return !h.found;
                             });
     return hit.found;
@@ -5492,7 +5498,7 @@ bool EpubReaderActivity::textAtPoint(const int x, const int y) {
   if (!page) return false;
   // A fingertip is not a stylus: the gap between two words or two lines still counts as the
   // nearer word, up to half a line out. The word-select screen then picks that nearest word.
-  const int slop = renderer.getLineHeight(fontId) / 2;
+  const int slop = renderer.getLineHeight(fontId) / 2 * reach;
   for (const auto& element : page->elements) {
     if (element->getTag() != TAG_PageLine) continue;
     const auto& line = static_cast<const PageLine&>(*element);

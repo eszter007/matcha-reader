@@ -197,7 +197,8 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   // 0 = Off, 1 = Tap.
   emit(SettingInfo::Enum(StrId::STR_SHOW_READER_MENU, &CrossPointSettings::showReaderMenu,
                          {StrId::STR_STATE_OFF, StrId::STR_STATE_TAP, StrId::STR_STATE_SWIPE_UP}, "tapForReaderMenu",
-                         StrId::STR_CAT_CONTROLS));
+                         StrId::STR_CAT_CONTROLS)
+           .withEnumOrder(showReaderMenuOrder()));
 
   // --- Shortcuts ---
   // STR_CAT_SHORTCUTS is not one of the four sections: these rows are reached through the

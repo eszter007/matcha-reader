@@ -717,7 +717,8 @@ class EpubReaderActivity final : public ReaderActivity {
   void onLookupPanelResult(const ActivityResult& result);
   int clippingAtPoint(const Page& page, int x, int y) const;
   // True when (x, y) is on or near a word of the page on screen; a margin is not.
-  bool textAtPoint(int x, int y);
+  // reach: how far around text still counts, in half lines (1 = the usual half line).
+  bool textAtPoint(int x, int y, int reach = 1);
   // The horizontal page's text lines as the render task drew them, so textAtPoint() can answer on
   // the loop task without the render lock, which the render task holds for the whole e-ink refresh.
   // 64 lines x 8 bytes live in the activity; a page with more falls back to the locked scan.
