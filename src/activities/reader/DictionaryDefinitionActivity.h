@@ -102,6 +102,7 @@ class DictionaryDefinitionActivity final : public Activity {
   void collectPageWords(std::vector<PanelWord>& out) const;
   bool startWordCursor();
   void lookUpNested(const std::string& word);
+  void lookUpAt(int x, int y);
   LookupClipHandles clipHandles;
   MoreEntries more;
   // Past the last entry while more are coming: a Loading page the reader can step onto, which the

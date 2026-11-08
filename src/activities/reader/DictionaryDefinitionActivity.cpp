@@ -16,7 +16,7 @@
 #include "CrossPointSettings.h"
 #include "HapticFeedback.h"
 #include "JapaneseNestedLookup.h"
-#include "PanelTouch.h"
+#include "PanelInput.h"
 #include "ReaderUtils.h"
 #include "SdCardFontSystem.h"
 #include "components/DictionaryPanel.h"
@@ -312,67 +312,6 @@ void DictionaryDefinitionActivity::loop() {
   if (miningFeedback_.popupExpired(millis())) requestUpdate();
   // One word per tick; input below still runs every tick, so Back closes the view at once.
   if (more.next && !RenderLock::peek()) fetchMoreEntries();
-  // Back steps up to the word selection. The power click leaves the dictionary outright: from
-  // the selection it opened this view, so from here it closes the whole flow -- two clicks in
-  // and back out, without the reading hand moving.
-  if (ReaderUtils::wordLookupPowerClick(mappedInput)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
-    return;
-  }
-  if (nestedHost.noticeExpired()) requestUpdate();
-  if (nestedHost.cursorActive()) {
-    const auto input = nestedHost.handleCursorInput(mappedInput);
-    if (input != NestedLookupHost::CursorInput::None) requestUpdate();
-    if (input == NestedLookupHost::CursorInput::Picked) {
-      const uint32_t tag = nestedHost.pickedTag();
-      std::string word;
-      if (entries[currentEntry].definitionText) {
-        word = japanese_nested::lookupTextAt(definition, tag);
-      } else if (tag < cursorWords.size()) {
-        word = std::move(cursorWords[tag]);
-      }
-      std::vector<std::string>{}.swap(cursorWords);
-      if (!word.empty()) lookUpNested(word);
-    } else if (!nestedHost.cursorActive()) {
-      std::vector<std::string>{}.swap(cursorWords);
-    }
-    return;
-  }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    // A long Back leaves a nested lookup altogether, every panel of the chain at once.
-    if (depth > 0 && mappedInput.getHeldTime() >= ReaderUtils::GO_BACK_OR_HOME_MS) {
-      setResult(ActivityResult{LookupChainCloseResult{}});
-    }
-    finish();
-    return;
-  }
-  if (int lx = 0, ly = 0; nested.lookup && showingEntry() && mappedInput.wasScreenLongPress(lx, ly)) {
-    std::string word;
-    {
-      RenderLock lock;  // render() writes drawnText and shares the font cache these measure with
-      if (entries[currentEntry].definitionText) {
-        word = japanese_nested::wordAt(renderer, nestedHost.drawnText, definition, lx, ly);
-      } else {
-        std::vector<PanelWord> words;
-        collectPageWords(words);
-        for (auto& candidate : words) {
-          if (lx >= candidate.x && lx < candidate.x + candidate.width && ly >= candidate.y &&
-              ly < candidate.y + candidate.height) {
-            word = std::move(candidate.text);
-            break;
-          }
-        }
-      }
-    }
-    if (!word.empty()) {
-      haptic_feedback::touchAction();
-      lookUpNested(word);
-    }
-    return;
-  }
   if (ClipStartResult clip; clipHandles.pressed(renderer, mappedInput, clip)) {
     ActivityResult result;
     result.data = clip;
@@ -380,67 +319,87 @@ void DictionaryDefinitionActivity::loop() {
     finish();
     return;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    // Held: a word cursor for looking up a word of the definition. Pressed: save the sentence.
-    // Held, or pressed where there is nothing to save: start the cursor.
-    if (nested.lookup && (NestedLookupHost::isConfirmHold(mappedInput) || !miningAvailable())) {
-      if (startWordCursor()) requestUpdate();
+  const auto input = PanelInput::read(renderer, mappedInput, &nestedHost, miningAvailable(),
+                                      nested.lookup && showingEntry(), pageTurnReversed);
+  if (input.redraw) requestUpdate();
+  switch (input.event) {
+    case PanelInput::Event::CursorPick: {
+      std::string word;
+      if (entries[currentEntry].definitionText) {
+        word = japanese_nested::lookupTextAt(definition, input.tag);
+      } else if (input.tag < cursorWords.size()) {
+        word = std::move(cursorWords[input.tag]);
+      }
+      std::vector<std::string>{}.swap(cursorWords);
+      if (!word.empty()) lookUpNested(word);
       return;
     }
-    saveSentence();
-    return;
-  }
-  // A side button bound to Word Lookup closes the dictionary, as the power click does.
-  if (ReaderUtils::wordLookupSideToggle(mappedInput)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
-    return;
-  }
-  const auto panelStep = ReaderUtils::lookupPanelStep(mappedInput);
-  if (panelStep != ReaderUtils::PanelStep::None) {
-    skipEntry(panelStep == ReaderUtils::PanelStep::Next ? 1 : -1);
-    return;
-  }
-
-  switch (const auto touch = PanelTouch::read(renderer, mappedInput, miningAvailable(), pageTurnReversed)) {
-    case PanelTouch::Action::Close: {
-      // A tap outside the card means "back to the book", as in the Japanese panel.
-      ActivityResult result;
-      result.isCancelled = true;
-      setResult(std::move(result));
+    case PanelInput::Event::None:
+      if (!nestedHost.cursorActive() && !cursorWords.empty()) std::vector<std::string>{}.swap(cursorWords);
+      return;
+    case PanelInput::Event::LongBack:
+      // Leaves a nested lookup altogether, every panel of the chain at once.
+      if (depth > 0) setResult(ActivityResult{LookupChainCloseResult{}});
       finish();
       return;
+    case PanelInput::Event::Back:
+      finish();
+      return;
+    case PanelInput::Event::CloseAll:
+    case PanelInput::Event::SideToggle: {
+      // Back to the book: the word selection that opened this view closes too.
+      finishCancelled();
+      return;
     }
-    case PanelTouch::Action::AddButton:
-      saveSentence();
+    case PanelInput::Event::LongPress:
+      if (nested.lookup && showingEntry()) lookUpAt(input.x, input.y);
       return;
-    case PanelTouch::Action::ScrollDown:
-    case PanelTouch::Action::ScrollUp:
-      if (stepPage(touch == PanelTouch::Action::ScrollDown ? 1 : -1)) haptic_feedback::touchAction();
+    case PanelInput::Event::StartCursor:
+      if (!nested.lookup) {
+        if (miningAvailable()) saveSentence();  // no cursor here: a held Confirm is a Confirm
+      } else if (startWordCursor()) {
+        requestUpdate();
+      }
       return;
-    case PanelTouch::Action::Next:
-    case PanelTouch::Action::Previous:
-      if (skipEntry(touch == PanelTouch::Action::Next ? 1 : -1)) haptic_feedback::touchAction();
+    case PanelInput::Event::Confirm:
+      // Where there is nothing to save, Confirm starts the cursor instead.
+      if (miningAvailable()) {
+        saveSentence();
+      } else if (nested.lookup && startWordCursor()) {
+        requestUpdate();
+      }
       return;
-    case PanelTouch::Action::None:
-      break;
+    case PanelInput::Event::ReadOn:
+      stepPage(input.direction);
+      return;
+    case PanelInput::Event::Skip:
+      skipEntry(input.direction);
+      return;
   }
+}
 
-  // Every pair reads the same way: a press reads on through the entry and onto the next word at
-  // its end, a hold skips to the next word.
-  int delta = 0;
-  switch (ReaderUtils::lookupPressAny(mappedInput, delta)) {
-    case ReaderUtils::LookupPress::Press:
-      stepPage(delta);
-      break;
-    case ReaderUtils::LookupPress::Hold:
-      skipEntry(delta);
-      break;
-    case ReaderUtils::LookupPress::None:
-      break;
+// A long press on the definition: look up the word under it.
+void DictionaryDefinitionActivity::lookUpAt(const int x, const int y) {
+  std::string word;
+  {
+    RenderLock lock;  // render() writes drawnText and shares the font cache these measure with
+    if (entries[currentEntry].definitionText) {
+      word = japanese_nested::wordAt(renderer, nestedHost.drawnText, definition, x, y);
+    } else {
+      std::vector<PanelWord> words;
+      collectPageWords(words);
+      for (auto& candidate : words) {
+        if (x >= candidate.x && x < candidate.x + candidate.width && y >= candidate.y &&
+            y < candidate.y + candidate.height) {
+          word = std::move(candidate.text);
+          break;
+        }
+      }
+    }
   }
+  if (word.empty()) return;
+  haptic_feedback::touchAction();
+  lookUpNested(word);
 }
 
 // Draws the current page: a styled Page when the HTML layout succeeded,

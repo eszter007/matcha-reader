@@ -78,6 +78,9 @@ class Activity {
   // Finish this activity and return to the previous one on the stack (if any)
   static void finish();
 
+  // Finish with a cancelled result: the caller closes too (a panel's "back to the book").
+  void finishCancelled();
+
   // Convenience method to facilitate API transition to ActivityManager
   // TODO: remove this in near future
   static void onGoHome(HomeMenuItem item = HomeMenuItem::NONE);

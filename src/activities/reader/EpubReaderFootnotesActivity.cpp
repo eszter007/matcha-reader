@@ -10,7 +10,7 @@
 
 #include "FootnoteTextExtractor.h"
 #include "MappedInputManager.h"
-#include "PanelTouch.h"
+#include "PanelInput.h"
 #include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -48,71 +48,65 @@ void EpubReaderFootnotesActivity::selectFootnote(const int index) {
   requestUpdate();
 }
 
-void EpubReaderFootnotesActivity::stepNote(const int direction) {
+bool EpubReaderFootnotesActivity::stepNote(const int direction) {
   const int next = selectedIndex + direction;
-  if (next < 0 || next >= static_cast<int>(footnotes.size())) return;
+  if (next < 0 || next >= static_cast<int>(footnotes.size())) return false;
   RenderLock lock(*this);  // the render task draws from the text this replaces
   selectFootnote(next);
+  return true;
 }
 
-void EpubReaderFootnotesActivity::scrollBy(const int lines) {
+bool EpubReaderFootnotesActivity::scrollBy(const int lines) {
   const int maxLine = std::max(0, textPages.lineCount() - textPages.visibleLines());
   const int next = std::max(0, std::min(scrollLine + lines, maxLine));
-  if (next == scrollLine) return;
+  if (next == scrollLine) return false;
   scrollLine = next;
   requestUpdate();
+  return true;
 }
 
-void EpubReaderFootnotesActivity::cancel() {
-  ActivityResult result;
-  result.isCancelled = true;
-  setResult(std::move(result));
-  finish();
-}
+void EpubReaderFootnotesActivity::cancel() { finishCancelled(); }
 
 void EpubReaderFootnotesActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    cancel();
+  // The Power button jumps to the note, as Confirm does.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Power)) {
+    jumpToNote();
     return;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-      mappedInput.wasReleased(MappedInputManager::Button::Power)) {
-    if (selectedIndex >= 0 && selectedIndex < static_cast<int>(footnotes.size())) {
-      setResult(FootnoteResult{footnotes[selectedIndex].href});
-      finish();
-    }
-    return;
-  }
-
   // A few lines short of a full panel, so the last lines read stay in view as context.
   const int scrollStep = std::max(1, textPages.visibleLines() - 2);
-  switch (PanelTouch::read(renderer, mappedInput, false, pageTurnReversed)) {
-    case PanelTouch::Action::Close:
+  const auto input = PanelInput::read(renderer, mappedInput, nullptr, false, false, pageTurnReversed);
+  switch (input.event) {
+    case PanelInput::Event::Back:
+    case PanelInput::Event::LongBack:
+    case PanelInput::Event::CloseAll:
+    case PanelInput::Event::SideToggle:
       cancel();
       return;
-    case PanelTouch::Action::Next:
-      stepNote(1);
+    case PanelInput::Event::Confirm:
+      jumpToNote();
       return;
-    case PanelTouch::Action::Previous:
-      stepNote(-1);
+    case PanelInput::Event::ReadOn:
+      // Through the note, then on to the neighbouring one; reading back lands at its end.
+      if (!scrollBy(input.direction * scrollStep) && stepNote(input.direction) && input.direction < 0) {
+        scrollBy(textPages.lineCount());
+      }
       return;
-    case PanelTouch::Action::ScrollDown:
-      scrollBy(scrollStep);
+    case PanelInput::Event::Skip:
+      stepNote(input.direction);
       return;
-    case PanelTouch::Action::ScrollUp:
-      scrollBy(-scrollStep);
+    case PanelInput::Event::None:
+    case PanelInput::Event::StartCursor:
+    case PanelInput::Event::CursorPick:
+    case PanelInput::Event::LongPress:
       return;
-    case PanelTouch::Action::AddButton:
-    case PanelTouch::Action::None:
-      break;
   }
+}
 
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenRight}, [this] { stepNote(1); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenLeft}, [this] { stepNote(-1); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenDown},
-                                       [this, scrollStep] { scrollBy(scrollStep); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenUp},
-                                       [this, scrollStep] { scrollBy(-scrollStep); });
+void EpubReaderFootnotesActivity::jumpToNote() {
+  if (selectedIndex < 0 || selectedIndex >= static_cast<int>(footnotes.size())) return;
+  setResult(FootnoteResult{footnotes[selectedIndex].href});
+  finish();
 }
 
 void EpubReaderFootnotesActivity::render(RenderLock&&) {

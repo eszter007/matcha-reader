@@ -30,7 +30,7 @@
 #include "HapticFeedback.h"
 #include "JapaneseNestedLookup.h"
 #include "MappedInputManager.h"
-#include "PanelTouch.h"
+#include "PanelInput.h"
 #include "ReaderUtils.h"
 #include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
@@ -834,10 +834,7 @@ void EpubReaderWordLookupActivity::returnToSelect() {
 // state this tick.
 bool EpubReaderWordLookupActivity::handleSelectInput() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
+    finishCancelled();
     return false;
   }
 
@@ -2291,113 +2288,59 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     finish();
     return false;
   }
-  if (nestedHost.cursorActive()) {
-    const auto input = nestedHost.handleCursorInput(mappedInput);
-    if (input != NestedLookupHost::CursorInput::None) requestUpdate();
-    if (input == NestedLookupHost::CursorInput::Picked) {
+  const auto input = PanelInput::read(renderer, mappedInput, &nestedHost, hasResult, hasResult, pageTurnReversed);
+  if (input.redraw) requestUpdate();
+  switch (input.event) {
+    case PanelInput::Event::CursorPick: {
       StrId failure = StrId::STR_NO_MATCH;
-      auto panel = japanese_nested::open(
-          renderer, mappedInput, japanese_nested::lookupTextAt(visibleDefinition(), nestedHost.pickedTag()), failure);
+      auto panel = japanese_nested::open(renderer, mappedInput,
+                                         japanese_nested::lookupTextAt(visibleDefinition(), input.tag), failure);
       showNestedPanel(std::move(panel), failure);
-    }
-    return false;
-  }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    // Back steps out of the definition and onto the page it came from, keeping the scan, the
-    // cursor and the page pixels' place in the flow; only leaving select mode ends the panel.
-    if (selectCtx.valid()) {
-      returnToSelect();
       return false;
     }
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
-    return false;
-  }
-  if (nestedHost.noticeExpired()) requestUpdate();
-  // A long press on a word of the definition opens that word's entry in a panel over this one.
-  if (int lx = 0, ly = 0; hasResult && mappedInput.wasScreenLongPress(lx, ly)) {
-    openNestedLookup(lx, ly);
-    return false;
-  }
-  // The gestures every floating panel answers, read in one place (PanelTouch). A tap outside the
-  // card closes the whole panel rather than stepping back to select mode: the gesture means "back
-  // to the book", and Back is still there for the page. Up/down swipes read on like a button press;
-  // a page turn skips to the neighbouring entry page like a hold.
-  switch (const auto touch = PanelTouch::read(renderer, mappedInput, hasResult, pageTurnReversed)) {
-    case PanelTouch::Action::Close: {
-      ActivityResult result;
-      result.isCancelled = true;
-      setResult(std::move(result));
-      finish();
+    case PanelInput::Event::Back:
+    case PanelInput::Event::LongBack:
+      // Back steps out of the definition and onto the page it came from, keeping the scan, the
+      // cursor and the page pixels' place in the flow; only leaving select mode ends the panel.
+      if (selectCtx.valid()) {
+        returnToSelect();
+      } else {
+        finishCancelled();
+      }
       return false;
-    }
-    case PanelTouch::Action::AddButton:
-      saveSentence();
+    case PanelInput::Event::CloseAll:
+    case PanelInput::Event::SideToggle:
+      // A tap outside, the power click and the second side-button click mean "back to the book",
+      // not back to the page's word selection.
+      finishCancelled();
       return false;
-    case PanelTouch::Action::ScrollDown:
-    case PanelTouch::Action::ScrollUp:
-      readOn(touch == PanelTouch::Action::ScrollDown ? 1 : -1);
+    case PanelInput::Event::LongPress:
+      if (hasResult) openNestedLookup(input.x, input.y);
       return false;
-    case PanelTouch::Action::Next:
-    case PanelTouch::Action::Previous:
-      skipPage(touch == PanelTouch::Action::Next ? 1 : -1);
+    case PanelInput::Event::StartCursor:
+      if (!hasResult) {
+        performLookup();
+      } else if (nestedHost.startCjkCursor(renderer, visibleDefinition())) {
+        requestUpdate();
+      }
       return false;
-    case PanelTouch::Action::None:
-      break;
-  }
-
-  if (ReaderUtils::wordLookupPowerClick(mappedInput)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
-    return false;
-  }
-
-  // With an entry showing, Select saves it for sentence mining. Without one (no match, or a
-  // lookup the heap refused) it looks the word up again, as it always did.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (hasResult && NestedLookupHost::isConfirmHold(mappedInput)) {
-      if (nestedHost.startCjkCursor(renderer, visibleDefinition())) requestUpdate();
+    case PanelInput::Event::Confirm:
+      // With an entry showing, Select saves it for sentence mining. Without one (no match, or a
+      // lookup the heap refused) it looks the word up again.
+      if (hasResult) {
+        saveSentence();
+      } else {
+        performLookup();
+      }
       return false;
-    }
-    if (hasResult) {
-      saveSentence();
-    } else {
-      performLookup();
-    }
-    return false;
-  }
-
-  // The second click of the same side button, now that the definition is up, leaves the panel.
-  if (ReaderUtils::wordLookupSideToggle(mappedInput)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
-    return false;
-  }
-  // Remapped page bindings move through the entry: sections in the paged view, words otherwise.
-  const auto panelStep = ReaderUtils::lookupPanelStep(mappedInput);
-  if (panelStep != ReaderUtils::PanelStep::None) {
-    skipPage(panelStep == ReaderUtils::PanelStep::Next ? 1 : -1);
-    return true;
-  }
-
-  // Every pair reads the same way, so one pair alone (Picco, touch off) reaches everything: a
-  // press reads on through the entry and onto the next page at its end; a hold skips the page.
-  int delta = 0;
-  switch (ReaderUtils::lookupPressAny(mappedInput, delta)) {
-    case ReaderUtils::LookupPress::Press:
-      readOn(delta);
-      break;
-    case ReaderUtils::LookupPress::Hold:
-      skipPage(delta);
-      break;
-    case ReaderUtils::LookupPress::None:
-      break;
+    case PanelInput::Event::ReadOn:
+      readOn(input.direction);
+      return true;
+    case PanelInput::Event::Skip:
+      skipPage(input.direction);
+      return true;
+    case PanelInput::Event::None:
+      return true;
   }
   return true;
 }

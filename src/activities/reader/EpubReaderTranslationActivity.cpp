@@ -14,7 +14,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
-#include "PanelTouch.h"
+#include "PanelInput.h"
 #include "SilentRestart.h"
 #include "WifiCredentialStore.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -448,12 +448,7 @@ void EpubReaderTranslationActivity::onWifiComplete(bool success) {
   requestUpdate();
 }
 
-void EpubReaderTranslationActivity::cancel() {
-  ActivityResult result;
-  result.isCancelled = true;
-  setResult(std::move(result));
-  finish();
-}
+void EpubReaderTranslationActivity::cancel() { finishCancelled(); }
 
 void EpubReaderTranslationActivity::stepPage(const int direction) {
   if (state != SHOWING_RESULT) return;
@@ -473,25 +468,26 @@ void EpubReaderTranslationActivity::loop() {
     return;
   }
 
-  switch (PanelTouch::read(renderer, mappedInput, false, pageTurnReversed)) {
-    case PanelTouch::Action::Close:
+  // One translation, so reading on and skipping both turn its pages.
+  const auto input = PanelInput::read(renderer, mappedInput, nullptr, false, false, pageTurnReversed);
+  switch (input.event) {
+    case PanelInput::Event::LongBack:
+    case PanelInput::Event::CloseAll:
+    case PanelInput::Event::SideToggle:
       cancel();
       return;
-    case PanelTouch::Action::Next:
-    case PanelTouch::Action::ScrollDown:
-      stepPage(1);
+    case PanelInput::Event::ReadOn:
+    case PanelInput::Event::Skip:
+      stepPage(input.direction);
       return;
-    case PanelTouch::Action::Previous:
-    case PanelTouch::Action::ScrollUp:
-      stepPage(-1);
+    case PanelInput::Event::Back:  // read above, before the connection is polled
+    case PanelInput::Event::Confirm:
+    case PanelInput::Event::StartCursor:
+    case PanelInput::Event::CursorPick:
+    case PanelInput::Event::LongPress:
+    case PanelInput::Event::None:
       return;
-    case PanelTouch::Action::AddButton:
-    case PanelTouch::Action::None:
-      break;
   }
-
-  buttonNavigator.onNext([this] { stepPage(1); });
-  buttonNavigator.onPrevious([this] { stepPage(-1); });
 }
 
 void EpubReaderTranslationActivity::render(RenderLock&&) {
