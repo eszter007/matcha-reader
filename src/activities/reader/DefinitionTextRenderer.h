@@ -135,10 +135,10 @@ inline size_t hitTest(const GfxRenderer& renderer, const WrapGeometry& geometry,
                       const int y) {
   std::vector<CharBox> boxes;
   collectCjkBoxes(renderer, geometry, text, boxes);
-  for (const auto& box : boxes) {
-    if (x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height) return box.offset;
-  }
-  return std::string::npos;
+  const auto hit = std::find_if(boxes.begin(), boxes.end(), [x, y](const CharBox& box) {
+    return x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height;
+  });
+  return hit != boxes.end() ? hit->offset : std::string::npos;
 }
 
 }  // namespace DefinitionText
