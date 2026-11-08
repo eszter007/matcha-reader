@@ -19,10 +19,8 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
-#include "EpubReaderPercentSelectionActivity.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
-#include "MangaBookmarksActivity.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
@@ -30,11 +28,7 @@
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/BookProgress.h"
-#include "util/BookmarkFile.h"
-#include "util/BookmarkUtil.h"
 #include "util/ScreenshotUtil.h"
-#include "util/SyncedPosition.h"
 
 bool XtcReaderActivity::loadBook() {
   xtc = makeUniqueNoThrow<Xtc>(bookPath, "/.crosspoint");
@@ -68,20 +62,9 @@ void XtcReaderActivity::onReaderExit() {
   xtc.reset();
 }
 
-void XtcReaderActivity::jumpToPercent(const int percent) {
-  if (!xtc) return;
-  const uint32_t total = xtc->getPageCount();
-  uint32_t target = static_cast<uint32_t>(static_cast<float>(percent) / 100.0f * total);
-  if (target >= total && total > 0) target = total - 1;
-  currentPage = target;
-}
-
 void XtcReaderActivity::readerLoop() {
   // Auto-dismiss the bookmark toast.
-  if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
-    showBookmarkMessage = false;
-    requestUpdate();
-  }
+  if (expireBookmarkMessage()) requestUpdate();
 
   if (!xtc) {
     return;
@@ -155,8 +138,6 @@ void XtcReaderActivity::readerLoop() {
   requestUpdate();
 }
 
-bool XtcReaderActivity::isAtEndOfBook() const { return xtc && currentPage >= xtc->getPageCount(); }
-
 void XtcReaderActivity::onReturnFromEndOfBook() { currentPage = xtc->getPageCount() > 0 ? xtc->getPageCount() - 1 : 0; }
 
 void XtcReaderActivity::render(RenderLock&&) {
@@ -216,6 +197,7 @@ void XtcReaderActivity::launchMenu() {
 }
 
 void XtcReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
+  if (handlePagedMenuAction(action)) return;
   switch (action) {
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER:
       if (xtc && xtc->hasChapters() && !xtc->getChapters().empty()) {
@@ -227,44 +209,6 @@ void XtcReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction a
             });
       }
       break;
-    case EpubReaderMenuActivity::MenuAction::GO_TO_PERCENT: {
-      if (!xtc || xtc->getPageCount() == 0) break;
-      const int totalPages = static_cast<int>(xtc->getPageCount());
-      const int initialPercent = static_cast<int>((currentPage + 1) * 100 / totalPages);
-      startActivityForResult(
-          std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
-          [this](const ActivityResult& result) {
-            if (!result.isCancelled) jumpToPercent(std::get<PercentResult>(result.data).percent);
-            requestUpdate();
-          });
-      break;
-    }
-    case EpubReaderMenuActivity::MenuAction::TOGGLE_BOOKMARK:
-      addBookmark();
-      showBookmarkMessage = true;
-      bookmarkMessageTime = millis();
-      requestUpdate();
-      break;
-    case EpubReaderMenuActivity::MenuAction::BOOKMARKS: {
-      if (!xtc) break;
-      startActivityForResult(std::make_unique<MangaBookmarksActivity>(renderer, mappedInput, xtc->getPath(),
-                                                                      std::vector<manga::TocEntry>{}),
-                             [this](const ActivityResult& result) {
-                               if (!result.isCancelled && xtc) {
-                                 const uint32_t target = std::get<PageResult>(result.data).page;
-                                 if (target < xtc->getPageCount()) currentPage = target;
-                               }
-                               requestUpdate();
-                             });
-      break;
-    }
-    case EpubReaderMenuActivity::MenuAction::SCREENSHOT:
-      pendingScreenshot = true;
-      requestUpdate();
-      break;
-    case EpubReaderMenuActivity::MenuAction::SYNC:
-      if (launchSync(false)) return;
-      break;
     case EpubReaderMenuActivity::MenuAction::DELETE_CACHE: {
       if (xtc) {
         const std::string cachePath = xtc->getCachePath();
@@ -275,62 +219,6 @@ void XtcReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction a
     }
     default:
       break;
-  }
-}
-
-// Page-based bookmarks, mirroring the manga reader: BookmarkEntry with computedSpineIndex=0 and
-// computedChapterPageCount / computedChapterProgress holding the total page count / bookmarked
-// page. The bookmark file is keyed by the XTC file path (BookmarkUtil::getBookmarkPath).
-void XtcReaderActivity::loadCachedBookmarks() {
-  cachedBookmarks.clear();
-  if (!xtc) return;
-  BookmarkFile::load(xtc->getPath(), cachedBookmarks);
-  updateBookmarkFlag();
-}
-
-void XtcReaderActivity::updateBookmarkFlag() {
-  if (!xtc || cachedBookmarks.empty()) {
-    currentPageBookmarked = false;
-    return;
-  }
-  const uint32_t pageCount = xtc->getPageCount();
-  currentPageBookmarked = std::any_of(cachedBookmarks.begin(), cachedBookmarks.end(), [&](const BookmarkEntry& b) {
-    return b.computedSpineIndex == 0 && b.computedChapterPageCount == pageCount &&
-           b.computedChapterProgress == currentPage;
-  });
-}
-
-void XtcReaderActivity::addBookmark() {
-  if (!xtc) return;
-  const uint32_t pageCount = xtc->getPageCount();
-  if (pageCount == 0) return;
-
-  const size_t countBefore = cachedBookmarks.size();
-  cachedBookmarks.erase(std::remove_if(cachedBookmarks.begin(), cachedBookmarks.end(),
-                                       [&](const BookmarkEntry& b) {
-                                         return b.computedSpineIndex == 0 && b.computedChapterPageCount == pageCount &&
-                                                b.computedChapterProgress == currentPage;
-                                       }),
-                        cachedBookmarks.end());
-  if (cachedBookmarks.size() != countBefore) {
-    bookmarkRemoved = true;
-    currentPageBookmarked = false;
-  } else {
-    BookmarkEntry entry;
-    entry.percentage = static_cast<float>(currentPage) / static_cast<float>(pageCount);
-    char buf[32];
-    snprintf(buf, sizeof(buf), tr(STR_PAGE_NUMBER_FORMAT), currentPage + 1);
-    entry.summary = buf;
-    entry.computedSpineIndex = 0;
-    entry.computedChapterPageCount = static_cast<uint16_t>(std::min<uint32_t>(pageCount, 0xFFFF));
-    entry.computedChapterProgress = static_cast<uint16_t>(std::min<uint32_t>(currentPage, 0xFFFF));
-    cachedBookmarks.insert(cachedBookmarks.begin(), entry);
-    bookmarkRemoved = false;
-    currentPageBookmarked = true;
-  }
-
-  if (!BookmarkFile::save(xtc->getPath(), cachedBookmarks)) {
-    LOG_ERR("XTR", "Failed to save bookmarks for: %s", xtc->getPath().c_str());
   }
 }
 
@@ -643,70 +531,4 @@ void XtcReaderActivity::loadProgress() {
     }
     f.close();
   }
-}
-
-ScreenshotInfo XtcReaderActivity::getScreenshotInfo() const {
-  ScreenshotInfo info;
-  info.readerType = ScreenshotInfo::ReaderType::Xtc;
-  if (xtc) {
-    const std::string t = xtc->getTitle();
-    snprintf(info.title, sizeof(info.title), "%s", t.c_str());
-    const uint32_t pageCount = xtc->getPageCount();
-    info.totalPages = pageCount;
-    // Clamp to last valid page to avoid sentinel value (currentPage == pageCount)
-    uint32_t clampedPage = (pageCount > 0 && currentPage >= pageCount) ? pageCount - 1 : currentPage;
-    info.progressPercent = pageCount > 0 ? xtc->calculateProgress(clampedPage) : 0;
-    // XTC progress already counts the visible page as read.
-    info.endProgressPercent = info.progressPercent;
-    info.currentPage = static_cast<int>(clampedPage) + 1;
-  } else {
-    info.currentPage = currentPage + 1;
-  }
-  return info;
-}
-
-bool XtcReaderActivity::writeSyncedPosition() {
-  syncedPosition::Position position;
-  const uint32_t count = xtc ? xtc->getPageCount() : 0;
-  if (syncedPositionPercent() < 0 || !syncedPosition::load(xtc->getPath(), position)) return false;
-  if (!writePageProgress(xtc->getPath(), syncedPosition::pageOf(position, count))) return false;
-  syncedPosition::dismiss(xtc->getPath());
-  // The page in memory too: leaving the reader saves it over the record otherwise.
-  RenderLock lock(*this);
-  loadProgress();
-  return true;
-}
-
-int XtcReaderActivity::syncedPositionPercent() {
-  syncedPosition::Position position;
-  const uint32_t count = xtc ? xtc->getPageCount() : 0;
-  if (count == 0 || !syncedPosition::load(xtc->getPath(), position)) return -1;
-  const uint32_t targetPage = syncedPosition::pageOf(position, count);
-  // Read past it here since it was fetched: going there would be going back. Pages, not the rounded
-  // percentages, which put neighbouring pages of a long book on the same whole number.
-  uint32_t ownPage = 0;
-  if (readPageProgress(xtc->getPath(), ownPage) && targetPage <= ownPage) {
-    syncedPosition::dismiss(xtc->getPath());
-    return -1;
-  }
-  return static_cast<int>(targetPage * 100 / count);
-}
-
-bool XtcReaderActivity::startShortcutSync() { return KOREADER_STORE.hasCredentials() && launchSync(true); }
-
-bool XtcReaderActivity::launchSync(const bool withClockAndInsights) {
-  if (!xtc) return false;
-  PagedSyncBook paged;
-  paged.page = currentPage;
-  paged.pageCount = xtc->getPageCount();
-  paged.title = xtc->getTitle();
-  paged.author = xtc->getAuthor();
-  auto sync = makeUniqueNoThrow<KOReaderSyncActivity>(renderer, mappedInput, xtc->getPath(), std::move(paged));
-  if (!sync) {
-    LOG_ERR("SYNC", "OOM: sync activity");
-    return false;
-  }
-  if (withClockAndInsights) sync->alsoSyncClockAndInsights();
-  activityManager.replaceActivity(std::move(sync));
-  return true;
 }

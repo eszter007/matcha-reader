@@ -45,6 +45,12 @@ class ReaderActivity : public Activity {
   // A cover thumbnail of this height for the end-of-book ticket, generated if missing. Empty when
   // the format has none, or it could not be made now; the ticket then shows the cat instead.
   virtual std::string prepareEndOfBookCover(int height) { return ""; }
+  // False for a reader that draws no book text (manga): the reader font is released while the book
+  // is open and restored when it closes or fails to load.
+  virtual bool usesReaderFonts() const { return true; }
+  void restoreReaderFonts();
+  // The file that identifies the book for the reading session's document id.
+  virtual std::string sessionDocumentPath() const { return bookPath; }
   virtual void onReaderEnter() = 0;
   virtual void onReaderExit() = 0;
   virtual void readerLoop() = 0;

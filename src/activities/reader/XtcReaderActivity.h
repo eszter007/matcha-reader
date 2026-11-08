@@ -16,33 +16,13 @@
 #include <utility>
 #include <vector>
 
-#include "BookmarkEntry.h"
-#include "ReaderActivity.h"
-#include "activities/reader/EpubReaderMenuActivity.h"
+#include "PagedReaderActivity.h"
 
-class XtcReaderActivity final : public ReaderActivity {
+class XtcReaderActivity final : public PagedReaderActivity {
   std::shared_ptr<Xtc> xtc;
-
-  uint32_t currentPage = 0;
-
-  // Reader menu / bookmarks / screenshot state (page-based, mirrors the manga reader).
-  std::vector<BookmarkEntry> cachedBookmarks;
-  bool currentPageBookmarked = false;
-  bool showBookmarkMessage = false;
-  bool bookmarkRemoved = false;
-  uint32_t bookmarkMessageTime = 0;
-  bool pendingScreenshot = false;
-  // Swallow the Confirm release that opened this book (from the library) so it doesn't
-  // immediately open the reader menu -- which would freePageBuffer() mid first-render.
-  bool ignoreNextConfirmRelease = true;
 
   void launchMenu();
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
-  bool launchSync(bool withClockAndInsights);
-  bool startShortcutSync() override;
-  void addBookmark();
-  void loadCachedBookmarks();
-  void updateBookmarkFlag();
 
   // Page pixel buffer (a 1-bit page, or plane 1 of a 2-bit page), allocated once and reused for
   // every page turn. Page dimensions are fixed per file, so one buffer serves all pages -- avoids a
@@ -65,8 +45,10 @@ class XtcReaderActivity final : public ReaderActivity {
   void renderPage();
   void renderStatusBarOverlay(StatusBarOverlayPosition position) const;
   StatusBarInfo getStatusBarInfo() const;
-  void saveProgress() const;
-  void loadProgress();
+  void saveProgress() const override;
+  void loadProgress() override;
+  uint32_t pageCount() const override { return xtc ? xtc->getPageCount() : 0; }
+  std::string positionKey() const override { return xtc ? xtc->getPath() : bookPath; }
 
   bool loadBook() override;
   bool hasBook() const override { return xtc != nullptr; }
@@ -76,16 +58,11 @@ class XtcReaderActivity final : public ReaderActivity {
   void onReaderEnter() override;
   void onReaderExit() override;
   void readerLoop() override;
-  void jumpToPercent(int percent) override;
-  bool writeSyncedPosition() override;
-  int syncedPositionPercent() override;
-  bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;
 
  public:
   explicit XtcReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
                              bool allowFastInitialRefresh)
-      : ReaderActivity("XtcReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
+      : PagedReaderActivity("XtcReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
   void render(RenderLock&&) override;
-  ScreenshotInfo getScreenshotInfo() const override;
 };

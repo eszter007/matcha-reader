@@ -3,6 +3,7 @@
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
+#include <I18n.h>
 #include <MangaPanel.h>
 #include <Memory.h>
 
@@ -20,6 +21,7 @@
 #include "XtcReaderActivity.h"
 #include "activities/util/BmpViewerActivity.h"
 #include "components/SyncedPositionPrompt.h"
+#include "fontIds.h"
 #include "util/BookProgress.h"
 #include "util/PluginEvents.h"
 #include "util/RemoteProgress.h"
@@ -99,8 +101,17 @@ void ReaderActivity::onEnter() {
     APP_STATE.saveToFile();
   }
 
-  sdFontSystem.ensureLoaded(renderer);
+  if (usesReaderFonts()) {
+    sdFontSystem.ensureLoaded(renderer);
+  } else {
+    // No book text: the reader font leaves RAM while the book is open, and so does the CJK
+    // companion, since releasing resident fonts does not decide what comes back.
+    RenderLock lock;
+    sdFontSystem.releaseAllResidentFonts(renderer);
+    sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
+  }
   if (!loadBook()) {
+    restoreReaderFonts();
     if (!handleLoadFailure()) finish();
     return;
   }
@@ -141,6 +152,7 @@ void ReaderActivity::onExit() {
   const ScreenshotInfo exitInfo = hasBook() ? getScreenshotInfo() : ScreenshotInfo{};
   const bool hadBook = hasBook();
   onReaderExit();
+  restoreReaderFonts();
   // Read from the saved progress, as on entry, so a book opened without moving compares equal.
   if (hadBook) remoteProgress::readHere(bookPath, enterPercent, loadOwnBookProgress(bookPath));
 
@@ -171,8 +183,15 @@ void ReaderActivity::onExit() {
 
 void ReaderActivity::prepareForSleep() { flushReaderSession(); }
 
+// Home and the next reader need the user's font again after a reader that released it.
+void ReaderActivity::restoreReaderFonts() {
+  if (usesReaderFonts()) return;
+  RenderLock lock;
+  sdFontSystem.ensureLoaded(renderer);
+}
+
 void ReaderActivity::flushReaderSession() {
-  sessionReporter.flush(bookPath, bookPath);
+  sessionReporter.flush(bookPath, sessionDocumentPath());
   const std::string pacePath = paceFilePath();
   if (!pacePath.empty()) readingPace.save(pacePath);
 }
@@ -278,6 +297,10 @@ bool ReaderActivity::renderEndOfBook(const char* logTag) {
     // observe an object whose names/selector are still being populated.
     endOfBookOptionsReady.store(true, std::memory_order_release);
     endOfBookOptions->render(renderer, mappedInput);
+  } else {
+    // No memory for the suggestions: still say where the reader is.
+    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() * 3 / 8, tr(STR_END_OF_BOOK), true,
+                              EpdFontFamily::BOLD);
   }
   renderer.displayBuffer();
   // Credits the last page's dwell and brings the session's progress to the end of the book.

@@ -46,7 +46,7 @@ against newer firmware degrades gracefully on older firmware.
 
 | Event             | Fires when                                             | Variables                            |
 | ----------------- | ------------------------------------------------------ | ------------------------------------ |
-| `reader.open`     | A book is opened (EPUB/TXT/XTC)                        | `book` (SD path)                     |
+| `reader.open`     | A book is opened (EPUB/TXT/XTC/manga)                  | `book` (SD path)                     |
 | `reader.exit`     | The reader is left (home, sleep, another activity)     | `book`, `percent`, `end_percent`     |
 | `reader.session`  | An active-reading summary is flushed before sleep/exit | fields documented below              |
 | `book.downloaded` | An on-device catalog download completed                | `path`, `title`, `plugin`            |
