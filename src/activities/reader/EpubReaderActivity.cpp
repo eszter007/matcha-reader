@@ -2350,14 +2350,20 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       {
         RenderLock lock(*this);
         if (epub && (section || verticalSection)) {
-          uint16_t backupSpine = currentSpineIndex;
-          uint16_t backupPage = shownPage(0);
-          uint16_t backupPageCount = builtPageCount(0);
+          // The progress file lives in the cache being cleared, so it is written afterwards; its
+          // content offset is read first, while the chapter is still loaded, so the book reopens on
+          // the same text however the rebuilt cache lays it out.
+          const int spine = currentSpineIndex;
+          const int page = shownPage(0);
+          const int total = chapterPageTotal(0);
+          const auto offset = visibleOffsetForPage(page);
+          const auto percent = static_cast<uint8_t>(pageBasedPercent(spine, page + 1));
           section.reset();
           verticalSection.reset();
           epub->clearCache();
           epub->setupCacheDir();
-          if (!saveProgress(backupSpine, backupPage, backupPageCount, verticalOverride, furiganaOverride)) {
+          if (!EpubReaderUtils::saveProgress(*epub, spine, page, total, verticalOverride, furiganaOverride, percent,
+                                             offset)) {
             LOG_ERR("ERS", "Failed to save progress before cache clear");
           }
         }
