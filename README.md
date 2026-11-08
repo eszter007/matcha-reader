@@ -23,7 +23,7 @@ This page is the short version. How to use everything is in the [User Guide](USE
 
 ## Word lookup, sentence mining and page translation
 
-Look up any word on the page, in vertical or horizontal text. In Japanese and Chinese the page is split into words first. The cursor only lands on words that have an entry. The definition opens in a panel over the page. On touch devices, long-press a word to open it. See [Guide §6.1](USER_GUIDE.md#61-word-lookup).
+Look up any word on the page, in vertical or horizontal text. In Japanese and Chinese the page is split into words first. The cursor only lands on words that have an entry. The definition opens in a panel over the page. On touch devices, long-press a word to open it. Words inside an entry, such as those in an example sentence, can be looked up the same way. See [Guide §6.1](USER_GUIDE.md#61-word-lookup).
 
 <p align="center">
   <img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence">

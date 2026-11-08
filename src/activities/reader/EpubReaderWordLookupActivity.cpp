@@ -25,8 +25,10 @@
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
 #include "DictSourceNames.h"
+#include "DictionaryDefinitionActivity.h"
 #include "Epub/Page.h"
 #include "HapticFeedback.h"
+#include "JapaneseNestedLookup.h"
 #include "MappedInputManager.h"
 #include "PanelTouch.h"
 #include "ReaderUtils.h"
@@ -2289,6 +2291,17 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     finish();
     return false;
   }
+  if (nestedHost.cursorActive()) {
+    const auto input = nestedHost.handleCursorInput(mappedInput);
+    if (input != NestedLookupHost::CursorInput::None) requestUpdate();
+    if (input == NestedLookupHost::CursorInput::Picked) {
+      StrId failure = StrId::STR_NO_MATCH;
+      auto panel = japanese_nested::open(
+          renderer, mappedInput, japanese_nested::lookupTextAt(visibleDefinition(), nestedHost.pickedTag()), failure);
+      showNestedPanel(std::move(panel), failure);
+    }
+    return false;
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     // Back steps out of the definition and onto the page it came from, keeping the scan, the
     // cursor and the page pixels' place in the flow; only leaving select mode ends the panel.
@@ -2300,6 +2313,12 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     result.isCancelled = true;
     setResult(std::move(result));
     finish();
+    return false;
+  }
+  if (nestedHost.noticeExpired()) requestUpdate();
+  // A long press on a word of the definition opens that word's entry in a panel over this one.
+  if (int lx = 0, ly = 0; hasResult && mappedInput.wasScreenLongPress(lx, ly)) {
+    openNestedLookup(lx, ly);
     return false;
   }
   // The gestures every floating panel answers, read in one place (PanelTouch). A tap outside the
@@ -2340,6 +2359,10 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
   // With an entry showing, Select saves it for sentence mining. Without one (no match, or a
   // lookup the heap refused) it looks the word up again, as it always did.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    if (hasResult && NestedLookupHost::isConfirmHold(mappedInput)) {
+      if (nestedHost.startCjkCursor(renderer, visibleDefinition())) requestUpdate();
+      return false;
+    }
     if (hasResult) {
       saveSentence();
     } else {
@@ -2705,6 +2728,7 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
     else if (lowMemoryResult)
       message = tr(STR_LOW_MEMORY_RETRY);
     UITheme::drawCenteredText(renderer, body, UI_12_FONT_ID, body.y + body.height / 2, message, true);
+    nestedHost.drawnText.valid = false;
   } else {
     DefinitionText::EntryMetadata metadata{visibleReading(), visibleGrammar()};
     const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
@@ -2723,6 +2747,7 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
     const int maxDefY = definitionBody.y + definitionBody.height;
     const auto wrap = DefinitionText::drawWrapped(renderer, defFont, visibleDefinition(), textX, defY, defLineH,
                                                   maxWidth, maxDefY, definitionScroll, defScale);
+    nestedHost.drawnText = {true, defFont, textX, defY, defLineH, maxWidth, maxDefY, definitionScroll, defScale};
 
     totalLines = metadataLines + wrap.totalLines;
     // Leave at least a screenful visible: max scroll = total - capacity
@@ -2821,14 +2846,16 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
                                             counterText.empty() ? nullptr : counterText.c_str(), visibleKind(),
                                             hasResult && mappedInput.hasTouch(), hasResult && miningFeedback_.saved());
   renderContentArea(layout.body);
-  DictionaryPanel::drawPopup(renderer, layout, miningFeedback_.popupText(millis()));
+  nestedHost.drawCursor(renderer);
+  DictionaryPanel::drawPopup(renderer, layout, nestedHost.popupText(miningFeedback_.popupText(millis())));
 
   // Directional labels, not mapLabels: the hint has to name the direction the button moves the
   // selection ON THE ROTATED SCREEN. mapLabels only ever flipped a fixed left/right pair, so in
   // landscape the front buttons still read "Left"/"Right" while actually moving up and down.
   const auto labels =
       mappedInput.mapDirectionalLabels(tr(STR_BACK),
-                                       !hasResult                ? tr(STR_SELECT)
+                                       nestedHost.cursorActive() ? tr(STR_LOOKUP)
+                                       : !hasResult              ? tr(STR_SELECT)
                                        : miningFeedback_.saved() ? tr(STR_MINING_SAVED)
                                                                  : tr(STR_MINING_SAVE),
                                        tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
@@ -2874,4 +2901,35 @@ void EpubReaderWordLookupActivity::countLookup() {
   if (std::find(countedLookups_.begin(), countedLookups_.end(), hash) != countedLookups_.end()) return;
   if (countedLookups_.empty()) countedLookups_.reserve(32);
   countedLookups_.push_back(hash);
+}
+
+void EpubReaderWordLookupActivity::openNestedLookup(const int x, const int y) {
+  std::string word;
+  {
+    RenderLock lock;  // render() writes drawnText and shares the font cache the hit test measures with
+    word = japanese_nested::wordAt(renderer, nestedHost.drawnText, visibleDefinition(), x, y);
+  }
+  if (word.empty()) return;
+  haptic_feedback::touchAction();
+  StrId failure = StrId::STR_NO_MATCH;
+  auto panel = japanese_nested::open(renderer, mappedInput, word, failure);
+  showNestedPanel(std::move(panel), failure);
+}
+
+void EpubReaderWordLookupActivity::showNestedPanel(std::unique_ptr<DictionaryDefinitionActivity> panel,
+                                                   const StrId failure) {
+  if (!panel) {
+    nestedHost.showNotice(failure);
+    requestUpdate();
+    return;
+  }
+  panel->setPageTurnReversed(pageTurnReversed);
+  startActivityForResult(std::move(panel), [this](const ActivityResult& result) {
+    if (auto chain = NestedLookupHost::chainResult(result, /*nestedLevel=*/false)) {
+      setResult(std::move(*chain));
+      finish();
+      return;
+    }
+    requestUpdate();
+  });
 }

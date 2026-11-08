@@ -29,6 +29,19 @@ class PanelTextPages {
   // Draws one panel's worth of lines starting at line `firstLine`, for a view that scrolls.
   void drawLines(const GfxRenderer& renderer, int fontId, int x, int y, const std::string& text, int firstLine) const;
 
+  // One space-separated token of a drawn page, where draw() put it.
+  struct Word {
+    int16_t x;
+    int16_t y;
+    int16_t width;
+    int16_t height;
+    uint32_t start;  // byte span in the laid-out string
+    uint16_t len;
+  };
+  // The tokens of page `page` as draw() lays them out with its top-left at x, y.
+  void collectWords(const GfxRenderer& renderer, int fontId, int x, int y, const std::string& text, int page,
+                    std::vector<Word>& out) const;
+
  private:
   struct Line {
     uint32_t start;

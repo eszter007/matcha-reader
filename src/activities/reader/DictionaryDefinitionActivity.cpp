@@ -1,16 +1,21 @@
 #include "DictionaryDefinitionActivity.h"
 
+#include <Arduino.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <Logging.h>
+#include <Memory.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 #include "BookStats.h"
 #include "CrossPointSettings.h"
 #include "HapticFeedback.h"
+#include "JapaneseNestedLookup.h"
 #include "PanelTouch.h"
 #include "ReaderUtils.h"
 #include "SdCardFontSystem.h"
@@ -29,6 +34,27 @@ namespace {
 // reader and word-select. Bigger definitions take the span-based plain-text
 // path, which holds no per-page copies.
 constexpr size_t MAX_STYLED_HTML_BYTES = 16 * 1024;
+
+// Contiguous heap a nested lookup needs before it starts: the next panel lays out a definition of
+// up to MAX_STYLED_HTML_BYTES while this one keeps its own pages.
+constexpr uint32_t NESTED_LOOKUP_MIN_HEAP = 24 * 1024;
+// Panels a chain may open over the first. The ESP32-C3 boards (X4, X3) take one: measured on an X4,
+// each Japanese lookup there drew free heap from ~45KB down to under 3KB at its peak.
+#if defined(CONFIG_IDF_TARGET_ESP32C3) && CONFIG_IDF_TARGET_ESP32C3
+constexpr uint8_t MAX_NESTED_LEVELS = 1;
+#else
+constexpr uint8_t MAX_NESTED_LEVELS = 7;  // eight panels in all
+#endif
+
+// The word in a token: surrounding punctuation ("(see", "word;") is not part of it.
+std::string trimToken(const char* text, const size_t len) {
+  static constexpr char kPunct[] = "()[]{}<>\"'.,;:!?*/";
+  size_t start = 0;
+  size_t end = len;
+  while (start < end && std::strchr(kPunct, text[start]) != nullptr) start++;
+  while (end > start && std::strchr(kPunct, text[end - 1]) != nullptr) end--;
+  return std::string(text + start, end - start);
+}
 
 }  // namespace
 
@@ -118,7 +144,8 @@ std::string DictionaryDefinitionActivity::footerLabel() const {
 }
 
 void DictionaryDefinitionActivity::onEnter() {
-  DictionaryPanel::setAvoid(clipHandles.band(renderer));  // before the entries are laid out
+  // A nested panel keeps the placement of the panel it opened from, so it covers that one exactly.
+  if (depth == 0) DictionaryPanel::setAvoid(clipHandles.band(renderer));  // before the entries are laid out
   ensureGlyphFallback();
   Activity::onEnter();
   if (entries.empty()) {
@@ -141,6 +168,24 @@ void DictionaryDefinitionActivity::showEntry(const size_t index, const bool atLa
   textPages.clear();
   definition = entry.definition;
   std::replace(definition.begin(), definition.end(), '\0', '\n');
+  nestedHost.drawnText.valid = false;
+  if (entry.definitionText) {
+    // Paged by whole lines of the shared wrapper: a dry run with no room to draw counts them.
+    const BodyArea body = bodyArea();
+    const Rect area{body.x, body.y, body.width, body.height};
+    const int fontId = DefinitionText::wordLookupFontId();
+    const uint16_t scale = DefinitionText::wordLookupFontScale();
+    const int lineHeight = std::max(1, renderer.getLineHeightScaled(fontId, scale));
+    const int metadataLines = DefinitionText::entryMetadataLineCount(renderer, area, fontId, scale,
+                                                                     {entry.reading, entry.grammar, std::string()});
+    const auto wrap = DefinitionText::drawWrapped(renderer, fontId, definition, body.x, body.y, lineHeight, body.width,
+                                                  body.y, 0, scale);
+    definitionTextLines = std::max(1, body.height / lineHeight);
+    totalPages = std::max(1, (metadataLines + wrap.totalLines + definitionTextLines - 1) / definitionTextLines);
+    currentPage = atLastPage ? totalPages - 1 : 0;
+    miningFeedback_.clear();
+    return;
+  }
   if (!(entry.html && definition.size() <= MAX_STYLED_HTML_BYTES && layoutHtmlPages())) {
     definition = htmlToPlainText(definition);
     const BodyArea body = bodyArea();
@@ -211,7 +256,7 @@ bool DictionaryDefinitionActivity::skipEntry(const int direction) {
 }
 
 void DictionaryDefinitionActivity::onExit() {
-  DictionaryPanel::setAvoid(Rect{});
+  if (depth == 0) DictionaryPanel::setAvoid(Rect{});
   Activity::onExit();
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->releaseAllFontMemory();
@@ -277,8 +322,55 @@ void DictionaryDefinitionActivity::loop() {
     finish();
     return;
   }
+  if (nestedHost.noticeExpired()) requestUpdate();
+  if (nestedHost.cursorActive()) {
+    const auto input = nestedHost.handleCursorInput(mappedInput);
+    if (input != NestedLookupHost::CursorInput::None) requestUpdate();
+    if (input == NestedLookupHost::CursorInput::Picked) {
+      const uint32_t tag = nestedHost.pickedTag();
+      std::string word;
+      if (entries[currentEntry].definitionText) {
+        word = japanese_nested::lookupTextAt(definition, tag);
+      } else if (tag < cursorWords.size()) {
+        word = std::move(cursorWords[tag]);
+      }
+      std::vector<std::string>{}.swap(cursorWords);
+      if (!word.empty()) lookUpNested(word);
+    } else if (!nestedHost.cursorActive()) {
+      std::vector<std::string>{}.swap(cursorWords);
+    }
+    return;
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    // A long Back leaves a nested lookup altogether, every panel of the chain at once.
+    if (depth > 0 && mappedInput.getHeldTime() >= ReaderUtils::GO_BACK_OR_HOME_MS) {
+      setResult(ActivityResult{LookupChainCloseResult{}});
+    }
     finish();
+    return;
+  }
+  if (int lx = 0, ly = 0; nested.lookup && showingEntry() && mappedInput.wasScreenLongPress(lx, ly)) {
+    std::string word;
+    {
+      RenderLock lock;  // render() writes drawnText and shares the font cache these measure with
+      if (entries[currentEntry].definitionText) {
+        word = japanese_nested::wordAt(renderer, nestedHost.drawnText, definition, lx, ly);
+      } else {
+        std::vector<PanelWord> words;
+        collectPageWords(words);
+        for (auto& candidate : words) {
+          if (lx >= candidate.x && lx < candidate.x + candidate.width && ly >= candidate.y &&
+              ly < candidate.y + candidate.height) {
+            word = std::move(candidate.text);
+            break;
+          }
+        }
+      }
+    }
+    if (!word.empty()) {
+      haptic_feedback::touchAction();
+      lookUpNested(word);
+    }
     return;
   }
   if (ClipStartResult clip; clipHandles.pressed(renderer, mappedInput, clip)) {
@@ -289,6 +381,12 @@ void DictionaryDefinitionActivity::loop() {
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    // Held: a word cursor for looking up a word of the definition. Pressed: save the sentence.
+    // Held, or pressed where there is nothing to save: start the cursor.
+    if (nested.lookup && (NestedLookupHost::isConfirmHold(mappedInput) || !miningAvailable())) {
+      if (startWordCursor()) requestUpdate();
+      return;
+    }
     saveSentence();
     return;
   }
@@ -349,8 +447,12 @@ void DictionaryDefinitionActivity::loop() {
 // otherwise the wrapped line spans (copied into a stack buffer for NUL
 // termination). Called twice per render: once in font-cache scan mode, once
 // for the real paint.
-void DictionaryDefinitionActivity::drawBody(const int fontId, const int x, const int startY) const {
+void DictionaryDefinitionActivity::drawBody(const int fontId, const int x, const int startY) {
   if (!showingEntry()) return;
+  if (entries[currentEntry].definitionText) {
+    drawDefinitionText(x, startY);
+    return;
+  }
   if (!pages.empty()) {
     pages[currentPage]->render(renderer, fontId, x, startY);
     return;
@@ -385,15 +487,161 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   drawBody(fontId, layout.body.x, layout.body.y);  // scan pass: records codepoints only
   scope.endScanAndPrewarm();
   drawBody(fontId, layout.body.x, layout.body.y);
-  DictionaryPanel::drawPopup(renderer, layout, miningFeedback_.popupText(millis()));
+  nestedHost.drawCursor(renderer);
+  DictionaryPanel::drawPopup(renderer, layout, nestedHost.popupText(miningFeedback_.popupText(millis())));
 
   const bool hasPrev = onLoadingPage ? !entries.empty() : currentPage > 0 || currentEntry > 0;
   const bool hasNext =
       !onLoadingPage && (currentPage + 1 < totalPages || currentEntry + 1 < entries.size() || more.next);
-  const auto labels = mappedInput.mapLabels(
-      tr(STR_BACK), miningAvailable() ? (miningFeedback_.saved() ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE)) : "",
-      hasPrev ? "<" : "", hasNext ? ">" : "");
+  if (nestedHost.cursorActive()) {
+    const auto cursorLabels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_LOOKUP), "<", ">");
+    DictionaryPanel::clearButtonHints(renderer);
+    GUI.drawButtonHints(renderer, cursorLabels.btn1, cursorLabels.btn2, cursorLabels.btn3, cursorLabels.btn4);
+    renderer.displayBuffer();
+    return;
+  }
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_BACK),
+                            miningAvailable() ? (miningFeedback_.saved() ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE))
+                            : nested.lookup && showingEntry() ? tr(STR_SELECT)
+                                                              : "",
+                            hasPrev ? "<" : "", hasNext ? ">" : "");
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
+}
+
+// The words of the page on screen, in reading order, where drawBody puts them.
+void DictionaryDefinitionActivity::collectPageWords(std::vector<PanelWord>& out) const {
+  out.clear();
+  if (!showingEntry() || entries[currentEntry].definitionText) return;
+  const BodyArea body = bodyArea();
+  const int fontId = definitionFontId();
+  if (!pages.empty()) {
+    out.reserve(64);
+    for (const auto& element : pages[currentPage]->elements) {
+      if (element->getTag() != TAG_PageLine) continue;
+      const auto* line = static_cast<const PageLine*>(element.get());
+      const auto* block = line->getBlock();
+      if (!block || !block->valid()) continue;
+      const int lineFontId = block->getBlockStyle().resolveFontId(fontId);
+      for (uint16_t i = 0; i < block->wordCount(); i++) {
+        const char* text = block->wordText(i);
+        std::string word = trimToken(text, std::strlen(text));
+        if (word.empty()) continue;
+        const int32_t wordFont = block->wordFont(i);
+        const int font = wordFont != 0 ? static_cast<int>(wordFont) : lineFontId;
+        out.push_back({static_cast<int16_t>(body.x + line->xPos + block->wordXpos(i)),
+                       static_cast<int16_t>(body.y + line->yPos),
+                       static_cast<int16_t>(renderer.getTextWidth(font, text, block->wordStyle(i))),
+                       static_cast<int16_t>(renderer.getLineHeight(font)), std::move(word)});
+      }
+    }
+    return;
+  }
+  std::vector<PanelTextPages::Word> spans;
+  spans.reserve(64);
+  textPages.collectWords(renderer, fontId, body.x, body.y, definition, currentPage, spans);
+  out.reserve(spans.size());
+  for (const auto& span : spans) {
+    std::string word = trimToken(definition.c_str() + span.start, span.len);
+    if (word.empty()) continue;
+    out.push_back({span.x, span.y, span.width, span.height, std::move(word)});
+  }
+}
+
+bool DictionaryDefinitionActivity::startWordCursor() {
+  if (!showingEntry()) return false;
+  if (entries[currentEntry].definitionText) return nestedHost.startCjkCursor(renderer, definition);
+  std::vector<PanelWord> words;
+  {
+    RenderLock lock;  // measures through the font cache render shares
+    collectPageWords(words);
+  }
+  std::vector<DefinitionText::CharBox> boxes;
+  boxes.reserve(words.size());
+  cursorWords.clear();
+  cursorWords.reserve(words.size());
+  for (auto& word : words) {
+    boxes.push_back({word.x, word.y, word.width, word.height, static_cast<uint32_t>(cursorWords.size())});
+    cursorWords.push_back(std::move(word.text));
+  }
+  return nestedHost.startCursor(std::move(boxes));
+}
+
+std::unique_ptr<DictionaryDefinitionActivity> DictionaryDefinitionActivity::openNested(
+    GfxRenderer& renderer, MappedInputManager& mappedInput, const NestedLookup& source, const char* word,
+    const uint8_t chainDepth, StrId& failure) {
+  if (chainDepth > MAX_NESTED_LEVELS) {
+    failure = StrId::STR_LOOKUP_CHAIN_FULL;
+    return nullptr;
+  }
+  if (ESP.getMaxAllocHeap() < NESTED_LOOKUP_MIN_HEAP) {
+    LOG_ERR("DICT", "Nested lookup: maxAlloc %u below %u", ESP.getMaxAllocHeap(), NESTED_LOOKUP_MIN_HEAP);
+    failure = StrId::STR_LOW_MEMORY_RETRY;
+    return nullptr;
+  }
+  std::vector<Entry> found;
+  failure = StrId::STR_DICT_NOT_FOUND;
+  if (!source.lookup(source.ctx, word, found, failure) || found.empty()) return nullptr;
+  auto panel = makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(found));
+  if (!panel) {
+    LOG_ERR("DICT", "OOM: nested definition view");
+    failure = StrId::STR_LOW_MEMORY_RETRY;
+    return nullptr;
+  }
+  panel->setNestedLookup(source, chainDepth);
+  return panel;
+}
+
+// Opens `word`'s entries in a panel over this one. Back there returns here, on this page.
+void DictionaryDefinitionActivity::lookUpNested(const std::string& word) {
+  StrId failure = StrId::STR_DICT_NOT_FOUND;
+  auto child = openNested(renderer, mappedInput, nested, word.c_str(), static_cast<uint8_t>(depth + 1), failure);
+  if (!child) {
+    nestedHost.showNotice(failure);
+    requestUpdate();
+    return;
+  }
+  child->setPageTurnReversed(pageTurnReversed);
+  startActivityForResult(std::move(child), [this](const ActivityResult& result) {
+    // The power click and a long Back close the whole chain; a plain Back stops here.
+    if (auto chain = NestedLookupHost::chainResult(result, depth > 0)) {
+      setResult(std::move(*chain));
+      finish();
+      return;
+    }
+    ensureGlyphFallback();  // the closed panel released the shared fallback font on exit
+    requestUpdate();
+  });
+}
+
+// One page of a DefinitionText entry, as the word-lookup panels draw it: the reading and grammar
+// header, then the senses, scrolled by whole pages.
+void DictionaryDefinitionActivity::drawDefinitionText(const int x, const int startY) {
+  const Entry& entry = entries[currentEntry];
+  const BodyArea body = bodyArea();
+  const Rect area{x, startY, body.width, body.height};
+  const int fontId = DefinitionText::wordLookupFontId();
+  const uint16_t scale = DefinitionText::wordLookupFontScale();
+  sdFontSystem.ensureWordLookupFallback(renderer, fontId, DefinitionText::wordLookupFontPointSize());
+  const int lineHeight = std::max(1, renderer.getLineHeightScaled(fontId, scale));
+  const DefinitionText::EntryMetadata metadata{entry.reading, entry.grammar, std::string()};
+  const int scroll = currentPage * definitionTextLines;
+  const int metadataLines = DefinitionText::entryMetadataLineCount(renderer, area, fontId, scale, metadata);
+  const int metadataEndY =
+      DefinitionText::drawEntryMetadata(renderer, area, fontId, scale, metadata, scroll, lineHeight);
+  DefinitionText::WrapGeometry geometry;
+  geometry.valid = true;
+  geometry.fontId = fontId;
+  geometry.textX = x;
+  geometry.startY = metadataEndY - std::min(scroll, metadataLines) * lineHeight;
+  geometry.lineHeight = lineHeight;
+  geometry.maxWidth = body.width;
+  geometry.maxY = startY + body.height;
+  geometry.scrollOffset = std::max(0, scroll - metadataLines);
+  geometry.scale = scale;
+  DefinitionText::drawWrapped(renderer, fontId, definition, geometry.textX, geometry.startY, lineHeight,
+                              geometry.maxWidth, geometry.maxY, geometry.scrollOffset, scale);
+  nestedHost.drawnText = geometry;
 }

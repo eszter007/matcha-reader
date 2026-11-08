@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "DefinitionTextRenderer.h"
+#include "NestedLookupHost.h"
 #include "activities/Activity.h"
 #include "clippings/LookupClipHandles.h"
 #include "components/DictionaryPanel.h"
@@ -30,6 +32,11 @@ class DictionaryDefinitionActivity final : public Activity {
     // with this entry as its definition. Invalid = no saving.
     sentencemining::Draft draft;
     uint8_t dictSlot = 0;  // which of the lookup's dictionaries gave it: two can share a title
+    // A Japanese/Chinese dictionary entry, already in DefinitionText's layout (formatEntryBody),
+    // with its header fields apart. Drawn as the word-lookup panels draw theirs.
+    bool definitionText = false;
+    std::string reading;
+    std::string grammar;
   };
 
   // Supplies further entries while the view is up (a touch selection's other words). next() puts
@@ -42,9 +49,29 @@ class DictionaryDefinitionActivity final : public Activity {
     StrId (*failure)(void* ctx) = nullptr;
   };
 
+  // Looks up a word chosen inside a definition, in the dictionaries behind the panel. Fills `out`
+  // and returns true, or returns false with the reason in `failure`.
+  struct NestedLookup {
+    void* ctx = nullptr;
+    bool (*lookup)(void* ctx, const char* word, std::vector<Entry>& out, StrId& failure) = nullptr;
+  };
+
   explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         std::vector<Entry> entries);
 
+  // Enables lookups inside the definition: a long press on a word, or holding Confirm for a word
+  // cursor. `chainDepth` is how many panels of the chain are under this one.
+  void setNestedLookup(const NestedLookup& source, const uint8_t chainDepth = 0) {
+    nested = source;
+    depth = chainDepth;
+  }
+
+  // The first panel of a lookup chain started from another screen: `word`'s entries, or null with
+  // the reason in `failure` (no match, low memory). The caller opens it with startActivityForResult.
+  static std::unique_ptr<DictionaryDefinitionActivity> openNested(GfxRenderer& renderer,
+                                                                  MappedInputManager& mappedInput,
+                                                                  const NestedLookup& source, const char* word,
+                                                                  uint8_t chainDepth, StrId& failure);
   // Handles on the looked-up word behind the panel; a drag on one finishes with ClipStartResult.
   void setClipHandles(const LookupClipHandles& handles) { clipHandles = handles; }
   void setMoreEntries(const MoreEntries& source) { more = source; }
@@ -59,6 +86,22 @@ class DictionaryDefinitionActivity final : public Activity {
 
  private:
   bool pageTurnReversed = false;
+  NestedLookup nested;
+  uint8_t depth = 0;
+  // A word of the page on screen, where it is drawn.
+  struct PanelWord {
+    int16_t x;
+    int16_t y;
+    int16_t width;
+    int16_t height;
+    std::string text;
+  };
+  NestedLookupHost nestedHost;
+  // StarDict cursor: the text of each word box, by tag (DefinitionText entries tag byte offsets).
+  std::vector<std::string> cursorWords;
+  void collectPageWords(std::vector<PanelWord>& out) const;
+  bool startWordCursor();
+  void lookUpNested(const std::string& word);
   LookupClipHandles clipHandles;
   MoreEntries more;
   // Past the last entry while more are coming: a Loading page the reader can step onto, which the
@@ -100,7 +143,7 @@ class DictionaryDefinitionActivity final : public Activity {
 
   BodyArea bodyArea() const;
   bool layoutHtmlPages();
-  void drawBody(int fontId, int x, int startY) const;
+  void drawBody(int fontId, int x, int startY);
 
   std::vector<Entry> entries;
   size_t currentEntry = 0;
@@ -113,6 +156,9 @@ class DictionaryDefinitionActivity final : public Activity {
   // Empty means the plain-text span path below is active.
   std::vector<std::unique_ptr<Page>> pages;
   PanelTextPages textPages;  // plain-text path: wrapped spans of `definition`
+  // DefinitionText path (Entry::definitionText): lines per page.
+  int definitionTextLines = 1;
+  void drawDefinitionText(int x, int startY);
   int currentPage = 0;
   int totalPages = 1;
 };

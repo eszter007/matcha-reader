@@ -17,6 +17,9 @@
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
 #include "DictSourceNames.h"
+#include "DictionaryDefinitionActivity.h"
+#include "HapticFeedback.h"
+#include "JapaneseNestedLookup.h"
 #include "MappedInputManager.h"
 #include "PanelTouch.h"
 #include "ReaderUtils.h"
@@ -456,6 +459,17 @@ void MangaWordLookupActivity::performLookupImpl() {
 
 void MangaWordLookupActivity::loop() {
   if (miningFeedback_.popupExpired(millis())) requestUpdate();
+  if (nestedHost.cursorActive()) {
+    const auto input = nestedHost.handleCursorInput(mappedInput);
+    if (input != NestedLookupHost::CursorInput::None) requestUpdate();
+    if (input == NestedLookupHost::CursorInput::Picked) {
+      StrId failure = StrId::STR_NO_MATCH;
+      auto panel = japanese_nested::open(
+          renderer, mappedInput, japanese_nested::lookupTextAt(resultDefinition, nestedHost.pickedTag()), failure);
+      showNestedPanel(std::move(panel), failure);
+    }
+    return;
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput)) {
     ActivityResult result;
     result.isCancelled = true;
@@ -466,6 +480,10 @@ void MangaWordLookupActivity::loop() {
 
   // With a definition showing, Select saves it for sentence mining; before that it looks up.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    if (hasResult && NestedLookupHost::isConfirmHold(mappedInput)) {
+      if (nestedHost.startCjkCursor(renderer, resultDefinition)) requestUpdate();
+      return;
+    }
     if (hasResult) {
       saveSentence();
     } else {
@@ -496,6 +514,12 @@ void MangaWordLookupActivity::loop() {
     return;
   }
 
+  if (nestedHost.noticeExpired()) requestUpdate();
+  // A long press on a word of the definition opens that word's entry in a panel over this one.
+  if (int lx = 0, ly = 0; hasResult && mappedInput.wasScreenLongPress(lx, ly)) {
+    openNestedLookup(lx, ly);
+    return;
+  }
   // The gestures every floating panel answers, read in one place (PanelTouch): a tap outside the
   // card puts it away, up/down swipes read on like a button press, and a page turn skips to the
   // previous/next word like a hold.
@@ -589,6 +613,7 @@ void MangaWordLookupActivity::renderContentArea(const Rect& body) {
     const bool stillWorking = lookupInFlight || !scan.isDone();
     UITheme::drawCenteredText(renderer, body, UI_12_FONT_ID, body.y + body.height / 2,
                               stillWorking ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
+    nestedHost.drawnText.valid = false;
     return;
   }
 
@@ -609,6 +634,7 @@ void MangaWordLookupActivity::renderContentArea(const Rect& body) {
   const int maxDefY = definitionBody.y + definitionBody.height;
   const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
                                                 maxDefY, definitionScroll, defScale);
+  nestedHost.drawnText = {true, defFont, textX, defY, defLineH, maxWidth, maxDefY, definitionScroll, defScale};
 
   totalLines = metadataLines + wrap.totalLines;
   visibleCapacity = std::max(1, body.height / defLineH);
@@ -640,13 +666,15 @@ void MangaWordLookupActivity::render(RenderLock&&) {
                                             counterText.empty() ? nullptr : counterText.c_str(), kind,
                                             hasResult && mappedInput.hasTouch(), hasResult && miningFeedback_.saved());
   renderContentArea(layout.body);
-  DictionaryPanel::drawPopup(renderer, layout, miningFeedback_.popupText(millis()));
+  nestedHost.drawCursor(renderer);
+  DictionaryPanel::drawPopup(renderer, layout, nestedHost.popupText(miningFeedback_.popupText(millis())));
 
   // Directional labels for the same reason as the EPUB lookup panel: the hint must name the
   // direction on the rotated screen, which a fixed left/right pair cannot do.
   const auto labels =
       mappedInput.mapDirectionalLabels(tr(STR_BACK),
-                                       !hasResult                ? tr(STR_SELECT)
+                                       nestedHost.cursorActive() ? tr(STR_LOOKUP)
+                                       : !hasResult              ? tr(STR_SELECT)
                                        : miningFeedback_.saved() ? tr(STR_MINING_SAVED)
                                                                  : tr(STR_MINING_SAVE),
                                        tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
@@ -666,4 +694,34 @@ void MangaWordLookupActivity::countLookup() {
   if (std::find(countedLookups_.begin(), countedLookups_.end(), hash) != countedLookups_.end()) return;
   if (countedLookups_.empty()) countedLookups_.reserve(32);
   countedLookups_.push_back(hash);
+}
+void MangaWordLookupActivity::openNestedLookup(const int x, const int y) {
+  std::string word;
+  {
+    RenderLock lock;  // render() writes drawnText and shares the font cache the hit test measures with
+    word = japanese_nested::wordAt(renderer, nestedHost.drawnText, resultDefinition, x, y);
+  }
+  if (word.empty()) return;
+  haptic_feedback::touchAction();
+  StrId failure = StrId::STR_NO_MATCH;
+  auto panel = japanese_nested::open(renderer, mappedInput, word, failure);
+  showNestedPanel(std::move(panel), failure);
+}
+
+void MangaWordLookupActivity::showNestedPanel(std::unique_ptr<DictionaryDefinitionActivity> panel,
+                                              const StrId failure) {
+  if (!panel) {
+    nestedHost.showNotice(failure);
+    requestUpdate();
+    return;
+  }
+  panel->setPageTurnReversed(pageTurnReversed);
+  startActivityForResult(std::move(panel), [this](const ActivityResult& result) {
+    if (auto chain = NestedLookupHost::chainResult(result, /*nestedLevel=*/false)) {
+      setResult(std::move(*chain));
+      finish();
+      return;
+    }
+    requestUpdate();
+  });
 }

@@ -1246,6 +1246,23 @@ and a Chinese word may have several readings. Each entry gets its own page. Ever
 | Swipe up / down (touch) | Same as a press |
 | Page-turn swipe (touch) | Same as a hold |
 
+**Looking up a word inside an entry**
+
+Words in an entry can be looked up too, for example a word in an example sentence. The new entry opens over the
+one you were reading, in the same panel.
+
+- On a touch device, hold your finger on the word.
+- With buttons, hold **Select** (Confirm, about 1 s), or just press it in an entry that was itself opened this way. A box appears on the first word of the page. Move it with the
+  page buttons, then press **Look Up** (Confirm) to look it up. **Back** removes the box.
+- In Japanese and Chinese entries the box steps one character at a time; the lookup reads the longest word that starts
+  there.
+- **Back** returns to the previous entry, on the page you left. Hold **Back** (about 1 s) to close every entry
+  and return to the book. A short power click does the same, when the shortcut above is set.
+- Up to 8 entries can be open at once; a ninth shows "Too many lookups open". On the X4 and X3, which have
+  less memory, only one entry can be opened over the first. When memory is low, the lookup shows "Low memory - try again" and the
+  current entry stays open.
+- An entry opened this way is not saved for sentence mining, since it has no sentence from the book.
+
 **In manga**, lookup opens straight in the entry view:
 
 | Button | Action |

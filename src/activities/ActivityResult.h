@@ -94,13 +94,16 @@ struct FootnoteResult {
   std::string href;
 };
 
+// A nested dictionary lookup was left with a long Back: every panel of the chain closes.
+struct LookupChainCloseResult {};
+
 struct FilePathResult {
   std::string path;
 };
 
 using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
                                    IntervalResult, PageResult, ClippingResult, ClipStartResult, ProgressChangeResult,
-                                   NetworkModeResult, FootnoteResult, FilePathResult>;
+                                   NetworkModeResult, FootnoteResult, FilePathResult, LookupChainCloseResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

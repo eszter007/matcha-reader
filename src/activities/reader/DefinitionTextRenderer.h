@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "CrossPointSettings.h"
 #include "fontIds.h"
@@ -95,7 +97,48 @@ struct WrapResult {
 // maxWidth and draws the lines that fall inside [scrollOffset, maxY). Latin text breaks at
 // the last fitting space; CJK breaks per character, keeping sentence-ending punctuation
 // attached to its line rather than orphaned at a line start.
+// Where one CJK character of a definition was drawn: a stop for a word cursor.
+struct CharBox {
+  int16_t x;
+  int16_t y;
+  int16_t width;
+  int16_t height;
+  uint32_t offset;  // byte offset in the definition text
+};
+
 WrapResult drawWrapped(const GfxRenderer& renderer, int fontId, const std::string& text, int textX, int startY,
-                       int lineHeight, int maxWidth, int maxY, int scrollOffset, uint16_t scale = 256);
+                       int lineHeight, int maxWidth, int maxY, int scrollOffset, uint16_t scale = 256,
+                       std::vector<CharBox>* boxes = nullptr);
+
+// Where a panel last drew its definition with drawWrapped, so a touch can be mapped back to the
+// text. Written by the render task, read by the input loop.
+struct WrapGeometry {
+  bool valid = false;
+  int fontId = 0;
+  int textX = 0;
+  int startY = 0;
+  int lineHeight = 0;
+  int maxWidth = 0;
+  int maxY = 0;
+  int scrollOffset = 0;
+  uint16_t scale = 256;
+};
+
+// The CJK characters of `text` on screen, in reading order; full-width punctuation is left out.
+// Draws nothing. Empty when the heap cannot hold the list. Hold RenderLock: it measures through
+// the shared font cache.
+void collectCjkBoxes(const GfxRenderer& renderer, const WrapGeometry& geometry, const std::string& text,
+                     std::vector<CharBox>& out);
+
+// Byte offset in `text` of the CJK character drawn at (x, y), or npos. Hold RenderLock.
+inline size_t hitTest(const GfxRenderer& renderer, const WrapGeometry& geometry, const std::string& text, const int x,
+                      const int y) {
+  std::vector<CharBox> boxes;
+  collectCjkBoxes(renderer, geometry, text, boxes);
+  for (const auto& box : boxes) {
+    if (x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height) return box.offset;
+  }
+  return std::string::npos;
+}
 
 }  // namespace DefinitionText
