@@ -21,7 +21,7 @@
 #include "HapticFeedback.h"
 #include "JapaneseNestedLookup.h"
 #include "MappedInputManager.h"
-#include "PanelTouch.h"
+#include "PanelInput.h"
 #include "ReaderUtils.h"
 #include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
@@ -459,104 +459,56 @@ void MangaWordLookupActivity::performLookupImpl() {
 
 void MangaWordLookupActivity::loop() {
   if (miningFeedback_.popupExpired(millis())) requestUpdate();
-  if (nestedHost.cursorActive()) {
-    const auto input = nestedHost.handleCursorInput(mappedInput);
-    if (input != NestedLookupHost::CursorInput::None) requestUpdate();
-    if (input == NestedLookupHost::CursorInput::Picked) {
+  // The items here are the words of the page: skipping moves the word cursor.
+  const auto input = PanelInput::read(renderer, mappedInput, &nestedHost, hasResult, hasResult, pageTurnReversed);
+  if (input.redraw) requestUpdate();
+  switch (input.event) {
+    case PanelInput::Event::CursorPick: {
       StrId failure = StrId::STR_NO_MATCH;
-      auto panel = japanese_nested::open(
-          renderer, mappedInput, japanese_nested::lookupTextAt(resultDefinition, nestedHost.pickedTag()), failure);
+      auto panel = japanese_nested::open(renderer, mappedInput,
+                                         japanese_nested::lookupTextAt(resultDefinition, input.tag), failure);
       showNestedPanel(std::move(panel), failure);
-    }
-    return;
-  }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
-    return;
-  }
-
-  // With a definition showing, Select saves it for sentence mining; before that it looks up.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (hasResult && NestedLookupHost::isConfirmHold(mappedInput)) {
-      if (nestedHost.startCjkCursor(renderer, resultDefinition)) requestUpdate();
       return;
     }
-    if (hasResult) {
-      saveSentence();
-    } else {
-      performLookup();
-    }
-    return;
-  }
-
-  // A side button bound to Word Lookup mirrors the power-button shortcut: the click that opened
-  // this screen looks the highlighted word up, and only a click with a definition already showing
-  // leaves. Two clicks in, one click out. This view draws the cursor and the definition together,
-  // so "a definition is showing" IS hasResult -- the same thing Confirm produces above.
-  if (ReaderUtils::wordLookupSideToggle(mappedInput)) {
-    if (!hasResult) {
-      performLookup();
+    case PanelInput::Event::Back:
+    case PanelInput::Event::LongBack:
+    case PanelInput::Event::CloseAll:
+      finishCancelled();
       return;
-    }
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
-    return;
-  }
-  // Remapped page bindings (side buttons and the power button) move the word cursor here.
-  const auto step = ReaderUtils::lookupPanelStep(mappedInput);
-  if (step != ReaderUtils::PanelStep::None) {
-    moveCursor(step == ReaderUtils::PanelStep::Next ? 1 : -1);
-    return;
-  }
-
-  if (nestedHost.noticeExpired()) requestUpdate();
-  // A long press on a word of the definition opens that word's entry in a panel over this one.
-  if (int lx = 0, ly = 0; hasResult && mappedInput.wasScreenLongPress(lx, ly)) {
-    openNestedLookup(lx, ly);
-    return;
-  }
-  // The gestures every floating panel answers, read in one place (PanelTouch): a tap outside the
-  // card puts it away, up/down swipes read on like a button press, and a page turn skips to the
-  // previous/next word like a hold.
-  switch (const auto touch = PanelTouch::read(renderer, mappedInput, hasResult, pageTurnReversed)) {
-    case PanelTouch::Action::Close: {
-      ActivityResult result;
-      result.isCancelled = true;
-      setResult(std::move(result));
-      finish();
+    case PanelInput::Event::SideToggle:
+      // The click that opened this screen looks the highlighted word up; only a click with a
+      // definition already showing leaves. Two clicks in, one click out.
+      if (hasResult) {
+        finishCancelled();
+      } else {
+        performLookup();
+      }
       return;
-    }
-    case PanelTouch::Action::AddButton:
-      saveSentence();
+    case PanelInput::Event::StartCursor:
+      if (!hasResult) {
+        performLookup();  // a hold before the definition shows looks up, as a press does
+      } else if (nestedHost.startCjkCursor(renderer, resultDefinition)) {
+        requestUpdate();
+      }
       return;
-    case PanelTouch::Action::ScrollDown:
-    case PanelTouch::Action::ScrollUp:
-      readOn(touch == PanelTouch::Action::ScrollDown ? 1 : -1);
+    case PanelInput::Event::Confirm:
+      // With a definition showing, Select saves it for sentence mining; before that it looks up.
+      if (hasResult) {
+        saveSentence();
+      } else {
+        performLookup();
+      }
       return;
-    case PanelTouch::Action::Next:
-    case PanelTouch::Action::Previous:
-      moveCursor(touch == PanelTouch::Action::Next ? 1 : -1);
+    case PanelInput::Event::LongPress:
+      if (hasResult) openNestedLookup(input.x, input.y);
       return;
-    case PanelTouch::Action::None:
-      break;
-  }
-
-  // Every pair reads the same way, as in the book's lookup panel: a press reads on through the
-  // definition and onto the next word at its end; a hold skips to the next word.
-  int delta = 0;
-  switch (ReaderUtils::lookupPressAny(mappedInput, delta)) {
-    case ReaderUtils::LookupPress::Press:
-      readOn(delta);
-      break;
-    case ReaderUtils::LookupPress::Hold:
-      moveCursor(delta);
-      break;
-    case ReaderUtils::LookupPress::None:
+    case PanelInput::Event::ReadOn:
+      readOn(input.direction);
+      return;
+    case PanelInput::Event::Skip:
+      moveCursor(input.direction);
+      return;
+    case PanelInput::Event::None:
       break;
   }
 

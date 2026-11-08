@@ -7,7 +7,6 @@
 
 #include "activities/Activity.h"
 #include "components/PanelTextPages.h"
-#include "util/ButtonNavigator.h"
 
 class Epub;
 
@@ -46,13 +45,13 @@ class EpubReaderFootnotesActivity final : public Activity {
   PanelTextPages textPages;
   int scrollLine = 0;  // first line of the note shown; the note scrolls, notes page
 
-  ButtonNavigator buttonNavigator;
-
   // Loads note `index` and shows it from its top. Clamped to the notes that exist.
   void selectFootnote(int index);
   // Moves to the next (+1) or previous (-1) note; ends are hard stops.
-  void stepNote(int direction);
+  bool stepNote(int direction);  // false at either end
   // Scrolls the note by `lines`, clamped to its length.
-  void scrollBy(int lines);
+  // False when the text is already at that end.
+  bool scrollBy(int lines);
+  void jumpToNote();
   void cancel();
 };

@@ -1037,12 +1037,14 @@ The book remembers your way back. If the device goes to sleep, or you close the 
 
 To read footnotes without leaving the page, choose **Links and footnotes** in the Reader Menu. You can also set the Power button or a side button to **Footnotes**. The notes open in a small panel on top of the page, starting at the note closest to where you are. The bottom of the panel shows which note you are on, e.g. `2/3`.
 
-| In the footnote panel            | Buttons          | Touch                                           |
-| -------------------------------- | ---------------- | ----------------------------------------------- |
-| Scroll a long note               | **Up** / **Down** | Swipe up or down                                |
-| Next or previous note            | **Left** / **Right** | Your page-turn gesture                      |
-| Go to the note in the book       | **Confirm**      |                                                 |
-| Close the panel                  | **Back**         | Tap outside the panel                           |
+The panel uses the same buttons as the dictionary panels (see [6.1](#61-word-lookup)):
+
+| In the footnote panel            | Buttons                                   | Touch                  |
+| -------------------------------- | ----------------------------------------- | ---------------------- |
+| Read on: down a long note, then the next note | Press **Down** / **Right** (**Up** / **Left** goes back) | Swipe up or down |
+| Skip to the next or previous note | Hold **Down** / **Right** (or **Up** / **Left**) | Your page-turn gesture |
+| Go to the note in the book       | **Confirm** (or **Power**)                |                        |
+| Close the panel                  | **Back**                                  | Tap outside the panel  |
 
 <p align="center"><img src="docs/images/screenshots/footnotes.png" width="260" alt="A footnote in the floating panel, note 2 of 3"></p>
 
@@ -1348,8 +1350,8 @@ browser.
 1. The reader connects to the last Wi-Fi network you used. If there is none, or it does not answer, the Wi-Fi list
    opens. Pick a network and the translation continues.
 2. "Translating..." shows while it works.
-3. The translation opens in a panel over the page. A long one is split into pages: turn them with Left / Right,
-   the page buttons or your usual page-turn gesture.
+3. The translation opens in a panel over the page. A long one is split into pages: turn them with any arrow or
+   page button (pressed or held), a swipe up or down, or your usual page-turn gesture.
 4. Press Back, or tap outside the panel, to return to the book.
 
 <p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
