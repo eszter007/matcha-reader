@@ -50,10 +50,9 @@ void PagedReaderActivity::toggleBookmark() {
   if (count == 0) return;
 
   const size_t countBefore = cachedBookmarks.size();
-  cachedBookmarks.erase(
-      std::remove_if(cachedBookmarks.begin(), cachedBookmarks.end(),
-                     [&](const BookmarkEntry& b) { return isPageBookmark(b, count, currentPage); }),
-      cachedBookmarks.end());
+  cachedBookmarks.erase(std::remove_if(cachedBookmarks.begin(), cachedBookmarks.end(),
+                                       [&](const BookmarkEntry& b) { return isPageBookmark(b, count, currentPage); }),
+                        cachedBookmarks.end());
   if (cachedBookmarks.size() != countBefore) {
     bookmarkRemoved = true;
     currentPageBookmarked = false;
@@ -99,8 +98,8 @@ void PagedReaderActivity::launchPercentJump() {
                                                                               /*scrubOnEnter=*/true),
                          [this, initialPercent](const ActivityResult& result) {
                            // The picker opens at the end of the visible page, which maps to the next page.
-                           const int percent = result.isCancelled ? initialPercent
-                                                                  : std::get<PercentResult>(result.data).percent;
+                           const int percent =
+                               result.isCancelled ? initialPercent : std::get<PercentResult>(result.data).percent;
                            if (percent != initialPercent) jumpToPercent(percent);
                            requestUpdate();
                          });
@@ -118,14 +117,15 @@ bool PagedReaderActivity::handlePagedMenuAction(const EpubReaderMenuActivity::Me
       return true;
     case MenuAction::BOOKMARKS:
       if (!hasBook()) return true;
-      startActivityForResult(std::make_unique<MangaBookmarksActivity>(renderer, mappedInput, positionKey(), bookmarkToc()),
-                             [this](const ActivityResult& result) {
-                               if (!result.isCancelled && hasBook()) {
-                                 const uint32_t target = std::get<PageResult>(result.data).page;
-                                 if (target < pageCount()) goToPage(target);
-                               }
-                               requestUpdate();
-                             });
+      startActivityForResult(
+          std::make_unique<MangaBookmarksActivity>(renderer, mappedInput, positionKey(), bookmarkToc()),
+          [this](const ActivityResult& result) {
+            if (!result.isCancelled && hasBook()) {
+              const uint32_t target = std::get<PageResult>(result.data).page;
+              if (target < pageCount()) goToPage(target);
+            }
+            requestUpdate();
+          });
       return true;
     case MenuAction::SCREENSHOT:
       pendingScreenshot = true;
