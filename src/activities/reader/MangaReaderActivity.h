@@ -381,6 +381,7 @@ class MangaReaderActivity final : public PagedReaderActivity {
 
   void nextPanel();
   void prevPanel();
+  static constexpr uint32_t SKIP_PAGE_COUNT = 10;  // pages a held turn skips
   void nextPage(bool keepPanelMode = false);
   void prevPage(bool keepPanelMode = false);
   int findPanelWithCrop(int start, int step) const;
