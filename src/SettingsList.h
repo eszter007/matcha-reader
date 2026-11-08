@@ -13,6 +13,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "CrossPointSettings.h"
@@ -397,81 +398,104 @@ inline bool isHiddenOnDevice(const SettingInfo& s) {
   }
 }
 
-// categoryFilter/includeTextSettingsEntries let embedded device screens copy only
-// entries they can display while the reader keeps its memory-heavy state alive.
+// Replaces the font family and size entries with options built from the fonts
+// present; other entries are left unchanged.
+inline void buildFontOptions(SettingInfo& s, const SdCardFontRegistry* registry) {
+  if (s.nameId == StrId::STR_FONT_FAMILY && registry && registry->getFamilyCount() > 0) {
+    s = buildFontFamilySetting(registry);
+  } else if (s.nameId == StrId::STR_FONT_SIZE) {
+    // Unconditional: even with no SD fonts installed the sizes come from the
+    // built-in family rather than a fixed Small/Medium/Large/XL enum.
+    s = buildFontSizeSetting(registry);
+  }
+}
+
+// Which rows a settings screen shows. category STR_NONE_OPT means every category;
+// includeTextSettingsEntries false leaves out the rows the Text Settings screen owns.
+struct SettingsListOptions {
+  StrId category = StrId::STR_NONE_OPT;
+  bool includeTextSettingsEntries = true;
+  std::string bookLanguage;
+  bool showAppliedDictionary = false;
+};
+
+// Visits the settings shown on this device in list order, one at a time, for
+// callers that need not hold the whole list in memory. Entries whose key
+// wants(key) rejects are skipped; wants gets nullptr for entries without a key.
+// The visited entry is valid only during the callback; move from it to keep it.
+// The dictionary, its install status and the word lookup font size are emitted
+// together just before the first Controls row (or last, with none); the Home
+// button rows follow the base list.
+// A row added here whose value is saved belongs in forEachPersistableSetting() too.
+template <typename Wants, typename Visit>
+void forEachSetting(const SdCardFontRegistry* registry, const std::vector<DictionaryEntry>* dictionaries, Wants wants,
+                    Visit visit, const SettingsListOptions& options = {}) {
+  const bool hasDictionaries = dictionaries && !dictionaries->empty();
+  const bool readerRows = options.category == StrId::STR_NONE_OPT || options.category == StrId::STR_CAT_READER;
+  bool insertPending = hasDictionaries || readerRows;
+  const auto offer = [&](SettingInfo& s) {
+    if (!wants(s.key)) return;
+    buildFontOptions(s, registry);
+    visit(s);
+  };
+  const auto insertDictionaryRows = [&] {
+    insertPending = false;
+    if (hasDictionaries) {
+      SettingInfo dictionary =
+          buildDictionarySetting(*dictionaries, options.bookLanguage, options.showAppliedDictionary);
+      const bool global = dictionary.nameId == StrId::STR_FALLBACK_DICTIONARY;
+      offer(dictionary);
+      // Global settings only: in a book the dictionary row already names what that book uses.
+      if (global && readerRows) {
+        static constexpr std::pair<StrId, const char*> STATUSES[] = {
+            {StrId::STR_DICT_STATUS_JA, "jp"}, {StrId::STR_DICT_STATUS_ZH, "zh"}, {StrId::STR_DICT_STATUS_YUE, "yue"}};
+        for (const auto& [nameId, folder] : STATUSES) {
+          SettingInfo status = buildDictionaryStatusSetting(nameId, folder);
+          offer(status);
+        }
+      }
+    }
+    if (readerRows) {
+      SettingInfo fontSize = buildWordLookupFontSizeSetting();
+      offer(fontSize);
+    }
+  };
+  const auto each = [&](SettingInfo& s) {
+    if (insertPending && s.category == StrId::STR_CAT_CONTROLS) insertDictionaryRows();
+    offer(s);
+  };
+  auto base = [&](SettingInfo& s) {
+    if (options.category != StrId::STR_NONE_OPT && s.category != options.category) return;
+    if (!options.includeTextSettingsEntries && s.inTextSettings) return;
+    if (isHiddenOnDevice(s)) return;
+    each(s);
+  };
+  forEachBaseSetting(base);
+  if (BoardConfig::hasHomeKey()) {
+    for (unsigned i = 0; i < 3; ++i) {
+      SettingInfo gesture = home_button::setting(i);
+      each(gesture);
+    }
+  }
+  if (insertPending) insertDictionaryRows();
+}
+
+// UI callers own the list for runtime filtering and font/dictionary options.
 inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
                                                 const std::vector<DictionaryEntry>* dictionaries = nullptr,
                                                 const StrId categoryFilter = StrId::STR_NONE_OPT,
                                                 const bool includeTextSettingsEntries = true,
                                                 const std::string& bookLanguage = {},
                                                 const bool showAppliedDictionary = false) {
-  // Embedded settings screens run while the reader still owns its page, EPUB and font caches,
-  // so only the rows a screen shows are kept, each built as it is visited.
-  const auto shown = [categoryFilter, includeTextSettingsEntries](const SettingInfo& setting) {
-    if (categoryFilter != StrId::STR_NONE_OPT && setting.category != categoryFilter) return false;
-    if (!includeTextSettingsEntries && setting.inTextSettings) return false;
-    return !isHiddenOnDevice(setting);
-  };
-  // Sized to the rows shown, plus every row added below, so the one allocation is as small as the
-  // screen allows and the list never grows: a filtered screen asking for the whole table's room
-  // is the large contiguous allocation that aborts on a fragmented heap.
-  constexpr size_t ADDED_ROWS = 8;  // 3 home buttons, dictionary, word lookup font size, 3 statuses
+  const SettingsListOptions options{categoryFilter, includeTextSettingsEntries, bookLanguage, showAppliedDictionary};
+  const auto all = [](const char*) { return true; };
+  // Counted first and reserved exactly, so the one allocation is as small as the screen allows:
+  // embedded settings screens run while the reader still owns its page, EPUB and font caches.
   size_t count = 0;
-  auto countShown = [&count, &shown](SettingInfo& setting) {
-    if (shown(setting)) ++count;
-  };
-  forEachBaseSetting(countShown);
+  forEachSetting(registry, dictionaries, all, [&count](SettingInfo&) { ++count; }, options);
   std::vector<SettingInfo> v;
-  v.reserve(count + ADDED_ROWS);
-  auto keep = [&v, &shown](SettingInfo& setting) {
-    if (shown(setting)) v.push_back(std::move(setting));
-  };
-  forEachBaseSetting(keep);
-  if (BoardConfig::hasHomeKey()) {
-    for (unsigned i = 0; i < 3; ++i) {
-      v.push_back(home_button::setting(i));
-    }
-  }
-  if (registry && registry->getFamilyCount() > 0) {
-    auto it = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.nameId == StrId::STR_FONT_FAMILY; });
-    if (it != v.end()) {
-      *it = buildFontFamilySetting(registry);
-    }
-  }
-  {
-    // Unconditional: even with no SD fonts installed the sizes come from the
-    // built-in family rather than a fixed Small/Medium/Large/XL enum.
-    auto it = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.nameId == StrId::STR_FONT_SIZE; });
-    if (it != v.end()) {
-      *it = buildFontSizeSetting(registry);
-    }
-  }
-  if (dictionaries && !dictionaries->empty()) {
-    // Insert at the end of the Reader category (just before the first Controls entry).
-    auto it =
-        std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.category == StrId::STR_CAT_CONTROLS; });
-    v.insert(it, buildDictionarySetting(*dictionaries, bookLanguage, showAppliedDictionary));
-  }
-  if (categoryFilter == StrId::STR_NONE_OPT || categoryFilter == StrId::STR_CAT_READER) {
-    // Keep this immediately below the dictionary row in Reader Settings, when present.
-    auto it = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) {
-      return s.nameId == StrId::STR_DICTIONARY || s.nameId == StrId::STR_FALLBACK_DICTIONARY;
-    });
-    if (it != v.end()) {
-      v.insert(it + 1, buildWordLookupFontSizeSetting());
-    } else {
-      it = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.category == StrId::STR_CAT_CONTROLS; });
-      v.insert(it, buildWordLookupFontSizeSetting());
-    }
-    // Global settings only: in a book the dictionary row already names what that book uses.
-    it = std::find_if(v.begin(), v.end(),
-                      [](const SettingInfo& s) { return s.nameId == StrId::STR_FALLBACK_DICTIONARY; });
-    if (it != v.end()) {
-      v.insert(it + 1, {buildDictionaryStatusSetting(StrId::STR_DICT_STATUS_JA, "jp"),
-                        buildDictionaryStatusSetting(StrId::STR_DICT_STATUS_ZH, "zh"),
-                        buildDictionaryStatusSetting(StrId::STR_DICT_STATUS_YUE, "yue")});
-    }
-  }
+  v.reserve(count);
+  forEachSetting(registry, dictionaries, all, [&v](SettingInfo& s) { v.push_back(std::move(s)); }, options);
   return v;
 }
 
@@ -484,6 +508,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
 // reverting to Dictionary. Every row is persisted whatever the board: a value is not the UI's to
 // drop. Filtering this walk by board once cost the Reader Menu Style its key on button boards --
 // the row was shown and applied, then reverted to List on every boot.
+// A saved row added outside the base list belongs in forEachSetting() too.
 template <typename Fn>
 inline void forEachPersistableSetting(Fn&& fn) {
   auto each = [&fn](SettingInfo& info) { fn(static_cast<const SettingInfo&>(info)); };

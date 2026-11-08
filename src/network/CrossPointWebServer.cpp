@@ -1698,12 +1698,10 @@ void CrossPointWebServer::handleGetSettings() const {
   bool seenFirst = false;
   JsonDocument doc;
 
-  // The fork builds the whole list (its settings stay header-only); entries are still serialized
-  // and sent one at a time.
-  const auto settings = getSettingsList(&sdFontSystem.registry(), &dictionaries);
-  for (const SettingInfo& s : settings) {
-    if (!wants(s.key)) continue;
-    if (s.webHidden) continue;
+  // One entry at a time: building the whole list first can exhaust the heap
+  // right after a plugin relay.
+  forEachSetting(&sdFontSystem.registry(), &dictionaries, wants, [&](const SettingInfo& s) {
+    if (s.webHidden) return;
 
     doc.clear();
     doc["key"] = s.key;
@@ -1770,20 +1768,20 @@ void CrossPointWebServer::handleGetSettings() const {
         break;
       }
       default:
-        continue;
+        return;
     }
 
     // A truncated options list would shift option indexes, so skip the entry instead.
     if (doc.overflowed()) {
       LOG_ERR("WEB", "OOM: setting JSON for %s", s.key);
-      continue;
+      return;
     }
     if (seenFirst) reply.write(',');
     seenFirst = true;
     serializeJson(doc, reply);
     yield();                          // Yield to allow WiFi and other tasks to process during a slow send
     resetTaskWatchdogIfSubscribed();  // Reset watchdog: writing a full chunk blocks on the network
-  }
+  });
 
   reply.write("]");
   reply.end();
