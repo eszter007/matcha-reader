@@ -19,6 +19,7 @@ class Page;
 #include "activities/Activity.h"
 #include "clippings/LookupClipHandles.h"
 #include "components/DictionaryPanel.h"
+#include "util/LookupCounter.h"
 #include "util/SentenceMining.h"
 
 // What the vertical reader hands the panel so the word cursor can be shown ON the page (select
@@ -365,11 +366,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   // Sentence mining: saves the visible entry with its sentence (Select, or the panel's + button).
   // The corner turns into a check once it is saved, and a short popup reports each save.
   MiningContext mining_;
-  // Hashes of the headwords shown this session, so browsing back and forth counts each word
-  // once; the total goes to BookStats in one write on exit.
-  static constexpr size_t MAX_COUNTED_LOOKUPS = 256;
-  std::vector<uint32_t> countedLookups_;
-  void countLookup();
+  LookupCounter lookupCounter;  // distinct headwords shown, for the book's stats
   std::string miningSentence() const;
   void performLookup();
   void performLookupImpl();

@@ -302,7 +302,7 @@ void EpubReaderWordLookupActivity::onExit() {
     RenderLock lock;
     sdFontSystem.releaseWordLookupFallback(renderer);
   }
-  BookStats::addCounts(mining_.bookPath.c_str(), static_cast<uint32_t>(countedLookups_.size()), 0);
+  lookupCounter.flush(mining_.bookPath);
   Activity::onExit();
 }
 
@@ -1616,7 +1616,7 @@ void EpubReaderWordLookupActivity::performLookup() {
     lowMemoryResult = false;
     lastLookupHeapLimited = false;
   }
-  countLookup();
+  if (hasResult) lookupCounter.count(resultHeadword);
   lookupInFlight = false;
 }
 
@@ -2506,14 +2506,6 @@ void EpubReaderWordLookupActivity::drawPageBehindPanel() {
     drawnBoxCount = boxes;
     invertBoxes(drawnBoxes, drawnBoxCount);
   }
-}
-
-void EpubReaderWordLookupActivity::countLookup() {
-  if (!hasResult || resultHeadword.empty() || countedLookups_.size() >= MAX_COUNTED_LOOKUPS) return;
-  const auto hash = static_cast<uint32_t>(std::hash<std::string>{}(resultHeadword));
-  if (std::find(countedLookups_.begin(), countedLookups_.end(), hash) != countedLookups_.end()) return;
-  if (countedLookups_.empty()) countedLookups_.reserve(32);
-  countedLookups_.push_back(hash);
 }
 
 // The result's pages from `first` on as panel entries, each with the card a save writes. The
