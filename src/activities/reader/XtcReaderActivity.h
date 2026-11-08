@@ -21,7 +21,7 @@
 class XtcReaderActivity final : public PagedReaderActivity {
   std::shared_ptr<Xtc> xtc;
 
-  void launchMenu();
+  void launchMenu() override;
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
 
   // Page pixel buffer (a 1-bit page, or plane 1 of a 2-bit page), allocated once and reused for

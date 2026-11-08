@@ -400,7 +400,7 @@ class MangaReaderActivity final : public PagedReaderActivity {
   void fillSyncBook(PagedSyncBook& paged) const override;
 
   void launchWordLookupCurrentView();
-  void launchMenu();
+  void launchMenu() override;
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
 };

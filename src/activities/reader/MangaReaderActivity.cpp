@@ -553,19 +553,7 @@ void MangaReaderActivity::readerLoop() {
     return;
   }
 
-  if (!ignoreNextConfirmRelease && ReaderUtils::confirmHoldStartsSync(mappedInput)) {
-    onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SYNC);
-    return;
-  }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || touchMenu) {
-    if (ignoreNextConfirmRelease) {
-      ignoreNextConfirmRelease = false;
-    } else if (viewMode == ViewMode::PanelZoom || viewMode == ViewMode::FullPage) {
-      if (touchMenu) haptic_feedback::touchAction();
-      launchMenu();
-      return;
-    }
-  }
+  if (handleMenuInput(touchMenu)) return;
 
   // Resolve against the reader's OWN orientation, not the live one: a panel whose aspect does not
   // match the screen is displayed rotated 90 degrees, and that rotation stays applied while the

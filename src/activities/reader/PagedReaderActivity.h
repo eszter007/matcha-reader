@@ -49,6 +49,10 @@ class PagedReaderActivity : public ReaderActivity {
   bool expireBookmarkMessage();
   // Handles the menu actions every paged reader shares. False for the others.
   bool handlePagedMenuAction(EpubReaderMenuActivity::MenuAction action);
+  virtual void launchMenu() = 0;
+  // Confirm: a hold starts a sync, a release (or the touch menu gesture) opens the reader menu.
+  // True when it handled the input.
+  bool handleMenuInput(bool touchMenu);
   void launchPercentJump();
   bool launchSync(bool withClockAndInsights);
 

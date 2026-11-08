@@ -85,20 +85,7 @@ void XtcReaderActivity::readerLoop() {
 
   // Open the reader menu on Confirm (swallow the release that opened the book from the library),
   // or on the touch menu gesture.
-  if (!ignoreNextConfirmRelease && ReaderUtils::confirmHoldStartsSync(mappedInput)) {
-    onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SYNC);
-    return;
-  }
-  const bool touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || touchMenu) {
-    if (ignoreNextConfirmRelease) {
-      ignoreNextConfirmRelease = false;
-    } else {
-      if (touchMenu) haptic_feedback::touchAction();
-      launchMenu();
-    }
-    return;
-  }
+  if (handleMenuInput(ReaderUtils::isTouchMenuGesture(renderer, mappedInput))) return;
 
   if (handleBackNavigation()) return;
 
