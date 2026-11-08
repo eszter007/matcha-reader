@@ -116,6 +116,7 @@ void DictionaryDefinitionActivity::prepareDraft(Entry& entry) {
 void DictionaryDefinitionActivity::fetchMoreEntries() {
   std::vector<Entry> fresh;
   const bool moreToCome = more.next(more.ctx, entries, fresh);
+  if (!fresh.empty()) recordVocabulary(fresh.front());
   RenderLock lock;
   if (!moreToCome) {
     if (more.failure) emptyMessage = more.failure(more.ctx);
@@ -164,8 +165,24 @@ void DictionaryDefinitionActivity::onEnter() {
     requestUpdate();
     return;
   }
+  recordVocabulary(entries.front());
   showEntry(startEntry < entries.size() ? startEntry : 0, false);
   requestUpdate();
+}
+
+// One record per looked-up word. The word as the page shows it is the <b> span of the card's
+// sentence; a nested panel's word has no sentence, and without either the headword stands in.
+void DictionaryDefinitionActivity::recordVocabulary(const Entry& entry) const {
+  if (!recordsVocabulary || !SETTINGS.vocabularyHistoryEnabled) return;
+  std::string word = nestedWord;
+  const std::string& sentence = entry.draft.card.sentence;
+  const size_t open = sentence.find("<b>");
+  const size_t close = open == std::string::npos ? std::string::npos : sentence.find("</b>", open + 3);
+  if (word.empty() && close != std::string::npos) word = htmlToPlainText(sentence.substr(open + 3, close - open - 3));
+  if (word.empty()) word = entry.headword;
+  if (!VocabularyStore::append(vocabulary, word, entry.headword, entry.definition, entry.html)) {
+    LOG_ERR("VOCAB", "Lookup not saved to vocabulary history");
+  }
 }
 
 void DictionaryDefinitionActivity::showEntry(const size_t index, const bool atLastPage) {
@@ -242,6 +259,7 @@ bool DictionaryDefinitionActivity::stepWord(const int direction, const bool atEn
     for (auto& entry : entries) prepareDraft(entry);
     showEntry(direction > 0 ? 0 : entries.size() - 1, atEnd);
   }
+  recordVocabulary(entries.front());  // outside the lock: an SD write must not hold up the render task
   requestUpdate();
   return true;
 }
@@ -605,6 +623,10 @@ void DictionaryDefinitionActivity::lookUpNested(const std::string& word) {
     return;
   }
   child->setPageTurnReversed(pageTurnReversed);
+  if (recordsVocabulary) {
+    child->setVocabulary(vocabulary);
+    child->nestedWord = word;
+  }
   startActivityForResult(std::move(child), [this](const ActivityResult& result) {
     // The power click and a long Back close the whole chain; a plain Back stops here.
     if (auto chain = NestedLookupHost::chainResult(result, depth > 0)) {

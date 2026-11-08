@@ -238,6 +238,7 @@ void MangaWordLookupActivity::openPanel() {
   panel->setWordSteps({this, &MangaWordLookupActivity::stepWord});
   panel->setNestedLookup({nullptr, &japanese_nested::lookup});
   panel->setPageTurnReversed(pageTurnReversed);
+  if (SETTINGS.vocabularyHistoryEnabled) panel->setVocabulary(vocabularyContext(mining_));
   // Back, a tap outside and the power click all return to the comic.
   startActivityForResult(std::move(panel), [this](const ActivityResult&) { finishCancelled(); });
 }

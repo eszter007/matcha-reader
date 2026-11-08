@@ -2636,6 +2636,7 @@ void EpubReaderWordLookupActivity::openPanel() {
   }
   panel->setNestedLookup({nullptr, &japanese_nested::lookup});
   panel->setPageTurnReversed(pageTurnReversed);
+  if (SETTINGS.vocabularyHistoryEnabled) panel->setVocabulary(vocabularyContext(mining_));
   startActivityForResult(std::move(panel), [this](const ActivityResult& result) {
     panelOpen = false;
     if (std::holds_alternative<ClipStartResult>(result.data)) {

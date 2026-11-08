@@ -556,6 +556,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     WORD_LOOKUP_FONT_SIZE_COUNT
   };
   uint8_t wordLookupFontSize = WORD_LOOKUP_FONT_SMALL;
+  // Append every successful dictionary lookup to /Vocabulary.txt (default off).
+  uint8_t vocabularyHistoryEnabled = 0;
   // Reader menu open gesture (SHOW_READER_MENU: off / center tap / bottom-edge
   // up-swipe). Only surfaced on home-key boards, where Home is the capacitive
   // key and the bottom edge is free; elsewhere it stays at the Tap default.

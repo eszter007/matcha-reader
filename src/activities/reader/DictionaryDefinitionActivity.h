@@ -15,6 +15,7 @@
 #include "components/DictionaryPanel.h"
 #include "components/PanelTextPages.h"
 #include "util/SentenceMining.h"
+#include "vocabulary/VocabularyStore.h"
 
 // Paged viewer for the definitions of one word, one entry per dictionary that has it, read as a
 // single flow: paging past an entry's last page opens the next. HTML definitions are laid out
@@ -108,6 +109,12 @@ class DictionaryDefinitionActivity final : public Activity {
   }
   // The entry the panel opens on (the grammar entry when that is the better match).
   void setStartEntry(const size_t index) { startEntry = index; }
+  // Records each looked-up word to vocabulary history (/Vocabulary.txt), with where it was read.
+  // Set by lookup screens only; a nested panel inherits it.
+  void setVocabulary(VocabularyContext context) {
+    vocabulary = std::move(context);
+    recordsVocabulary = true;
+  }
   bool skipLoopDelay() override { return more.next != nullptr || hostBusy; }
 
   // The book behind the panel reverses its page turns (Reversed Page Turn in a vertical book).
@@ -119,6 +126,10 @@ class DictionaryDefinitionActivity final : public Activity {
 
  private:
   bool pageTurnReversed = false;
+  VocabularyContext vocabulary;
+  bool recordsVocabulary = false;
+  std::string nestedWord;  // the word a nested panel was opened for
+  void recordVocabulary(const Entry& entry) const;
   NestedLookup nested;
   uint8_t depth = 0;
   // A word of the page on screen, where it is drawn.

@@ -69,6 +69,14 @@ On the very first lookup with a dictionary (and again whenever the `.idx` or `.s
 
 The rules are selected by the book's language tag, falling back to the language folder the dictionary sits in (`/dictionaries/fr/...`) for a book with no tag. They cover regular morphology only: irregular verbs that share no stem with their lemma (French `est`, `ont`, `fut`, `vais`), and a verb's irregular passé simple (French `connus`, `naquit`), are not rule-reachable and need a `.syn`, which resolves them in one step and works in any language.
 
+## Vocabulary History
+
+With **Reader Settings → Save Vocabulary Lookups** on, every successful lookup is appended to `/Vocabulary.txt` at the root of the SD card: StarDict lookups, Japanese and Chinese book lookups, manga lookups, and lookups made inside a definition. It is separate from sentence mining and from `My Clippings.txt`. Failed lookups are not recorded, and an SD-card write failure does not interrupt the dictionary.
+
+The file uses UTF-8 **JSON Lines**: one JSON object per line, versioned with `"v":1`, in the same layout as CrossPoint's vocabulary history. Each record has a random `id`, `word` (the word as the page shows it), `headword` (dictionary match), `definition` (plain text), and `timestamp` (Unix seconds, or `null` when the clock is unavailable). It also includes `title`, `author`, `series`, `series_index`, `chapter`, `page` (1-based chapter page), `spine` (0-based EPUB spine index), and `start_offset` (always `null`: the lookup screens do not track the word's source offset). `chapter` is the TOC entry of the spine item being read. Manga records leave `chapter` empty and `page` and `spine` at 0. A lookup made inside a definition records the book of the lookup it was opened from. Definitions are limited to 2 KiB, words and headwords to 160 UTF-8 bytes each, and book fields to bounded lengths; `definition_truncated` says whether the definition was shortened.
+
+One record is written per looked-up word: stepping to the next word or a selection that brings in more words adds a record for each word. Repeated lookups are recorded separately.
+
 ## The Definition Screen
 
 When a word is found, the definition screen shows the matched headword at the top and the definition text below, with a page counter for long definitions.

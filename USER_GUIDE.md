@@ -1338,6 +1338,29 @@ The file is plain CSV, so a spreadsheet or another flashcard app can open it too
 chip and loses the time on a restart, so the date can be wrong or empty until the next Wi-Fi connection. To set
 the clock at any time, see [Syncing the Clock](#syncing-the-clock).
 
+#### Vocabulary history
+
+Sentence mining saves only the words you choose. Vocabulary history keeps every word you look up, in every
+language and in manga too, without a button press. Turn it on in **Reader Settings → Save Vocabulary Lookups**
+(off by default). It works alongside sentence mining: neither changes what the other saves.
+
+Each lookup adds one line to `Vocabulary.txt` at the root of the SD card. Looking up a word again adds another
+line. When you step to the next word or a selection brings in more words, each word gets its own line. A word
+looked up inside a definition is saved too, under the book the first lookup was made in.
+
+Each line is a JSON object (JSON Lines), the same format as CrossPoint's vocabulary history. It holds:
+
+| Field | Contents |
+| --- | --- |
+| `word` | The word as it appears on the page |
+| `headword` | The dictionary entry it matched |
+| `definition` | The entry as plain text, shortened past 2 KB (`definition_truncated` says so) |
+| `title`, `author`, `series`, `series_index` | The book. Manga have no series |
+| `chapter`, `page`, `spine` | Where you were reading. `page` is the page in the chapter, counted from 1. Manga leave these at 0 |
+| `timestamp` | When, in Unix seconds, or `null` while the clock is not set |
+
+If the file cannot be written, the lookup still opens and nothing is saved.
+
 ### 6.2 Page Translation
 
 Reader menu → **Translate Page** translates the current page into English.
