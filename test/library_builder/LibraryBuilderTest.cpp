@@ -706,4 +706,3 @@ TEST_F(LibraryBuilderTest, SubRootScansKeepNestedAndSubstringResourceNames) {
     EXPECT_GT(fake::directoryEntriesByPath[bookPath], 0u);
   }
 }
-
