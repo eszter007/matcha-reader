@@ -12,6 +12,10 @@ class Page;
 #include <string>
 #include <vector>
 
+#include "DefinitionTextRenderer.h"
+#include "DictionaryDefinitionActivity.h"
+#include "JapaneseNestedLookup.h"
+#include "NestedLookupHost.h"
 #include "WordSelectionScan.h"
 #include "activities/Activity.h"
 #include "clippings/LookupClipHandles.h"
@@ -102,6 +106,9 @@ class EpubReaderWordLookupActivity final : public Activity {
 
  private:
   bool pageTurnReversed = false;
+  NestedLookupHost nestedHost;  // long press / hold Confirm: look up a word of the definition
+  void openNestedLookup(int x, int y);
+  void showNestedPanel(std::unique_ptr<DictionaryDefinitionActivity> panel, StrId failure);
   WordSelectionScan scan;
 
   // Select: the page with a highlight box on the current word. Definition: the full-screen

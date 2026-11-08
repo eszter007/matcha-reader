@@ -147,6 +147,9 @@ class DictionaryWordSelectActivity final : public Activity {
   LookupStatus selectionStatus;
   static StrId failureMessage(const LookupStatus& status);
   static StrId selectionFailure(void* ctx);
+  // A word chosen inside a definition, looked up in the same dictionaries (see NestedLookup).
+  static bool nestedLookup(void* ctx, const char* word, std::vector<DictionaryDefinitionActivity::Entry>& out,
+                           StrId& failure);
   void lookUpInto(const char* text, const std::string& sentence,
                   const std::vector<DictionaryDefinitionActivity::Entry>& shown,
                   std::vector<DictionaryDefinitionActivity::Entry>& out, size_t byteLimit, LookupStatus& status);

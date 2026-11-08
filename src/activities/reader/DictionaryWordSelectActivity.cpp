@@ -412,6 +412,7 @@ void DictionaryWordSelectActivity::performLookup() {
       return;
     }
     definitionView->setPageTurnReversed(pageTurnReversed);
+    definitionView->setNestedLookup({this, &DictionaryWordSelectActivity::nestedLookup});
     if (moreWords) {
       definitionView->setMoreEntries(
           {this, &DictionaryWordSelectActivity::nextSelectionWord, &DictionaryWordSelectActivity::selectionFailure});
@@ -814,6 +815,22 @@ bool DictionaryWordSelectActivity::nextSelectionWord(void* ctx,
   if (!status.ok && kept.ok) kept = status;
   if (status.ok && kept.ok && kept.result == Dictionary::LookupResult::NotFound) kept.result = status.result;
   return true;
+}
+
+bool DictionaryWordSelectActivity::nestedLookup(void* ctx, const char* word,
+                                                std::vector<DictionaryDefinitionActivity::Entry>& out, StrId& failure) {
+  auto* self = static_cast<DictionaryWordSelectActivity*>(ctx);
+  // The selection walk counts its own bytes in selectionHeldBytes; a nested word must not use them up.
+  const size_t heldBefore = self->selectionHeldBytes;
+  self->selectionHeldBytes = 0;
+  out.reserve(self->dictCount);
+  LookupStatus status;
+  self->lookUpInto(word, std::string(), {}, out, MAX_SELECTION_BYTES, status);
+  self->selectionHeldBytes = heldBefore;
+  // Not minable: a card needs the book's sentence, and this word has none.
+  for (auto& entry : out) entry.draft = {};
+  if (out.empty()) failure = failureMessage(status);
+  return !out.empty();
 }
 
 StrId DictionaryWordSelectActivity::selectionFailure(void* ctx) {

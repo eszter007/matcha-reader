@@ -88,6 +88,10 @@ Definitions are drawn in your reading font. Dictionaries may use IPA symbols (e.
 - **Touch** — the card pages the same way the reader itself is set to turn pages (**Settings → Controls → Touch
   Reader Controls**): tap zones, inverted zones, swipes, inverted swipes, or nothing at all when touch page turns
   are off. A tap outside the card puts it away.
+- **Long press on a word** (touch), or **hold Confirm** and pick a word with the page buttons — look that word up in
+  the same dictionaries. Its entry opens over this one; **Back** returns here, **hold Back** returns to the book.
+  In an entry opened this way a short **Confirm** starts the cursor too. Up to 8 entries can be open at once; on the
+  X4 and X3, which have less memory, one entry over the first.
 
 
 

@@ -815,7 +815,8 @@ int layoutScriptRuns(const GfxRenderer& renderer, const int fontId, std::string&
 
 WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,
                            const int startY, const int lineHeight, const int maxWidth, const int maxY,
-                           const int scrollOffset, const uint16_t scale, std::string& lineBuf) {
+                           const int scrollOffset, const uint16_t scale, std::string& lineBuf,
+                           std::vector<CharBox>* boxes) {
   WrapResult out;
   int defY = startY;
   int lineIndex = 0;
@@ -868,7 +869,36 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
     const int exampleRuleX =
         isExample ? textX + renderer.getTextWidthScaled(fontId, "1. ", paragraphScale, EpdFontFamily::REGULAR) : 0;
     static constexpr char kExamplePrefix[] = "  │ ";
-    const auto drawWrappedLine = [&](std::string& line, const bool firstLine, const int y) {
+    const auto drawWrappedLine = [&](std::string& line, const bool firstLine, const int y, const size_t lineStart) {
+      if (boxes) {
+        // Collecting draws nothing: it records each CJK character of this visible line.
+        const int lineX = textX + lineIndent(firstLine);
+        // Each character measured alone and summed: linear in the line, unlike re-measuring prefixes.
+        std::string glyph;
+        int left = 0;
+        for (size_t at = 0; at < line.size();) {
+          const auto* start = reinterpret_cast<const unsigned char*>(line.c_str() + at);
+          const auto* next = start;
+          const uint32_t cp = utf8NextCodepoint(&next);
+          const size_t charLen = std::max<size_t>(1, static_cast<size_t>(next - start));
+          glyph.assign(line, at, charLen);
+          const int right = left + layoutScriptRuns(renderer, fontId, glyph, 0, 0, paragraphScale, /*draw=*/false, true,
+                                                    paragraphStyle);
+          // Full-width punctuation starts no word: the cursor skips it.
+          const bool punctuation = (cp >= 0x3000 && cp <= 0x303F) || (cp >= 0xFF01 && cp <= 0xFF0F) ||
+                                   (cp >= 0xFF1A && cp <= 0xFF20) || (cp >= 0xFF3B && cp <= 0xFF40) ||
+                                   (cp >= 0xFF5B && cp <= 0xFF65);
+          // Never past the reservation: growing the list could abort on a fragmented heap.
+          if (utf8IsCjkCodepoint(cp) && !punctuation && boxes->size() < boxes->capacity()) {
+            boxes->push_back({static_cast<int16_t>(lineX + left), static_cast<int16_t>(y),
+                              static_cast<int16_t>(std::max(1, right - left)), static_cast<int16_t>(lineHeight),
+                              static_cast<uint32_t>(lineStart + at)});
+          }
+          left = right;
+          at += charLen;
+        }
+        return;
+      }
       // Drawn apart from the text: the renderer routes a whole string to the CJK fallback when
       // one glyph is missing, and the serif face has no arrow.
       if (isNote && firstLine) {
@@ -905,6 +935,7 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
 
     while (remStart < remEndFixed) {
       const size_t remLen = remEndFixed - remStart;
+      const size_t lineStart = remStart;  // each line is a contiguous span of `text` from here
 
       // Whole remainder fits on one line? (Only measurable when it fits the buffer; a longer
       // remainder could never fit one line anyway.)
@@ -916,7 +947,7 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
           const int lineY =
               isNote && !firstParagraphLine && lineIndex - 1 > scrollOffset ? defY - std::max(1, lineHeight / 3) : defY;
           if (lineIndex > scrollOffset && lineY + lineHeight <= maxY) {
-            drawWrappedLine(lineBuf, firstParagraphLine, lineY);
+            drawWrappedLine(lineBuf, firstParagraphLine, lineY, lineStart);
             defY = lineY + lineHeight;
             out.linesDrawn++;
           }
@@ -992,7 +1023,7 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
       const int lineY =
           isNote && !firstParagraphLine && lineIndex - 1 > scrollOffset ? defY - std::max(1, lineHeight / 3) : defY;
       if (lineIndex > scrollOffset && lineY + lineHeight <= maxY) {
-        drawWrappedLine(lineBuf, firstParagraphLine, lineY);
+        drawWrappedLine(lineBuf, firstParagraphLine, lineY, lineStart);
         defY = lineY + lineHeight;
         out.linesDrawn++;
       }
@@ -1006,7 +1037,7 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
 
 WrapResult drawWrapped(const GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,
                        const int startY, const int lineHeight, const int maxWidth, const int maxY,
-                       const int scrollOffset, const uint16_t scale) {
+                       const int scrollOffset, const uint16_t scale, std::vector<CharBox>* boxes) {
   // The single allocation of this whole function, guarded: if even one line buffer doesn't
   // fit, drawing text under a heap this starved would abort() inside the renderer anyway --
   // show nothing (header/word still render) rather than crash. -fno-exceptions makes an
@@ -1032,7 +1063,26 @@ WrapResult drawWrapped(const GfxRenderer& renderer, const int fontId, const std:
   std::string lineBuf;
   lineBuf.reserve(LINE_BUF_CAP);
   return DrawWrappedImpl(renderer, fontId, text, textX, startY, lineHeight, maxWidth, maxY, scrollOffset, scale,
-                         lineBuf);
+                         lineBuf, boxes);
+}
+
+void collectCjkBoxes(const GfxRenderer& renderer, const WrapGeometry& geometry, const std::string& text,
+                     std::vector<CharBox>& out) {
+  out.clear();
+  if (!geometry.valid || geometry.lineHeight <= 0) return;
+  // Room for every visible line full of square characters.
+  const int lines = std::max(1, (geometry.maxY - geometry.startY) / geometry.lineHeight + 1);
+  const int perLine = std::max(1, geometry.maxWidth * 4 / (geometry.lineHeight * 3));
+  const size_t count = static_cast<size_t>(lines * perLine);
+  // The list plus the wrapper's own line buffer, with the same headroom drawWrapped asks for.
+  if (ESP.getMaxAllocHeap() < count * sizeof(CharBox) + LINE_BUF_CAP * 2) {
+    LOG_ERR("DEFTXT", "No heap for %u character boxes (maxAlloc=%u)", static_cast<unsigned>(count),
+            ESP.getMaxAllocHeap());
+    return;
+  }
+  out.reserve(count);
+  drawWrapped(renderer, geometry.fontId, text, geometry.textX, geometry.startY, geometry.lineHeight, geometry.maxWidth,
+              geometry.maxY, geometry.scrollOffset, geometry.scale, &out);
 }
 
 }  // namespace DefinitionText

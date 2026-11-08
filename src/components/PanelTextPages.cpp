@@ -132,3 +132,35 @@ void PanelTextPages::drawLines(const GfxRenderer& renderer, const int fontId, co
     renderer.drawText(fontId, x, y + (i - firstLine) * lineHeight, buf);
   }
 }
+
+void PanelTextPages::collectWords(const GfxRenderer& renderer, const int fontId, const int x, const int y,
+                                  const std::string& text, const int page, std::vector<Word>& out) const {
+  const int lineHeight = renderer.getLineHeight(fontId);
+  const int firstLine = page * linesPerPage;
+  const int lastLine = std::min(firstLine + linesPerPage, static_cast<int>(lines.size()));
+  char buf[MAX_LINE_BYTES + 1];
+  for (int i = firstLine; i < lastLine; i++) {
+    const Line& line = lines[i];
+    if (line.start + line.len > text.size()) break;
+    const size_t len = std::min(static_cast<size_t>(line.len), MAX_LINE_BYTES);
+    size_t pos = 0;
+    while (pos < len) {
+      while (pos < len && text[line.start + pos] == ' ') pos++;
+      size_t end = pos;
+      while (end < len && text[line.start + end] != ' ') end++;
+      if (end > pos) {
+        // Prefix widths, measured the way drawText lays the line out.
+        memcpy(buf, text.c_str() + line.start, pos);
+        buf[pos] = '\0';
+        const int left = renderer.getTextWidth(fontId, buf);
+        memcpy(buf, text.c_str() + line.start, end);
+        buf[end] = '\0';
+        const int right = renderer.getTextWidth(fontId, buf);
+        out.push_back({static_cast<int16_t>(x + left), static_cast<int16_t>(y + (i - firstLine) * lineHeight),
+                       static_cast<int16_t>(std::max(1, right - left)), static_cast<int16_t>(lineHeight),
+                       static_cast<uint32_t>(line.start + pos), static_cast<uint16_t>(end - pos)});
+      }
+      pos = end;
+    }
+  }
+}
