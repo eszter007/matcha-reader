@@ -513,14 +513,15 @@ struct VerticalParsedText::LayoutCursor {
       const int leftover = static_cast<int>(o.viewportHeight_) - (lastY[col] + lastGeom.cellPx);
       const bool pushedOut = col < 64 && (o.oidashiColumns_ >> col) & 1u;
       if (leftover <= 0 || (leftover >= lastGeom.rowPitchPx && !pushedOut)) continue;
-      spread[col] = static_cast<int16_t>(
-          std::min(leftover, lastRow[col] * lastGeom.cellPx / MAX_SPREAD_PER_GAP_DIVISOR));
+      spread[col] =
+          static_cast<int16_t>(std::min(leftover, lastRow[col] * lastGeom.cellPx / MAX_SPREAD_PER_GAP_DIVISOR));
       any = any || spread[col] != 0;
     }
     if (!any) return;
     for (auto& g : pg.glyphs) {
       if (g.column >= n || spread[g.column] == 0) continue;
-      g.y = static_cast<uint16_t>(static_cast<int>(g.y) + spread[g.column] * static_cast<int>(g.row) / lastRow[g.column]);
+      g.y =
+          static_cast<uint16_t>(static_cast<int>(g.y) + spread[g.column] * static_cast<int>(g.row) / lastRow[g.column]);
     }
   }
 
@@ -2083,8 +2084,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     const size_t limit = cur.boundaryLimit();
     const uint32_t cp = pc.codepoint;
     constexpr uint8_t CONT = EpdFontFamily::RUBY_CONTINUE;
-    const bool rubyHead = (pc.style & CONT) == 0 &&
-                          (pc.rubyLen > 0 || (idx + 1 < limit && (stream_[idx + 1].style & CONT) != 0));
+    const bool rubyHead =
+        (pc.style & CONT) == 0 && (pc.rubyLen > 0 || (idx + 1 < limit && (stream_[idx + 1].style & CONT) != 0));
     if ((isImageMarker(cp) && cur.placeInlineImage(idx)) || (isBangOrQuestion(cp) && cur.placeBangPair(idx, limit)) ||
         (isAsciiDigit(cp) && cur.placeNumber(idx, limit)) ||
         ((isAsciiDigit(cp) || Kinsoku::isRotatedRunCharacter(cp)) && cur.placeRotatedRun(idx, limit)) ||
@@ -2275,4 +2276,3 @@ void VerticalParsedText::resolveColumnX(VerticalPage& p) const {
   if (!pendingColWidened_) return;
   for (auto& g : p.glyphs) g.x = static_cast<uint16_t>(std::max(0, g.x + columnXDelta(pendingColW_, g)));
 }
-
