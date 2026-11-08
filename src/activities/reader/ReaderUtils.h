@@ -360,17 +360,21 @@ inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const Mapp
 // so it remains free in tap mode. The Off/Swipe Up
 // alternatives are only surfaced on home-key boards (SettingsList), where the
 // menu stays reachable through the key's long-press function.
-inline bool isTouchMenuTap(const GfxRenderer& renderer, const MappedInputManager& input) {
-  if (!input.hasTouch()) return false;
+// The centre third of the screen, where a tap opens the reader menu when Show Reader Menu is Tap.
+inline bool isInTouchMenuZone(const GfxRenderer& renderer, const int x, const int y) {
   if (SETTINGS.showReaderMenu != CrossPointSettings::READER_MENU_TAP) return false;
-  int x = 0;
-  int y = 0;
-  if (!input.wasScreenTapped(x, y)) return false;
   const int width = renderer.getScreenWidth();
   const int height = renderer.getScreenHeight();
   const int zoneWidth = width / 3;
   const int zoneHeight = height / 3;
   return x >= zoneWidth && x < width - zoneWidth && y >= zoneHeight && y < height - zoneHeight;
+}
+
+inline bool isTouchMenuTap(const GfxRenderer& renderer, const MappedInputManager& input) {
+  if (!input.hasTouch()) return false;
+  int x = 0;
+  int y = 0;
+  return input.wasScreenTapped(x, y) && isInTouchMenuZone(renderer, x, y);
 }
 
 // Reader menu opens on the menu edge-swipe or a center-third tap. Home-key

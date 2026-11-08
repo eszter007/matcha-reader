@@ -233,6 +233,13 @@ inline SettingInfo buildVocabularyHistorySetting() {
 }
 
 // Long-press menu choices as stored LONG_PRESS_MENU_FUNCTION values, in menu order: Off first.
+// Swipe Up only where the Home key leaves the bottom edge free; elsewhere that swipe is Home.
+inline std::vector<uint8_t> showReaderMenuOrder() {
+  std::vector<uint8_t> order = {CrossPointSettings::READER_MENU_OFF, CrossPointSettings::READER_MENU_TAP};
+  if (BoardConfig::hasHomeKey()) order.push_back(CrossPointSettings::READER_MENU_SWIPE_UP);
+  return order;
+}
+
 // Reader Menu only on boards with a Home key, which have no other way to it from the long press.
 inline std::vector<uint8_t> longPressMenuOrder() {
   std::vector<uint8_t> order = {CrossPointSettings::LP_MENU_DISABLED, CrossPointSettings::LP_MENU_KOSYNC,
@@ -365,12 +372,10 @@ inline bool isHiddenOnDevice(const SettingInfo& s) {
       return !BoardConfig::hasTouch();
     case StrId::STR_TOUCH_READER_CONTROLS:
       return !BoardConfig::hasTouch() || slideSwitchOwns(CrossPointSettings::SLIDE_SWITCH_TOUCH_CONTROLS);
-    // The reader-menu gesture choice only makes sense where the menu stays
-    // reachable without the tap and the bottom edge is free (the capacitive
-    // Home key); everywhere else the bottom-edge up-swipe is Home and the
-    // center tap is the primary path, so the setting stays at its Tap default.
+    // Off leaves the menu to the top-edge swipe and the buttons; Swipe Up is
+    // offered only where the bottom edge is free (showReaderMenuOrder()).
     case StrId::STR_SHOW_READER_MENU:
-      return !BoardConfig::hasHomeKey();
+      return !BoardConfig::hasTouch();
     case StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION:
     case StrId::STR_SUNLIGHT_FADING_FIX:
     case StrId::STR_BACK_SHORT_TO_FILE_BROWSER:
