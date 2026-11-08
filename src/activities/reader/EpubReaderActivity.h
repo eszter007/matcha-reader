@@ -22,6 +22,7 @@
 #include "WordSelectionScan.h"
 #include "components/OptionPopup.h"
 #include "util/CjkScript.h"
+#include "util/SentenceMining.h"
 
 class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
@@ -642,6 +643,12 @@ class EpubReaderActivity final : public ReaderActivity {
   void renderOverlay();
   std::string currentChapterTitle() const;
   int currentTocIndex() const;
+  // What a lookup screen needs from the book: the card's book fields, and where the word is for
+  // vocabulary history. `pageIndex` is 0-based in the current chapter.
+  sentencemining::BookContext lookupContext(std::string nextPageText, std::string language, int pageIndex);
+  // The book's series, read once for vocabulary history; for the Epub it was read from.
+  std::unique_ptr<Epub::SyncMetadata> vocabularyMetadata;
+  const Epub* vocabularyMetadataBook = nullptr;
   // The open control panel's controls, in the order shown. Text: size, font, Focus Reading or
   // Furigana, more settings; Page: spacing, margins, alignment, orientation, writing. Alignment and
   // Focus Reading are for non-CJK books; Writing and Furigana for books that can be read vertically.

@@ -14,6 +14,7 @@
 #include <cstdlib>
 
 #include "BookStats.h"
+#include "CrossPointSettings.h"
 #include "DictionaryDefinitionActivity.h"
 #include "HapticFeedback.h"
 #include "ReaderUtils.h"
@@ -412,6 +413,7 @@ void DictionaryWordSelectActivity::performLookup() {
       return;
     }
     definitionView->setPageTurnReversed(pageTurnReversed);
+    if (SETTINGS.vocabularyHistoryEnabled) definitionView->setVocabulary(vocabularyContext(mining_));
     definitionView->setNestedLookup({this, &DictionaryWordSelectActivity::nestedLookup});
     if (moreWords) {
       definitionView->setMoreEntries(

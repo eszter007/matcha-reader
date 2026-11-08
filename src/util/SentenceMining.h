@@ -3,6 +3,7 @@
 #include <SentenceMiningCsv.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -24,6 +25,13 @@ struct BookContext {
   std::string bookLanguage;
   // The book's identity in BookStats, which counts lookups and saved sentences per book.
   std::string bookPath;
+  // Where the lookup was made, for vocabulary history. Unknown: empty, 0, or UINT32_MAX.
+  std::string chapter;
+  std::string series;
+  std::optional<float> seriesIndex;
+  uint16_t page = 0;  // 1-based page in the chapter
+  uint16_t spine = 0;
+  uint32_t startOffset = UINT32_MAX;
 };
 
 // A card waiting for its definition, handed from a word-select screen to the definition screen,

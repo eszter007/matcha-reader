@@ -521,6 +521,7 @@ bool EpubReaderActivity::loadBook() {
   }
 
   epub = makeUniqueNoThrow<Epub>(bookPath, "/.crosspoint");
+  vocabularyMetadataBook = nullptr;
   if (!epub) {
     LOG_ERR("READER", "Failed to allocate EPUB object");
     return false;
@@ -875,7 +876,7 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
     LOG_ERR("ERS", "OOM: word select");
     return;
   }
-  wordSelect->setMiningContext({getBookTitle(), getBookAuthor(), std::move(nextPageText), {}, bookPath});
+  wordSelect->setMiningContext(lookupContext(std::move(nextPageText), {}, section->currentPage));
   wordSelect->setPageTurnReversed(useReversedPageTurn());
   if (!lookupText.empty()) wordSelect->setLookupText(lookupText);
   startActivityForResult(std::move(wordSelect), [this](const ActivityResult& result) { onLookupPanelResult(result); });
@@ -6245,8 +6246,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         if (!lookup) {
           LOG_ERR("ERS", "OOM: word lookup panel");
         } else {
-          lookup->setMiningContext(
-              {getBookTitle(), getBookAuthor(), std::move(miningTail), effectiveLanguage(), bookPath});
+          lookup->setMiningContext(lookupContext(std::move(miningTail), effectiveLanguage(), pageIndex));
           lookup->setPageTurnReversed(useReversedPageTurn());
           panel = std::move(lookup);
         }
@@ -6322,7 +6322,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         requestUpdate();  // the build was suspended for the panel; the next render resumes it
         return;
       }
-      lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail), effectiveLanguage(), bookPath});
+      lookup->setMiningContext(lookupContext(std::move(miningTail), effectiveLanguage(), pageIndex));
       lookup->setPageTurnReversed(useReversedPageTurn());
       startActivityForResult(std::move(lookup), [this](const ActivityResult& result) { onLookupPanelResult(result); });
     }
@@ -6493,6 +6493,28 @@ int EpubReaderActivity::currentTocIndex() const {
     best = tocIndices[i];
   }
   return best;
+}
+
+sentencemining::BookContext EpubReaderActivity::lookupContext(std::string nextPageText, std::string language,
+                                                              const int pageIndex) {
+  sentencemining::BookContext context{getBookTitle(), getBookAuthor(), std::move(nextPageText), std::move(language),
+                                      bookPath};
+  if (!SETTINGS.vocabularyHistoryEnabled || !epub) return context;
+  // A chapter is a spine item here: the word's own TOC entry would need its offset on the page.
+  const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
+  if (tocIndex != -1) context.chapter = epub->getTocItem(tocIndex).title;
+  context.page = static_cast<uint16_t>(pageIndex + 1);
+  context.spine = static_cast<uint16_t>(currentSpineIndex);
+  if (vocabularyMetadataBook != epub.get()) {
+    vocabularyMetadataBook = epub.get();
+    vocabularyMetadata = makeUniqueNoThrow<Epub::SyncMetadata>();
+    if (vocabularyMetadata && !epub->loadSyncMetadata(*vocabularyMetadata)) vocabularyMetadata.reset();
+  }
+  if (vocabularyMetadata) {
+    context.series = vocabularyMetadata->series;
+    context.seriesIndex = vocabularyMetadata->seriesIndex;
+  }
+  return context;
 }
 
 std::string EpubReaderActivity::currentChapterTitle() const {

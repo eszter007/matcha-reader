@@ -227,6 +227,11 @@ inline SettingInfo buildWordLookupFontSizeSetting() {
                            "wordLookupFontSize", StrId::STR_CAT_READER);
 }
 
+inline SettingInfo buildVocabularyHistorySetting() {
+  return SettingInfo::Toggle(StrId::STR_SAVE_VOCABULARY_LOOKUPS, &CrossPointSettings::vocabularyHistoryEnabled,
+                             "vocabularyHistoryEnabled", StrId::STR_CAT_READER);
+}
+
 // Long-press menu choices as stored LONG_PRESS_MENU_FUNCTION values, in menu order: Off first.
 // Reader Menu only on boards with a Home key, which have no other way to it from the long press.
 inline std::vector<uint8_t> longPressMenuOrder() {
@@ -423,7 +428,7 @@ struct SettingsListOptions {
 // callers that need not hold the whole list in memory. Entries whose key
 // wants(key) rejects are skipped; wants gets nullptr for entries without a key.
 // The visited entry is valid only during the callback; move from it to keep it.
-// The dictionary, its install status and the word lookup font size are emitted
+// The dictionary, its install status, the word lookup font size and vocabulary history are emitted
 // together just before the first Controls row (or last, with none); the Home
 // button rows follow the base list.
 // A row added here whose value is saved belongs in forEachPersistableSetting() too.
@@ -458,6 +463,8 @@ void forEachSetting(const SdCardFontRegistry* registry, const std::vector<Dictio
     if (readerRows) {
       SettingInfo fontSize = buildWordLookupFontSizeSetting();
       offer(fontSize);
+      SettingInfo vocabulary = buildVocabularyHistorySetting();
+      offer(vocabulary);
     }
   };
   const auto each = [&](SettingInfo& s) {
@@ -519,4 +526,5 @@ inline void forEachPersistableSetting(Fn&& fn) {
     }
   }
   fn(buildWordLookupFontSizeSetting());
+  fn(buildVocabularyHistorySetting());
 }
