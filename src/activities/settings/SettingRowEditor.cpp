@@ -27,8 +27,8 @@
 #include "StatusBarSettingsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
-#include "components/UITheme.h"
 #include "components/OptionPopup.h"
+#include "components/UITheme.h"
 
 SettingRowEditor::EditResult SettingRowEditor::editValue(const SettingInfo& setting) {
   const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen;
@@ -68,8 +68,7 @@ SettingRowEditor::EditResult SettingRowEditor::editValue(const SettingInfo& sett
         popup.show(setting.nameId, setting.enumStringValues, cur, std::move(onSelect));
       } else {
         const auto enumLabels = setting.enumLabels();
-        popup.show(setting.nameId, enumLabels.data(), static_cast<int>(enumLabels.size()), cur,
-                         std::move(onSelect));
+        popup.show(setting.nameId, enumLabels.data(), static_cast<int>(enumLabels.size()), cur, std::move(onSelect));
       }
       activity.requestUpdate();
       return EditResult::Opened;
@@ -121,8 +120,7 @@ bool SettingRowEditor::launchSharedAction(const SettingAction action) {
       }
       return true;
     case SettingAction::KOReaderSync:
-      activity.startActivityForResult(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput),
-                                      resultHandler);
+      activity.startActivityForResult(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput), resultHandler);
       return true;
     case SettingAction::OPDSBrowser:
       activity.startActivityForResult(std::make_unique<OpdsServerListActivity>(renderer, mappedInput), resultHandler);
@@ -159,8 +157,7 @@ bool SettingRowEditor::launchSharedAction(const SettingAction action) {
       activity.startActivityForResult(std::make_unique<OtaUpdateActivity>(renderer, mappedInput), resultHandler);
       return true;
     case SettingAction::SdFirmwareUpdate:
-      activity.startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput),
-                                      resultHandler);
+      activity.startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput), resultHandler);
       return true;
     case SettingAction::DownloadFonts:
       activity.startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput), rebuildOnReturn);
@@ -169,8 +166,7 @@ bool SettingRowEditor::launchSharedAction(const SettingAction action) {
       // Row labels are translated once when the rows are built and don't
       // re-run on Pop (see ActivityManager::loop()), so a language switch
       // needs an explicit rebuild here rather than the generic resultHandler.
-      activity.startActivityForResult(std::make_unique<LanguageSelectActivity>(renderer, mappedInput),
-                                      rebuildOnReturn);
+      activity.startActivityForResult(std::make_unique<LanguageSelectActivity>(renderer, mappedInput), rebuildOnReturn);
       return true;
     case SettingAction::KeyboardLayouts:
       if (auto next = makeUniqueNoThrow<KeyboardLayoutsActivity>(renderer, mappedInput)) {
