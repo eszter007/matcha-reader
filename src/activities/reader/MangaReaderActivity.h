@@ -395,7 +395,7 @@ class MangaReaderActivity final : public PagedReaderActivity {
   std::string positionKey() const override { return book ? book->getFolder() : bookPath; }
   void goToPage(uint32_t page) override;
   std::string bookmarkSummary() const override;
-  std::vector<manga::TocEntry> bookmarkToc() const override {
+  std::vector<manga::TocEntry> chapters() const override {
     return book ? book->getToc() : std::vector<manga::TocEntry>{};
   }
   void fillSyncBook(PagedSyncBook& paged) const override;

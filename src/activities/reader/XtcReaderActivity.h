@@ -45,6 +45,7 @@ class XtcReaderActivity final : public PagedReaderActivity {
   void renderPage();
   void renderStatusBarOverlay(StatusBarOverlayPosition position) const;
   StatusBarInfo getStatusBarInfo() const;
+  std::vector<manga::TocEntry> chapters() const override;
   void saveProgress() const override;
   void loadProgress() override;
   uint32_t pageCount() const override { return xtc ? xtc->getPageCount() : 0; }

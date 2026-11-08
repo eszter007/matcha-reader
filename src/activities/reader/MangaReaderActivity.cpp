@@ -28,7 +28,6 @@
 #include "HapticFeedback.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
-#include "MangaChapterSelectionActivity.h"
 #include "MangaWordLookupActivity.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
@@ -1871,22 +1870,6 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
                              });
       return;
     }
-    case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER:
-      if (book && book->hasToc()) {
-        startActivityForResult(
-            std::make_unique<MangaChapterSelectionActivity>(renderer, mappedInput, book->getToc(), currentPage),
-            [this](const ActivityResult& result) {
-              if (!result.isCancelled && book) {
-                const uint32_t targetPage = std::get<PageResult>(result.data).page;
-                if (targetPage < book->getPageCount()) goToPage(targetPage);
-              }
-              requestUpdate();
-            });
-        return;
-      }
-      // No TOC available — fall back to percent-based page jump
-      launchPercentJump();
-      break;
     case EpubReaderMenuActivity::MenuAction::WORD_LOOKUP: {
       launchWordLookupCurrentView();
       break;

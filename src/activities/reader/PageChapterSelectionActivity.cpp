@@ -1,4 +1,4 @@
-#include "MangaChapterSelectionActivity.h"
+#include "PageChapterSelectionActivity.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -9,10 +9,10 @@
 
 namespace fui = freeink::ui;
 
-MangaChapterSelectionActivity::MangaChapterSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                                             std::vector<manga::TocEntry> tocEntries,
-                                                             const uint32_t currentPage)
-    : UiListActivity("MangaChapterSelection", renderer, mappedInput), tocEntries(std::move(tocEntries)) {
+PageChapterSelectionActivity::PageChapterSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                                           std::vector<manga::TocEntry> tocEntries,
+                                                           const uint32_t currentPage)
+    : UiListActivity("PageChapterSelection", renderer, mappedInput), tocEntries(std::move(tocEntries)) {
   // Which chapter the current page falls within. Applied in onEnter(), not here: the base
   // class resets the nav there, so a selection made in the constructor never survives.
   for (size_t i = 0; i < this->tocEntries.size(); i++) {
@@ -27,7 +27,7 @@ MangaChapterSelectionActivity::MangaChapterSelectionActivity(GfxRenderer& render
   items.reserve(this->tocEntries.size());
   for (size_t i = 0; i < this->tocEntries.size(); i++) {
     fui::ListItem item;
-    item.label = this->tocEntries[i].title.c_str();
+    item.label = this->tocEntries[i].title.empty() ? tr(STR_UNNAMED) : this->tocEntries[i].title.c_str();
     // The row's identity travels in actionValue -- list() registers the tap
     // target as hit(rect, action, item.actionValue), so leaving it at its
     // default reported every row as index 0 and every tap opened the first
@@ -37,7 +37,7 @@ MangaChapterSelectionActivity::MangaChapterSelectionActivity(GfxRenderer& render
   }
 }
 
-void MangaChapterSelectionActivity::onEnter() {
+void PageChapterSelectionActivity::onEnter() {
   UiListActivity::onEnter();
   // After the base, which resets the nav: the first screen build then pulls the viewport to the
   // chapter the reader is in, the same way the EPUB picker does.
@@ -45,7 +45,7 @@ void MangaChapterSelectionActivity::onEnter() {
   requestUpdate();
 }
 
-void MangaChapterSelectionActivity::buildScreen(UiScreen& screen) {
+void PageChapterSelectionActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   // Content: the safe area minus the header band drawChrome paints the title in.
@@ -70,7 +70,7 @@ void MangaChapterSelectionActivity::buildScreen(UiScreen& screen) {
   screen.list(props);
 }
 
-void MangaChapterSelectionActivity::activateIndex(const int index) {
+void PageChapterSelectionActivity::activateIndex(const int index) {
   if (index < 0 || index >= listCount()) {
     return;
   }
@@ -82,7 +82,7 @@ void MangaChapterSelectionActivity::activateIndex(const int index) {
   finish();
 }
 
-bool MangaChapterSelectionActivity::handleButtons() {
+bool PageChapterSelectionActivity::handleButtons() {
   // Confirm activates on RELEASE, matching the EPUB picker: the press that
   // opened this screen must not also select the row under the cursor.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
@@ -102,7 +102,7 @@ bool MangaChapterSelectionActivity::handleButtons() {
 // Header only: UiListActivity::render() calls drawFooter() for the button hints, and it draws the
 // same four labels. Painting them here as well drew them twice -- three times on the pass where a
 // wrapped row makes the list re-layout and drawChrome() runs again.
-void MangaChapterSelectionActivity::drawChrome() {
+void PageChapterSelectionActivity::drawChrome() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   GUI.drawHeader(renderer, Rect{safe.x, safe.y + metrics.topPadding, safe.width, metrics.headerHeight},

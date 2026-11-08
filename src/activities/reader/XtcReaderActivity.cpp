@@ -25,7 +25,6 @@
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
 #include "SdCardFontSystem.h"
-#include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/ScreenshotUtil.h"
@@ -151,6 +150,15 @@ void XtcReaderActivity::render(RenderLock&&) {
   }
 }
 
+std::vector<manga::TocEntry> XtcReaderActivity::chapters() const {
+  std::vector<manga::TocEntry> list;
+  if (!xtc || !xtc->hasChapters()) return list;
+  const auto& source = xtc->getChapters();
+  list.reserve(source.size());
+  for (const auto& chapter : source) list.push_back({chapter.startPage, chapter.name});
+  return list;
+}
+
 void XtcReaderActivity::launchMenu() {
   if (!xtc) return;
   // Free the ~50KB page buffer while the menu is on top: the reader doesn't render underneath a
@@ -186,16 +194,6 @@ void XtcReaderActivity::launchMenu() {
 void XtcReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
   if (handlePagedMenuAction(action)) return;
   switch (action) {
-    case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER:
-      if (xtc && xtc->hasChapters() && !xtc->getChapters().empty()) {
-        startActivityForResult(
-            std::make_unique<XtcReaderChapterSelectionActivity>(renderer, mappedInput, xtc, currentPage),
-            [this](const ActivityResult& result) {
-              if (!result.isCancelled) currentPage = std::get<PageResult>(result.data).page;
-              requestUpdate();
-            });
-      }
-      break;
     case EpubReaderMenuActivity::MenuAction::DELETE_CACHE: {
       if (xtc) {
         const std::string cachePath = xtc->getCachePath();

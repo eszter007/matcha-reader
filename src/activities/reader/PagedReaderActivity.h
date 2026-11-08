@@ -37,7 +37,8 @@ class PagedReaderActivity : public ReaderActivity {
   // Moves to a page known to be in range; readers with per-page state reset it here.
   virtual void goToPage(uint32_t page) { currentPage = page; }
   virtual std::string bookmarkSummary() const;
-  virtual std::vector<manga::TocEntry> bookmarkToc() const { return {}; }
+  // The book's chapters with their first pages, in page order; empty when it has none.
+  virtual std::vector<manga::TocEntry> chapters() const { return {}; }
   // Metadata beyond page, count, title and author.
   virtual void fillSyncBook(PagedSyncBook&) const {}
 
