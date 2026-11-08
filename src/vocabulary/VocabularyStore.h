@@ -18,8 +18,8 @@ struct VocabularyContext {
 };
 
 inline VocabularyContext vocabularyContext(const sentencemining::BookContext& book) {
-  return {book.bookTitle, book.bookAuthor, book.series, book.seriesIndex, book.chapter,
-          book.page,      book.spine,      book.startOffset};
+  return {book.bookTitle, book.bookAuthor, book.series, book.seriesIndex,
+          book.chapter,   book.page,       book.spine,  book.startOffset};
 }
 
 class VocabularyStore {
