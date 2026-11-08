@@ -742,21 +742,29 @@ void DictionaryWordSelectActivity::lookUpInto(const char* text, const std::strin
       if (status.result == Dictionary::LookupResult::NotFound) status.result = lookupResult;
       continue;
     }
-    entry.dictSlot = static_cast<uint8_t>(d);
-    if (repeated(shown, entry) || repeated(out, entry)) continue;
-    if (selectionHeldBytes + entry.definition.size() > byteLimit) continue;
-    selectionHeldBytes += entry.definition.size();
-    entry.dictName = slot.dict.getBookName();
-    entry.html = slot.dict.definitionsAreHtml();
-    auto& draft = entry.draft;
-    draft.card.word = entry.headword;
-    draft.card.sentence = sentence;
-    draft.card.book = mining_.bookTitle;
-    draft.card.author = mining_.bookAuthor;
-    draft.card.dictionary = entry.dictName;
-    draft.language = sentencemining::languageForDictionary(slot.folder, language);
-    draft.bookPath = mining_.bookPath;
-    out.push_back(std::move(entry));
+    // The first match, then the other headwords a .syn entry points at, each as its own entry.
+    const uint8_t synonymMatches = slot.dict.moreSynonymMatches();
+    for (uint8_t m = 0;; m++) {
+      entry.dictSlot = static_cast<uint8_t>(d);
+      if (!repeated(shown, entry) && !repeated(out, entry) &&
+          selectionHeldBytes + entry.definition.size() <= byteLimit) {
+        selectionHeldBytes += entry.definition.size();
+        entry.dictName = slot.dict.getBookName();
+        entry.html = slot.dict.definitionsAreHtml();
+        auto& draft = entry.draft;
+        draft.card.word = entry.headword;
+        draft.card.sentence = sentence;
+        draft.card.book = mining_.bookTitle;
+        draft.card.author = mining_.bookAuthor;
+        draft.card.dictionary = entry.dictName;
+        draft.language = sentencemining::languageForDictionary(slot.folder, language);
+        draft.bookPath = mining_.bookPath;
+        out.push_back(std::move(entry));
+      }
+      if (m >= synonymMatches) break;
+      entry = DictionaryDefinitionActivity::Entry{};
+      if (!slot.dict.readSynonymMatch(m, entry.definition, entry.headword)) break;
+    }
   }
 }
 
