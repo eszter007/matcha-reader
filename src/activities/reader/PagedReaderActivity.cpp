@@ -9,6 +9,7 @@
 #include <cstdio>
 
 #include "EpubReaderPercentSelectionActivity.h"
+#include "HapticFeedback.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #include "MangaBookmarksActivity.h"
@@ -137,6 +138,21 @@ bool PagedReaderActivity::handlePagedMenuAction(const EpubReaderMenuActivity::Me
     default:
       return false;
   }
+}
+
+bool PagedReaderActivity::handleMenuInput(const bool touchMenu) {
+  if (!ignoreNextConfirmRelease && ReaderUtils::confirmHoldStartsSync(mappedInput)) {
+    launchSync(false);
+    return true;
+  }
+  if (!mappedInput.wasReleased(MappedInputManager::Button::Confirm) && !touchMenu) return false;
+  if (ignoreNextConfirmRelease) {
+    ignoreNextConfirmRelease = false;
+  } else {
+    if (touchMenu) haptic_feedback::touchAction();
+    launchMenu();
+  }
+  return true;
 }
 
 ScreenshotInfo PagedReaderActivity::getScreenshotInfo() const {

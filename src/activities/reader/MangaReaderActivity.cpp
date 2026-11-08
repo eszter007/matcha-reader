@@ -553,19 +553,7 @@ void MangaReaderActivity::readerLoop() {
     return;
   }
 
-  if (!ignoreNextConfirmRelease && ReaderUtils::confirmHoldStartsSync(mappedInput)) {
-    onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SYNC);
-    return;
-  }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || touchMenu) {
-    if (ignoreNextConfirmRelease) {
-      ignoreNextConfirmRelease = false;
-    } else if (viewMode == ViewMode::PanelZoom || viewMode == ViewMode::FullPage) {
-      if (touchMenu) haptic_feedback::touchAction();
-      launchMenu();
-      return;
-    }
-  }
+  if (handleMenuInput(touchMenu)) return;
 
   // Resolve against the reader's OWN orientation, not the live one: a panel whose aspect does not
   // match the screen is displayed rotated 90 degrees, and that rotation stays applied while the
@@ -619,7 +607,26 @@ void MangaReaderActivity::readerLoop() {
   const int panelBefore = currentPanel;
   const ViewMode modeBefore = viewMode;
 
-  if (viewMode == ViewMode::PanelZoom) {
+  // Long-Press Button Behavior "Chapter Skip": a held turn skips 10 pages, as in XTC.
+  const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
+  const bool skipPages =
+      !fromTilt && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP && heldMs >= ReaderUtils::SKIP_HOLD_MS;
+
+  if (skipPages) {
+    const uint32_t count = pageCount();
+    if (prevTriggered) {
+      goToPage(currentPage >= SKIP_PAGE_COUNT ? currentPage - SKIP_PAGE_COUNT : 0);
+    } else if (currentPage + SKIP_PAGE_COUNT < count) {
+      goToPage(currentPage + SKIP_PAGE_COUNT);
+    } else {
+      // Past the last page: the end-of-book screen, as a single turn from the last page.
+      currentPage = count;
+      currentPanel = -1;
+      viewMode = ViewMode::FullPage;
+      automaticPageTurnActive = false;
+    }
+    requestUpdate();
+  } else if (viewMode == ViewMode::PanelZoom) {
     if (nextTriggered) nextPanel();
     if (prevTriggered) prevPanel();
   } else {
@@ -646,9 +653,9 @@ void MangaReaderActivity::readerLoop() {
   }
 
   const bool moved = currentPage != pageBefore || currentPanel != panelBefore || viewMode != modeBefore;
-  // A panel step is reading, the same as a page turn.
-  notePageTurn(nextTriggered && !prevTriggered, moved);
-  if (moved && (touch.prev || touch.next)) haptic_feedback::touchAction();
+  // A panel step is reading, the same as a page turn; a skip is navigation.
+  notePageTurn(!skipPages && nextTriggered && !prevTriggered, moved);
+  if (moved && (touch.prev || touch.next)) haptic_feedback::touchAction(skipPages);
 }
 
 int MangaReaderActivity::getProgressBasisPoints() const {

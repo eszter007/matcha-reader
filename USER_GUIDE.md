@@ -589,6 +589,7 @@ Which rows you see depends on your device. Touch devices hide the rows that only
 - **Long-Press Button Behavior**: What holding a page-turn button does.
   - **Off** (default): nothing extra.
   - **Chapter Skip**: jumps to the next chapter, or back to the start of the chapter, then to the previous one.
+    In XTC books and manga, which have no chapters to skip by, it jumps 10 pages.
   - **Orientation Change**: turns the screen to the next orientation.
 
 - **Long-Press Menu** (button devices): What holding **Confirm** does while reading. A short press always opens the
