@@ -132,6 +132,18 @@ class ChapterHtmlSlimParser {
   [[nodiscard]] bool preserveWhitespaceActive() const {
     return whitespaceScopeCount > 0 && whitespaceScopes[whitespaceScopeCount - 1].preserve;
   }
+  // font-family is inherited too, and <body> sets it without being a block: each element that
+  // names a family opens a scope holding its publisher font id (0 = the reader font).
+  struct FontFamilyScope {
+    uint16_t pathDepth;
+    int fontId;
+  };
+  static constexpr uint8_t MAX_FONT_FAMILY_SCOPES = 8;
+  FontFamilyScope fontFamilyScopes[MAX_FONT_FAMILY_SCOPES] = {};
+  uint8_t fontFamilyScopeCount = 0;
+  [[nodiscard]] int inheritedFamilyFontId() const {
+    return fontFamilyScopeCount > 0 ? fontFamilyScopes[fontFamilyScopeCount - 1].fontId : 0;
+  }
   void emitPreservedSpaces(uint32_t visibleOffset);
   void preservedLineBreak();
   // Widow/orphan control: a paragraph's lone first line, or its lone last line, moves to the next
@@ -371,7 +383,8 @@ class ChapterHtmlSlimParser {
   static void applyVerticalAlignToEntry(StyleStackEntry& entry, const CssStyle& css);
   void pushTableTextStyleEntry(const CssStyle& cssStyle);
   void pushDecorationStyleEntry(CssTextDecoration defaultDecoration, const CssStyle& cssStyle);
-  void pushBlockFontScaleEntry(const CssStyle& cssStyle);
+  void pushBlockFontScaleEntry(const CssStyle& cssStyle, int baseFontId);
+  int blockBaseFontId(const CssStyle& cssStyle) const;
   void emitHorizontalRule(const BlockStyle& blockStyle);
   // XML callbacks
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts);

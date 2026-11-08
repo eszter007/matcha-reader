@@ -348,7 +348,8 @@ void VerticalParsedText::addParagraph(const std::string& utf8Text) {
     // visibleTextOffset stays 0: this overload takes plain text with no extractor context, so
     // there is no chapter-wide position to attribute it to. Only the annotated path (the one
     // the real chapter build uses) carries offsets.
-    stream_.push_back(PendingChar{Kinsoku::verticalFormOf(cp), paragraphIndex, static_cast<uint32_t>(i), 0, false, 0});
+    stream_.push_back(
+        PendingChar{Kinsoku::verticalFormOf(cp), paragraphIndex, 0, static_cast<uint32_t>(i), 0, false, 0});
     i += consumed;
   }
 }
@@ -487,6 +488,7 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
         if (!canPushStreamChar()) return;
         PendingChar pc{Kinsoku::verticalFormOf(baseCps[k]),
                        paragraphIndex,
+                       run.fontSlot,
                        static_cast<uint32_t>(baseOffsets[k]),
                        run.style,
                        run.emphasis,
@@ -530,6 +532,7 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
         const uint8_t style = k > 0 ? static_cast<uint8_t>(run.style | EpdFontFamily::RUBY_CONTINUE) : run.style;
         PendingChar pc{Kinsoku::verticalFormOf(baseCps[k]),
                        paragraphIndex,
+                       run.fontSlot,
                        static_cast<uint32_t>(baseOffsets[k]),
                        style,
                        run.emphasis,

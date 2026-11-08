@@ -1,6 +1,6 @@
 add_executable(VerticalPageBreakTest
   VerticalPageBreakTest.cpp
-  ${REPO_ROOT}/lib/Epub/Epub/VerticalParsedText.cpp ${REPO_ROOT}/lib/Epub/Epub/VerticalLayout.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/VerticalParsedText.cpp ${REPO_ROOT}/lib/Epub/Epub/VerticalLayout.cpp ${REPO_ROOT}/lib/Epub/Epub/BookFontMap.cpp
   ${REPO_ROOT}/lib/Epub/Epub/Kinsoku.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp
 )
@@ -10,6 +10,7 @@ target_include_directories(VerticalPageBreakTest PRIVATE
   ${REPO_ROOT}/lib
   ${REPO_ROOT}/lib/Epub
   ${REPO_ROOT}/lib/Epub/Epub
+  ${REPO_ROOT}/lib/EpdFont
   ${REPO_ROOT}/lib/EpdFont
   ${REPO_ROOT}/lib/Utf8
 )

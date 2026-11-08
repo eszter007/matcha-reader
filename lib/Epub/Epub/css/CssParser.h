@@ -81,7 +81,7 @@ class CssParser {
   //      as a third value instead of falling back to normal. Framing is unchanged.
   // v28: a margin's `auto` is stored as CssUnit::Auto instead of 0px (vertical block alignment).
   //      Framing is unchanged.
-  static constexpr uint8_t CSS_CACHE_VERSION = 28;
+  static constexpr uint8_t CSS_CACHE_VERSION = 29;
 
   // The stylesheets one chapter links, as indices into the book's stylesheet list. A record from a
   // stylesheet the chapter does not link is skipped on load: an image-page stylesheet's
@@ -100,6 +100,16 @@ class CssParser {
     }
   };
   static constexpr uint8_t SOURCE_UNKNOWN = 0xFF;
+
+  // One @font-face rule: the family it names, the style it serves, and the font file as a path
+  // inside the EPUB (resolved against its stylesheet).
+  struct FontFaceRule {
+    uint16_t familyKey = 0;  // fontFamilyKeyOf()
+    bool bold = false;
+    bool italic = false;
+    std::string href;
+  };
+  static constexpr size_t MAX_FONT_FACES = 16;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -276,6 +286,9 @@ class CssParser {
   [[nodiscard]] StylesheetFilter stylesheetFilterFor(const std::vector<std::string>& linkedPaths) const;
   bool endCacheAppend(bool discard);
 
+  // The @font-face rules of the book whose cache is at bookCachePath (empty when it has none).
+  static std::vector<FontFaceRule> loadFontFaces(const std::string& bookCachePath);
+
   // VerticalBlockStyle::blockAlign values.
   static constexpr uint8_t VERTICAL_BLOCK_CENTER = 1;
   static constexpr uint8_t VERTICAL_BLOCK_END = 2;
@@ -293,6 +306,9 @@ class CssParser {
     bool alignEnd : 1 = false;     // text-align: right/end -> each column ends at the foot
     // font-size relative to the parent's size (em, %) rather than the body's (px, rem, keywords).
     bool fontScaleOfParent : 1 = false;
+    // font-family as a bookfonts slot (0 = not set). Resolved when the rules are collected, which
+    // happens while the book's fonts are loaded.
+    uint8_t fontSlot : 2 = 0;
     uint8_t blockAlign = 0;   // VERTICAL_BLOCK_*: auto head/foot margins place the whole block
     uint8_t borderEdges = 0;  // CssStyle::BORDER_* edge mask; vertical rendering stays solid
     // font-size as a multiple of that size, in 32nds; 0 = not set. A byte keeps the rule at 32 bytes.
@@ -300,7 +316,7 @@ class CssParser {
     [[nodiscard]] float fontScale() const { return fontScale32 / 32.0f; }
     [[nodiscard]] bool any() const {
       return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || alignEnd || blockAlign != 0 ||
-             borderEdges != 0 || indentEm >= 0 || fontScale32 != 0;
+             borderEdges != 0 || indentEm >= 0 || fontScale32 != 0 || fontSlot != 0;
     }
   };
 
@@ -432,6 +448,10 @@ class CssParser {
   uint8_t appendSourceCount_ = 0;
   size_t importsOffset_ = 0;
   void recordImport(std::string_view target);
+  // @font-face rules seen while building the cache; written beside it by endCacheAppend.
+  std::vector<FontFaceRule> fontFaces_;
+  void recordFontFace(std::string_view body);
+  bool saveFontFaces() const;
 
   static void writeRuleRecord(HalFile& file, uint8_t source, std::string_view selector, const CssStyle& style);
   // Reads the header's stylesheet table and returns `requested` widened to the stylesheets its

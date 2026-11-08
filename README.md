@@ -147,6 +147,7 @@ A wallpaper over the page you were reading. The book shows through. See [Guide Â
 - Clippings and highlights work in vertical text too
 - Translate the selected text from the touch selection bar
 - Optimize EPUB on upload: splits single-file novels into chapters and fits images to the screen
+- Publisher fonts on boards with PSRAM (X4 Pro and others): a book can be drawn in the fonts it ships, horizontal and vertical
 - Japanese and Chinese interface language support
 
 ## Setup

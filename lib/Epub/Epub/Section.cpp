@@ -304,7 +304,7 @@ namespace {
 // v111: upstream merge (their v72 and v73): ruby layout reserves room for an overhanging
 //       annotation and spaces the base under a wider one, as Chromium does; TrueType fonts
 //       advance .notdef for missing glyphs. Lines move. The framing is unchanged.
-constexpr uint8_t SECTION_FILE_VERSION = 111;
+constexpr uint8_t SECTION_FILE_VERSION = 112;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -326,7 +326,7 @@ constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(bool) + sizeof(bool) + sizeof(uint32_t) +
                                  sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
-                                 sizeof(int8_t) + sizeof(uint8_t) + sizeof(uint8_t);
+                                 sizeof(int8_t) + sizeof(uint8_t) + sizeof(uint8_t) + sizeof(uint32_t);
 }  // namespace
 
 // Out-of-line so the unique_ptr<ChapterHtmlSlimParser> in BuildContext can be
@@ -369,15 +369,16 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
     LOG_DBG("SCT", "File not open for writing header");
     return;
   }
-  static_assert(HEADER_SIZE ==
-                    sizeof(SECTION_FILE_VERSION) + sizeof(spec.fontId) + sizeof(spec.lineCompression) +
-                        sizeof(spec.extraParagraphSpacing) + sizeof(spec.paragraphIndentSpaces) +
-                        sizeof(spec.paragraphAlignment) + sizeof(spec.viewportWidth) + sizeof(spec.viewportHeight) +
-                        sizeof(pageCount) + sizeof(spec.hyphenationEnabled) + sizeof(spec.embeddedStyle) +
-                        sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) + sizeof(spec.honorBookInsets) +
-                        sizeof(spec.furiganaEnabled) + sizeof(spec.characterSpacing) + sizeof(spec.wordSpacingPercent) +
-                        sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
-                "Header size mismatch");
+  static_assert(
+      HEADER_SIZE == sizeof(SECTION_FILE_VERSION) + sizeof(spec.fontId) + sizeof(spec.lineCompression) +
+                         sizeof(spec.extraParagraphSpacing) + sizeof(spec.paragraphIndentSpaces) +
+                         sizeof(spec.paragraphAlignment) + sizeof(spec.viewportWidth) + sizeof(spec.viewportHeight) +
+                         sizeof(pageCount) + sizeof(spec.hyphenationEnabled) + sizeof(spec.embeddedStyle) +
+                         sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) + sizeof(spec.honorBookInsets) +
+                         sizeof(spec.furiganaEnabled) + sizeof(spec.characterSpacing) +
+                         sizeof(spec.wordSpacingPercent) + sizeof(spec.bookFontsSignature) + sizeof(uint32_t) +
+                         sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
+      "Header size mismatch");
   // Written as the incomplete sentinel; finalizeBuild() patches it to
   // SECTION_FILE_VERSION as the last step, committing the file.
   serialization::writePod(file, SECTION_FILE_INCOMPLETE_VERSION);
@@ -396,6 +397,7 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   serialization::writePod(file, spec.furiganaEnabled);
   serialization::writePod(file, spec.characterSpacing);
   serialization::writePod(file, spec.wordSpacingPercent);
+  serialization::writePod(file, spec.bookFontsSignature);
   serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
@@ -440,6 +442,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     bool fileFuriganaEnabled;
     int8_t fileCharacterSpacing;
     uint8_t fileWordSpacingPercent;
+    uint32_t fileBookFontsSignature;
     serialization::readPod(file, fileFontId);
     serialization::readPod(file, fileLineCompression);
     serialization::readPod(file, fileExtraParagraphSpacing);
@@ -455,6 +458,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     serialization::readPod(file, fileFuriganaEnabled);
     serialization::readPod(file, fileCharacterSpacing);
     serialization::readPod(file, fileWordSpacingPercent);
+    serialization::readPod(file, fileBookFontsSignature);
 
     if (spec.fontId != fileFontId || spec.lineCompression != fileLineCompression ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing ||
@@ -463,7 +467,8 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
         spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
         spec.honorBookInsets != fileHonorBookInsets || spec.furiganaEnabled != fileFuriganaEnabled ||
-        spec.characterSpacing != fileCharacterSpacing || spec.wordSpacingPercent != fileWordSpacingPercent) {
+        spec.characterSpacing != fileCharacterSpacing || spec.wordSpacingPercent != fileWordSpacingPercent ||
+        spec.bookFontsSignature != fileBookFontsSignature) {
       // Name the field(s). A mismatch here throws the whole chapter away and rebuilds it, and on a
       // build long enough to be SUSPENDED (which persists a partial) an unexplained rejection is
       // indistinguishable from an infinite rebuild loop -- reported in #209 as the orientation
@@ -504,6 +509,8 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         note("characterSpacing", spec.characterSpacing, fileCharacterSpacing);
       if (spec.wordSpacingPercent != fileWordSpacingPercent)
         note("wordSpacing", spec.wordSpacingPercent, fileWordSpacingPercent);
+      if (spec.bookFontsSignature != fileBookFontsSignature)
+        note("bookFonts", spec.bookFontsSignature, fileBookFontsSignature);
       why[at] = '\0';
       file.close();
       LOG_ERR("SCT", "Cache rejected (%s): want!=file %s", filePartial ? "partial" : "complete", why);

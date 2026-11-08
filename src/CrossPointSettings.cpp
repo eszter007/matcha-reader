@@ -48,6 +48,7 @@ uint8_t legacyLineSpacing(JsonVariantConst value) {
 CrossPointSettings::TextProfile CrossPointSettings::liveTextProfile() const {
   TextProfile p{fontPointSize, lineSpacing, characterSpacing, wordSpacing, fontFamily, {}};
   copyToField(p.sdFontFamilyName, sdFontFamilyName, sizeof(p.sdFontFamilyName));
+  p.publisherFonts = publisherFonts;
   return p;
 }
 
@@ -58,6 +59,7 @@ void CrossPointSettings::setLiveTextProfile(const TextProfile& p) {
   wordSpacing = p.wordSpacing;
   fontFamily = p.fontFamily;
   copyToField(sdFontFamilyName, p.sdFontFamilyName, sizeof(sdFontFamilyName));
+  publisherFonts = p.publisherFonts;
 }
 
 void CrossPointSettings::holdLatinTextProfile(const TextProfile& latin) {
@@ -152,6 +154,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // option lists depend on the SD font registry), so the generic loop skips them.
   doc["fontFamily"] = fontFamily;
   doc["fontSize"] = fontPointSize;
+  doc["publisherFonts"] = publisherFonts;
   // SD card font family name — not in SettingsList, save manually
   if (sdFontFamilyName[0] != '\0') {
     doc["sdFontFamilyName"] = sdFontFamilyName;
@@ -163,6 +166,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
     doc["lineHeight"] = latinHeld.lineSpacing;
     doc["characterSpacing"] = latinHeld.characterSpacing;
     doc["wordSpacing"] = latinHeld.wordSpacing;
+    doc["publisherFonts"] = latinHeld.publisherFonts;
     if (latinHeld.sdFontFamilyName[0] != '\0') {
       doc["sdFontFamilyName"] = latinHeld.sdFontFamilyName;
     } else {
@@ -179,6 +183,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
     o["wordSpacing"] = p.wordSpacing;
     o["fontFamily"] = p.fontFamily;
     if (p.sdFontFamilyName[0] != '\0') o["sdFontFamilyName"] = p.sdFontFamilyName;
+    o["publisherFonts"] = p.publisherFonts;
   }
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, save manually
   if (dictionaryName[0] != '\0') {
@@ -394,6 +399,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   }
 
   // SD card font family name — not in SettingsList, load manually
+  publisherFonts = (doc["publisherFonts"] | 0) != 0 ? 1 : 0;
   const char* sfn = doc["sdFontFamilyName"] | "";
   strncpy(sdFontFamilyName, sfn, sizeof(sdFontFamilyName) - 1);
   sdFontFamilyName[sizeof(sdFontFamilyName) - 1] = '\0';
@@ -444,6 +450,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
         if (words >= WORD_SPACING_MIN && words <= WORD_SPACING_MAX) p.wordSpacing = words;
         p.fontFamily = clamp(o["fontFamily"] | p.fontFamily, BUILTIN_FONT_COUNT, (uint8_t)0);
         copyToField(p.sdFontFamilyName, o["sdFontFamilyName"] | "", sizeof(p.sdFontFamilyName));
+        p.publisherFonts = (o["publisherFonts"] | 0) != 0 ? 1 : 0;
       }
       scriptTextProfiles[i - 1] = p;
     }

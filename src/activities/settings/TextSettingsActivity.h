@@ -54,7 +54,7 @@ class TextSettingsActivity final : public UiListActivity {
     VerticalText,  // Japanese and Chinese, from Settings only
     Count
   };
-  enum class StyleRow { FocusReading, Hyphenation, EmbeddedStyle, AntiAliasing, Count };
+  enum class StyleRow { FocusReading, Hyphenation, EmbeddedStyle, PublisherFonts, AntiAliasing, Count };
   // The rows before Layout.
   static constexpr int FONT_ROW = 0;
   static constexpr int SIZE_ROW = 1;
@@ -92,7 +92,10 @@ class TextSettingsActivity final : public UiListActivity {
   uint8_t* verticalTextSetting() const;
   // CJK books hide FocusReading/Hyphenation.
   StyleRow styleRowAt(int visibleIndex) const;
-  int styleRowCount() const { return cjkBook_ ? 2 : static_cast<int>(StyleRow::Count); }
+  int styleRowCount() const { return visibleStyleRows(nullptr); }
+  // Like visibleLayoutRows(): a CJK book hides the Latin-only rows, and boards without vector
+  // fonts cannot draw publisher fonts.
+  int visibleStyleRows(StyleRow* out) const;
   // Sentinel settingIndex for the "Manage Fonts" row appended to the family list. It opens
   // FontDownloadActivity instead of selecting a font, so "the font I want isn't here" is one press away.
   static constexpr uint8_t MANAGE_FONTS_ROW = 0xFF;

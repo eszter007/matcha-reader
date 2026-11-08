@@ -432,6 +432,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // available size (and persists the snap) whenever the family changes.
   uint8_t fontPointSize = DEFAULT_FONT_POINT_SIZE;
   uint8_t lineSpacing = LINE_SPACING_120;
+  // Draw a book in its own embedded fonts (@font-face) where it ships them; vector-font boards
+  // only. Per text profile like the font itself.
+  uint8_t publisherFonts = 0;
   // Text profiles: books in each script keep their own font, size and spacing. The live fields
   // (fontFamily, sdFontFamilyName, fontPointSize, lineSpacing, characterSpacing, wordSpacing) hold
   // the Latin profile; a book in another script swaps its profile in while it is open
@@ -445,6 +448,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     uint8_t wordSpacing = 100;
     uint8_t fontFamily = NOTOSERIF;
     char sdFontFamilyName[32] = "";
+    uint8_t publisherFonts = 0;  // see CrossPointSettings::publisherFonts
     bool operator==(const TextProfile&) const = default;
   };
   TextProfile liveTextProfile() const;

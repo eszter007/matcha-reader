@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <VectorFontSupport.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -32,7 +33,8 @@ constexpr StrId LAYOUT_ROW_NAME_IDS[] = {
     StrId::STR_SCREEN_MARGIN, StrId::STR_BOOK_CSS_MARGINS,      StrId::STR_TATEGAKI};
 // Only Focus Reading shows in the preview; the other Style rows say so in their label.
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION_NO_PREVIEW,
-                                        StrId::STR_EMBEDDED_STYLE_NO_PREVIEW, StrId::STR_TEXT_AA_NO_PREVIEW};
+                                        StrId::STR_EMBEDDED_STYLE_NO_PREVIEW, StrId::STR_PUBLISHER_FONTS_NO_PREVIEW,
+                                        StrId::STR_TEXT_AA_NO_PREVIEW};
 
 // Position of the active family within the DISPLAYED list. The list hides the JP
 // extension families, so a registry index is not a list index -- match by name.
@@ -555,6 +557,9 @@ bool TextSettingsActivity::styleRowIsSwitch(const int row, bool& checked) const 
     case StyleRow::EmbeddedStyle:
       checked = SETTINGS.embeddedStyle != 0;
       return true;
+    case StyleRow::PublisherFonts:
+      checked = SETTINGS.publisherFonts != 0;
+      return true;
     case StyleRow::AntiAliasing:
       checked = SETTINGS.textAntiAliasing != 0;
       return true;
@@ -609,6 +614,9 @@ void TextSettingsActivity::confirmStyleRow(int row) {
     case StyleRow::EmbeddedStyle:
       SETTINGS.embeddedStyle = !SETTINGS.embeddedStyle;
       break;
+    case StyleRow::PublisherFonts:
+      SETTINGS.publisherFonts = !SETTINGS.publisherFonts;
+      break;
     case StyleRow::AntiAliasing:
       SETTINGS.textAntiAliasing = !SETTINGS.textAntiAliasing;
       break;
@@ -656,7 +664,26 @@ TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int visi
   return visibleIndex >= 0 && visibleIndex < count ? rows[visibleIndex] : LayoutRow::Count;
 }
 
+int TextSettingsActivity::visibleStyleRows(StyleRow* out) const {
+  int count = 0;
+  const auto add = [&](const StyleRow row) {
+    if (out) out[count] = row;
+    count++;
+  };
+  if (!cjkBook_) {
+    add(StyleRow::FocusReading);
+    add(StyleRow::Hyphenation);
+  }
+  add(StyleRow::EmbeddedStyle);
+#if CROSSPOINT_VECTOR_FONTS
+  add(StyleRow::PublisherFonts);
+#endif
+  add(StyleRow::AntiAliasing);
+  return count;
+}
+
 TextSettingsActivity::StyleRow TextSettingsActivity::styleRowAt(const int visibleIndex) const {
-  if (!cjkBook_) return static_cast<StyleRow>(visibleIndex);
-  return visibleIndex == 0 ? StyleRow::EmbeddedStyle : StyleRow::AntiAliasing;
+  StyleRow rows[static_cast<int>(StyleRow::Count)];
+  const int count = visibleStyleRows(rows);
+  return visibleIndex >= 0 && visibleIndex < count ? rows[visibleIndex] : StyleRow::Count;
 }

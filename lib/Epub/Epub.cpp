@@ -26,6 +26,7 @@
 
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
+#include "Epub/parsers/FontObfuscationProbe.h"
 #include "Epub/parsers/TocNavParser.h"
 #include "Epub/parsers/TocNcxParser.h"
 
@@ -1382,6 +1383,16 @@ uint8_t* Epub::readItemContentsToBytes(const std::string& itemHref, size_t* size
   }
 
   return content;
+}
+
+std::string Epub::readUniqueIdentifier() const {
+  std::string opf;
+  UniqueIdentifierProbe probe;
+  if (!findContentOpfFile(&opf) || !probe.setup() || !ZipFile(filepath).readFileToStream(opf.c_str(), probe, 512) ||
+      !probe.finish()) {
+    return {};
+  }
+  return probe.identifier();
 }
 
 bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, const size_t chunkSize,

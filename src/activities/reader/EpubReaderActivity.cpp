@@ -37,6 +37,7 @@
 #include <limits>
 #include <numeric>
 
+#include "../../BookFonts.h"
 #include "../../util/BookmarkFile.h"
 #include "BookmarkEntry.h"
 #include "ChapterBuildGate.h"
@@ -681,6 +682,7 @@ int EpubReaderActivity::bookPercentFor(const ChapterPosition& position) const {
 }
 
 void EpubReaderActivity::onReaderExit() {
+  bookFonts.unload(renderer);
   saveTextSettingsIfDirty();  // a Text/Page change made with a panel still open
   // The extractor holds a raw pointer to this activity's epub; drop it before
   // the activity (and the shared_ptr) goes away.
@@ -1931,6 +1933,7 @@ void EpubReaderActivity::applyVerticalFuriganaOverride(const int8_t verticalOver
     // Forcing vertical text on a non-CJK book is the same signal the book's script covers at
     // open: the companion font follows it.
     sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
+    syncBookFonts();
   }
   if (furiganaOverrideIn >= 0 && furiganaOverrideIn != (useFurigana() ? 1 : 0)) {
     furiganaOverride = furiganaOverrideIn;
@@ -1996,6 +1999,7 @@ void EpubReaderActivity::applyLanguageState() {
   // CJK books (or forced vertical text) need the proper-size companion font; plain Latin books
   // must not pay its SD load / RAM (user-reported).
   sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
+  syncBookFonts();
   // Word lookup reads the converted dictionary of the book's language, and traditional Chinese
   // sets its vertical punctuation differently from Japanese. Both are process-wide and decided
   // here, before any layout or lookup runs.
@@ -2234,6 +2238,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
         }
         sdFontSystem.ensureLoaded(renderer);
         sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
+        syncBookFonts();
         // Reading Orientation now only changes via this screen (removed from the reader's
         // own quick menu, which used to apply it straight from the popup via
         // applyOrientation(menu.orientation)): pick up a change the same way onEnter()
@@ -5916,10 +5921,22 @@ ReaderRenderSpec EpubReaderActivity::readerSpec(const uint16_t viewportWidth, co
   ReaderRenderSpec spec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
   spec.fontId = effectiveReaderFontId();
   spec.furiganaEnabled = useFurigana();
+  spec.bookFontsSignature = bookFonts.signature();
   int marginTop, marginRight, marginBottom, marginLeft;
   renderer.getOrientedViewableTRBL(&marginTop, &marginRight, &marginBottom, &marginLeft);
   spec.rightMarginPx = static_cast<uint16_t>(std::max(0, marginRight + SETTINGS.screenMargin));
   return spec;
+}
+
+// Publisher fonts follow the reader font, its size and the setting, so they are synced wherever
+// those change: after every font reload, before the next layout reads bookFonts.signature().
+void EpubReaderActivity::syncBookFonts() {
+  // Only with the book's own CSS: their rules are part of it.
+  if (epub && SETTINGS.publisherFonts && SETTINGS.embeddedStyle) {
+    bookFonts.load(*epub, renderer, SETTINGS.fontPointSize, effectiveReaderFontId());
+  } else {
+    bookFonts.unload(renderer);
+  }
 }
 
 int EpubReaderActivity::effectiveReaderFontId() const {

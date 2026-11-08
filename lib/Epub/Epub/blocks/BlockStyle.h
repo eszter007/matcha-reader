@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "Epub/BookFontMap.h"
 #include "Epub/ReaderFontScale.h"
 #include "Epub/css/CssStyle.h"
 
@@ -262,7 +263,10 @@ struct BlockStyle {
                                  const uint16_t viewportWidth = 0, const bool honorHorizontalInsets = false,
                                  const int baseFontId = 0) {
     BlockStyle blockStyle;
-    blockStyle.fontId = baseFontId != 0 ? cssBlockFontId(cssStyle, baseFontId) : 0;
+    // A publisher font the block names wins over its size, which then scales the font's glyphs
+    // (cssBlockFontScaleTag): a publisher font is resident at one size.
+    const int familyFontId = cssStyle.hasFontFamily() ? bookfonts::fontIdForFamily(cssStyle.fontFamilyKey) : 0;
+    blockStyle.fontId = familyFontId != 0 ? familyFontId : (baseFontId != 0 ? cssBlockFontId(cssStyle, baseFontId) : 0);
     const float vw = viewportWidth;
     blockStyle.marginTop = cssStyle.marginTop.toPixelsInt16(emSize, vw);
     blockStyle.marginBottom = cssStyle.marginBottom.toPixelsInt16(emSize, vw);

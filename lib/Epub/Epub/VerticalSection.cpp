@@ -17,6 +17,7 @@
 #include <cstring>
 #include <string>
 
+#include "BookFontMap.h"
 #include "Epub/RubyGlossary.h"
 #include "Epub/VerticalBatch.h"
 #include "Epub/blocks/ImageBlock.h"
@@ -135,7 +136,7 @@ namespace {
 // (EBPAJ .block-align-center / -end) centre a block along the column or push it to the foot.
 // v159: each glyph records its CSS font-size (scale8). Columns are as wide as their largest text,
 // and characters advance down a column by their own size.
-constexpr uint8_t VSECTION_FILE_VERSION = 159;
+constexpr uint8_t VSECTION_FILE_VERSION = 160;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -328,6 +329,36 @@ struct TextExtractor {
       fontScaleCount--;
     }
   }
+  // CSS font-family, nested like font-size: the bookfonts slot each element selects.
+  uint8_t fontSlots[MAX_STYLE_STACK] = {};
+  int fontSlotOpenedAt[MAX_STYLE_STACK] = {};
+  int fontSlotCount = 0;
+  // The slot a run records: 0 for the reader font, whether inherited or chosen explicitly.
+  uint8_t currentFontSlot() const {
+    const uint8_t slot = fontSlotCount > 0 ? fontSlots[fontSlotCount - 1] : 0;
+    return slot == bookfonts::READER_SLOT ? 0 : slot;
+  }
+  void closeFontSlotAt(int depth) {
+    if (fontSlotCount > 0 && fontSlotOpenedAt[fontSlotCount - 1] - 1 == depth) {
+      flushCurrentText();
+      fontSlotCount--;
+    }
+  }
+  // This element's own font-family slot, as resolveFontScale() finds its size; 0 when none sets it.
+  uint8_t resolveFontSlot(const char* name, const char** atts) const {
+    uint8_t slot = 0;
+    if (blockStyles && !blockStyles->empty()) {
+      const uint32_t tagHash = CssParser::blockSelectorHash(name, strlen(name));
+      for (const auto& rule : *blockStyles) {
+        if (rule.style.fontSlot == 0 || (rule.tagHash != 0 && rule.tagHash != tagHash)) continue;
+        if (rule.classHash != 0 && !hasClassHash(atts, rule.classHash)) continue;
+        slot = rule.style.fontSlot;
+      }
+    }
+    CssParser::VerticalBlockStyle own;
+    if (inlineBlockStyle(atts, own) && own.fontSlot != 0) slot = own.fontSlot;
+    return slot;
+  }
   // The size in eighths of the body, snapped as horizontal text snaps it (fontScaleTagForScale).
   uint8_t currentScale8() const {
     const int32_t tag = fontScaleTagForScale(currentFontScale());
@@ -443,6 +474,7 @@ struct TextExtractor {
     }
     run.indentQuarters = currentIndent();
     run.scale8 = currentScale8();
+    run.fontSlot = currentFontSlot();
     currentRuns.push_back(std::move(run));
   }
 
@@ -790,6 +822,15 @@ struct TextExtractor {
         self->fontScaleOpenedAt[self->fontScaleCount] = self->elementDepth;
         self->fontScaleCount++;
       }
+      if (!self->inRt && !self->inRp && self->fontSlotCount < MAX_STYLE_STACK) {
+        const uint8_t slot = self->resolveFontSlot(name, atts);
+        if (slot != 0) {
+          self->flushCurrentText();
+          self->fontSlots[self->fontSlotCount] = slot;
+          self->fontSlotOpenedAt[self->fontSlotCount] = self->elementDepth;
+          self->fontSlotCount++;
+        }
+      }
     }
     if (isBoldTag(name) || hasClass(atts, "bold")) {
       if (self->boldStack.canOpen()) {
@@ -948,9 +989,11 @@ struct TextExtractor {
       // stream them onward at the same cadence as the byte bound (see SOFT_FLUSH_RUNS).
       if (self->currentRuns.size() >= SOFT_FLUSH_RUNS) self->emitRuns(false);
       self->closeFontScaleAt(self->elementDepth);
+      self->closeFontSlotAt(self->elementDepth);
       return;
     }
     self->closeFontScaleAt(self->elementDepth);
+    self->closeFontSlotAt(self->elementDepth);
     if (self->boldStack.closesHere(self->elementDepth)) {
       self->flushCurrentText();
       self->boldStack.close();
@@ -1138,6 +1181,7 @@ void visitGlyphFields(Ar& ar, G& g) {
   bool emphasis = g.emphasis;
   uint8_t lineHeadFlush = g.lineHeadFlush;
   uint8_t scale8 = g.scale8;
+  uint8_t fontSlot = g.fontSlot;
   ar(codepoint);
   ar(column);
   ar(row);
@@ -1150,6 +1194,7 @@ void visitGlyphFields(Ar& ar, G& g) {
   ar(emphasis);
   ar(lineHeadFlush);
   ar(scale8);
+  ar(fontSlot);
   ar(g.textId);
   if constexpr (!std::is_const_v<G>) {
     g.codepoint = codepoint;
@@ -1161,6 +1206,7 @@ void visitGlyphFields(Ar& ar, G& g) {
     g.emphasis = emphasis;
     g.lineHeadFlush = lineHeadFlush;
     g.scale8 = scale8;
+    g.fontSlot = fontSlot;
   }
 }
 
@@ -1945,7 +1991,8 @@ constexpr size_t HEADER_PAGECOUNT_OFFSET = sizeof(uint8_t)      // version
                                            + sizeof(uint8_t)    // lineSpacing
                                            + sizeof(uint8_t)    // furiganaFlag
                                            + sizeof(int8_t)     // characterSpacing
-                                           + sizeof(uint16_t);  // rightMarginPx
+                                           + sizeof(uint16_t)   // rightMarginPx
+                                           + sizeof(uint32_t);  // bookFontsSignature
 
 }  // namespace
 
@@ -2160,6 +2207,7 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   serialization::writePod(b.out, furiganaFlag);
   serialization::writePod(b.out, spec.characterSpacing);
   serialization::writePod(b.out, spec.rightMarginPx);
+  serialization::writePod(b.out, spec.bookFontsSignature);
   const uint16_t pageCountPlaceholder = 0;
   const uint32_t indexOffsetPlaceholder = 0;
   serialization::writePod(b.out, pageCountPlaceholder);
@@ -2580,10 +2628,13 @@ bool VerticalSection::loadSectionFile(const ReaderRenderSpec& spec, const bool r
   serialization::readPod(file, cachedCharacterSpacing);
   uint16_t cachedRightMargin;
   serialization::readPod(file, cachedRightMargin);
+  uint32_t cachedBookFonts;
+  serialization::readPod(file, cachedBookFonts);
 
   if (cachedFontId != fontId || cachedWidth != viewportWidth || cachedHeight != viewportHeight ||
       cachedLineSpacing != lineSpacing || cachedFurigana != (furiganaEnabled ? 1 : 0) ||
-      cachedCharacterSpacing != spec.characterSpacing || cachedRightMargin != spec.rightMarginPx) {
+      cachedCharacterSpacing != spec.characterSpacing || cachedRightMargin != spec.rightMarginPx ||
+      cachedBookFonts != spec.bookFontsSignature) {
     file.close();
     LOG_DBG("VSC", "Parameter mismatch, clearing cache");
     clearCache();
