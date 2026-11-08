@@ -55,6 +55,13 @@ class DictionaryDefinitionActivity final : public Activity {
     void (*draw)(void* ctx) = nullptr;
   };
 
+  // Work of the screen under the panel that must go on while the panel is up (a page still being
+  // mapped). Called on idle frames; returns true while there is more to do.
+  struct HostTick {
+    void* ctx = nullptr;
+    bool (*tick)(void* ctx) = nullptr;
+  };
+
   // Supplies further entries while the view is up (a touch selection's other words). next() puts
   // one more word's entries in `fresh`, reading `shown` to skip repeats, and returns false once
   // nothing is left.
@@ -91,9 +98,17 @@ class DictionaryDefinitionActivity final : public Activity {
   // Handles on the looked-up word behind the panel; a drag on one finishes with ClipStartResult.
   void setClipHandles(const LookupClipHandles& handles) { clipHandles = handles; }
   void setMoreEntries(const MoreEntries& source) { more = source; }
+  // step() runs under RenderLock, which the same task may take again inside it.
   void setWordSteps(const WordSteps& source) { steps = source; }
+  // draw() runs on the render task.
   void setBackdrop(const Backdrop& source) { backdrop = source; }
-  bool skipLoopDelay() override { return more.next != nullptr; }
+  void setHostTick(const HostTick& source) {
+    hostTick = source;
+    hostBusy = source.tick != nullptr;
+  }
+  // The entry the panel opens on (the grammar entry when that is the better match).
+  void setStartEntry(const size_t index) { startEntry = index; }
+  bool skipLoopDelay() override { return more.next != nullptr || hostBusy; }
 
   // The book behind the panel reverses its page turns (Reversed Page Turn in a vertical book).
   void setPageTurnReversed(const bool reversed) { pageTurnReversed = reversed; }
@@ -125,6 +140,9 @@ class DictionaryDefinitionActivity final : public Activity {
   MoreEntries more;
   WordSteps steps;
   Backdrop backdrop;
+  HostTick hostTick;
+  bool hostBusy = false;
+  size_t startEntry = 0;
   // The neighbouring word's entries, when steps is set: the first page going forward, the last
   // entry's last page (atEnd) or first page going back. False at the page's ends.
   bool stepWord(int direction, bool atEnd);

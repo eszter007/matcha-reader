@@ -2194,13 +2194,21 @@ void EpubReaderWordLookupActivity::loop() {
     if (!handleSelectInput()) return;
   } else if (!panelOpen) {
     // Waiting for the word's entry: it opens in the definition panel as soon as it is there (a
-    // selection's walk fills the panel itself). Until then only Back or the power click count.
-    if (!lookupInFlight && (hasResult || selectionWalk == SelectionWalk::Running)) {
+    // selection's walk fills the panel itself).
+    if (!panelFailed && !lookupInFlight && (hasResult || selectionWalk == SelectionWalk::Running)) {
       openPanel();
       return;
     }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput)) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput) ||
+        ReaderUtils::wordLookupSideToggle(mappedInput)) {
       finishCancelled();
+      return;
+    }
+    // No match, or a lookup the heap refused: Confirm tries again.
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      panelFailed = false;
+      performLookup();
+      requestUpdate();
       return;
     }
   }
@@ -2458,10 +2466,12 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
   drawPageBehindPanel();
   const auto layout = DictionaryPanel::draw(renderer, "", nullptr, nullptr, nullptr, false, false);
   const bool stillWorking = lookupInFlight || !scan.isDone() || selectionWalk == SelectionWalk::Running;
-  const char* message = stillWorking ? tr(STR_LOADING) : lowMemoryResult ? tr(STR_LOW_MEMORY_RETRY) : tr(STR_NO_MATCH);
+  const char* message = stillWorking                     ? tr(STR_LOADING)
+                        : lowMemoryResult || panelFailed ? tr(STR_LOW_MEMORY_RETRY)
+                                                         : tr(STR_NO_MATCH);
   UITheme::drawCenteredText(renderer, layout.body, UI_12_FONT_ID, layout.body.y + layout.body.height / 2, message,
                             true);
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), stillWorking ? "" : tr(STR_SELECT), "", "");
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
@@ -2557,9 +2567,21 @@ void EpubReaderWordLookupActivity::appendEntries(const size_t first,
 bool EpubReaderWordLookupActivity::stepWord(void* ctx, const int direction,
                                             std::vector<DictionaryDefinitionActivity::Entry>& out) {
   auto* self = static_cast<EpubReaderWordLookupActivity*>(ctx);
+  const int from = self->cursorIndex;
   self->moveCursor(direction);
   self->appendEntries(0, out);
+  // A word that could not be read (low memory) leaves the panel on the word it shows: so does
+  // the cursor, or the next step would start from a word the reader never saw.
+  if (out.empty()) self->cursorIndex = from;
   return !out.empty();
+}
+
+// The page keeps being mapped while the panel is up, so the cursor can cycle and the scan cache
+// gets written on exit.
+bool EpubReaderWordLookupActivity::scanTick(void* ctx) {
+  auto* self = static_cast<EpubReaderWordLookupActivity*>(ctx);
+  if (!self->scan.isDone() && self->stepScan(40)) DictIndex::logAndResetStats("progressive scan complete");
+  return !self->scan.isDone();
 }
 
 // A touch selection's further words, a slice of the walk at a time while the panel is up.
@@ -2594,9 +2616,13 @@ void EpubReaderWordLookupActivity::openPanel() {
   auto panel = makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(entries));
   if (!panel) {
     LOG_ERR("WLA", "OOM: definition panel");
+    panelFailed = true;  // shown as low memory until Confirm retries
+    requestUpdate();
     return;
   }
   panelOpen = true;
+  panel->setHostTick({this, &EpubReaderWordLookupActivity::scanTick});
+  if (!sectionText.empty()) panel->setStartEntry(static_cast<size_t>(std::max(0, currentSection)));
   if (selectionRunning) {
     panel->setMoreEntries(
         {this, &EpubReaderWordLookupActivity::nextSelectionEntries, &EpubReaderWordLookupActivity::selectionFailure});

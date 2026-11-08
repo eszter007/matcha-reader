@@ -44,7 +44,9 @@ class MangaWordLookupActivity final : public Activity {
   bool pageTurnReversed = false;
   // The definition panel is open over this activity, which keeps the page's word cursor.
   bool panelOpen = false;
+  bool panelFailed = false;  // the panel could not be allocated: low memory until Confirm retries
   void openPanel();
+  static bool scanTick(void* ctx);
   bool resultEntries(std::vector<DictionaryDefinitionActivity::Entry>& out);
   static bool stepWord(void* ctx, int direction, std::vector<DictionaryDefinitionActivity::Entry>& out);
   WordSelectionScan scan;
@@ -70,8 +72,7 @@ class MangaWordLookupActivity final : public Activity {
   void initScanFromCacheOrBurst();
   void runInitialBurst();
   void moveCursor(int delta);
-  // A screenful through the definition, then onto the neighbouring word at its end.
-  // Sentence mining: saves the shown entry with the sentence from its speech bubble.
+  // Sentence mining: the shown entry is saved with the sentence from its speech bubble.
   sentencemining::BookContext mining_;
   // Hashes of the headwords shown this session, so browsing back and forth counts each word
   // once; the total goes to BookStats in one write on exit.

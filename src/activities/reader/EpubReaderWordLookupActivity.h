@@ -15,7 +15,6 @@ class Page;
 #include "DefinitionTextRenderer.h"
 #include "DictionaryDefinitionActivity.h"
 #include "JapaneseNestedLookup.h"
-#include "NestedLookupHost.h"
 #include "WordSelectionScan.h"
 #include "activities/Activity.h"
 #include "clippings/LookupClipHandles.h"
@@ -108,7 +107,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   bool pageTurnReversed = false;
   // The definition panel is open over this activity, which keeps the page, cursor and scan.
   bool panelOpen = false;
+  bool panelFailed = false;  // the panel could not be allocated: low memory until Confirm retries
   void openPanel();
+  static bool scanTick(void* ctx);
   void appendEntries(size_t first, std::vector<DictionaryDefinitionActivity::Entry>& out);
   void drawPageBehindPanel();
   static bool stepWord(void* ctx, int direction, std::vector<DictionaryDefinitionActivity::Entry>& out);
@@ -317,15 +318,10 @@ class EpubReaderWordLookupActivity final : public Activity {
   // appendDict != 0: resultDefinition holds one further entry from that dictionary; its pages go
   // after the existing ones instead of replacing them.
   void splitDefinitionIntoSections(uint8_t appendDict = 0);
-  // A screenful through the entry, then onto the neighbouring page at its end.
-  // Text and footer label for what is on screen: the current section in tategaki, the whole
-  // merged definition otherwise.
-
   int scrollOffset = 0;  // lines scrolled within current entry
 
-  // Vertical (tategaki) reading pages the definition a screenful at a time and shows a page
-  // counter, instead of the free scrolling the horizontal and manga panels keep. scrollOffset
-  // is still the source of truth -- paging just quantizes it to whole screenfuls.
+  // With word geometry the entry shows one page per source; without it, one text through which
+  // reading on moves to the page's next word.
   bool pagedDefinition() const { return selectCtx.valid(); }
 
   // Scan-result persistence (empty path = disabled).
@@ -419,6 +415,4 @@ class EpubReaderWordLookupActivity final : public Activity {
   bool initialRenderDone = false;
   int fastRefreshCount = 0;
   static constexpr int kFullRefreshInterval = 10;
-
-  // Draws the definition text (or the loading/no-match notice) into the panel's inner rectangle.
 };

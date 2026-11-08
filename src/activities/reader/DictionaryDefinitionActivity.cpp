@@ -164,7 +164,7 @@ void DictionaryDefinitionActivity::onEnter() {
     requestUpdate();
     return;
   }
-  showEntry(0, false);
+  showEntry(startEntry < entries.size() ? startEntry : 0, false);
   requestUpdate();
 }
 
@@ -357,6 +357,7 @@ void DictionaryDefinitionActivity::loop() {
     }
     case PanelInput::Event::None:
       if (!nestedHost.cursorActive() && !cursorWords.empty()) std::vector<std::string>{}.swap(cursorWords);
+      if (hostBusy && !RenderLock::peek()) hostBusy = hostTick.tick(hostTick.ctx);
       return;
     case PanelInput::Event::LongBack:
       // Leaves a nested lookup altogether, every panel of the chain at once.
@@ -471,7 +472,17 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
     // Japanese/Chinese entries span many compressed glyph groups: load them in one pass first, or
     // each missing character falls through the slow one-at-a-time path while drawing.
     fcm->clearCache();
-    DefinitionText::prewarmStyledText(renderer, DefinitionText::wordLookupFontId(), definition);
+    // The first page needs only the start of the text (~1KB covers a screen of Latin or CJK);
+    // warming a long merged entry whole cost about a second per step.
+    constexpr size_t kFirstPageBytes = 1024;
+    if (currentPage == 0 && definition.size() > kFirstPageBytes) {
+      size_t cut = kFirstPageBytes;  // back up to a UTF-8 lead byte so the last character is whole
+      while (cut > 0 && (static_cast<unsigned char>(definition[cut]) & 0xC0) == 0x80) cut--;
+      std::string head = definition.substr(0, cut);
+      DefinitionText::prewarmStyledText(renderer, DefinitionText::wordLookupFontId(), head);
+    } else {
+      DefinitionText::prewarmStyledText(renderer, DefinitionText::wordLookupFontId(), definition);
+    }
   }
   auto scope = fcm->createPrewarmScope();
   drawBody(fontId, layout.body.x, layout.body.y);  // scan pass: records codepoints only

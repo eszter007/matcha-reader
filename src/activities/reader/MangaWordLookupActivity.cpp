@@ -175,7 +175,7 @@ bool MangaWordLookupActivity::resultEntries(std::vector<DictionaryDefinitionActi
   if (!hasResult) return false;
   DictionaryDefinitionActivity::Entry entry;
   entry.headword = resultHeadword;
-  entry.definition = resultDefinition;
+  entry.definition = std::move(resultDefinition);  // the panel shows it; a step looks the next word up anew
   entry.reading = resultReading;
   entry.grammar = resultGrammar;
   entry.definitionText = true;
@@ -202,8 +202,23 @@ bool MangaWordLookupActivity::resultEntries(std::vector<DictionaryDefinitionActi
 bool MangaWordLookupActivity::stepWord(void* ctx, const int direction,
                                        std::vector<DictionaryDefinitionActivity::Entry>& out) {
   auto* self = static_cast<MangaWordLookupActivity*>(ctx);
+  const int from = self->cursorIndex;
   self->moveCursor(direction);
-  return self->resultEntries(out);
+  // A word that could not be read (low memory) leaves the panel on the word it shows: so does
+  // the cursor, or the next step would start from a word the reader never saw.
+  if (!self->resultEntries(out)) {
+    self->cursorIndex = from;
+    return false;
+  }
+  return true;
+}
+
+// The page keeps being mapped while the panel is up, so the cursor can cycle and the scan cache
+// gets written on exit.
+bool MangaWordLookupActivity::scanTick(void* ctx) {
+  auto* self = static_cast<MangaWordLookupActivity*>(ctx);
+  if (!self->scan.isDone() && self->scan.step(40)) DictIndex::logAndResetStats("progressive scan complete");
+  return !self->scan.isDone();
 }
 
 // The entry opens in the shared definition panel; this activity keeps the page's word cursor
@@ -214,9 +229,12 @@ void MangaWordLookupActivity::openPanel() {
   auto panel = makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(entries));
   if (!panel) {
     LOG_ERR("MWLA", "OOM: definition panel");
+    panelFailed = true;  // shown as low memory until Confirm retries
+    requestUpdate();
     return;
   }
   panelOpen = true;
+  panel->setHostTick({this, &MangaWordLookupActivity::scanTick});
   panel->setWordSteps({this, &MangaWordLookupActivity::stepWord});
   panel->setNestedLookup({nullptr, &japanese_nested::lookup});
   panel->setPageTurnReversed(pageTurnReversed);
@@ -483,9 +501,16 @@ void MangaWordLookupActivity::performLookupImpl() {
 }
 
 void MangaWordLookupActivity::loop() {
-  // Until a word is found: the page is still being mapped, and only Back or a tap outside count.
+  // Until a word is found: the page is still being mapped. Back leaves; Confirm or the side button
+  // bound to Word Lookup looks the word up again (no match, or a lookup the heap refused).
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput)) {
     finishCancelled();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || ReaderUtils::wordLookupSideToggle(mappedInput)) {
+    panelFailed = false;
+    performLookup();
+    requestUpdate();
     return;
   }
   // Progressive background scan + one-time result persistence -- same structure as
@@ -501,7 +526,7 @@ void MangaWordLookupActivity::loop() {
       requestUpdate();
     }
   }
-  if (hasResult && !panelOpen) openPanel();
+  if (hasResult && !panelOpen && !panelFailed) openPanel();
 }
 
 // Shown only until the first word is found: the entry itself opens in the definition panel.
@@ -509,8 +534,11 @@ void MangaWordLookupActivity::render(RenderLock&&) {
   const auto layout = DictionaryPanel::draw(renderer, "", nullptr, nullptr, nullptr, false, false);
   const bool stillWorking = lookupInFlight || !scan.isDone();
   UITheme::drawCenteredText(renderer, layout.body, UI_12_FONT_ID, layout.body.y + layout.body.height / 2,
-                            stillWorking ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+                            stillWorking  ? tr(STR_LOADING)
+                            : panelFailed ? tr(STR_LOW_MEMORY_RETRY)
+                                          : tr(STR_NO_MATCH),
+                            true);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), stillWorking ? "" : tr(STR_SELECT), "", "");
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   // FAST only: the framebuffer holds just the page's BW plane, so a full refresh would flash the

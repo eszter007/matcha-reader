@@ -26,9 +26,4 @@ bool lookup(void* ctx, const char* text, std::vector<DictionaryDefinitionActivit
 std::string wordAt(const GfxRenderer& renderer, const DefinitionText::WrapGeometry& geometry, const std::string& text,
                    int x, int y);
 
-// The first panel of a chain for `word` (from wordAt or lookupTextAt), or null with the reason in
-// `failure`. Call without RenderLock: it reads the dictionary from SD.
-std::unique_ptr<DictionaryDefinitionActivity> open(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                                   const std::string& word, StrId& failure);
-
 }  // namespace japanese_nested
