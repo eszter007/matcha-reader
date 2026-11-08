@@ -101,8 +101,17 @@ void ReaderActivity::onEnter() {
     APP_STATE.saveToFile();
   }
 
-  if (usesReaderFonts()) sdFontSystem.ensureLoaded(renderer);
+  if (usesReaderFonts()) {
+    sdFontSystem.ensureLoaded(renderer);
+  } else {
+    // No book text: the reader font leaves RAM while the book is open, and so does the CJK
+    // companion, since releasing resident fonts does not decide what comes back.
+    RenderLock lock;
+    sdFontSystem.releaseAllResidentFonts(renderer);
+    sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
+  }
   if (!loadBook()) {
+    restoreReaderFonts();
     if (!handleLoadFailure()) finish();
     return;
   }
@@ -143,6 +152,7 @@ void ReaderActivity::onExit() {
   const ScreenshotInfo exitInfo = hasBook() ? getScreenshotInfo() : ScreenshotInfo{};
   const bool hadBook = hasBook();
   onReaderExit();
+  restoreReaderFonts();
   // Read from the saved progress, as on entry, so a book opened without moving compares equal.
   if (hadBook) remoteProgress::readHere(bookPath, enterPercent, loadOwnBookProgress(bookPath));
 
@@ -172,6 +182,13 @@ void ReaderActivity::onExit() {
 }
 
 void ReaderActivity::prepareForSleep() { flushReaderSession(); }
+
+// Home and the next reader need the user's font again after a reader that released it.
+void ReaderActivity::restoreReaderFonts() {
+  if (usesReaderFonts()) return;
+  RenderLock lock;
+  sdFontSystem.ensureLoaded(renderer);
+}
 
 void ReaderActivity::flushReaderSession() {
   sessionReporter.flush(bookPath, sessionDocumentPath());

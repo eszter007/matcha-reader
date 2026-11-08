@@ -85,30 +85,15 @@ CjkScript mangaScript(const manga::MangaBook* book) {
 }
 }  // namespace
 
-// Manga renders no book text: the reader font is released while it is open, and the companion
-// policy dropped explicitly, since releaseAllResidentFonts() frees memory without deciding what
-// should come back. A book that fails to load puts the user's font back at once.
 bool MangaReaderActivity::loadBook() {
-  // Retires renderer font registrations, so it cannot run beside the render task.
-  {
-    RenderLock lock;
-    sdFontSystem.releaseAllResidentFonts(renderer);
-    sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
-  }
-  const auto restoreFonts = [this] {
-    RenderLock lock;
-    sdFontSystem.ensureLoaded(renderer);
-  };
   book = makeUniqueNoThrow<manga::MangaBook>(bookPath);
   if (!book) {
     LOG_ERR("MRA", "Failed to allocate MangaBook");
-    restoreFonts();
     return false;
   }
   if (!book->load()) {
     LOG_ERR("MRA", "Failed to load manga: %s", book->getFolder().c_str());
     book.reset();
-    restoreFonts();
     return false;
   }
   // The converted dictionary lives in a per-language folder; pick the comic's before the first
@@ -183,6 +168,8 @@ void MangaReaderActivity::onReaderEnter() {
 }
 
 void MangaReaderActivity::onReaderExit() {
+  // The base's exit steps before this one may not free what the worker reads (book, panels, cache
+  // paths) nor wait on it.
   // Join the prefetch worker FIRST, before any teardown below: it may be mid-decode against book
   // paths and activity members. The exit flag makes the decode's cancel probe abort within one
   // MCU block/scanline (partial tmp dropped by the converter), so this spin is short -- worst
@@ -214,14 +201,6 @@ void MangaReaderActivity::onReaderExit() {
   saveProgress();
   panels.clear();
   book.reset();
-
-  // Home/Library and the next text reader need the user's selected font again. The manga entry
-  // released it only from RAM; ensureLoaded() restores the unchanged saved selection here.
-  {
-    RenderLock lock;
-    sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
-    sdFontSystem.ensureLoaded(renderer);
-  }
 }
 
 void MangaReaderActivity::loadCurrentPagePanels() {

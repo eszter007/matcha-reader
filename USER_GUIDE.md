@@ -1575,6 +1575,9 @@ author and progress.
 | Back | Leave the book | Back to the full page |
 | Hold Back | Open the file browser at the book | Open the file browser at the book |
 
+Side buttons with their own action, Tilt Page Turn and the other reader shortcuts work in manga as they do in books
+(see **Settings → Controls → Shortcuts**).
+
 <p align="center">
   <img src="docs/images/screenshots/manga-full-page.png" width="240" alt="Full page view">
   <img src="docs/images/screenshots/manga-panel-zoom.png" width="240" alt="Panel zoom view">
