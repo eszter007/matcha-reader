@@ -1,8 +1,10 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string_view>
 
 // Matches order of PARAGRAPH_ALIGNMENT in CrossPointSettings
 enum class CssTextAlign : uint8_t { Justify = 0, Left = 1, Center = 2, Right = 3, None = 4 };
@@ -157,6 +159,56 @@ constexpr uint8_t cssPageBreakWith(const uint8_t packed, const CssPageBreakSlot 
 //   bits 0-1  CssTextTransform
 //   bit  2    hyphens: none  (the ONLY hyphens value that changes anything -- see hyphensNone())
 //   bit  3    white-space: pre / pre-wrap / break-spaces (spaces and line breaks kept)
+// A font family name as a 16-bit key: quotes and outer spaces stripped, ASCII case folded, never 0.
+// @font-face rules and font-family declarations meet on this key, so neither needs the other's table.
+inline uint16_t fontFamilyKeyOf(std::string_view name) {
+  while (!name.empty() &&
+         (name.front() == ' ' || name.front() == '\t' || name.front() == '"' || name.front() == '\'')) {
+    name.remove_prefix(1);
+  }
+  while (!name.empty() && (name.back() == ' ' || name.back() == '\t' || name.back() == '"' || name.back() == '\'')) {
+    name.remove_suffix(1);
+  }
+  if (name.empty()) return 0;
+  uint32_t h = 2166136261u;
+  for (const char c : name) {
+    h ^= static_cast<uint8_t>(c >= 'A' && c <= 'Z' ? c + 32 : c);
+    h *= 16777619u;
+  }
+  const auto key = static_cast<uint16_t>(h ^ (h >> 16));
+  return key != 0 ? key : 1;
+}
+
+// The key of the first family in a font-family list that is not a generic or CSS-wide keyword;
+// 0 when there is none, which means "the reader font".
+inline uint16_t fontFamilyListKey(std::string_view list) {
+  constexpr std::string_view GENERIC[] = {"serif",   "sans-serif", "monospace", "cursive",  "fantasy",      "system-ui",
+                                          "inherit", "initial",    "unset",     "ui-serif", "ui-sans-serif"};
+  while (!list.empty()) {
+    const size_t comma = list.find(',');
+    const std::string_view item = list.substr(0, comma);
+    std::string_view bare = item;
+    while (!bare.empty() && (bare.front() == ' ' || bare.front() == '\t')) bare.remove_prefix(1);
+    while (!bare.empty() && (bare.back() == ' ' || bare.back() == '\t')) bare.remove_suffix(1);
+    bool generic = false;
+    for (const std::string_view g : GENERIC) {
+      if (bare.size() == g.size() && std::equal(bare.begin(), bare.end(), g.begin(), [](char a, char b) {
+            return (a >= 'A' && a <= 'Z' ? a + 32 : a) == b;
+          })) {
+        generic = true;
+        break;
+      }
+    }
+    if (!generic) {
+      const uint16_t key = fontFamilyKeyOf(bare);
+      if (key != 0) return key;
+    }
+    if (comma == std::string_view::npos) break;
+    list.remove_prefix(comma + 1);
+  }
+  return 0;
+}
+
 constexpr uint8_t CSS_TEXT_TRANSFORM_MASK = 0x03;
 constexpr uint8_t CSS_HYPHENS_NONE_BIT = 1 << 2;
 constexpr uint8_t CSS_PRESERVE_WHITESPACE_BIT = 1 << 3;
@@ -193,6 +245,7 @@ struct CssPropertyFlags {
   uint16_t hyphens : 1;
   uint16_t letterSpacing : 1;
   uint16_t whiteSpace : 1;
+  uint16_t fontFamily : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -224,7 +277,8 @@ struct CssPropertyFlags {
         textTransform(0),
         hyphens(0),
         letterSpacing(0),
-        whiteSpace(0) {}
+        whiteSpace(0),
+        fontFamily(0) {}
 
   // EVERY flag above must appear in both anySet() and clearAll(). An omission is silent and
   // total: anySet() gates processRuleBlockWithStyle's first line, so a rule that defines only
@@ -235,7 +289,7 @@ struct CssPropertyFlags {
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
            imageWidth || display || direction || verticalAlign || border || textEmphasis || fontVariant ||
            listStyleType || fontSize || inkMode || pageBreak || lineHeight || textTransform || hyphens ||
-           letterSpacing || whiteSpace;
+           letterSpacing || whiteSpace || fontFamily;
   }
 
   void clearAll() {
@@ -244,11 +298,11 @@ struct CssPropertyFlags {
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = border = 0;
     textEmphasis = fontVariant = listStyleType = fontSize = inkMode = pageBreak = lineHeight = 0;
-    textTransform = hyphens = letterSpacing = whiteSpace = 0;
+    textTransform = hyphens = letterSpacing = whiteSpace = fontFamily = 0;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..28.
+// Cache serializes defined flags as uint32_t with bit indices 0..30.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
 static_assert(sizeof(CssPropertyFlags) * 8 >= 19,
@@ -382,6 +436,9 @@ struct CssStyle {
                                            : (textFlags & static_cast<uint8_t>(~CSS_PRESERVE_WHITESPACE_BIT)));
   }
 
+  // font-family as fontFamilyKeyOf() of its first non-generic name; 0 = the reader font.
+  uint16_t fontFamilyKey = 0;
+
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
 
   // Apply properties from another style, only overwriting if the other style
@@ -503,6 +560,10 @@ struct CssStyle {
       setPreserveWhitespace(base.preserveWhitespace());
       defined.whiteSpace = 1;
     }
+    if (base.hasFontFamily()) {
+      fontFamilyKey = base.fontFamilyKey;
+      defined.fontFamily = 1;
+    }
     if (base.hasInkMode()) {
       inkMode = base.inkMode;
       defined.inkMode = 1;
@@ -562,6 +623,7 @@ struct CssStyle {
   // still lets an explicit `normal` stop the cascade from inheriting a parent's tracking.
   [[nodiscard]] bool hasLetterSpacing() const { return defined.letterSpacing; }
   [[nodiscard]] bool hasWhiteSpace() const { return defined.whiteSpace; }
+  [[nodiscard]] bool hasFontFamily() const { return defined.fontFamily; }
 
   void reset() {
     textAlign = CssTextAlign::Left;

@@ -469,14 +469,22 @@ to that book only.
     - **Hyphenation** (off by default): splits long words at the end of a line. With it on, Korean text may also
       break between syllables, without a hyphen. With it off, Korean breaks only at spaces.
     - **Embedded Style** (on by default): uses the book's own formatting (its CSS).
+    - **Publisher Fonts** (off by default, X4 Pro and other boards with PSRAM): draws a book in the fonts it
+      ships, in horizontal and vertical text. Up to two of a book's font families are used, usually the body
+      font and a heading font; any other text, and any character a book font lacks, uses your font. Works
+      only with **Embedded Style** on. TrueType and OpenType fonts only: books that ship only WOFF fonts keep
+      your font, and so does a font file larger than 4 MB (common for full Japanese or Chinese fonts). Text
+      the book sets larger or smaller is drawn by scaling the font, so it can look slightly softer.
     - **Text Anti-Aliasing** (on by default): smooth grey edges on letters, furigana included. The grey appears
       about half a second after a page turns. Turning pages faster than that skips it.
-  - The Japanese and Chinese profiles list only **Embedded Style** and **Text Anti-Aliasing** under **STYLE**.
+  - The Japanese and Chinese profiles list only **Embedded Style**, **Publisher Fonts** and **Text Anti-Aliasing**
+    under **STYLE**.
   - While a book is shown vertically, **LAYOUT** lists only **Line Spacing**, **Character spacing** and
     **Screen Margin**, the settings vertical text uses.
 
-- **Text profiles**: each of the five profiles keeps its own **font**, **font size**, **line spacing**, **character
-  spacing** and **word spacing**, so a font that suits Japanese leaves your English books alone. A book uses the
+- **Text profiles**: each of the five profiles keeps its own **font**, **Publisher Fonts** choice, **font size**,
+  **line spacing**, **character spacing** and **word spacing**, so a font that suits Japanese leaves your English
+  books alone. A book uses the
   profile of its language: Japanese, traditional Chinese (Cantonese too), simplified Chinese, or Korean (a book
   tagged `ko` or `kor`). Every other book uses **Latin & Others**. Opened from inside a book, **Text Settings** goes
   straight to that book's profile. A size or spacing you change while reading goes to the book's profile too. A font

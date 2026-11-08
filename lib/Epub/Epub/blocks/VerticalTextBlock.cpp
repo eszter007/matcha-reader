@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "../BookFontMap.h"
 #include "GfxRenderer.h"
 #include "ImageBlock.h"
 #include "Kinsoku.h"
@@ -94,6 +95,23 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
   const SizedCell body{256, cellPx, ascender, baselineInCell};
   SesameMask sesame = makeSesameMask(cellPx);
   int sesameCell = cellPx;
+  // A publisher font (VerticalGlyph::fontSlot) is set in the same cells, on its own baseline.
+  SizedCell slotBodies[4] = {body, body, body, body};
+  bool slotReady[4] = {true, false, false, false};
+  const auto fontOfSlot = [&](const uint8_t slot) {
+    const int id = bookfonts::fontIdForSlot(slot);
+    return id != 0 ? id : fontId;
+  };
+  const auto bodyOfSlot = [&](const uint8_t slot) -> const SizedCell& {
+    const int id = bookfonts::fontIdForSlot(slot);
+    if (id == 0 || slot >= 4) return body;
+    if (!slotReady[slot]) {
+      slotBodies[slot] =
+          SizedCell{256, cellPx, renderer.getFontAscenderSize(id), verticalCellBaselineOffset(renderer, id, cellPx)};
+      slotReady[slot] = true;
+    }
+    return slotBodies[slot];
+  };
 
   // Styled-block borders (kakomi boxes, .k-solid-top separator rules). Rects share the glyphs'
   // cell-top coordinate space and the same offsets. `edges` says which lines to draw; EXTEND_*
@@ -120,20 +138,21 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
       if (!renderer.isFontCacheScanning()) drawInlineImage(renderer, page, g, dx, cellTop);
       continue;
     }
-    const SizedCell sized = sizedCell(body, g.scale8);
+    const int gFont = fontOfSlot(g.fontSlot);
+    const SizedCell sized = sizedCell(bodyOfSlot(g.fontSlot), g.scale8);
     int dy = cellTop;
     if (g.renderKind == VerticalGlyph::Upright || g.renderKind == VerticalGlyph::UprightRun) {
       dy = cellTop + sized.baselineInCell - sized.ascender;
     }
 
     if (g.renderKind == VerticalGlyph::RotatedRun) {
-      renderer.drawTextRotated90CCWScaled(fontId, dx, dy, page.glyphText(g), sized.scale, black,
+      renderer.drawTextRotated90CCWScaled(gFont, dx, dy, page.glyphText(g), sized.scale, black,
                                           static_cast<EpdFontFamily::Style>(g.style));
       continue;
     }
 
     if (g.renderKind == VerticalGlyph::UprightRun) {
-      renderer.drawTextScaled(fontId, dx, dy, page.glyphText(g), sized.scale, black,
+      renderer.drawTextScaled(gFont, dx, dy, page.glyphText(g), sized.scale, black,
                               static_cast<EpdFontFamily::Style>(g.style));
       continue;
     }
@@ -146,13 +165,13 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
       // second-half placement lands on the line head. The layout flags which brackets those are (it knows
       // where columns start, indents included) and removes the same half em from the rest of the column.
       if (g.lineHeadFlush) dy -= sized.cellPx / 2;
-      renderer.drawCharVerticalRotatedInCell(fontId, dx, dy, sized.cellPx, g.codepoint, shiftType, black,
+      renderer.drawCharVerticalRotatedInCell(gFont, dx, dy, sized.cellPx, g.codepoint, shiftType, black,
                                              static_cast<EpdFontFamily::Style>(g.style), nullptr, nullptr, sized.scale);
       continue;
     }
 
     if (g.renderKind == VerticalGlyph::SmallKanaCorner) {
-      renderer.drawCharVerticalCornerTopRight(fontId, dx, dy, cellPx, g.codepoint, black,
+      renderer.drawCharVerticalCornerTopRight(gFont, dx, dy, cellPx, g.codepoint, black,
                                               static_cast<EpdFontFamily::Style>(g.style));
       continue;
     }
@@ -166,14 +185,14 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
     int uprightDy = dy;
     {
       GlyphInk ink;
-      if (measureGlyphInk(renderer, fontId, g.codepoint, g.style, &ink) && ink.height > 0 && ink.height < ink.top) {
+      if (measureGlyphInk(renderer, gFont, g.codepoint, g.style, &ink) && ink.height > 0 && ink.height < ink.top) {
         // Thin glyph (一): ink sits near the middle of the em-box, not the top, so centre its
         // ink in the cell instead of using the common baseline. Same space conversion as
         // uprightTopFor: derive the cell's top, then hand drawText a TOP (it adds the ascender).
         uprightDy = cellTop + sized.cellPx / 2 + sized.at(ink.top) - sized.at(ink.height) / 2 - sized.ascender;
       }
     }
-    renderer.drawTextScaled(fontId, dx, uprightDy, utf8Char.c_str(), sized.scale, black,
+    renderer.drawTextScaled(gFont, dx, uprightDy, utf8Char.c_str(), sized.scale, black,
                             static_cast<EpdFontFamily::Style>(g.style));
 
     if (g.emphasis) {

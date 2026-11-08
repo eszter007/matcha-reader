@@ -298,8 +298,8 @@ void ChapterHtmlSlimParser::pushDecorationStyleEntry(const CssTextDecoration def
 // A block's font-size on an SD-card reader font: that font is resident at one size, so the block
 // cannot switch font (cssBlockFontId). Scale its words' bitmaps instead, as an inline <span>
 // font-size does, so a heading is not stuck at body size. Popped with the element.
-void ChapterHtmlSlimParser::pushBlockFontScaleEntry(const CssStyle& cssStyle) {
-  const int32_t tag = cssBlockFontScaleTag(cssStyle, fontId);
+void ChapterHtmlSlimParser::pushBlockFontScaleEntry(const CssStyle& cssStyle, const int baseFontId) {
+  const int32_t tag = cssBlockFontScaleTag(cssStyle, baseFontId);
   if (tag == 0) return;
   StyleStackEntry entry;
   entry.depth = depth;
@@ -307,6 +307,14 @@ void ChapterHtmlSlimParser::pushBlockFontScaleEntry(const CssStyle& cssStyle) {
   entry.fontIdOverride = tag;
   entry.fontScale = cssFontSizeScale(cssStyle);
   inlineStyleStack.push_back(entry);
+}
+
+// The font a block's font-size is measured against: the publisher font it names or inherits
+// (resident at one size, so sizes scale its glyphs), else the reader font.
+int ChapterHtmlSlimParser::blockBaseFontId(const CssStyle& cssStyle) const {
+  (void)cssStyle;  // its own family, if any, is already the innermost scope
+  const int family = inheritedFamilyFontId();
+  return family != 0 ? family : fontId;
 }
 
 // Update effective bold/italic/decorations based on block style and inline style stack
@@ -1617,6 +1625,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     cssStyle.defined.fontSize = 0;
   }
 
+  if (cssStyle.hasFontFamily() && self->fontFamilyScopeCount < MAX_FONT_FAMILY_SCOPES) {
+    self->fontFamilyScopes[self->fontFamilyScopeCount++] = {static_cast<uint16_t>(self->cssPath.depth()),
+                                                            bookfonts::fontIdForFamily(cssStyle.fontFamilyKey)};
+  }
+
   // white-space is inherited: open a scope when this element sets it (or is a <pre>).
   {
     const bool isPre = strcasecmp(name, "pre") == 0;
@@ -2438,11 +2451,17 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // CSS em inside a block resolves against that block's OWN font size, so an element with a
   // font-size gets its margins/padding/indent measured in the larger em too.
   const int blockFontId = cssBlockFontId(cssStyle, self->fontId);
+  const int blockBaseFontId = self->blockBaseFontId(cssStyle);
+  // A block in an inherited publisher font that sets no font of its own is drawn in that font.
+  const auto withFamily = [&](BlockStyle style) {
+    if (style.fontId == 0 && blockBaseFontId != self->fontId) style.fontId = blockBaseFontId;
+    return style;
+  };
   const float emSize =
       static_cast<float>(self->renderer.getFontAscenderSize(blockFontId != 0 ? blockFontId : self->fontId));
   const auto userAlignmentBlockStyle =
-      BlockStyle::fromCssStyle(cssStyle, emSize, static_cast<CssTextAlign>(self->paragraphAlignment),
-                               self->viewportWidth, self->honorBookInsets, self->fontId);
+      withFamily(BlockStyle::fromCssStyle(cssStyle, emSize, static_cast<CssTextAlign>(self->paragraphAlignment),
+                                          self->viewportWidth, self->honorBookInsets, blockBaseFontId));
 
   // Defer every block border until its content is placed. This keeps top/bottom pairs together
   // across page breaks and lets bottom-only heading/worksheet rules render at all.
@@ -2496,8 +2515,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     const auto headingAlignment = self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None)
                                       ? CssTextAlign::Left
                                       : static_cast<CssTextAlign>(self->paragraphAlignment);
-    auto headerBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, headingAlignment, self->viewportWidth,
-                                                     self->honorBookInsets, self->fontId);
+    auto headerBlockStyle = withFamily(BlockStyle::fromCssStyle(cssStyle, emSize, headingAlignment, self->viewportWidth,
+                                                                self->honorBookInsets, blockBaseFontId));
     headerBlockStyle.textAlignDefined = true;
     if (self->embeddedStyle && cssStyle.hasTextAlign()) {
       headerBlockStyle.alignment = cssStyle.textAlign;
@@ -2508,7 +2527,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->blockStyleStack.push_back(accumulated);
     self->startNewTextBlock(accumulated.withoutBottom());
     self->currentBlockIsHeading = true;
-    self->pushBlockFontScaleEntry(cssStyle);
+    self->pushBlockFontScaleEntry(cssStyle, blockBaseFontId);
     // AFTER startNewTextBlock: that call flushes the PREVIOUS block, which must stay on the page
     // it was already on. The break is spent by the first block laid out from here on.
     if (cssStyle.pageBreakBefore() == CssPageBreak::Always && !self->forcedBreakTaken) self->pendingForcedBreak = true;
@@ -2559,7 +2578,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       // On the block itself, never on the style stack: a drop cap belongs to this one
       // paragraph, and the stack is what every nested and sibling block inherits from.
       self->applyDropCap(name, classAttr);
-      self->pushBlockFontScaleEntry(cssStyle);
+      self->pushBlockFontScaleEntry(cssStyle, blockBaseFontId);
       // See the header branch above: raised only once the previous block has been flushed.
       if (cssStyle.pageBreakBefore() == CssPageBreak::Always && !self->forcedBreakTaken) {
         self->pendingForcedBreak = true;
@@ -2708,7 +2727,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     const bool inheritedTableTextAlign = self->tableDepth >= 1 && cssStyle.hasTextAlign();
     if (cssStyle.hasFontWeight() || cssStyle.hasFontStyle() || cssStyle.hasTextDecoration() ||
         cssStyle.hasDirection() || cssStyle.hasVerticalAlign() || cssStyle.hasTextEmphasis() ||
-        cssStyle.hasFontVariant() || cssStyle.hasTextTransform() || cssStyle.hasFontSize() || inheritedTableTextAlign) {
+        cssStyle.hasFontVariant() || cssStyle.hasTextTransform() || cssStyle.hasFontSize() ||
+        (cssStyle.hasFontFamily() && bookfonts::isBookFont(self->inheritedFamilyFontId())) ||
+        (cssStyle.hasFontFamily() && self->currentTextBlock &&
+         bookfonts::isBookFont(self->currentTextBlock->getBlockStyle().fontId)) ||
+        inheritedTableTextAlign) {
       // Before the flush below, which would make an empty block look non-empty.
       self->applyInlineDropCap(cssStyle);
       // Flush buffer before style change so preceding text gets current style
@@ -2766,6 +2789,15 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
           // instead, so `<small>` really is small rather than silently rendering at body size.
           entry.fontIdOverride = fontScaleTagForScale(entry.fontScale);
         }
+      }
+      // <html>/<body> name the book's font through the family scopes, which blocks inherit; as a
+      // word font it would also override the font a heading inside sets for itself.
+      if (cssStyle.hasFontFamily() && !entry.setsParagraphDirection) {
+        // A word slot holds one font, so a span naming a publisher font draws it at block size.
+        const int familyFontId = self->inheritedFamilyFontId();
+        entry.hasFontId = true;
+        entry.fontIdOverride = familyFontId != 0 ? familyFontId : self->fontId;
+        entry.fontScale = 1.0f;
       }
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
@@ -3052,6 +3084,11 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
   if (self->nonVisibleTextDepth > 0) {
     self->nonVisibleTextDepth--;
+  }
+
+  if (self->fontFamilyScopeCount > 0 &&
+      self->fontFamilyScopes[self->fontFamilyScopeCount - 1].pathDepth == self->cssPath.depth()) {
+    self->fontFamilyScopeCount--;
   }
 
   if (self->whitespaceScopeCount > 0 &&

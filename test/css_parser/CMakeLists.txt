@@ -1,12 +1,14 @@
 add_executable(CssParserTest
   CssParserTest.cpp
   ${REPO_ROOT}/lib/Epub/Epub/css/CssParser.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/BookFontMap.cpp
   ${REPO_ROOT}/lib/Epub/Epub/ReaderFontScale.cpp
 )
 
 target_include_directories(CssParserTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/stubs
   ${REPO_ROOT}/lib/Epub/Epub/css
+  ${REPO_ROOT}/lib/EpdFont
   ${REPO_ROOT}/lib/AsciiText
   ${REPO_ROOT}/lib/Memory
 )

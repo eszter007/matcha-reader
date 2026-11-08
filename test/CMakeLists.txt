@@ -95,6 +95,7 @@ add_subdirectory(inflate_stream)
 add_subdirectory(inflate_reader)
 add_subdirectory(zip_file)
 add_subdirectory(fs_helpers)
+add_subdirectory(font_obfuscation)
 add_subdirectory(http_header)
 add_subdirectory(txt_to_html)
 

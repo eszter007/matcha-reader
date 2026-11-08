@@ -4,6 +4,7 @@
 #include <AsciiText.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <VectorFontSupport.h>
 
 #include <algorithm>
 #include <array>
@@ -14,6 +15,7 @@
 #include <cstring>
 #include <string_view>
 
+#include "../BookFontMap.h"
 #include "../ReaderFontScale.h"
 
 namespace {
@@ -86,11 +88,11 @@ constexpr size_t CSS_LEADING_ENUM_BYTES = 5;   // textAlign, fontStyle, fontWeig
 constexpr size_t CSS_LENGTH_FIELD_COUNT = 14;  // CssLength members written, in order
 // display, verticalAlign, border, emphasis, variant, listType, inkMode, pageBreaks, textFlags,
 // then the four per-side border specs
-constexpr size_t CSS_TRAILING_ENUM_BYTES = 13;
+constexpr size_t CSS_TRAILING_ENUM_BYTES = 15;  // + font-family key (2)
 constexpr size_t RULE_FIXED_BYTES = CSS_LEADING_ENUM_BYTES +
                                     CSS_LENGTH_FIELD_COUNT * (sizeof(float) + sizeof(uint8_t)) +
                                     CSS_TRAILING_ENUM_BYTES + sizeof(uint32_t);
-static_assert(RULE_FIXED_BYTES == 92, "CSS v26 rule framing must stay in sync with writeRuleRecord");
+static_assert(RULE_FIXED_BYTES == 94, "CSS v29 rule framing must stay in sync with writeRuleRecord");
 
 constexpr char asciiToLower(const char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c; }
 
@@ -139,6 +141,15 @@ std::string resolveImportPath(const std::string& from, std::string_view target) 
     start = end + 1;
   }
   return out;
+}
+
+// True for an `@font-face` prelude (any spacing and case).
+bool startsWithFontFace(std::string_view prelude) {
+  while (!prelude.empty() && isAsciiWhitespace(prelude.front())) prelude.remove_prefix(1);
+  constexpr std::string_view KEYWORD = "font-face";
+  return prelude.size() >= KEYWORD.size() &&
+         std::equal(KEYWORD.begin(), KEYWORD.end(), prelude.begin(),
+                    [](const char a, const char b) { return a == asciiToLower(b); });
 }
 
 // The URL of an `@import` prelude (`import "a.css"`, `import url(a.css) screen`), or empty.
@@ -1022,6 +1033,9 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.setPageBreak(slot, resolved);
       style.defined.pageBreak = 1;
     }
+  } else if (iequalsAscii(name, "font-family")) {
+    style.fontFamilyKey = fontFamilyListKey(value);
+    style.defined.fontFamily = 1;
   } else if (iequalsAscii(name, "font-variant") || iequalsAscii(name, "font-variant-caps")) {
     // Only small-caps matters for rendering; anything else resets to normal.
     style.fontVariant =
@@ -1424,6 +1438,13 @@ bool CssParser::loadFromStream(HalFile& source) {
   // cut short, so its path matches no stylesheet and the import is skipped (logged).
   char atPrelude[96];
   size_t atPreludeLen = 0;
+#if CROSSPOINT_VECTOR_FONTS
+  // An @font-face body, read whole so its declarations can be parsed together. A longer body
+  // (many src fallbacks) is cut short; the parse then reads only what fit.
+  char fontFaceBody[512];
+  size_t fontFaceLen = 0;
+#endif
+  bool inFontFace = false;
 
   int bodyDepth = 0;
   bool skippingRule = false;
@@ -1435,10 +1456,26 @@ bool CssParser::loadFromStream(HalFile& source) {
   auto handleChar = [&](const char c) {
     if (inAtRule) {
       if (c == '{') {
+#if CROSSPOINT_VECTOR_FONTS
+        if (atDepth == 0) {
+          inFontFace = startsWithFontFace(std::string_view(atPrelude, atPreludeLen));
+          fontFaceLen = 0;
+        }
+#endif
         ++atDepth;
       } else if (c == '}') {
         if (atDepth > 0) --atDepth;
-        if (atDepth == 0) inAtRule = false;
+        if (atDepth == 0) {
+          inAtRule = false;
+#if CROSSPOINT_VECTOR_FONTS
+          if (inFontFace) recordFontFace(std::string_view(fontFaceBody, fontFaceLen));
+#endif
+          inFontFace = false;
+        }
+      } else if (inFontFace && atDepth == 1) {
+#if CROSSPOINT_VECTOR_FONTS
+        if (fontFaceLen < sizeof(fontFaceBody)) fontFaceBody[fontFaceLen++] = c;
+#endif
       } else if (c == ';' && atDepth == 0) {
         inAtRule = false;
         const std::string_view target = importTarget(std::string_view(atPrelude, atPreludeLen));
@@ -1702,6 +1739,8 @@ constexpr char rulesCache[] = "/css_rules.cache";
 // transient failure (an SD open that lost a race, a parse abandoned on low heap) left the
 // book permanently unstyled until some later open happened to complete a full parse.
 constexpr char rulesCacheTmp[] = "/css_rules.cache.tmp";
+// @font-face rules, beside the rule cache (CssParser::saveFontFaces).
+constexpr char fontFacesCache[] = "/css_fonts.cache";
 
 bool CssParser::hasCache() const { return hasCacheAt(cachePath); }
 
@@ -1711,6 +1750,7 @@ bool CssParser::hasCacheAt(const std::string& bookCachePath) {
 
 void CssParser::deleteCache() const {
   if (hasCache()) Storage.remove((cachePath + rulesCache).c_str());
+  if (Storage.exists((cachePath + fontFacesCache).c_str())) Storage.remove((cachePath + fontFacesCache).c_str());
 }
 
 bool CssParser::saveToCache() const {
@@ -1806,6 +1846,8 @@ void CssParser::encodeStyleWire(const CssStyle& style, uint8_t* out) {
   putByte(style.pageBreaks);
   putByte(style.textFlags);
   for (const uint8_t side : style.borderSides) putByte(side);
+  putByte(static_cast<uint8_t>(style.fontFamilyKey & 0xFF));
+  putByte(static_cast<uint8_t>(style.fontFamilyKey >> 8));
 
   uint32_t definedBits = 0;
   if (style.defined.textAlign) definedBits |= 1 << 0;
@@ -1838,6 +1880,7 @@ void CssParser::encodeStyleWire(const CssStyle& style, uint8_t* out) {
   if (style.defined.hyphens) definedBits |= 1 << 27;
   if (style.defined.letterSpacing) definedBits |= 1 << 28;
   if (style.defined.whiteSpace) definedBits |= 1 << 29;
+  if (style.defined.fontFamily) definedBits |= 1 << 30;
   memcpy(out + at, &definedBits, sizeof(definedBits));
   at += sizeof(definedBits);
 
@@ -1939,6 +1982,7 @@ CssParser::VerticalBlockStyle CssParser::verticalBlockStyleOf(const CssStyle& cs
     vs.fontScale32 = static_cast<uint8_t>(std::clamp<long>(std::lround(scale * 32), 1, 255));
     vs.fontScaleOfParent = cssFontSizeIsParentRelative(css);
   }
+  if (css.defined.fontFamily) vs.fontSlot = bookfonts::slotForFamily(css.fontFamilyKey);
   return vs;
 }
 
@@ -1994,6 +2038,7 @@ void CssParser::addVerticalRule(std::vector<VerticalBlockRule>& out, std::string
     if (vs.blockAlign != 0) existing.blockAlign = vs.blockAlign;
     if (vs.borderEdges != 0) existing.borderEdges = vs.borderEdges;
     if (vs.indentEm >= 0) existing.indentEm = vs.indentEm;
+    if (vs.fontSlot != 0) existing.fontSlot = vs.fontSlot;
     if (vs.fontScale32 != 0) {
       existing.fontScale32 = vs.fontScale32;
       existing.fontScaleOfParent = vs.fontScaleOfParent;
@@ -2164,11 +2209,13 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
     // cell grid, so a per-glyph tracking delta has no meaning there.)
     uint8_t inkModeVal, pageBreaksVal, textFlagsVal;
     uint8_t sidesVal[4];  // per-side border specs (v26): the vertical engine draws the summary only
+    uint8_t familyVal[2];
     uint32_t definedBits = 0;
     if (file.read(&displayVal, 1) != 1 || file.read(&verticalAlignVal, 1) != 1 || file.read(&borderVal, 1) != 1 ||
         file.read(&emphasisVal, 1) != 1 || file.read(&variantVal, 1) != 1 || file.read(&listTypeVal, 1) != 1 ||
         file.read(&inkModeVal, 1) != 1 || file.read(&pageBreaksVal, 1) != 1 || file.read(&textFlagsVal, 1) != 1 ||
         file.read(sidesVal, sizeof(sidesVal)) != sizeof(sidesVal) ||
+        file.read(familyVal, sizeof(familyVal)) != sizeof(familyVal) ||
         file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
       break;
     }
@@ -2196,6 +2243,8 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
     css.defined.border = (definedBits & (1u << 18)) != 0;
     css.fontSize = lengthOf(lens[11]);
     css.defined.fontSize = (definedBits & (1u << 22)) != 0;
+    css.fontFamilyKey = static_cast<uint16_t>(familyVal[0] | familyVal[1] << 8);
+    css.defined.fontFamily = (definedBits & (1u << 30)) != 0;
     addVerticalRule(out, selector, css);
   }
   if (out.size() >= maxOut) {
@@ -2209,6 +2258,7 @@ bool CssParser::beginCacheAppend(const std::vector<std::string>* sources, const 
   appendedRuleCount_ = 0;
   cacheAppendActive_ = false;
   currentSource_ = SOURCE_UNKNOWN;
+  fontFaces_.clear();
   if (cachePath.empty()) return false;
   if (!Storage.openFileForWrite("CSS", cachePath + rulesCacheTmp, cacheAppendFile_)) return false;
   cacheAppendFile_.write(CssParser::CSS_CACHE_VERSION);
@@ -2265,6 +2315,149 @@ void CssParser::recordImport(const std::string_view target) {
     }
   }
   LOG_DBG("CSS", "@import %.*s not among the book's stylesheets", static_cast<int>(target.size()), target.data());
+}
+
+namespace {
+constexpr uint8_t FONT_FACES_CACHE_VERSION = 1;
+
+std::string_view trimCss(std::string_view v) {
+  while (!v.empty() && isAsciiWhitespace(v.front())) v.remove_prefix(1);
+  while (!v.empty() && isAsciiWhitespace(v.back())) v.remove_suffix(1);
+  return v;
+}
+
+std::string_view unquoteCss(std::string_view v) {
+  v = trimCss(v);
+  if (v.size() >= 2 && (v.front() == '"' || v.front() == '\'') && v.back() == v.front()) {
+    v = v.substr(1, v.size() - 2);
+  }
+  return v;
+}
+
+bool containsAscii(std::string_view haystack, std::string_view lowerNeedle) {
+  if (lowerNeedle.size() > haystack.size()) return false;
+  for (size_t i = 0; i + lowerNeedle.size() <= haystack.size(); ++i) {
+    if (iequalsAscii(haystack.substr(i, lowerNeedle.size()), lowerNeedle)) return true;
+  }
+  return false;
+}
+
+// The first url() in a src list that FreeType can open: TrueType or OpenType, not WOFF/WOFF2.
+std::string_view firstUsableFontUrl(std::string_view src) {
+  while (!src.empty()) {
+    const size_t comma = src.find(',');
+    const std::string_view item = src.substr(0, comma);
+    const size_t open = item.find("url(");
+    if (open != std::string_view::npos) {
+      const size_t close = item.find(')', open);
+      const std::string_view url = unquoteCss(
+          item.substr(open + 4, close == std::string_view::npos ? std::string_view::npos : close - open - 4));
+      const bool woff = containsAscii(url, ".woff") || containsAscii(item, "format(\"woff") ||
+                        containsAscii(item, "format('woff") || containsAscii(item, "format(woff");
+      if (!url.empty() && !woff && !containsAscii(url, "data:")) return url;
+    }
+    if (comma == std::string_view::npos) break;
+    src.remove_prefix(comma + 1);
+  }
+  return {};
+}
+}  // namespace
+
+void CssParser::recordFontFace(const std::string_view body) {
+  if (!cacheAppendActive_ || fontFaces_.size() >= MAX_FONT_FACES) return;
+  FontFaceRule rule;
+  std::string_view url;
+  std::string_view rest = body;
+  while (!rest.empty()) {
+    const size_t semi = rest.find(';');
+    const std::string_view decl = rest.substr(0, semi);
+    const size_t colon = decl.find(':');
+    if (colon != std::string_view::npos) {
+      const std::string_view name = trimCss(decl.substr(0, colon));
+      const std::string_view value = trimCss(decl.substr(colon + 1));
+      if (iequalsAscii(name, "font-family")) {
+        rule.familyKey = fontFamilyKeyOf(value);
+      } else if (iequalsAscii(name, "src")) {
+        url = firstUsableFontUrl(value);
+      } else if (iequalsAscii(name, "font-weight")) {
+        rule.bold = iequalsAscii(value, "bold") || iequalsAscii(value, "bolder") ||
+                    (!value.empty() && value.front() >= '6' && value.front() <= '9' && value.size() == 3);
+      } else if (iequalsAscii(name, "font-style")) {
+        rule.italic = iequalsAscii(value, "italic") || containsAscii(value, "oblique");
+      }
+    }
+    if (semi == std::string_view::npos) break;
+    rest.remove_prefix(semi + 1);
+  }
+  if (rule.familyKey == 0 || url.empty()) return;
+  const std::string sheet =
+      appendSources_ && currentSource_ < appendSourceCount_ ? (*appendSources_)[currentSource_] : std::string();
+  rule.href = resolveImportPath(sheet, url);
+  for (const auto& existing : fontFaces_) {
+    if (existing.familyKey == rule.familyKey && existing.bold == rule.bold && existing.italic == rule.italic) return;
+  }
+  if (fontFaces_.capacity() == 0) fontFaces_.reserve(MAX_FONT_FACES);
+  LOG_DBG("CSS", "@font-face %04x%s%s -> %s", rule.familyKey, rule.bold ? " bold" : "", rule.italic ? " italic" : "",
+          rule.href.c_str());
+  fontFaces_.push_back(std::move(rule));
+}
+
+bool CssParser::saveFontFaces() const {
+  const std::string path = cachePath + fontFacesCache;
+  if (fontFaces_.empty()) {
+    if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
+    return true;
+  }
+  HalFile file;
+  if (!Storage.openFileForWrite("CSS", path, file)) return false;
+  bool ok = file.write(FONT_FACES_CACHE_VERSION) == 1 && file.write(static_cast<uint8_t>(fontFaces_.size())) == 1;
+  for (const auto& face : fontFaces_) {
+    const uint8_t flags = (face.bold ? 1 : 0) | (face.italic ? 2 : 0);
+    const auto len = static_cast<uint16_t>(std::min<size_t>(face.href.size(), MAX_SELECTOR_LENGTH));
+    ok = ok &&
+         file.write(reinterpret_cast<const uint8_t*>(&face.familyKey), sizeof(face.familyKey)) ==
+             sizeof(face.familyKey) &&
+         file.write(flags) == 1 && file.write(reinterpret_cast<const uint8_t*>(&len), sizeof(len)) == sizeof(len) &&
+         file.write(reinterpret_cast<const uint8_t*>(face.href.data()), len) == len;
+  }
+  file.close();
+  if (!ok) Storage.remove(path.c_str());
+  return ok;
+}
+
+std::vector<CssParser::FontFaceRule> CssParser::loadFontFaces(const std::string& bookCachePath) {
+  std::vector<FontFaceRule> faces;
+  HalFile file;
+  if (!Storage.exists((bookCachePath + fontFacesCache).c_str()) ||
+      !Storage.openFileForRead("CSS", bookCachePath + fontFacesCache, file)) {
+    return faces;
+  }
+  uint8_t version = 0;
+  uint8_t count = 0;
+  if (file.read(&version, 1) != 1 || version != FONT_FACES_CACHE_VERSION || file.read(&count, 1) != 1 ||
+      count > MAX_FONT_FACES) {
+    return faces;
+  }
+  faces.reserve(count);
+  for (uint8_t i = 0; i < count; ++i) {
+    FontFaceRule face;
+    uint8_t flags = 0;
+    uint16_t len = 0;
+    if (file.read(&face.familyKey, sizeof(face.familyKey)) != sizeof(face.familyKey) || file.read(&flags, 1) != 1 ||
+        file.read(&len, sizeof(len)) != sizeof(len) || len == 0 || len > MAX_SELECTOR_LENGTH) {
+      faces.clear();
+      return faces;
+    }
+    face.href.resize(len);
+    if (file.read(reinterpret_cast<uint8_t*>(face.href.data()), len) != len) {
+      faces.clear();
+      return faces;
+    }
+    face.bold = (flags & 1) != 0;
+    face.italic = (flags & 2) != 0;
+    faces.push_back(std::move(face));
+  }
+  return faces;
 }
 
 bool CssParser::readStylesheetTable(HalFile& file, const StylesheetFilter* requested, StylesheetFilter& effective,
@@ -2423,6 +2616,13 @@ bool CssParser::endCacheAppend(const bool discard) {
   }
   cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(&appendedRuleCount_), sizeof(appendedRuleCount_));
   cacheAppendFile_.close();  // must close before renaming over the live path
+  // Written before the rules are published: a rules cache without its @font-face table would stop
+  // the next open from parsing again, and the book's fonts would be lost for good.
+  if (!saveFontFaces()) {
+    LOG_ERR("CSS", "Failed to save @font-face table; removing temp");
+    Storage.remove((cachePath + rulesCacheTmp).c_str());
+    return false;
+  }
   // Publish: the temp file is complete and framed, so it can take over as the cache.
   Storage.remove((cachePath + rulesCache).c_str());
   if (!Storage.rename((cachePath + rulesCacheTmp).c_str(), (cachePath + rulesCache).c_str())) {
@@ -2694,6 +2894,12 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
       style.borderSides[side] =
           (sidesVal[side] & bit) ? static_cast<uint8_t>(sidesVal[side] & ~(CssStyle::BORDER_EDGE_MASK & ~bit)) : 0;
     }
+    uint8_t familyVal[2];
+    if (file.read(familyVal, sizeof(familyVal)) != sizeof(familyVal)) {
+      clear();
+      return false;
+    }
+    style.fontFamilyKey = static_cast<uint16_t>(familyVal[0] | familyVal[1] << 8);
 
     // Read defined flags
     uint32_t definedBits = 0;
@@ -2731,6 +2937,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
     style.defined.hyphens = (definedBits & 1 << 27) != 0;
     style.defined.letterSpacing = (definedBits & 1 << 28) != 0;
     style.defined.whiteSpace = (definedBits & 1 << 29) != 0;
+    style.defined.fontFamily = (definedBits & 1 << 30) != 0;
 
     // Vertical-scoped rules ("v|...") are consumed exclusively through the streaming
     // collectVerticalStyles() -- loadFromCache feeds the HORIZONTAL layout engine only.

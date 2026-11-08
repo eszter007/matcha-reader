@@ -872,6 +872,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // built without them silently fails every parameter check and rebuilds the chapter. Build
   // every horizontal spec through here rather than repeating the fixups at each call site.
   ReaderRenderSpec readerSpec(uint16_t viewportWidth, uint16_t viewportHeight) const;
+  void syncBookFonts();
   void restoreSavedPosition();
   bool useVerticalText() const;
   // True when page turning should be reversed for this book: the toggle is on AND this book

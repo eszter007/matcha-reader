@@ -21,15 +21,16 @@ namespace {
 // later occurrence by the fallback for the rest of the chapter.
 struct InkMemo {
   static constexpr int CAPACITY = 24;
-  uint64_t keys[CAPACITY] = {};  // codepoint | style << 24 | scale8 << 32; 0 = free
+  uint64_t keys[CAPACITY] = {};  // codepoint | style << 24 | scale8 << 32 | font << 40; 0 = free
   GlyphInk inks[CAPACITY];
   int count = 0;
   int scale8 = 8;  // the size lookups and stores are for
-  uint64_t keyOf(const uint32_t cp, const uint8_t style) const {
-    return cp | (static_cast<uint64_t>(style) << 24) | (static_cast<uint64_t>(scale8) << 32);
+  uint64_t keyOf(const int fontId, const uint32_t cp, const uint8_t style) const {
+    const auto font = static_cast<uint64_t>(static_cast<uint32_t>(fontId) & 0xFFFFFFu);
+    return cp | (static_cast<uint64_t>(style) << 24) | (static_cast<uint64_t>(scale8) << 32) | (font << 40);
   }
-  bool lookup(const uint32_t cp, const uint8_t style, GlyphInk* out) const {
-    const uint64_t k = keyOf(cp, style);
+  bool lookup(const int fontId, const uint32_t cp, const uint8_t style, GlyphInk* out) const {
+    const uint64_t k = keyOf(fontId, cp, style);
     for (int i = 0; i < count; i++) {
       if (keys[i] == k) {
         *out = inks[i];
@@ -38,9 +39,9 @@ struct InkMemo {
     }
     return false;
   }
-  void store(const uint32_t cp, const uint8_t style, const GlyphInk& ink) {
+  void store(const int fontId, const uint32_t cp, const uint8_t style, const GlyphInk& ink) {
     if (count >= CAPACITY) return;  // full: fall back to probing, never evict
-    keys[count] = keyOf(cp, style);
+    keys[count] = keyOf(fontId, cp, style);
     inks[count] = ink;
     count++;
   }
@@ -189,9 +190,9 @@ bool rightAlignedInk(const Face& renderer, const int fontId, InkMemo& memo, cons
                      const uint32_t cp, const uint8_t style, const int colLeftX, const int cellTopY,
                      const InkVAlign vAlign, int* gxOut, int* gyOut, int* inkHeightOut = nullptr) {
   GlyphInk ink;
-  if (!memo.lookup(cp, style, &ink)) {
+  if (!memo.lookup(fontId, cp, style, &ink)) {
     if (!measureGlyphInk(renderer, fontId, cp, style, &ink)) return false;
-    memo.store(cp, style, ink);
+    memo.store(fontId, cp, style, ink);
   }
   if (ink.width <= 0 || ink.height <= 0) return false;
   // Draw resolves ink left as x + glyph->left, and ink top as (cellTop + baselineInCell) - top.
@@ -381,14 +382,14 @@ struct VerticalParsedText::LayoutCursor {
       // box (「 opens the character in the NEXT cell), so a run that only stepped one cell
       // started inside the bracket's ink (device photo, 「Furz」).
       int inkTop = 0, inkHeight = 0;
-      if (face.verticalPunctInkBox(o.fontId_, pg.codepoint, static_cast<EpdFontFamily::Style>(pg.style),
+      if (face.verticalPunctInkBox(o.fontOf(pg.fontSlot), pg.codepoint, static_cast<EpdFontFamily::Style>(pg.style),
                                    static_cast<int>(pg.y), geom.cellPx, Kinsoku::verticalShiftType(pg.codepoint),
                                    &inkTop, &inkHeight)) {
         startY = std::max(startY, inkTop + inkHeight + geom.inkGapPx);
       }
     } else if (pg.renderKind == VerticalGlyph::Upright && pg.codepoint != 0) {
       GlyphInk ink;
-      if (measureGlyphInk(face, o.fontId_, pg.codepoint, pg.style, &ink) && ink.height > 0) {
+      if (measureGlyphInk(face, o.fontOf(pg.fontSlot), pg.codepoint, pg.style, &ink) && ink.height > 0) {
         // pg.y already carries this column's slide-up; startY is computed on the raw grid and
         // gets the same slide applied at push time, so compare in raw space.
         const int pgRawY = static_cast<int>(pg.y) + ((pg.column == shiftColumn) ? columnYShift : 0);
@@ -411,7 +412,7 @@ struct VerticalParsedText::LayoutCursor {
     int offset = -1;
     if (Kinsoku::needsVerticalRotation(next.codepoint)) {
       int inkTop = 0, inkHeight = 0;
-      if (face.verticalPunctInkBox(o.fontId_, next.codepoint, nextStyle, 0, geom.cellPx,
+      if (face.verticalPunctInkBox(o.fontOf(next.fontSlot), next.codepoint, nextStyle, 0, geom.cellPx,
                                    Kinsoku::verticalShiftType(next.codepoint), &inkTop, &inkHeight)) {
         offset = inkTop;
       }
@@ -420,9 +421,9 @@ struct VerticalParsedText::LayoutCursor {
       // disabled the tail allowance; page the one character in first.
       char nextChar[5] = {};
       utf8EncodeCodepoint(next.codepoint, nextChar);
-      face.ensureSdCardFontReady(o.fontId_, nextChar, static_cast<uint8_t>(1u << (next.style & 3)));
+      face.ensureSdCardFontReady(o.fontOf(next.fontSlot), nextChar, static_cast<uint8_t>(1u << (next.style & 3)));
       GlyphInk ink;
-      if (measureGlyphInk(face, o.fontId_, next.codepoint, next.style, &ink) && ink.height > 0) {
+      if (measureGlyphInk(face, o.fontOf(next.fontSlot), next.codepoint, next.style, &ink) && ink.height > 0) {
         // 。、 are drawn at the head of their cell (rightAlignedInk, HalfEmHead), not on the baseline;
         // their centred traditional-Chinese form (type 5) sits mid-cell.
         const int shift = Kinsoku::verticalShiftType(next.codepoint);
@@ -593,7 +594,7 @@ struct VerticalParsedText::LayoutCursor {
     int qx = 0, placedY = 0;
     const int memoScale = inkMemo.scale8;
     inkMemo.scale8 = gScale;
-    const bool measured = rightAlignedInk(gFace, o.fontId_, inkMemo, gGeom, g.codepoint, g.style,
+    const bool measured = rightAlignedInk(gFace, o.fontOf(g.fontSlot), inkMemo, gGeom, g.codepoint, g.style,
                                           base.columnLeftX(g.column), gridTop, InkVAlign::HalfEmHead, &qx, &placedY);
     inkMemo.scale8 = memoScale;
     if (!measured) placedY = std::max(0, gridTop - gGeom.cellPx / 2);
@@ -713,6 +714,7 @@ struct VerticalParsedText::LayoutCursor {
     g.y = static_cast<uint16_t>(lastCellTop + geom.cellPx / 2);
     g.renderKind = VerticalGlyph::RotatedPunct;
     g.paragraphIndex = pc.paragraphIndex;
+    g.fontSlot = pc.fontSlot;
     g.byteOffset = pc.byteOffset;
     g.style = pc.style;
     g.emphasis = pc.emphasis;
@@ -830,6 +832,7 @@ struct VerticalParsedText::LayoutCursor {
     g.column = col;
     g.row = rowIdx;
     g.paragraphIndex = pc.paragraphIndex;
+    g.fontSlot = pc.fontSlot;
     g.byteOffset = pc.byteOffset;
     g.style = pc.style;
     g.emphasis = pc.emphasis;
@@ -862,8 +865,8 @@ struct VerticalParsedText::LayoutCursor {
       // is centred VERTICALLY in the frame and set right of its horizontal centre -- not against
       // the frame's top edge, which is where the horizontal-mode intuition puts it.
       int qx = 0, qy = 0;
-      if (rightAlignedInk(face, o.fontId_, inkMemo, geom, pc.codepoint, pc.style, colLeftX, cellTopY, InkVAlign::Centre,
-                          &qx, &qy)) {
+      if (rightAlignedInk(face, o.fontOf(pc.fontSlot), inkMemo, geom, pc.codepoint, pc.style, colLeftX, cellTopY,
+                          InkVAlign::Centre, &qx, &qy)) {
         g.x = static_cast<uint16_t>(qx);
         g.y = static_cast<uint16_t>(qy);
       } else {
@@ -879,7 +882,7 @@ struct VerticalParsedText::LayoutCursor {
     int gy = cellTopY;
     if (pc.codepoint >= '0' && pc.codepoint <= '9') {
       GlyphInk ink;
-      if (measureGlyphInk(face, o.fontId_, pc.codepoint, pc.style, &ink)) {
+      if (measureGlyphInk(face, o.fontOf(pc.fontSlot), pc.codepoint, pc.style, &ink)) {
         gx = colLeftX + (geom.cellPx - ink.width) / 2 - ink.left;
       }
     }
@@ -891,7 +894,7 @@ struct VerticalParsedText::LayoutCursor {
       // same depth. Closing up against a neighbour is the pair rules' job (3.1.4), not the
       // mark's own advance. (JLREQ 3.8 does reduce this, but per line and only to make one fit.)
       int qx = 0, qy = 0;
-      if (rightAlignedInk(face, o.fontId_, inkMemo, geom, pc.codepoint, pc.style, colLeftX, cellTopY,
+      if (rightAlignedInk(face, o.fontOf(pc.fontSlot), inkMemo, geom, pc.codepoint, pc.style, colLeftX, cellTopY,
                           InkVAlign::HalfEmHead, &qx, &qy)) {
         gx = qx;
         gy = qy;
@@ -902,7 +905,7 @@ struct VerticalParsedText::LayoutCursor {
     } else if (shiftType == 5) {
       // Traditional Chinese: the mark sits in the middle of its em (CNS 13180 / W3C clreq).
       int qx = 0, qy = 0;
-      if (rightAlignedInk(face, o.fontId_, inkMemo, geom, pc.codepoint, pc.style, colLeftX, cellTopY,
+      if (rightAlignedInk(face, o.fontOf(pc.fontSlot), inkMemo, geom, pc.codepoint, pc.style, colLeftX, cellTopY,
                           InkVAlign::CentreCell, &qx, &qy)) {
         gx = qx;
         gy = qy;
@@ -920,6 +923,7 @@ struct VerticalParsedText::LayoutCursor {
   // Place a two-character tate-chu-yoko run (a 2-digit number, or a !?/!! pair) upright in one
   // cell, ink-centred on the column, and advance row/column past it.
   void placeTcyPairAt(size_t i0) {
+    const int tcyFont = o.fontOf(o.stream_[i0].fontSlot);
     std::string runUtf8;
     utf8AppendCodepoint(o.stream_[i0].codepoint, runUtf8);
     utf8AppendCodepoint(o.stream_[i0 + 1].codepoint, runUtf8);
@@ -927,8 +931,8 @@ struct VerticalParsedText::LayoutCursor {
     // wider, so an unstyled measurement mis-centers the pair in its cell.
     const auto tcyStyle = static_cast<EpdFontFamily::Style>(o.stream_[i0].style);
     const auto tcyStyleBit = static_cast<uint8_t>(1u << (o.stream_[i0].style & 3));
-    face.ensureSdCardFontReady(o.fontId_, runUtf8.c_str(), tcyStyleBit);
-    const int runWidthPx = face.getRenderAdvanceX(o.fontId_, runUtf8.c_str(), tcyStyle);
+    face.ensureSdCardFontReady(tcyFont, runUtf8.c_str(), tcyStyleBit);
+    const int runWidthPx = face.getRenderAdvanceX(tcyFont, runUtf8.c_str(), tcyStyle);
 
     // Center the run on its INK box, not its advance width. drawText puts ink at
     // pen + firstGlyph.left, and digit advances carry trailing whitespace, so advance-based
@@ -939,11 +943,11 @@ struct VerticalParsedText::LayoutCursor {
       const uint32_t cpFirst = o.stream_[i0].codepoint;
       const uint32_t cpLast = o.stream_[i0 + 1].codepoint;
       int l1 = 0, w1 = 0, t1 = 0, h1 = 0, lN = 0, wN = 0, tN = 0, hN = 0;
-      if (face.getGlyphMetrics(o.fontId_, cpFirst, tcyStyle, &l1, &w1, &t1, &h1) &&
-          face.getGlyphMetrics(o.fontId_, cpLast, tcyStyle, &lN, &wN, &tN, &hN)) {
+      if (face.getGlyphMetrics(tcyFont, cpFirst, tcyStyle, &l1, &w1, &t1, &h1) &&
+          face.getGlyphMetrics(tcyFont, cpLast, tcyStyle, &lN, &wN, &tN, &hN)) {
         std::string lastUtf8;
         utf8AppendCodepoint(cpLast, lastUtf8);
-        const int lastAdvance = face.getRenderAdvanceX(o.fontId_, lastUtf8.c_str(), tcyStyle);
+        const int lastAdvance = face.getRenderAdvanceX(tcyFont, lastUtf8.c_str(), tcyStyle);
         // Ink spans pen+l1 .. pen+(runWidthPx-lastAdvance)+lN+wN.
         const int inkWidth = (runWidthPx - lastAdvance + lN + wN) - l1;
         if (inkWidth > 0 && inkWidth <= geom.cellPx) {
@@ -961,8 +965,8 @@ struct VerticalParsedText::LayoutCursor {
           int kl = 0, kw = 0, kt = 0, kh = 0;
           // String literal, no allocation -- this sits in the pagination path (review finding:
           // the earlier runUtf8 + 中 concatenation allocated per pair).
-          face.ensureSdCardFontReady(o.fontId_, "\xe4\xb8\xad", tcyStyleBit);
-          if (face.getGlyphMetrics(o.fontId_, 0x4E2D /* 中 */, tcyStyle, &kl, &kw, &kt, &kh) && kw > 0) {
+          face.ensureSdCardFontReady(tcyFont, "\xe4\xb8\xad", tcyStyleBit);
+          if (face.getGlyphMetrics(tcyFont, 0x4E2D /* 中 */, tcyStyle, &kl, &kw, &kt, &kh) && kw > 0) {
             cjkDelta = (kl + kw / 2) - geom.cellPx / 2;
             const int clampPx = std::max(1, (geom.cellPx - kw) / 2);
             if (cjkDelta > clampPx) cjkDelta = clampPx;
@@ -980,6 +984,7 @@ struct VerticalParsedText::LayoutCursor {
     g.x = static_cast<uint16_t>(std::max(0, runX));
     g.y = static_cast<uint16_t>(rowY);
     g.paragraphIndex = o.stream_[i0].paragraphIndex;
+    g.fontSlot = o.stream_[i0].fontSlot;
     g.byteOffset = o.stream_[i0].byteOffset;
     g.style = o.stream_[i0].style;
     g.renderKind = VerticalGlyph::UprightRun;
@@ -1210,6 +1215,7 @@ struct VerticalParsedText::LayoutCursor {
       g.x = static_cast<uint16_t>(std::max(0, rightEdge - o.inlineImages_[id].widthPx));
       g.y = 0;
       g.paragraphIndex = pc.paragraphIndex;
+      g.fontSlot = pc.fontSlot;
       g.byteOffset = pc.byteOffset;
       g.style = pc.style;
       g.renderKind = VerticalGlyph::Upright;
@@ -1250,6 +1256,7 @@ struct VerticalParsedText::LayoutCursor {
     g.x = static_cast<uint16_t>(base.columnLeftX(column));
     g.y = static_cast<uint16_t>(startY);
     g.paragraphIndex = pc.paragraphIndex;
+    g.fontSlot = pc.fontSlot;
     g.byteOffset = pc.byteOffset;
     g.style = pc.style;
     g.renderKind = VerticalGlyph::RotatedRun;
@@ -1292,13 +1299,13 @@ struct VerticalParsedText::LayoutCursor {
       // digits from a companion font and under-reported -- device photo: a year-run measured
       // ~half its drawn width, so 年 overprinted the digits).
       const auto runStyle = static_cast<EpdFontFamily::Style>(pc.style);
-      face.ensureSdCardFontReady(o.fontId_, runUtf8.c_str(), static_cast<uint8_t>(1u << (pc.style & 3)));
-      const int runWidthPx = face.getRenderAdvanceX(o.fontId_, runUtf8.c_str(), runStyle);
+      face.ensureSdCardFontReady(o.fontOf(pc.fontSlot), runUtf8.c_str(), static_cast<uint8_t>(1u << (pc.style & 3)));
+      const int runWidthPx = face.getRenderAdvanceX(o.fontOf(pc.fontSlot), runUtf8.c_str(), runStyle);
       // Same measured placement as an embedded Latin word: start under the previous glyph's real
       // ink, reserve only what the digits' ink needs. The old fixed 9/10-cell drop was a blunt
       // guard against 4-digit years overprinting the following character (1914年) and left most
       // of a cell empty behind the number (device photo, SCP－1305 だ。).
-      const int digitInkWidth = runInkWidth(face, o.fontId_, runUtf8, runWidthPx, runStyle);
+      const int digitInkWidth = runInkWidth(face, o.fontOf(pc.fontSlot), runUtf8, runWidthPx, runStyle);
       const int nextInkOffset = nextGlyphInkOffset(digitEnd, pc.paragraphIndex);
       int startY = rotatedRunStartY(column, rowY);
       uint16_t rowsNeeded = rotatedRunRows(geom.rowPitchPx, startY, digitInkWidth, row, nextInkOffset);
@@ -1334,7 +1341,7 @@ struct VerticalParsedText::LayoutCursor {
     std::string runUtf8;
     while (runEnd < limit &&
            (Kinsoku::isRotatedRunCharacter(o.stream_[runEnd].codepoint) || isAsciiDigit(o.stream_[runEnd].codepoint)) &&
-           o.stream_[runEnd].paragraphIndex == pc.paragraphIndex) {
+           o.stream_[runEnd].paragraphIndex == pc.paragraphIndex && o.stream_[runEnd].fontSlot == pc.fontSlot) {
       utf8AppendCodepoint(o.stream_[runEnd].codepoint, runUtf8);
       runEnd++;
       if (runEnd - idx > 64) break;
@@ -1363,7 +1370,7 @@ struct VerticalParsedText::LayoutCursor {
     // Measure with the run's ACTUAL style (drawn with g.style; bold is wider than an unstyled
     // measurement, which under-reserved rows and overprinted the next glyph).
     const auto runStyle = static_cast<EpdFontFamily::Style>(pc.style);
-    face.ensureSdCardFontReady(o.fontId_, runUtf8.c_str(), static_cast<uint8_t>(1u << (pc.style & 3)));
+    face.ensureSdCardFontReady(o.fontOf(pc.fontSlot), runUtf8.c_str(), static_cast<uint8_t>(1u << (pc.style & 3)));
     // JP sources separate embedded Latin from kana with ASCII spaces (それは Germinal や). Drawn
     // verbatim, the leading space pushes the first letter deep into the run's first cell and the
     // trailing space inflates the reserved rows -- the word floats low with a dead cell after it
@@ -1379,13 +1386,14 @@ struct VerticalParsedText::LayoutCursor {
       return true;
     }
     const auto inkOf = [&](const std::string& s) {
-      return runInkWidth(face, o.fontId_, s, face.getRenderAdvanceX(o.fontId_, s.c_str(), runStyle), runStyle);
+      return runInkWidth(face, o.fontOf(pc.fontSlot), s,
+                         face.getRenderAdvanceX(o.fontOf(pc.fontSlot), s.c_str(), runStyle), runStyle);
     };
 
     // Where the NEXT chunk of this run continues, when a split leaves it in the same column: one
     // word space after the previous chunk's ink, not the next cell boundary -- rounding a word gap
     // up to a whole cell is what made "au thority" read as two words.
-    const int wordSpacePx = face.getRenderAdvanceX(o.fontId_, " ", runStyle);
+    const int wordSpacePx = face.getRenderAdvanceX(o.fontOf(pc.fontSlot), " ", runStyle);
     int continueY = -1;
 
     while (!remaining.empty()) {
@@ -1591,8 +1599,9 @@ struct VerticalParsedText::LayoutCursor {
     const int nextInkOffset = nextGlyphInkOffset(nextIdx, paragraphIndex);
     int inkTop = 0, inkHeight = 0;
     if (nextInkOffset < 0 ||
-        !face.verticalPunctInkBox(o.fontId_, dots.codepoint, static_cast<EpdFontFamily::Style>(dots.style), dotsCellTop,
-                                  geom.cellPx, Kinsoku::verticalShiftType(dots.codepoint), &inkTop, &inkHeight)) {
+        !face.verticalPunctInkBox(o.fontOf(dots.fontSlot), dots.codepoint,
+                                  static_cast<EpdFontFamily::Style>(dots.style), dotsCellTop, geom.cellPx,
+                                  Kinsoku::verticalShiftType(dots.codepoint), &inkTop, &inkHeight)) {
       return;
     }
     // The dots sit low in their cell, so close the resulting overlap down to the same ink gap a
@@ -1722,7 +1731,7 @@ struct VerticalParsedText::LayoutCursor {
       const int pullShift = Kinsoku::verticalShiftType(pc.codepoint);
       if (pullShift == 1 || pullShift == 5) {
         int qx = 0, qy = 0;
-        if (rightAlignedInk(face, o.fontId_, inkMemo, geom, pc.codepoint, pc.style, gx, nextTop,
+        if (rightAlignedInk(face, o.fontOf(pc.fontSlot), inkMemo, geom, pc.codepoint, pc.style, gx, nextTop,
                             pullShift == 1 ? InkVAlign::HalfEmHead : InkVAlign::CentreCell, &qx, &qy)) {
           gx = qx;
           gy = qy;
@@ -1740,6 +1749,7 @@ struct VerticalParsedText::LayoutCursor {
         g.renderKind = VerticalGlyph::RotatedPunct;
       }
       g.paragraphIndex = pc.paragraphIndex;
+      g.fontSlot = pc.fontSlot;
       g.byteOffset = pc.byteOffset;
       g.scale8 = static_cast<uint8_t>(scale8);
       if (o.prevPageColWidened_) g.x = static_cast<uint16_t>(std::max(0, g.x + o.columnXDelta(o.prevPageColW_, g)));
@@ -2185,8 +2195,8 @@ void VerticalParsedText::alignBlockColumns(VerticalPage& p, const uint16_t start
       };
       int height = atScale(boxGeomCellPx_);
       if (g.renderKind == VerticalGlyph::RotatedRun && g.textId != VerticalGlyph::NO_TEXT) {
-        height =
-            atScale(renderer_.getRenderAdvanceX(fontId_, p.glyphText(g), static_cast<EpdFontFamily::Style>(g.style)));
+        height = atScale(renderer_.getRenderAdvanceX(fontOf(g.fontSlot), p.glyphText(g),
+                                                     static_cast<EpdFontFamily::Style>(g.style)));
       }
       bottom = std::max(bottom, static_cast<int>(g.y) + height);
     }

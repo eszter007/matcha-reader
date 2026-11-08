@@ -33,7 +33,7 @@ same way.
 
 | n | property | effect of ignoring |
 |---|---|---|
-| 65 | `font-family` | 12 `@font-face` faces ignored; everything uses the reader font |
+| 65 | `font-family` | Honoured on PSRAM boards with Publisher Fonts on (up to two TrueType/OpenType families); otherwise the reader font |
 | 8 | `letter-spacing` | tracking on headings lost |
 | 8 | `float` | pull-quotes and figures fall inline |
 | 3+18 | `hyphens`, `hyphenate-limit-*` (+vendor) | book's hyphenation prefs ignored |

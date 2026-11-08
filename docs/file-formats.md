@@ -95,6 +95,15 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 112 (fork numbering)
+
+The header gains a `u32` after the word spacing: the signature of the publisher fonts (`@font-face`)
+the book was laid out with, 0 for none. A section built with other fonts, or with them turned off, is
+rebuilt. CSS cache version 29 adds the `font-family` key to each rule record (two bytes after the
+per-side borders, defined bit 30), and the book's `@font-face` rules are saved beside it in
+`css_fonts.cache`: a version byte, a count, then per face its family key (`u16`), a flags byte (1 bold,
+2 italic) and its font path in the EPUB (`u16` length and the bytes).
+
 ### Version 111 (fork numbering)
 
 Upstream merge (their versions 72 and 73). The layout format is unchanged. Ruby layout now
@@ -585,6 +594,12 @@ if (parsedSize != fileSize) {
 
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
+
+### Version 160
+
+The header gains a `u32` after the right margin: the publisher-font signature, as in `section.bin`
+version 112. Each glyph record gains a `u8` after its size: the publisher font it is drawn in (0 = the
+reader font, 1 or 2 = one of the book's families).
 
 ### Version 159
 

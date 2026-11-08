@@ -116,6 +116,9 @@ class Epub {
   bool extractItemToFile(const std::string& itemHref, const std::string& destPath,
                          BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   bool getItemSize(const std::string& itemHref, size_t* size) const;
+  // The package's unique identifier (the dc:identifier its unique-identifier names), read from
+  // content.opf. Empty when there is none. Obfuscated fonts are keyed on it.
+  std::string readUniqueIdentifier() const;
   BookMetadataCache::SpineEntry getSpineItem(int spineIndex) const;
   BookMetadataCache::TocEntry getTocItem(int tocIndex) const;
   int getSpineItemsCount() const;
