@@ -388,6 +388,7 @@ bool HomeActivity::storeCoverBuffer() {
     return false;
   }
   coverBufferSize = needed;
+  coverBufferInverted = display.isInverted();
   if (!renderer.copyRegionToBuffer(coverRectX, coverRectY, coverRectW, coverRectH, coverBuffer, coverBufferSize)) {
     free(coverBuffer);
     coverBuffer = nullptr;
@@ -697,6 +698,12 @@ void HomeActivity::render(RenderLock&&) {
       requestUpdate();
     }
     return;
+  }
+  // A cover snapshot from the other output polarity holds the other byte form (night mode keeps images pre-inverted so
+  // they stay positive): pasting it back after a theme switch showed the cover as a negative. Redraw it instead.
+  if (coverBufferStored && coverBufferInverted != display.isInverted()) {
+    freeCoverBuffer();
+    coverRendered = false;
   }
   bool bufferRestored = coverRendered && coverBufferStored && restoreCoverBuffer();
 
