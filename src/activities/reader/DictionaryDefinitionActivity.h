@@ -37,6 +37,22 @@ class DictionaryDefinitionActivity final : public Activity {
     bool definitionText = false;
     std::string reading;
     std::string grammar;
+    StrId kind = StrId::STR_NONE_OPT;  // tag beside the headword (Vocab, Grammar, Name); none by default
+  };
+
+  // Steps to the neighbouring word of the page when reading on or skipping runs past the first or
+  // last entry, for a lookup that moves through the page's words (manga, a book page without word
+  // geometry). step() puts that word's entries in `out`; false at the page's ends.
+  struct WordSteps {
+    void* ctx = nullptr;
+    bool (*step)(void* ctx, int direction, std::vector<Entry>& out) = nullptr;
+  };
+
+  // Redraws what lies behind the panel (the page and its word highlight) at the start of each render,
+  // for a lookup whose word changes while the panel is up.
+  struct Backdrop {
+    void* ctx = nullptr;
+    void (*draw)(void* ctx) = nullptr;
   };
 
   // Supplies further entries while the view is up (a touch selection's other words). next() puts
@@ -75,6 +91,8 @@ class DictionaryDefinitionActivity final : public Activity {
   // Handles on the looked-up word behind the panel; a drag on one finishes with ClipStartResult.
   void setClipHandles(const LookupClipHandles& handles) { clipHandles = handles; }
   void setMoreEntries(const MoreEntries& source) { more = source; }
+  void setWordSteps(const WordSteps& source) { steps = source; }
+  void setBackdrop(const Backdrop& source) { backdrop = source; }
   bool skipLoopDelay() override { return more.next != nullptr; }
 
   // The book behind the panel reverses its page turns (Reversed Page Turn in a vertical book).
@@ -105,6 +123,11 @@ class DictionaryDefinitionActivity final : public Activity {
   void lookUpAt(int x, int y);
   LookupClipHandles clipHandles;
   MoreEntries more;
+  WordSteps steps;
+  Backdrop backdrop;
+  // The neighbouring word's entries, when steps is set: the first page going forward, the last
+  // entry's last page (atEnd) or first page going back. False at the page's ends.
+  bool stepWord(int direction, bool atEnd);
   // Past the last entry while more are coming: a Loading page the reader can step onto, which the
   // next entry takes over. Also the only page while nothing has been found yet.
   bool onLoadingPage = false;

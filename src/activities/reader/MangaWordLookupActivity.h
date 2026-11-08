@@ -8,7 +8,6 @@
 #include "DefinitionTextRenderer.h"
 #include "DictionaryDefinitionActivity.h"
 #include "JapaneseNestedLookup.h"
-#include "NestedLookupHost.h"
 #include "WordSelectionScan.h"
 #include "activities/Activity.h"
 #include "components/DictionaryPanel.h"
@@ -43,9 +42,11 @@ class MangaWordLookupActivity final : public Activity {
 
  private:
   bool pageTurnReversed = false;
-  NestedLookupHost nestedHost;  // long press / hold Confirm: look up a word of the definition
-  void openNestedLookup(int x, int y);
-  void showNestedPanel(std::unique_ptr<DictionaryDefinitionActivity> panel, StrId failure);
+  // The definition panel is open over this activity, which keeps the page's word cursor.
+  bool panelOpen = false;
+  void openPanel();
+  bool resultEntries(std::vector<DictionaryDefinitionActivity::Entry>& out);
+  static bool stepWord(void* ctx, int direction, std::vector<DictionaryDefinitionActivity::Entry>& out);
   WordSelectionScan scan;
 
   int cursorIndex = 0;
@@ -60,11 +61,6 @@ class MangaWordLookupActivity final : public Activity {
   std::string resultReading;
   std::string resultGrammar;
   int resultMatchLen = 0;
-  int scrollOffset = 0;
-  int totalLines = 0;
-  int maxScroll = 0;
-  // Body lines that fit at once, from the last render: the step a swipe scrolls by.
-  int visibleCapacity = 1;
 
   // Scan-result persistence (empty path = disabled).
   std::string scanCachePath;
@@ -75,25 +71,19 @@ class MangaWordLookupActivity final : public Activity {
   void runInitialBurst();
   void moveCursor(int delta);
   // A screenful through the definition, then onto the neighbouring word at its end.
-  void readOn(int delta);
   // Sentence mining: saves the shown entry with the sentence from its speech bubble.
   sentencemining::BookContext mining_;
-  DictionaryPanel::MiningFeedback miningFeedback_;
   // Hashes of the headwords shown this session, so browsing back and forth counts each word
   // once; the total goes to BookStats in one write on exit.
   static constexpr size_t MAX_COUNTED_LOOKUPS = 256;
   std::vector<uint32_t> countedLookups_;
   void countLookup();
-  void saveSentence();
   std::string miningSentence() const;
   void performLookup();
   void performLookupImpl();
   // True while performLookup() executes; render() shows "Loading..." instead of "No match found".
   bool lookupInFlight = false;
   std::string buildLookupText(size_t startIdx) const;
-
-  // Draws the definition text (or the loading/no-match notice) into the panel's inner rectangle.
-  void renderContentArea(const Rect& body);
 
   // Which dictionary the shown entry came from, for the panel footer. Literals, not tr()
   // strings: these are the dictionaries' own names. Null until a lookup lands.
