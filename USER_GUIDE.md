@@ -1279,7 +1279,7 @@ one you were reading, in the same panel.
 | Power (short click) | Same as Back, when **Short Power Button Click** is set to **Word Lookup** |
 
 The bottom of the entry shows which dictionary answered (e.g. `Vocab | JMdict` or `Vocab | CC-CEDICT`) and, when
-the entry runs over more than one screen, which screen you are on (e.g. 1/3). You only land on words the dictionary has. When stepping from word to word in manga, each word
+there is more than one screen to page through, which one you are on, counting the screens of every entry (e.g. 1/3). You only land on words the dictionary has. When stepping from word to word in manga, each word
 shows one entry so stepping stays quick.
 
 **Settings**
@@ -1697,8 +1697,9 @@ For Cantonese (`yue`), convert with `--lang yue`.
 **Several dictionaries in one language.** Give each one its own folder, e.g. `en/collins/` and `en/wiktionary/`.
 A lookup searches up to four dictionaries for the book's language and shows every entry it finds, one after the
 other. Page past the end of one entry and the next dictionary's entry opens. Page back from its first page and you
-return to the last page of the previous one. The bottom line names the dictionary and its place in the list, e.g.
-`Collins (1/2)`. The dictionary chosen under **Settings → Reader → Dictionary Settings → Fallback for other languages** comes first if it is in the
+return to the last page of the previous one. The bottom line names the dictionary, and on the right counts the screens of all
+entries together, e.g. `3/7`: how often you can still press on. A `~` in front (`~1/7`) means some entries are not
+measured yet; the number becomes exact as you page. The dictionary chosen under **Settings → Reader → Dictionary Settings → Fallback for other languages** comes first if it is in the
 book's language. The others follow in folder-name order. A saved sentence records the dictionary whose entry was on
 screen. The first lookup in a newly added dictionary takes longer, because the reader prepares the dictionary
 for searching.

@@ -192,8 +192,16 @@ class DictionaryDefinitionActivity final : public Activity {
   // The entry on screen, laid out: a copy of its definition, with embedded NULs (StarDict
   // multi-type separators) normalized to newlines so C-string APIs see the whole text.
   std::string definition;
-  // Footer title: the dictionary name, plus the entry's place when there are several.
-  std::string footerLabel() const;
+  // Pages of each entry once known (0 = not laid out yet), so the counter can count presses
+  // across all entries. Filled when an entry is shown and, while the panel is idle, by
+  // measureNextEntry(); a measurement that does not fit in the heap is left for later.
+  std::vector<uint16_t> entryPages;
+  inline static const std::string emptyLabel;
+  void notePages(size_t index, int count);
+  int measureEntryPages(const Entry& entry);
+  void measureNextEntry();
+  // "3/7", or "~3/7" while some entry's pages are still unknown. Empty for a single page.
+  void formatCounter(char* out, size_t size) const;
   // Styled path: reader-identical Pages laid out from the HTML definition.
   // Empty means the plain-text span path below is active.
   std::vector<std::unique_ptr<Page>> pages;
