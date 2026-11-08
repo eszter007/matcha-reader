@@ -357,7 +357,8 @@ class SdCardFontSystem {
   // UI-size TTF fallbacks (share ttfSources_); parallel to their renderer font ids.
   std::vector<std::unique_ptr<TtfEpdFont>> ttfUi_;
   std::vector<int> ttfUiIds_;
-  // Panel-size faces for a word lookup session (body and header); share ttfSources_.
+  // Panel-size faces for a word lookup session (body and header): sized variants of ttf_ that
+  // share its FreeType faces, so they must be freed before ttf_ is reloaded or freed.
   struct TtfLookupFace {
     std::unique_ptr<TtfEpdFont> font;
     int fontId = 0;

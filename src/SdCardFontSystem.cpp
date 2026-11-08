@@ -555,9 +555,9 @@ void SdCardFontSystem::unloadLookupVariant(GfxRenderer& renderer) {
 void SdCardFontSystem::releaseWordLookupFallback(GfxRenderer& renderer) {
   unloadLookupVariant(renderer);
 #if CROSSPOINT_VECTOR_FONTS
-  // With PSRAM the panel's TTF faces stay for the next lookup (their caches live there): loading
-  // one parses the font from SD, about half a second per open. mapTtfForLookup() reuses them, and
-  // unloadTtf() frees them with the reader face. Without PSRAM they would hold internal heap.
+  // With PSRAM the panel's TTF faces stay for the next lookup (their glyph caches live there);
+  // mapTtfForLookup() reuses them, and unloadTtf() frees them with the reader face. Without PSRAM
+  // their glyph caches would hold internal heap.
   if (HalMemory::getPsramHeap().totalBytes == 0) releaseTtfLookup(renderer);
 #endif
   lookupVariantTried_ = false;
@@ -1132,9 +1132,11 @@ bool SdCardFontSystem::mapTtfForLookup(GfxRenderer& renderer, const int primaryF
       LOG_ERR("SDFS", "OOM: TtfEpdFont for lookup @%upt", pointSize);
       return false;
     }
-    addTtfSources(*f);
-    // A definition is a few hundred glyphs at most.
-    if (!f->load(pointSize, /*twoBit=*/true, /*glyphCacheBytes=*/64 * 1024, /*maxGlyphs=*/512)) return false;
+    // A sized variant of the reader face, sharing its FreeType faces. A definition is a few
+    // hundred glyphs at most.
+    if (!f->loadVariantOf(*ttf_, pointSize, /*twoBit=*/true, /*glyphCacheBytes=*/64 * 1024, /*maxGlyphs=*/512)) {
+      return false;
+    }
     // Salted like the UI faces: the panel size can equal the reader's or a UI size.
     id = computeTtfFontId((ttfFamily_ + "\x01lookup").c_str(), pointSize);
     renderer.insertFont(id, f->family());
@@ -1157,9 +1159,9 @@ void SdCardFontSystem::releaseTtfLookup(GfxRenderer& renderer) {
 }
 
 void SdCardFontSystem::unloadTtf(GfxRenderer& renderer) {
-  releaseTtfLookup(renderer);  // they borrow ttfSources_ too
+  releaseTtfLookup(renderer);  // variants of ttf_: they borrow its FreeType faces
   if (ttfFamily_.empty() && ttfFontId_ == 0 && ttfUiIds_.empty()) return;
-  // UI-size fallbacks first (they borrow ttfSources_).
+  // UI-size fallbacks first (variants of ttf_: they borrow its FreeType faces).
   for (const int id : ttfUiIds_) {
     renderer.unregisterTtfFont(id);
     renderer.removeFont(id);
@@ -1283,16 +1285,14 @@ void SdCardFontSystem::addTtfSources(TtfEpdFont& font) {
 }
 
 void SdCardFontSystem::setupTtfUiFallbacks(GfxRenderer& renderer) {
-  if (ttfFamily_.empty()) return;
-  // Small caches: UI strings (titles/rows) are short. Each UI family is 4-style
-  // but LAZY, so only the regular face is ever built for UI text — the bold/
-  // italic faces cost nothing. All faces share the reader's sources (streamed
-  // handles or resident bytes), so no extra copy of any font file.
-  // Each fallback instance carries its own FreeType face and lazy glyph
-  // arena. Without PSRAM those compete with the reader's section build for
-  // internal DRAM, and the build must win: below this floor, skip the
-  // fallback (built-in bitmap UI fonts keep covering Latin UI text).
-  static constexpr size_t kUiFallbackMinInternalHeap = 160 * 1024;
+  if (!ttf_ || ttfFamily_.empty()) return;
+  // Small caches: UI strings (titles/rows) are short. Each UI family is a sized
+  // variant of ttf_, sharing its FreeType faces: no font file is parsed again and
+  // no FT_Face is allocated, only a lazy glyph arena. Without PSRAM that still
+  // competes with the reader's section build for internal DRAM, and the build
+  // must win: below this floor, skip the fallback (built-in bitmap UI fonts keep
+  // covering Latin UI text).
+  static constexpr size_t kUiFallbackMinInternalHeap = 24 * 1024;
   for (const auto& ui : kUiFontSizes) {
     if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) == 0) {
       const size_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
@@ -1307,8 +1307,8 @@ void SdCardFontSystem::setupTtfUiFallbacks(GfxRenderer& renderer) {
       LOG_ERR("SDFS", "OOM: TtfEpdFont for UI fallback @%upt", ui.pointSize);
       continue;  // built-in bitmap UI fonts keep covering this size
     }
-    addTtfSources(*f);
-    const bool ok = f->load(ui.pointSize, /*twoBit=*/true, /*glyphCacheBytes=*/16 * 1024, /*maxGlyphs=*/384);
+    const bool ok =
+        f->loadVariantOf(*ttf_, ui.pointSize, /*twoBit=*/true, /*glyphCacheBytes=*/16 * 1024, /*maxGlyphs=*/384);
     if (!ok) continue;
     LOG_DBG("SDFS", "TTF UI fallback @%upt loaded (heap free %u)", ui.pointSize, (unsigned)ESP.getFreeHeap());
     // Distinct id from the reader-size font: a UI size can equal the reader size
@@ -1350,6 +1350,7 @@ void SdCardFontSystem::loadTtfFamily(const SdCardFontFamilyInfo& family, GfxRend
   // re-drive the reader face at the new size, reusing the already-open files
   // instead of reopening all four and rebuilding every UI fallback.
   if (!registryWasDirty && ttf_ && ttfFamily_ == family.name) {
+    releaseTtfLookup(renderer);  // variants of the face being re-driven; rebuilt on the next lookup
     renderer.unregisterTtfFont(ttfFontId_);
     renderer.removeFont(ttfFontId_);
     if (ttf_->load(size, /*twoBit=*/true, cacheBytes, maxGlyphs)) {
