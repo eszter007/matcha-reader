@@ -1,4 +1,4 @@
-#include "EpubReaderChapterSelectionActivity.h"
+#include "ChapterListActivity.h"
 
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -12,15 +12,42 @@
 
 namespace fui = freeink::ui;
 
-EpubReaderChapterSelectionActivity::EpubReaderChapterSelectionActivity(GfxRenderer& renderer,
-                                                                       MappedInputManager& mappedInput,
-                                                                       const std::shared_ptr<Epub>& epub,
-                                                                       const int currentTocIndex)
-    : UiListActivity("EpubReaderChapterSelection", renderer, mappedInput),
-      epub(epub),
-      currentTocIndex(currentTocIndex) {}
+std::string EpubChapterSource::label(const int index) const {
+  const auto tocItem = epub->getTocItem(index);
+  return std::string(tocItem.level > 0 ? (tocItem.level - 1) * 2 : 0, ' ') + tocItem.title;
+}
 
-void EpubReaderChapterSelectionActivity::onEnter() {
+ActivityResult EpubChapterSource::result(const int index) const {
+  const auto tocItem = epub->getTocItem(index);
+  if (tocItem.spineIndex == -1) {
+    ActivityResult cancelled;
+    cancelled.isCancelled = true;
+    return cancelled;
+  }
+  return ChapterResult{tocItem.spineIndex, tocItem.anchor};
+}
+
+std::string PageChapterSource::label(const int index) const {
+  const std::string& title = entries[index].title;
+  return title.empty() ? std::string(tr(STR_UNNAMED)) : title;
+}
+
+int PageChapterSource::currentIndex() const {
+  // The last chapter starting at or before the current page.
+  int current = 0;
+  for (size_t i = 0; i < entries.size() && entries[i].pageIndex <= currentPage; i++) {
+    current = static_cast<int>(i);
+  }
+  return current;
+}
+
+ActivityResult PageChapterSource::result(const int index) const { return PageResult{entries[index].pageIndex}; }
+
+ChapterListActivity::ChapterListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                         std::unique_ptr<ChapterSource> source)
+    : UiListActivity("ChapterList", renderer, mappedInput), source(std::move(source)) {}
+
+void ChapterListActivity::onEnter() {
   UiListActivity::onEnter();
 
   // The reader underneath pins its page-render glyph arenas while this
@@ -33,26 +60,22 @@ void EpubReaderChapterSelectionActivity::onEnter() {
     fcm->clearCache();
   }
 
-  if (!epub) {
+  if (!source) {
     return;
   }
 
   // Start with the current chapter at the top of the viewport; the first
   // screen build pulls the viewport to it (ListNav follow-on-build) and
   // materializes the row window there (refreshTocWindow in buildScreen).
-  int tocIndex = currentTocIndex;
-  if (tocIndex == -1) {
-    tocIndex = 0;
-  }
-  nav.selected = tocIndex;
+  nav.selected = source->currentIndex();
 }
 
-// Materialize the ListItem/label window starting at `start` (clamped). TOC
-// entries are SD LUT reads (getTocItem), so this runs only when the viewport
+// Materialize the ListItem/label window starting at `start` (clamped). EPUB
+// TOC entries are SD LUT reads, so this runs only when the viewport
 // leaves the current window. Finishes with a batch prewarm of the window's
 // CJK fallback glyphs -- one bounded SD pass per list page; repaints inside
 // the window stay RAM-only.
-void EpubReaderChapterSelectionActivity::refreshTocWindow(const int start) {
+void ChapterListActivity::refreshTocWindow(const int start) {
   const int total = listCount();
   int clamped = start;
   if (clamped > total - TOC_WINDOW) clamped = total - TOC_WINDOW;
@@ -61,9 +84,7 @@ void EpubReaderChapterSelectionActivity::refreshTocWindow(const int start) {
 
   windowCount = total - clamped < TOC_WINDOW ? total - clamped : TOC_WINDOW;
   for (int i = 0; i < windowCount; i++) {
-    const auto tocItem = epub->getTocItem(clamped + i);
-    std::string indent(tocItem.level > 0 ? (tocItem.level - 1) * 2 : 0, ' ');
-    windowLabels[i] = indent + tocItem.title;
+    windowLabels[i] = source->label(clamped + i);
     fui::ListItem item;
     item.label = windowLabels[i].c_str();
     item.actionValue = static_cast<int16_t>(clamped + i);
@@ -84,7 +105,7 @@ void EpubReaderChapterSelectionActivity::refreshTocWindow(const int start) {
       &prewarmCtx, static_cast<uint32_t>(windowCount));
 }
 
-void EpubReaderChapterSelectionActivity::activateIndex(const int index) {
+void ChapterListActivity::activateIndex(const int index) {
   if (index < 0 || index >= listCount()) {
     return;
   }
@@ -92,19 +113,11 @@ void EpubReaderChapterSelectionActivity::activateIndex(const int index) {
   // an unrelated element on the next render.
   app.clearTapFlash();
   nav.selected = index;
-  const auto tocItem = epub->getTocItem(index);
-  if (tocItem.spineIndex == -1) {
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
-  } else {
-    setResult(ChapterResult{tocItem.spineIndex, tocItem.anchor});
-    finish();
-  }
+  setResult(source->result(index));
+  finish();
 }
 
-bool EpubReaderChapterSelectionActivity::handleButtons() {
+bool ChapterListActivity::handleButtons() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     ActivityResult result;
     result.isCancelled = true;
@@ -113,7 +126,7 @@ bool EpubReaderChapterSelectionActivity::handleButtons() {
     return true;
   }
 
-  if (!epub) {
+  if (!source) {
     return true;
   }
 
@@ -125,7 +138,7 @@ bool EpubReaderChapterSelectionActivity::handleButtons() {
   return false;
 }
 
-void EpubReaderChapterSelectionActivity::buildScreen(UiScreen& screen) {
+void ChapterListActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   // Content: the safe area minus the header band drawChrome paints the title in.
@@ -135,7 +148,7 @@ void EpubReaderChapterSelectionActivity::buildScreen(UiScreen& screen) {
       static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height)), static_cast<int16_t>(safe.x)});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
-  if (!epub) {
+  if (!source) {
     return;
   }
   if (listCount() == 0) {
@@ -157,6 +170,6 @@ void EpubReaderChapterSelectionActivity::buildScreen(UiScreen& screen) {
   screen.list(props);
 }
 
-void EpubReaderChapterSelectionActivity::drawChrome() {
+void ChapterListActivity::drawChrome() {
   GUI.drawHeader(renderer, UITheme::getInstance().getHeaderRect(renderer, true, false), tr(STR_SELECT_CHAPTER));
 }

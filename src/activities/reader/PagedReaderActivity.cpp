@@ -8,12 +8,12 @@
 #include <algorithm>
 #include <cstdio>
 
+#include "ChapterListActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "HapticFeedback.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #include "MangaBookmarksActivity.h"
-#include "PageChapterSelectionActivity.h"
 #include "ReaderUtils.h"
 #include "activities/ActivityManager.h"
 #include "util/BookProgress.h"
@@ -118,7 +118,8 @@ bool PagedReaderActivity::handlePagedMenuAction(const EpubReaderMenuActivity::Me
         return true;
       }
       startActivityForResult(
-          std::make_unique<PageChapterSelectionActivity>(renderer, mappedInput, std::move(list), currentPage),
+          std::make_unique<ChapterListActivity>(renderer, mappedInput,
+                                                std::make_unique<PageChapterSource>(std::move(list), currentPage)),
           [this](const ActivityResult& result) {
             if (!result.isCancelled && hasBook()) {
               const uint32_t target = std::get<PageResult>(result.data).page;
