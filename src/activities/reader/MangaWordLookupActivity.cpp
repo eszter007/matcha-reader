@@ -143,7 +143,7 @@ void MangaWordLookupActivity::onExit() {
     RenderLock lock;
     sdFontSystem.releaseWordLookupFallback(renderer);
   }
-  BookStats::addCounts(mining_.bookPath.c_str(), static_cast<uint32_t>(countedLookups_.size()), 0);
+  lookupCounter.flush(mining_.bookPath);
   Activity::onExit();
 }
 
@@ -304,7 +304,7 @@ void MangaWordLookupActivity::performLookup() {
   // Render shows "Loading..." instead of "No match found" while this runs (fast navigation).
   lookupInFlight = true;
   performLookupImpl();
-  countLookup();
+  if (hasResult) lookupCounter.count(resultHeadword);
   lookupInFlight = false;
 }
 
@@ -544,12 +544,4 @@ void MangaWordLookupActivity::render(RenderLock&&) {
   // FAST only: the framebuffer holds just the page's BW plane, so a full refresh would flash the
   // whole manga page; a FAST wave drives only the panel's pixels.
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-}
-
-void MangaWordLookupActivity::countLookup() {
-  if (!hasResult || resultHeadword.empty() || countedLookups_.size() >= MAX_COUNTED_LOOKUPS) return;
-  const auto hash = static_cast<uint32_t>(std::hash<std::string>{}(resultHeadword));
-  if (std::find(countedLookups_.begin(), countedLookups_.end(), hash) != countedLookups_.end()) return;
-  if (countedLookups_.empty()) countedLookups_.reserve(32);
-  countedLookups_.push_back(hash);
 }

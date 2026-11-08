@@ -11,6 +11,7 @@
 #include "WordSelectionScan.h"
 #include "activities/Activity.h"
 #include "components/DictionaryPanel.h"
+#include "util/LookupCounter.h"
 #include "util/SentenceMining.h"
 
 struct Rect;
@@ -74,11 +75,7 @@ class MangaWordLookupActivity final : public Activity {
   void moveCursor(int delta);
   // Sentence mining: the shown entry is saved with the sentence from its speech bubble.
   sentencemining::BookContext mining_;
-  // Hashes of the headwords shown this session, so browsing back and forth counts each word
-  // once; the total goes to BookStats in one write on exit.
-  static constexpr size_t MAX_COUNTED_LOOKUPS = 256;
-  std::vector<uint32_t> countedLookups_;
-  void countLookup();
+  LookupCounter lookupCounter;  // distinct headwords shown, for the book's stats
   std::string miningSentence() const;
   void performLookup();
   void performLookupImpl();
