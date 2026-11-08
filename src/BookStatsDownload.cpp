@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "stats/StatsRecords.h"
+
 namespace bookdownload {
 namespace {
 constexpr uint8_t MAGIC[4] = {'B', 'K', 'D', 'L'};
@@ -16,18 +18,10 @@ constexpr size_t HEADER_BYTES = 6;
 constexpr uint8_t FLAG_INCREMENT = 1;
 constexpr size_t DAY_BYTES = 6;
 
-void putU16(uint8_t* p, const uint16_t v) { memcpy(p, &v, 2); }
-void putU32(uint8_t* p, const uint32_t v) { memcpy(p, &v, 4); }
-uint16_t getU16(const uint8_t* p) {
-  uint16_t v;
-  memcpy(&v, p, 2);
-  return v;
-}
-uint32_t getU32(const uint8_t* p) {
-  uint32_t v;
-  memcpy(&v, p, 4);
-  return v;
-}
+using statsrecords::getU16;
+using statsrecords::getU32;
+using statsrecords::putU16;
+using statsrecords::putU32;
 
 // One book's header: nameHash(4) finished(1) sessions(4) language length(1) and bytes, day count(2).
 bool readBook(HalFile& f, Book& book) {
@@ -112,10 +106,7 @@ bool Writer::beginBook(const uint32_t hash, const bool finished, const uint32_t 
 bool Writer::addDay(const BookDay& day) {
   if (!ok || count >= BookStats::MAX_DAYS) return ok;  // past the limit BookStats keeps: dropped
   uint8_t rec[DAY_BYTES];
-  putU16(rec, day.year);
-  rec[2] = day.month;
-  rec[3] = day.day;
-  putU16(rec + 4, day.minutes);
+  statsrecords::putDay(rec, day);
   ok = file.write(rec, DAY_BYTES) == DAY_BYTES;
   count++;
   return ok;

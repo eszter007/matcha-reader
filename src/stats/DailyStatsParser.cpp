@@ -5,30 +5,13 @@
 #include <cstring>
 #include <iterator>
 
+#include "StatsJson.h"
 #include "StatsSync.h"
 
 namespace {
-bool equals(const char* value, const size_t len, const char* expected) {
-  return len == strlen(expected) && memcmp(value, expected, len) == 0;
-}
+using statsjson::equals;
 
-// "YYYY-MM-DD"; false for anything else.
-bool parseDate(const char* v, const size_t len, DailyReading& out) {
-  static constexpr size_t DIGITS[] = {0, 1, 2, 3, 5, 6, 8, 9};
-  if (len != 10 || v[4] != '-' || v[7] != '-' ||
-      !std::all_of(std::begin(DIGITS), std::end(DIGITS), [v](const size_t i) { return v[i] >= '0' && v[i] <= '9'; })) {
-    return false;
-  }
-  const auto num = [v](const size_t at, const size_t n) {
-    int x = 0;
-    for (size_t i = 0; i < n; i++) x = x * 10 + (v[at + i] - '0');
-    return x;
-  };
-  out.year = static_cast<uint16_t>(num(0, 4));
-  out.month = static_cast<uint8_t>(num(5, 2));
-  out.day = static_cast<uint8_t>(num(8, 2));
-  return out.month >= 1 && out.month <= 12 && out.day >= 1 && out.day <= 31;
-}
+using statsjson::parseDate;
 }  // namespace
 
 DailyStatsParser::DailyStatsParser(const char* deviceId, std::vector<DailyReading>& out, const int32_t firstDay,

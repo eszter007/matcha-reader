@@ -12,6 +12,7 @@
 #include <numeric>
 
 #include "BookStatsDownload.h"
+#include "stats/StatsRecords.h"
 
 ReadingStatsStore ReadingStatsStore::instance;
 
@@ -117,11 +118,7 @@ void normalizeLanguage(const char* in, char out[4]) {
   if (alias != std::end(ALIASES)) strncpy(out, alias->to, 4);
 }
 
-int daysInMonth(uint16_t y, uint8_t m) {
-  static constexpr int dm[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  if (m == 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) return 29;
-  return dm[m];
-}
+using statsrecords::daysInMonth;
 }  // namespace
 
 void ReadingStatsStore::addMinutes(uint16_t year, uint8_t month, uint8_t day, uint16_t minutes) {

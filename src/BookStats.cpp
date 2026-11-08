@@ -15,6 +15,7 @@
 
 #include "BookStatsDownload.h"
 #include "ReadingStatsStore.h"
+#include "stats/StatsRecords.h"
 
 namespace {
 // Resolved at use: the folder is "/.system" or "/system" depending on what the card has.
@@ -41,32 +42,16 @@ std::mutex& fileMutex() {
 }
 constexpr uint16_t MAX_PATH_LEN = 500;  // guards reserve() against a corrupt length field
 
-// Packed through a byte buffer, not a struct cast: ESP32-C3 faults on unaligned multi-byte
-// loads and a record at an arbitrary file offset has no alignment guarantee.
-void putU16(uint8_t* p, const uint16_t v) { memcpy(p, &v, 2); }
-void putU32(uint8_t* p, const uint32_t v) { memcpy(p, &v, 4); }
-uint16_t getU16(const uint8_t* p) {
-  uint16_t v;
-  memcpy(&v, p, 2);
-  return v;
-}
-uint32_t getU32(const uint8_t* p) {
-  uint32_t v;
-  memcpy(&v, p, 4);
-  return v;
-}
+using statsrecords::getU16;
+using statsrecords::getU32;
+using statsrecords::putU16;
+using statsrecords::putU32;
 
 // Chronological order; the tuple compare is equivalent for valid dates.
 bool byDate(const BookDay& a, const BookDay& b) {
   return std::tie(a.year, a.month, a.day) < std::tie(b.year, b.month, b.day);
 }
 
-int daysInMonthOf(const uint16_t y, const uint8_t m) {
-  static constexpr int dm[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  if (m < 1 || m > 12) return 0;
-  if (m == 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) return 29;
-  return dm[m];
-}
 // The path a book's insights are filed under. A .matcha volume counts as the folder it was packed
 // from, so replacing one with the other keeps its insights.
 std::string_view statsKey(const std::string_view path) { return FsHelpers::stripMatchaExtension(path); }
@@ -154,17 +139,13 @@ bool BookStats::loadLocal(const char* path) {
       complete = false;
       break;
     }
-    BookDay d{};
-    d.year = getU16(rec);
-    d.month = rec[2];
-    d.day = rec[3];
-    d.minutes = getU16(rec + 4);
+    const BookDay d = statsrecords::getDay(rec);
     if (d.year < 2020) continue;  // recorded before the clock was set; misdated
     days.push_back(d);
   }
   uint8_t fin[FINISH_BYTES];
   if (complete && f.read(fin, FINISH_BYTES) == FINISH_BYTES && getU16(fin) >= 2020) {
-    finished = {getU16(fin), fin[2], fin[3], 0};
+    finished = statsrecords::getDate(fin);
     uint8_t counts[FINISH_COUNTS_BYTES];
     if (f.read(counts, FINISH_COUNTS_BYTES) == FINISH_COUNTS_BYTES) {
       hasFinishCounts = true;
@@ -233,10 +214,7 @@ bool BookStats::save() const {
   for (size_t i = firstDay; i < days.size(); i++) {
     const auto& d = days[i];
     uint8_t rec[DAY_RECORD_BYTES];
-    putU16(rec, d.year);
-    rec[2] = d.month;
-    rec[3] = d.day;
-    putU16(rec + 4, d.minutes);
+    statsrecords::putDay(rec, d);
     if (f.write(rec, DAY_RECORD_BYTES) != DAY_RECORD_BYTES) {
       LOG_ERR("BSTAT", "short write on %s", file.c_str());
       return false;
@@ -244,9 +222,7 @@ bool BookStats::save() const {
   }
   if (finished.year != 0) {
     uint8_t fin[FINISH_BYTES];
-    putU16(fin, finished.year);
-    fin[2] = finished.month;
-    fin[3] = finished.day;
+    statsrecords::putDate(fin, finished);
     if (f.write(fin, FINISH_BYTES) != FINISH_BYTES) return false;
     if (hasFinishCounts) {
       uint8_t counts[FINISH_COUNTS_BYTES];
@@ -415,7 +391,7 @@ int BookStats::getDaysReadInMonth(const uint16_t year, const uint8_t month) cons
   bool status[32];
   getMonthStatus(year, month, status);
   int count = 0;
-  const int dim = daysInMonthOf(year, month);
+  const int dim = statsrecords::daysInMonth(year, month);
   for (int d = 1; d <= dim; d++) {
     if (status[d]) count++;
   }
