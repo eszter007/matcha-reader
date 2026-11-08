@@ -57,6 +57,7 @@ class GfxRenderer {
     bool identity() const { return own == 256 && fallback == 256 && !sizeFallbacks && !matchOwnEm; }
   };
   enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
+  enum class DitherMode { Replace, PreserveInk };
 
   // Logical screen orientation from the perspective of callers
   enum Orientation {
@@ -211,7 +212,7 @@ class GfxRenderer {
   // physical row with head-mask / middle memset / tail-mask byte writes — no
   // per-pixel rotation, no per-pixel RMW.
   template <Color color>
-  void fillRectImpl(int x, int y, int width, int height) const;
+  void fillRectImpl(int x, int y, int width, int height, DitherMode mode = DitherMode::Replace) const;
 
  public:
   explicit GfxRenderer(HalDisplay& halDisplay)
@@ -467,7 +468,8 @@ class GfxRenderer {
   // re-render of the content beneath it. Edge-exact (head/tail bit masks), unlike the 8px-aligned
   // readFramebufferRegion/writeFramebufferRegion pair.
   void invertRect(int x, int y, int width, int height) const;
-  void fillRectDither(int x, int y, int width, int height, Color color) const;
+  // PreserveInk adds the pattern's black pixels without clearing existing ink.
+  void fillRectDither(int x, int y, int width, int height, Color color, DitherMode mode = DitherMode::Replace) const;
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, Color color) const;
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, bool roundTopLeft, bool roundTopRight,
                        bool roundBottomLeft, bool roundBottomRight, Color color) const;
