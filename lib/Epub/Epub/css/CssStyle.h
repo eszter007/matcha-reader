@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <string_view>
 
 // Matches order of PARAGRAPH_ALIGNMENT in CrossPointSettings
@@ -190,15 +191,11 @@ inline uint16_t fontFamilyListKey(std::string_view list) {
     std::string_view bare = item;
     while (!bare.empty() && (bare.front() == ' ' || bare.front() == '\t')) bare.remove_prefix(1);
     while (!bare.empty() && (bare.back() == ' ' || bare.back() == '\t')) bare.remove_suffix(1);
-    bool generic = false;
-    for (const std::string_view g : GENERIC) {
-      if (bare.size() == g.size() && std::equal(bare.begin(), bare.end(), g.begin(), [](char a, char b) {
-            return (a >= 'A' && a <= 'Z' ? a + 32 : a) == b;
-          })) {
-        generic = true;
-        break;
-      }
-    }
+    const bool generic = std::any_of(std::begin(GENERIC), std::end(GENERIC), [bare](const std::string_view g) {
+      return bare.size() == g.size() && std::equal(bare.begin(), bare.end(), g.begin(), [](char a, char b) {
+               return (a >= 'A' && a <= 'Z' ? a + 32 : a) == b;
+             });
+    });
     if (!generic) {
       const uint16_t key = fontFamilyKeyOf(bare);
       if (key != 0) return key;

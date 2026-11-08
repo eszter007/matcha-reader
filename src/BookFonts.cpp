@@ -225,7 +225,8 @@ void BookFonts::unload(GfxRenderer& renderer) {
 
 BookFonts::BookFonts() = default;
 BookFonts::~BookFonts() = default;
-uint32_t BookFonts::load(const Epub&, GfxRenderer&, uint8_t, int) { return 0; }
-void BookFonts::unload(GfxRenderer&) {}
+// Members, not statics, to keep one interface on every board: nothing ever loads here.
+uint32_t BookFonts::load(const Epub&, GfxRenderer&, uint8_t, int) { return signature_; }
+void BookFonts::unload(GfxRenderer&) { signature_ = 0; }
 
 #endif
