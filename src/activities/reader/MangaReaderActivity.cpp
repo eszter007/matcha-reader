@@ -427,8 +427,12 @@ void MangaReaderActivity::readerLoop() {
   // this very tick's input handling, and so the single job slot frees up for the next post.
   applyPrefetchResult();
 
-  if (translationPageReady.exchange(false, std::memory_order_acquire)) {
-    translationAfterRender.store(false, std::memory_order_relaxed);
+  if (panelPageReady.exchange(false, std::memory_order_acquire)) {
+    const MenuPanel panel = panelAfterRender.exchange(MenuPanel::None, std::memory_order_relaxed);
+    if (panel == MenuPanel::WordLookup) {
+      launchWordLookupCurrentView();
+      return;
+    }
     auto translation = std::make_unique<EpubReaderTranslationActivity>(
         renderer, mappedInput, std::move(pendingTranslationSource), std::move(pendingTranslation));
     translation->setPageTurnReversed(SETTINGS.reversePageTurn != 0);
@@ -688,8 +692,8 @@ void MangaReaderActivity::render(RenderLock&&) {
   saveProgress();
   markPageRendered();
 
-  if (translationAfterRender.load(std::memory_order_relaxed)) {
-    translationPageReady.store(true, std::memory_order_release);
+  if (panelAfterRender.load(std::memory_order_relaxed) != MenuPanel::None) {
+    panelPageReady.store(true, std::memory_order_release);
   }
 
   if (pendingScreenshot) {
@@ -1489,6 +1493,12 @@ void MangaReaderActivity::workerWarmPanel() {
   // Cancelled: completed stays false (dims, if probed, still get published) -> retried later.
 }
 
+void MangaReaderActivity::openPanelAfterRender(const MenuPanel panel) {
+  panelPageReady.store(false, std::memory_order_relaxed);
+  panelAfterRender.store(panel, std::memory_order_relaxed);
+  requestUpdate();
+}
+
 void MangaReaderActivity::launchWordLookupCurrentView() {
   // In panel zoom, look up just that panel's text. In full-page view,
   // combine every panel's text on the page so lookup still works
@@ -1870,10 +1880,9 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
                              });
       return;
     }
-    case EpubReaderMenuActivity::MenuAction::WORD_LOOKUP: {
-      launchWordLookupCurrentView();
-      break;
-    }
+    case EpubReaderMenuActivity::MenuAction::WORD_LOOKUP:
+      openPanelAfterRender(MenuPanel::WordLookup);
+      return;
     case EpubReaderMenuActivity::MenuAction::TRANSLATE_PAGE: {
       // Same full-page fallback as WORD_LOOKUP above. Prefer a translation
       // already extracted offline during manga conversion (instant, no
@@ -1904,9 +1913,7 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
         // puts the page back first, then loop() opens the panel.
         pendingTranslationSource = std::move(combined);
         pendingTranslation = std::move(preTranslated);
-        translationPageReady.store(false, std::memory_order_relaxed);
-        translationAfterRender.store(true, std::memory_order_relaxed);
-        requestUpdate();
+        openPanelAfterRender(MenuPanel::Translation);
         return;
       }
       break;

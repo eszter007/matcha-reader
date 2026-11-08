@@ -49,10 +49,13 @@ class MangaReaderActivity final : public PagedReaderActivity {
 
  private:
   std::unique_ptr<manga::MangaBook> book;
-  // Translation opens as a panel over the page once render() has put the page back after the
-  // menu: the menu handler stores the text and sets the flag, render() marks the page drawn.
-  std::atomic<bool> translationAfterRender{false};
-  std::atomic<bool> translationPageReady{false};
+  // A panel chosen in the reader menu (translation, word lookup) opens over the page only once
+  // render() has put the page back: the menu handler sets panelAfterRender, render() marks the
+  // page drawn, loop() opens the panel.
+  enum class MenuPanel : uint8_t { None, Translation, WordLookup };
+  std::atomic<MenuPanel> panelAfterRender{MenuPanel::None};
+  std::atomic<bool> panelPageReady{false};
+  void openPanelAfterRender(MenuPanel panel);
   std::string pendingTranslationSource;
   std::string pendingTranslation;
 
