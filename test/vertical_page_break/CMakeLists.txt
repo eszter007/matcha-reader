@@ -1,6 +1,6 @@
 add_executable(VerticalPageBreakTest
   VerticalPageBreakTest.cpp
-  ${REPO_ROOT}/lib/Epub/Epub/VerticalParsedText.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/VerticalParsedText.cpp ${REPO_ROOT}/lib/Epub/Epub/VerticalLayout.cpp
   ${REPO_ROOT}/lib/Epub/Epub/Kinsoku.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp
 )

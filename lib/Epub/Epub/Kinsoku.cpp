@@ -6,6 +6,12 @@ namespace {
 
 bool g_centredPunctuation = false;
 
+// Most of a Japanese page: the CJK ideographs, none of which is punctuation, a bracket, a small kana
+// or Latin. Every rule below answers "no" for them, so they skip the lookups.
+constexpr bool isIdeograph(const uint32_t cp) { return cp >= 0x4E00 && cp <= 0x9FFF; }
+// Kana up to ヺ: no brackets, dashes, marks or Latin among them (small kana still count for kinsoku).
+constexpr bool isKana(const uint32_t cp) { return cp >= 0x3041 && cp <= 0x30FA; }
+
 // Closing brackets / quotation marks (both halfwidth-in-fullwidth-box JIS
 // punctuation and the CJK bracket block).
 bool isClosingBracket(uint32_t cp) {
@@ -121,12 +127,14 @@ bool isLineStartPunctuation(uint32_t cp) {
 }  // namespace
 
 bool isLineStartProhibited(uint32_t codepoint) {
+  if (isIdeograph(codepoint)) return false;
   return isClosingBracket(codepoint) || isSmallKanaOrMark(codepoint) || isLineStartPunctuation(codepoint);
 }
 
 // Opening brackets, and the signs written before a number (JLREQ cl-19: ￥ ＄ ￡ ＃ € №), which may not
 // be parted from it.
 bool isLineEndProhibited(uint32_t codepoint) {
+  if (isIdeograph(codepoint) || isKana(codepoint)) return false;
   switch (codepoint) {
     case 0xFFE5:  // ￥
     case 0xFF04:  // ＄
@@ -162,6 +170,7 @@ bool isAlwaysUpright(uint32_t codepoint) {
 }
 
 bool isRotatedRunCharacter(uint32_t codepoint) {
+  if (codepoint > 0x2122) return false;  // ™ is the highest codepoint in the set
   // Basic Latin letters and a handful of common inline symbols.
   // Anything in this set gets batched together and rendered sideways via
   // drawTextRotated90CW so an embedded English phrase reads
@@ -228,6 +237,7 @@ uint32_t verticalFormOf(const uint32_t codepoint) {
 }
 
 int verticalShiftType(uint32_t cp) {
+  if (isIdeograph(cp) || isKana(cp)) return 0;
   switch (cp) {
     case 0x3001:  // 、
     case 0x3002:  // 。
@@ -285,6 +295,7 @@ int verticalShiftType(uint32_t cp) {
 }
 
 bool needsVerticalRotation(uint32_t cp) {
+  if (isIdeograph(cp) || isKana(cp)) return false;
   switch (cp) {
     case 0x300C:  // 「
     case 0x300D:  // 」
@@ -327,6 +338,7 @@ bool needsVerticalRotation(uint32_t cp) {
 }
 
 bool isSmallKana(uint32_t cp) {
+  if (cp < 0x3041 || cp > 0x30F6) return false;
   switch (cp) {
     case 0x3041:
     case 0x3043:

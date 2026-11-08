@@ -40,8 +40,8 @@ class WordSelectionScan {
     // page without a dictionary read per cursor move -- the scan already knew the length and
     // used to discard it. 0 in allGlyphs; treat 0 as "one cell".
     uint8_t matchLen;
-    // Advance in pixels, for a page laid out in lines, where glyphs are not one cell wide. 0 in
-    // a vertical page: its cells are the caller's cellPx.
+    // Advance in pixels on a page laid out in lines; on a vertical page, the side of the glyph's
+    // square cell at the size it is set at. 0 = the caller's cellPx.
     uint8_t width;
     // Index into the scan's furigana list for the ruby printed on this glyph (a group reading sits
     // on its first glyph), kRubyCovered for a glyph under another glyph's ruby, or kNoRuby.

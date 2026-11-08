@@ -26,10 +26,10 @@ class GfxRenderer {
   int getFontAscenderSize(int) const { return 16; }
   int getLineHeight(int) const { return EM; }
   int getLineHeight(int, float c) const { return static_cast<int>(EM * c); }
-  bool verticalPunctInkBox(int, uint32_t, EpdFontFamily::Style, int cellTopY, int, int, int* inkTop,
-                           int* inkHeight) const {
-    *inkTop = cellTopY + 2;
-    *inkHeight = 16;
+  bool verticalPunctInkBox(int, uint32_t, EpdFontFamily::Style, int cellTopY, int cellSize, int, int* inkTop,
+                           int* inkHeight, uint16_t scale = 256) const {
+    *inkTop = cellTopY + 2 * scale / 256;
+    *inkHeight = cellSize * 16 / 20;
     return true;
   }
 

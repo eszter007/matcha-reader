@@ -562,6 +562,9 @@ class GfxRenderer {
                            EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   void drawTextRotated90CCW(int fontId, int x, int y, const char* text, bool black = true,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  // drawTextRotated90CCW at a scale (8.8 fixed point, 256 = as is), for text set at a CSS font-size.
+  void drawTextRotated90CCWScaled(int fontId, int x, int y, const char* text, uint16_t scale, bool black = true,
+                                  EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   // Renders one codepoint magnified by an integer factor, its INK box placed at
   // (inkLeftX, inkTopY): the glyph bitmap's top-left lands exactly there, and the glyph's own
   // left/top bearings are deliberately NOT added. The caller is positioning the visible mark
@@ -592,10 +595,12 @@ class GfxRenderer {
   // height, in cellTopY's coordinate space) without drawing. Vertical layout uses it so a
   // rotated Latin run keeps clear of the brackets it sits between.
   bool verticalPunctInkBox(int fontId, uint32_t cp, EpdFontFamily::Style style, int cellTopY, int cellSize,
-                           int shiftType, int* inkTop, int* inkHeight) const;
+                           int shiftType, int* inkTop, int* inkHeight, uint16_t scale = 256) const;
+  // `scale` (8.8 fixed point, 256 = as is) draws the glyph that much larger or smaller, for text set
+  // at a CSS font-size; cellSize is the cell at that size.
   void drawCharVerticalRotatedInCell(int fontId, int cellLeftX, int cellTopY, int cellSize, uint32_t cp, int shiftType,
                                      bool black = true, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
-                                     int* inkTopOut = nullptr, int* inkHeightOut = nullptr) const;
+                                     int* inkTopOut = nullptr, int* inkHeightOut = nullptr, uint16_t scale = 256) const;
   int getTextHeight(int fontId) const;
 
   // Grayscale functions

@@ -3314,10 +3314,24 @@ static bool isSymmetricBracket(const uint32_t cp) {
   }
 }
 
+void GfxRenderer::drawTextRotated90CCWScaled(const int fontId, const int x, const int y, const char* text,
+                                             const uint16_t scale, const bool black,
+                                             const EpdFontFamily::Style style) const {
+  if (scale == 256) {
+    drawTextRotated90CCW(fontId, x, y, text, black, style);
+    return;
+  }
+  if (text == nullptr || *text == '\0') return;
+  FaceScale face = faceScaleFor(fontId);
+  face.own = static_cast<uint16_t>(face.own * scale / 256);
+  face.fallback = static_cast<uint16_t>(face.fallback * scale / 256);
+  drawTextRotatedScaled(fontId, x, y, text, black, style, /*clockwise=*/false, face);
+}
+
 void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cellLeftX, const int cellTopY,
                                                 const int cellSize, const uint32_t cp, const int shiftType,
                                                 const bool black, const EpdFontFamily::Style style, int* inkTopOut,
-                                                int* inkHeightOut) const {
+                                                int* inkHeightOut, const uint16_t scale) const {
   // Ellipsis glyphs are often horizontally designed and become too tall/ink-heavy
   // when rotated from proportional fonts. Render a centered vertical dot stack
   // directly in the cell to keep stable spacing and avoid overlaps.
@@ -3358,8 +3372,11 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   // or a ruby annotation's rotated glyph is drawn twice the size of the text around it.
   const bool scaledStyle = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
   // After CCW rotation, glyph height maps to X extent and glyph width maps to Y extent.
-  const int rotatedW = scaledStyle ? (glyph->height + 1) / 2 : glyph->height;
-  const int rotatedH = scaledStyle ? (glyph->width + 1) / 2 : glyph->width;
+  const bool sized = !scaledStyle && scale != 256;  // drawn at a CSS font-size
+  const int rotatedW = scaledStyle ? (glyph->height + 1) / 2
+                       : sized     ? scalePositive(glyph->height, scale)
+                                   : glyph->height;
+  const int rotatedH = scaledStyle ? (glyph->width + 1) / 2 : sized ? scalePositive(glyph->width, scale) : glyph->width;
 
   // Centre the rotated ink box in the cell -- the same rule the upright glyphs follow, so
   // punctuation lands on the column's axis by construction. Brackets override this below.
@@ -3420,6 +3437,12 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     renderCharScaled<TextRotation::Rotated90CCW>(*this, renderMode, font, cp, cursorXs, cursorYs, black, style);
     return;
   }
+  if (sized) {
+    const int cursorXs = (drawX + rotatedW - 1) - scaleSigned(glyph->top, scale);
+    const int cursorYs = drawY - scaleSigned(glyph->left, scale);
+    renderCharAtScale<TextRotation::Rotated90CCW>(*this, renderMode, font, cp, cursorXs, cursorYs, black, style, scale);
+    return;
+  }
   const int cursorX = (drawX + rotatedW - 1) - glyph->top;
   const int cursorY = drawY - glyph->left;
 
@@ -3428,10 +3451,10 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
 
 bool GfxRenderer::verticalPunctInkBox(const int fontId, const uint32_t cp, const EpdFontFamily::Style style,
                                       const int cellTopY, const int cellSize, const int shiftType, int* inkTop,
-                                      int* inkHeight) const {
+                                      int* inkHeight, const uint16_t scale) const {
   if (!inkTop || !inkHeight) return false;
   *inkTop = INT32_MIN;
-  drawCharVerticalRotatedInCell(fontId, 0, cellTopY, cellSize, cp, shiftType, true, style, inkTop, inkHeight);
+  drawCharVerticalRotatedInCell(fontId, 0, cellTopY, cellSize, cp, shiftType, true, style, inkTop, inkHeight, scale);
   if (*inkTop == INT32_MIN) return false;  // no glyph / font missing
   // The box the drawer itself reports: VerticalTextBlock places every shape where
   // drawCharVerticalRotatedInCell does, with no drop of its own to mirror here.

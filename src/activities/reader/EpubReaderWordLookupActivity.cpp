@@ -953,7 +953,7 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
 }
 
 int EpubReaderWordLookupActivity::glyphWidth(const WordSelectionScan::GlyphRef& glyph) const {
-  return selectCtx.lines && glyph.width != 0 ? glyph.width : selectCtx.cellPx;
+  return glyph.width != 0 ? glyph.width : selectCtx.cellPx;
 }
 
 int EpubReaderWordLookupActivity::buildBoxesFor(const int selectableIndex, HighlightBox* out) const {
@@ -986,12 +986,13 @@ int EpubReaderWordLookupActivity::buildBoxesFor(const int selectableIndex, Highl
       continue;
     }
     const int top = std::min(firstCell.y, lastCell.y) + selectCtx.marginTop;
-    const int bottom = std::max(firstCell.y, lastCell.y) + selectCtx.marginTop + cellPx;
+    const int bottom =
+        std::max(firstCell.y + glyphWidth(firstCell), lastCell.y + glyphWidth(lastCell)) + selectCtx.marginTop;
     // Cell-exact, no padding: the cell IS the em box, so the box lands clear of the
     // neighbouring column's ink and of any ruby, which is drawn outside the cell.
     box.x = static_cast<int16_t>(firstCell.x + selectCtx.marginLeft);
     box.y = static_cast<int16_t>(top);
-    box.w = static_cast<int16_t>(cellPx);
+    box.w = static_cast<int16_t>(std::max(glyphWidth(firstCell), glyphWidth(lastCell)));
     box.h = static_cast<int16_t>(bottom - top);
     i = j;
   }
@@ -1052,9 +1053,10 @@ bool EpubReaderWordLookupActivity::nearestGlyphToPoint(const int x, const int y,
     const auto& g = scan.allGlyphs[i];
     const int bx = g.x + selectCtx.marginLeft;
     const int by = g.y + selectCtx.marginTop;
-    const int bw = selectCtx.lines ? glyphWidth(g) : cellPx;
+    const int bw = glyphWidth(g);
+    const int bh = selectCtx.lines ? cellPx : bw;  // a vertical cell is square at its own size
     const int dx = x < bx ? bx - x : (x >= bx + bw ? x - (bx + bw - 1) : 0);
-    const int dy = y < by ? by - y : (y >= by + cellPx ? y - (by + cellPx - 1) : 0);
+    const int dy = y < by ? by - y : (y >= by + bh ? y - (by + bh - 1) : 0);
     const int distance = std::max(dx, dy);
     if (distance < bestDistance) {
       bestDistance = distance;
@@ -1126,9 +1128,10 @@ void EpubReaderWordLookupActivity::refreshCursorBoxes() {
   int count = 0;
   if (provisionalGlyph < scan.onPageGlyphCount()) {
     const auto& glyph = scan.allGlyphs[provisionalGlyph];
-    boxes[0] = HighlightBox{static_cast<int16_t>(glyph.x + selectCtx.marginLeft),
-                            static_cast<int16_t>(glyph.y + selectCtx.marginTop),
-                            static_cast<int16_t>(glyphWidth(glyph)), static_cast<int16_t>(selectCtx.cellPx)};
+    boxes[0] =
+        HighlightBox{static_cast<int16_t>(glyph.x + selectCtx.marginLeft),
+                     static_cast<int16_t>(glyph.y + selectCtx.marginTop), static_cast<int16_t>(glyphWidth(glyph)),
+                     static_cast<int16_t>(selectCtx.lines ? selectCtx.cellPx : glyphWidth(glyph))};
     count = 1;
   } else {
     count = buildBoxesFor(cursorIndex, boxes);
