@@ -13,6 +13,7 @@
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #include "MangaBookmarksActivity.h"
+#include "PageChapterSelectionActivity.h"
 #include "ReaderUtils.h"
 #include "activities/ActivityManager.h"
 #include "util/BookProgress.h"
@@ -109,6 +110,24 @@ void PagedReaderActivity::launchPercentJump() {
 bool PagedReaderActivity::handlePagedMenuAction(const EpubReaderMenuActivity::MenuAction action) {
   using MenuAction = EpubReaderMenuActivity::MenuAction;
   switch (action) {
+    case MenuAction::SELECT_CHAPTER: {
+      auto list = hasBook() ? chapters() : std::vector<manga::TocEntry>{};
+      // Without chapters the item jumps by percent instead.
+      if (list.empty()) {
+        launchPercentJump();
+        return true;
+      }
+      startActivityForResult(
+          std::make_unique<PageChapterSelectionActivity>(renderer, mappedInput, std::move(list), currentPage),
+          [this](const ActivityResult& result) {
+            if (!result.isCancelled && hasBook()) {
+              const uint32_t target = std::get<PageResult>(result.data).page;
+              if (target < pageCount()) goToPage(target);
+            }
+            requestUpdate();
+          });
+      return true;
+    }
     case MenuAction::GO_TO_PERCENT:
       launchPercentJump();
       return true;
@@ -118,15 +137,14 @@ bool PagedReaderActivity::handlePagedMenuAction(const EpubReaderMenuActivity::Me
       return true;
     case MenuAction::BOOKMARKS:
       if (!hasBook()) return true;
-      startActivityForResult(
-          std::make_unique<MangaBookmarksActivity>(renderer, mappedInput, positionKey(), bookmarkToc()),
-          [this](const ActivityResult& result) {
-            if (!result.isCancelled && hasBook()) {
-              const uint32_t target = std::get<PageResult>(result.data).page;
-              if (target < pageCount()) goToPage(target);
-            }
-            requestUpdate();
-          });
+      startActivityForResult(std::make_unique<MangaBookmarksActivity>(renderer, mappedInput, positionKey(), chapters()),
+                             [this](const ActivityResult& result) {
+                               if (!result.isCancelled && hasBook()) {
+                                 const uint32_t target = std::get<PageResult>(result.data).page;
+                                 if (target < pageCount()) goToPage(target);
+                               }
+                               requestUpdate();
+                             });
       return true;
     case MenuAction::SCREENSHOT:
       pendingScreenshot = true;

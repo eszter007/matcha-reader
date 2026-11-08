@@ -8,21 +8,20 @@
 #include "MappedInputManager.h"
 #include "activities/UiListActivity.h"
 
-// UiListActivity, like the EPUB and XTC chapter pickers: it brings the touch
-// routing (row taps, swipe scrolling) the hand-rolled button-only list this
-// replaced never had, so the chapter list answers a finger on a touch board.
-class MangaChapterSelectionActivity final : public UiListActivity {
+// Chapter list of a page-based book (XTC, manga). Each entry is a title and the chapter's first
+// page; picking one returns that page as a PageResult.
+class PageChapterSelectionActivity final : public UiListActivity {
  public:
-  explicit MangaChapterSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                         std::vector<manga::TocEntry> tocEntries, uint32_t currentPage);
+  explicit PageChapterSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                        std::vector<manga::TocEntry> tocEntries, uint32_t currentPage);
 
   void onEnter() override;
 
  private:
   std::vector<manga::TocEntry> tocEntries;
   // fui::ListItem points at label storage that must outlive the build, and a
-  // manga TOC is a handful of chapters rather than the hundreds an EPUB can
-  // carry -- so the whole list is materialised rather than windowed.
+  // page-based book has a handful of chapters rather than the hundreds an EPUB
+  // can carry -- so the whole list is materialised rather than windowed.
   std::vector<freeink::ui::ListItem> items;
   int initialSelected = 0;  // chapter holding the page the reader is on; applied in onEnter()
 
