@@ -298,6 +298,7 @@ void WordSelectionScan::initFromVerticalPage(const VerticalPage& page, const int
     const int x = g.column < columnX.size() && columnX[g.column] >= 0 ? columnX[g.column] : g.x;
     const int y = std::max(0, verticalCellTop(page, i, cellPx));
     GlyphRef ref{static_cast<uint16_t>(x), static_cast<uint16_t>(y), g.column, g.row, g.codepoint, g.paragraphIndex, 0};
+    ref.width = static_cast<uint8_t>(std::min(255, glyphCellPx(g, cellPx)));
     if (!run && g.textId != VerticalGlyph::NO_TEXT) {
       ref.ruby = keepRuby(page.glyphTextStr(g));
     } else if (!run && ((g.style & EpdFontFamily::RUBY_CONTINUE) ||
@@ -314,7 +315,7 @@ void WordSelectionScan::initFromVerticalPage(const VerticalPage& page, const int
       int spread = 0;
       if (g.renderKind == VerticalGlyph::RotatedRun && chars > 1 && i + 1 < page.glyphs.size() &&
           page.glyphs[i + 1].column == g.column) {
-        spread = std::max(0, verticalCellTop(page, i + 1, cellPx) - y - cellPx);
+        spread = std::max(0, verticalCellTop(page, i + 1, cellPx) - y - glyphCellPx(g, cellPx));
       }
       size_t k = 0;
       for (size_t b = 0; b < runText.size() && pushed; k++) {

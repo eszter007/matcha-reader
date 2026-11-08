@@ -3,6 +3,7 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -59,6 +60,26 @@ SesameMask makeSesameMask(const int cellPx) {
   return m;
 }
 
+// The body font's cell metrics at the size a glyph is set at (VerticalGlyph::scale8): the bitmaps
+// are drawn scaled, so every measurement scales with them. At the body size, exactly the body's.
+struct SizedCell {
+  uint16_t scale = 256;  // 8.8 fixed point, for the scaled draw calls
+  int cellPx = 0;
+  int ascender = 0;
+  int baselineInCell = 0;
+  int at(const int v) const { return scale == 256 ? v : static_cast<int>(std::lround(v * scale / 256.0)); }
+};
+SizedCell sizedCell(const SizedCell& body, const uint8_t scale8) {
+  const int s8 = scale8 == 0 ? 8 : scale8;
+  if (s8 == 8) return body;
+  SizedCell c;
+  c.scale = static_cast<uint16_t>(s8 * 32);
+  c.cellPx = std::max(1, c.at(body.cellPx));
+  c.ascender = c.at(body.ascender);
+  c.baselineInCell = c.at(body.baselineInCell);
+  return c;
+}
+
 // Returns the cell size it drew with, so a caller needing the same geometry (ruby) reuses it
 // instead of re-deriving it -- every derivation probes the reference glyph out of the SD font.
 int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int offsetX, int offsetY, bool black) {
@@ -70,8 +91,9 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
   //   drawChar*InCell       - the cell's top-left, positioning within the cell from metrics
   const int ascender = renderer.getFontAscenderSize(fontId);
   const int baselineInCell = verticalCellBaselineOffset(renderer, fontId, cellPx);
-  const int uprightTopAdjust = baselineInCell - ascender;
-  const SesameMask sesame = makeSesameMask(cellPx);
+  const SizedCell body{256, cellPx, ascender, baselineInCell};
+  SesameMask sesame = makeSesameMask(cellPx);
+  int sesameCell = cellPx;
 
   // Styled-block borders (kakomi boxes, .k-solid-top separator rules). Rects share the glyphs'
   // cell-top coordinate space and the same offsets. `edges` says which lines to draw; EXTEND_*
@@ -98,19 +120,21 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
       if (!renderer.isFontCacheScanning()) drawInlineImage(renderer, page, g, dx, cellTop);
       continue;
     }
+    const SizedCell sized = sizedCell(body, g.scale8);
     int dy = cellTop;
     if (g.renderKind == VerticalGlyph::Upright || g.renderKind == VerticalGlyph::UprightRun) {
-      dy = cellTop + uprightTopAdjust;
+      dy = cellTop + sized.baselineInCell - sized.ascender;
     }
 
     if (g.renderKind == VerticalGlyph::RotatedRun) {
-      renderer.drawTextRotated90CCW(fontId, dx, dy, page.glyphText(g), black,
-                                    static_cast<EpdFontFamily::Style>(g.style));
+      renderer.drawTextRotated90CCWScaled(fontId, dx, dy, page.glyphText(g), sized.scale, black,
+                                          static_cast<EpdFontFamily::Style>(g.style));
       continue;
     }
 
     if (g.renderKind == VerticalGlyph::UprightRun) {
-      renderer.drawText(fontId, dx, dy, page.glyphText(g), black, static_cast<EpdFontFamily::Style>(g.style));
+      renderer.drawTextScaled(fontId, dx, dy, page.glyphText(g), sized.scale, black,
+                              static_cast<EpdFontFamily::Style>(g.style));
       continue;
     }
 
@@ -121,9 +145,9 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
       // starting a column is set flush to the head, so it is handed a cell half an em higher and its
       // second-half placement lands on the line head. The layout flags which brackets those are (it knows
       // where columns start, indents included) and removes the same half em from the rest of the column.
-      if (g.lineHeadFlush) dy -= cellPx / 2;
-      renderer.drawCharVerticalRotatedInCell(fontId, dx, dy, cellPx, g.codepoint, shiftType, black,
-                                             static_cast<EpdFontFamily::Style>(g.style));
+      if (g.lineHeadFlush) dy -= sized.cellPx / 2;
+      renderer.drawCharVerticalRotatedInCell(fontId, dx, dy, sized.cellPx, g.codepoint, shiftType, black,
+                                             static_cast<EpdFontFamily::Style>(g.style), nullptr, nullptr, sized.scale);
       continue;
     }
 
@@ -146,18 +170,23 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
         // Thin glyph (一): ink sits near the middle of the em-box, not the top, so centre its
         // ink in the cell instead of using the common baseline. Same space conversion as
         // uprightTopFor: derive the cell's top, then hand drawText a TOP (it adds the ascender).
-        uprightDy = cellTop + cellPx / 2 + ink.top - ink.height / 2 - ascender;
+        uprightDy = cellTop + sized.cellPx / 2 + sized.at(ink.top) - sized.at(ink.height) / 2 - sized.ascender;
       }
     }
-    renderer.drawText(fontId, dx, uprightDy, utf8Char.c_str(), black, static_cast<EpdFontFamily::Style>(g.style));
+    renderer.drawTextScaled(fontId, dx, uprightDy, utf8Char.c_str(), sized.scale, black,
+                            static_cast<EpdFontFamily::Style>(g.style));
 
     if (g.emphasis) {
       // Sesame dot beside the character, in the ruby band (JLREQ: an emphasis mark takes the ruby
       // position). It starts at the cell edge: centred in the band it read as floating between the
       // columns. Clamped to the panel like ruby, for the first column. Stamped from a mask, not drawn
       // as U+FE45: the built-in fonts lack that block, so a glyph showed as the missing-character box.
-      const int left = std::min(dx + cellPx, renderer.getScreenWidth() - sesame.size);
-      const int top = cellTop + (cellPx - sesame.size) / 2;
+      if (sesameCell != sized.cellPx) {
+        sesame = makeSesameMask(sized.cellPx);
+        sesameCell = sized.cellPx;
+      }
+      const int left = std::min(dx + sized.cellPx, renderer.getScreenWidth() - sesame.size);
+      const int top = cellTop + (sized.cellPx - sesame.size) / 2;
       for (int row = 0; row < sesame.size; ++row) {
         for (int col = 0; col < sesame.size; ++col) {
           if (sesame.rows[row] & (1u << col)) renderer.drawPixel(left + col, top + row, black);
@@ -183,10 +212,11 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
   // against a 33px em in Noto Serif JP), which stepped the ruby 45% too far apart and ran every
   // annotation past the foot of its base.
   const int rubyEmPx = verticalCellPx(renderer, rubyFontId);
-  const int rubyLineH = (rubyEmPx + 1) / 2;
+  const int rubyLineHBody = (rubyEmPx + 1) / 2;
   // Baseline of a ruby character below the top of its body: the base text's measured figure,
   // halved with the glyph.
-  const int rubyBaselineInBody = verticalCellBaselineOffset(renderer, rubyFontId, rubyEmPx) / 2;
+  const int rubyBaselineInBodyBody = verticalCellBaselineOffset(renderer, rubyFontId, rubyEmPx) / 2;
+  const int rubyAscender = renderer.getFontAscenderSize(rubyFontId);
   const auto rubyStyle = static_cast<EpdFontFamily::Style>(EpdFontFamily::SUP);
 
   int prevRubyBottom = -9999;
@@ -240,6 +270,16 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
     const std::string& rubyText = *text;
     if (rubyText.empty()) continue;
 
+    // A base set at a CSS font-size takes ruby half ITS size, beside its own cell.
+    const int s8 = g.scale8 == 0 ? 8 : g.scale8;
+    const uint16_t rubyScale = static_cast<uint16_t>(s8 * 32);  // the base's scale; ruby draws at half
+    const auto atBase = [rubyScale](const int v) {
+      return rubyScale == 256 ? v : static_cast<int>(std::lround(v * rubyScale / 256.0));
+    };
+    const int cellG = atBase(cellPxLocal);
+    const int rubyLineH = atBase(rubyLineHBody);
+    const int rubyBaselineInBody = atBase(rubyBaselineInBodyBody);
+
     // Walk the ruby string once: count its characters, and measure how far right its ink can
     // reach. Every ruby character in the stack is drawn at the same x, so the widest one decides.
     size_t rubyCharCount = 0;
@@ -257,7 +297,7 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
         GlyphInk ink;
         if (measureGlyphInk(renderer, rubyFontId, cp, static_cast<uint8_t>(rubyStyle), &ink) && ink.width > 0) {
           // SUP draws the glyph at 50%, so its metrics halve too.
-          rubyInkRight = std::max(rubyInkRight, (ink.left + ink.width + 1) / 2);
+          rubyInkRight = std::max(rubyInkRight, (atBase(ink.left + ink.width) + 1) / 2);
           if (uprightInkTop < 0 && ink.height > 0 && !Kinsoku::needsVerticalRotation(cp)) {
             uprightInkTop = ink.top;
             uprightInkHeight = ink.height;
@@ -270,12 +310,12 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
     // Ruby's virtual body starts where the base character's cell ENDS, beside it, not over it.
     // At the text edge that puts it in the margin, per JLREQ Fig 2.37 -- clamped to the panel by
     // its measured ink reach, since a margin here is only a few px.
-    const int rubyReach = rubyInkRight > 0 ? rubyInkRight : std::max(1, cellPxLocal / 2);
-    const int rubyX = std::min(g.x + offsetX + cellPxLocal, renderer.getScreenWidth() - rubyReach);
+    const int rubyReach = rubyInkRight > 0 ? rubyInkRight : std::max(1, cellG / 2);
+    const int rubyX = std::min(g.x + offsetX + cellG, renderer.getScreenWidth() - rubyReach);
 
     // The base the annotation is set against: from the group's first cell to its last.
     const int baseTop = g.y + offsetY;
-    const int baseLen = page_.glyphs[segmentEnd - 1].y + offsetY + cellPxLocal - baseTop;
+    const int baseLen = page_.glyphs[segmentEnd - 1].y + offsetY + cellG - baseTop;
     // Ruby is set solid, so its virtual length is N ruby bodies; alignment is on VIRTUAL BODIES
     // rather than ink.
     const int rubyBlockH = static_cast<int>(rubyCharCount) * rubyLineH;
@@ -298,11 +338,11 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
       const int overhang = rubyBlockH - baseLen;
       // Room beside the base first: the space layout left when it spaced the base out to the
       // reading, then one ruby character over a neighbour that may be hung over.
-      const int lastBottom = page_.glyphs[segmentEnd - 1].y + cellPxLocal;
+      const int lastBottom = page_.glyphs[segmentEnd - 1].y + cellG;
       // At a column's head the room is what layout left above the base, up to the text area's top;
       // at its foot the reading may run on into the margin.
       const int maxBefore =
-          before ? std::max(0, g.y - (before->y + cellPxLocal)) + (hangoverAllowed(before, true) ? rubyLineH : 0)
+          before ? std::max(0, g.y - (before->y + cellG)) + (hangoverAllowed(before, true) ? rubyLineH : 0)
                  : static_cast<int>(g.y);
       const int maxAfter =
           after ? std::max(0, after->y - lastBottom) + (hangoverAllowed(after, false) ? rubyLineH : 0) : overhang;
@@ -320,7 +360,10 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
       }
       bodyTop = baseTop - hangBefore;
     }
-    int rubyY = bodyTop + rubyBaselineInBody - renderer.textBaselineOffset(rubyFontId, rubyText.c_str(), rubyStyle);
+    // drawText takes a TOP; the scaled path puts the baseline the scaled ascender below it.
+    int rubyY = rubyScale == 256 ? bodyTop + rubyBaselineInBody -
+                                       renderer.textBaselineOffset(rubyFontId, rubyText.c_str(), rubyStyle)
+                                 : bodyTop + rubyBaselineInBody - atBase(rubyAscender) / 2;
     if (g.column == prevRubyColumn && rubyY < prevRubyBottom + 1) {
       rubyY = prevRubyBottom + 1;
     }
@@ -366,16 +409,26 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
         int cell = std::max(1, rubyLineH);
         GlyphInk rot;
         if (measureGlyphInk(renderer, rubyFontId, cp, static_cast<uint8_t>(rubyStyle), &rot) && rot.width > 0) {
-          cell = std::max({cell, (rot.width + 1) / 2, (rot.height + 1) / 2});
+          cell = std::max({cell, (atBase(rot.width) + 1) / 2, (atBase(rot.height) + 1) / 2});
         }
-        const int baseline = rubyY + renderer.textBaselineOffset(rubyFontId, rubyText.c_str(), rubyStyle);
+        const int baseline = rubyScale == 256
+                                 ? rubyY + renderer.textBaselineOffset(rubyFontId, rubyText.c_str(), rubyStyle)
+                                 : rubyY + atBase(rubyAscender) / 2;
         // No upright neighbour to measure (an all-dash annotation): fall back to the slot centre.
         const int centre =
             uprightInkTop >= 0 ? baseline - uprightInkTop / 2 + uprightInkHeight / 4 : rubyY + rubyLineH / 2;
-        renderer.drawCharVerticalRotatedInCell(rubyFontId, rubyX, centre - cell / 2, cell, cp,
-                                               Kinsoku::verticalShiftType(cp), black, rubyStyle);
-      } else {
+        if (rubyScale == 256) {
+          renderer.drawCharVerticalRotatedInCell(rubyFontId, rubyX, centre - cell / 2, cell, cp,
+                                                 Kinsoku::verticalShiftType(cp), black, rubyStyle);
+        } else {
+          renderer.drawCharVerticalRotatedInCell(rubyFontId, rubyX, centre - cell / 2, cell, cp,
+                                                 Kinsoku::verticalShiftType(cp), black, EpdFontFamily::REGULAR, nullptr,
+                                                 nullptr, static_cast<uint16_t>(rubyScale / 2));
+        }
+      } else if (rubyScale == 256) {
         renderer.drawText(rubyFontId, rubyX, rubyY, buf, black, rubyStyle);
+      } else {
+        renderer.drawTextScaled(rubyFontId, rubyX, rubyY, buf, static_cast<uint16_t>(rubyScale / 2), black);
       }
       rubyY += step;
       ri += charLen;

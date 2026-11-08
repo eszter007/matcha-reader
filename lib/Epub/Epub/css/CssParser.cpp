@@ -14,6 +14,8 @@
 #include <cstring>
 #include <string_view>
 
+#include "../ReaderFontScale.h"
+
 namespace {
 
 // Stack-allocated string buffer to avoid heap reallocations during parsing
@@ -1932,6 +1934,9 @@ CssParser::VerticalBlockStyle CssParser::verticalBlockStyleOf(const CssStyle& cs
   // text-align: right/end is the foot of a vertical column.
   if (css.defined.textAlign && css.textAlign == CssTextAlign::Right) vs.alignEnd = true;
   if (css.defined.border) vs.borderEdges = CssStyle::edgeMaskOf(css.borderEdges);
+  // Resolved as horizontal text resolves it, so %, em, px and keywords mean the same in both layouts.
+  vs.fontScale = cssFontSizeScale(css);
+  vs.fontScaleOfParent = cssFontSizeIsParentRelative(css);
   return vs;
 }
 
@@ -1987,6 +1992,10 @@ void CssParser::addVerticalRule(std::vector<VerticalBlockRule>& out, std::string
     if (vs.blockAlign != 0) existing.blockAlign = vs.blockAlign;
     if (vs.borderEdges != 0) existing.borderEdges = vs.borderEdges;
     if (vs.indentEm >= 0) existing.indentEm = vs.indentEm;
+    if (vs.fontScale > 0) {
+      existing.fontScale = vs.fontScale;
+      existing.fontScaleOfParent = vs.fontScaleOfParent;
+    }
     return;
   }
   // Within the capacity the caller reserved: growing it would need room for two copies.
@@ -2142,9 +2151,8 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
     uint8_t emphasisVal, variantVal, listTypeVal;  // v11 record tail; unused by the vertical engine
     // inkMode (v14) is read only to keep the stream aligned -- the vertical engine paints no
     // block backgrounds, so a panel there would be a new feature, not a regression to avoid.
-    // (font-size is read as lens[11] above; the vertical engine keeps one cell size per column,
-    // so a per-block size is not applied there. line-height is lens[12] and is skipped for the
-    // same reason: a column's advance is a cell grid, not a leading.)
+    // (font-size is lens[11]. line-height is lens[12] and is skipped: a column's advance is the
+    // text's own cell, not a leading.)
     // pageBreaks (v15) is likewise read for alignment only: the vertical engine paginates
     // columns through its own layout path, so honouring breaks there is new work, not a
     // regression this has to avoid.
@@ -2184,6 +2192,8 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
     css.defined.paddingTop = (definedBits & (1u << 9)) != 0;
     css.borderEdges = borderVal;
     css.defined.border = (definedBits & (1u << 18)) != 0;
+    css.fontSize = lengthOf(lens[11]);
+    css.defined.fontSize = (definedBits & (1u << 22)) != 0;
     addVerticalRule(out, selector, css);
   }
   if (out.size() >= maxOut) {

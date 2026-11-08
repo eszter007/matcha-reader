@@ -52,10 +52,10 @@ int verticalCellTop(const VerticalPage& page, const size_t glyphIndex, const int
   const VerticalGlyph& g = page.glyphs[glyphIndex];
   if (!shifted(g)) return g.y;
   for (size_t j = glyphIndex + 1; j < page.glyphs.size() && page.glyphs[j].column == g.column; j++) {
-    if (isFullUpright(page.glyphs[j])) return static_cast<int>(page.glyphs[j].y) - cellPx;
+    if (isFullUpright(page.glyphs[j])) return static_cast<int>(page.glyphs[j].y) - glyphCellPx(g, cellPx);
   }
   for (size_t j = glyphIndex; j-- > 0 && page.glyphs[j].column == g.column;) {
-    if (isFullUpright(page.glyphs[j])) return static_cast<int>(page.glyphs[j].y) + cellPx;
+    if (isFullUpright(page.glyphs[j])) return static_cast<int>(page.glyphs[j].y) + glyphCellPx(page.glyphs[j], cellPx);
   }
   return g.y;
 }
@@ -86,14 +86,15 @@ void forEachVerticalClipCell(const GfxRenderer& renderer, const VerticalPage& pa
     if (VerticalParsedText::isImageMarker(g.codepoint)) continue;
     const bool run = g.renderKind == VerticalGlyph::RotatedRun || g.renderKind == VerticalGlyph::UprightRun;
     uint32_t codepoints = 1;
-    int height = cellPx;
+    const int glyphCell = glyphCellPx(g, cellPx);
+    int height = glyphCell;
     if (run) {
       const std::string& text = page.glyphTextStr(g);
       if (text.empty()) continue;
       codepoints = countCodepoints(text);
       if (g.renderKind == VerticalGlyph::RotatedRun) {
-        height = std::max(cellPx,
-                          renderer.getTextAdvanceX(fontId, text.c_str(), static_cast<EpdFontFamily::Style>(g.style)));
+        const int advance = renderer.getTextAdvanceX(fontId, text.c_str(), static_cast<EpdFontFamily::Style>(g.style));
+        height = std::max(glyphCell, glyphCell == cellPx ? advance : advance * glyphCell / std::max(1, cellPx));
       }
     } else if (g.codepoint == 0) {
       continue;
@@ -102,7 +103,7 @@ void forEachVerticalClipCell(const GfxRenderer& renderer, const VerticalPage& pa
     const int x = g.column < columnX.size() && columnX[g.column] >= 0 ? columnX[g.column] : g.x;
     cell.x = static_cast<int16_t>(x + marginLeft);
     cell.y = static_cast<int16_t>(verticalCellTop(page, i, cellPx) + marginTop);
-    cell.width = static_cast<int16_t>(cellPx);
+    cell.width = static_cast<int16_t>(glyphCell);
     cell.height = static_cast<int16_t>(height);
     cell.column = g.column;
     cell.row = g.row;

@@ -293,9 +293,12 @@ class CssParser {
     uint8_t blockAlign = 0;    // VERTICAL_BLOCK_*: auto head/foot margins place the whole block
     uint8_t borderEdges = 0;   // CssStyle::BORDER_* edge mask; vertical rendering stays solid
     float indentEm = -1;       // text-indent: a paragraph's first column starts this far down; -1 = not set
+    // font-size as a multiple of the parent's size (em, %) or the body's (px, rem, keywords); 0 = not set.
+    float fontScale = 0;
+    bool fontScaleOfParent = false;
     [[nodiscard]] bool any() const {
       return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || alignEnd || blockAlign != 0 ||
-             borderEdges != 0 || indentEm >= 0;
+             borderEdges != 0 || indentEm >= 0 || fontScale > 0;
     }
   };
 

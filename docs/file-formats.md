@@ -586,6 +586,13 @@ if (parsedSize != fileSize) {
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
 
+### Version 159
+
+Each glyph record gains a `u8` after its line-head flag: the CSS `font-size` the character is set at,
+in eighths of the body size (8 = as is), snapped as horizontal text snaps it. A character advances
+down its column by its own size, and a column is as wide as the largest text in it. v158 caches are
+rebuilt once.
+
 ### Versions 144 to 158
 
 No format change; each rebuilds the cached pages once for a layout fix. In 148, a chapter applies

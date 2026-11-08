@@ -24,6 +24,7 @@
 #include "Epub/converters/ImageDimsProbe.h"
 #include "Epub/parsers/XhtmlDoctype.h"
 #include "GfxRenderer.h"
+#include "ReaderFontScale.h"
 #include "VisibleTextUtils.h"
 
 namespace {
@@ -132,7 +133,9 @@ namespace {
 // its own column again; it used to run on from the previous paragraph.
 // v158: no format change. text-align: right/end sets a column at the foot, and auto head/foot margins
 // (EBPAJ .block-align-center / -end) centre a block along the column or push it to the foot.
-constexpr uint8_t VSECTION_FILE_VERSION = 158;
+// v159: each glyph records its CSS font-size (scale8). Columns are as wide as their largest text,
+// and characters advance down a column by their own size.
+constexpr uint8_t VSECTION_FILE_VERSION = 159;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -313,6 +316,39 @@ struct TextExtractor {
   StyleStack italicStack;
   StyleStack emphasisStack;
 
+  // CSS font-size, nested: each sized element's size, as a multiple of the body text, and the depth
+  // that opened it. em and % compound through the sized ancestors; px, rem and keywords do not.
+  float fontScales[MAX_STYLE_STACK] = {};
+  int fontScaleOpenedAt[MAX_STYLE_STACK] = {};
+  int fontScaleCount = 0;
+  float currentFontScale() const { return fontScaleCount > 0 ? fontScales[fontScaleCount - 1] : 1.0f; }
+  // The size in eighths of the body, snapped as horizontal text snaps it (fontScaleTagForScale).
+  uint8_t currentScale8() const {
+    const int32_t tag = fontScaleTagForScale(currentFontScale());
+    return tag == 0 ? 8 : static_cast<uint8_t>(-tag / 32);
+  }
+  // This element's own font-size: its rules, then its style="" over them. False when none sets it.
+  bool resolveFontScale(const char* name, const char** atts, float& scale, bool& ofParent) const {
+    bool found = false;
+    if (blockStyles && !blockStyles->empty()) {
+      const uint32_t tagHash = CssParser::blockSelectorHash(name, strlen(name));
+      for (const auto& rule : *blockStyles) {
+        if (rule.style.fontScale <= 0 || (rule.tagHash != 0 && rule.tagHash != tagHash)) continue;
+        if (rule.classHash != 0 && !hasClassHash(atts, rule.classHash)) continue;
+        scale = rule.style.fontScale;
+        ofParent = rule.style.fontScaleOfParent;
+        found = true;
+      }
+    }
+    CssParser::VerticalBlockStyle own;
+    if (inlineBlockStyle(atts, own) && own.fontScale > 0) {
+      scale = own.fontScale;
+      ofParent = own.fontScaleOfParent;
+      found = true;
+    }
+    return found;
+  }
+
   bool hasEmphasis() const { return emphasisStack.active(); }
 
   // Diagnostic: bisects a ~11KB drop seen accumulating within a single furigana-dense paragraph's
@@ -400,6 +436,7 @@ struct TextExtractor {
       midParagraph = true;
     }
     run.indentQuarters = currentIndent();
+    run.scale8 = currentScale8();
     currentRuns.push_back(std::move(run));
   }
 
@@ -735,6 +772,17 @@ struct TextExtractor {
     } else if (strcasecmp(name, "rp") == 0) {
       self->inRp = true;
     }
+    {
+      float scale = 0;
+      bool ofParent = false;
+      if (self->fontScaleCount < MAX_STYLE_STACK && self->resolveFontScale(name, atts, scale, ofParent)) {
+        // Before the change, so the run built so far keeps the OLD size.
+        self->flushCurrentText();
+        self->fontScales[self->fontScaleCount] = ofParent ? self->currentFontScale() * scale : scale;
+        self->fontScaleOpenedAt[self->fontScaleCount] = self->elementDepth;
+        self->fontScaleCount++;
+      }
+    }
     if (isBoldTag(name) || hasClass(atts, "bold")) {
       if (self->boldStack.canOpen()) {
         // Before the change, so the run built so far is closed under the OLD style. A full
@@ -892,6 +940,10 @@ struct TextExtractor {
       // stream them onward at the same cadence as the byte bound (see SOFT_FLUSH_RUNS).
       if (self->currentRuns.size() >= SOFT_FLUSH_RUNS) self->emitRuns(false);
       return;
+    }
+    if (self->fontScaleCount > 0 && self->fontScaleOpenedAt[self->fontScaleCount - 1] - 1 == self->elementDepth) {
+      self->flushCurrentText();
+      self->fontScaleCount--;
     }
     if (self->boldStack.closesHere(self->elementDepth)) {
       self->flushCurrentText();
@@ -1079,6 +1131,7 @@ void visitGlyphFields(Ar& ar, G& g) {
   uint8_t style = g.style;
   bool emphasis = g.emphasis;
   uint8_t lineHeadFlush = g.lineHeadFlush;
+  uint8_t scale8 = g.scale8;
   ar(codepoint);
   ar(column);
   ar(row);
@@ -1090,6 +1143,7 @@ void visitGlyphFields(Ar& ar, G& g) {
   ar(style);
   ar(emphasis);
   ar(lineHeadFlush);
+  ar(scale8);
   ar(g.textId);
   if constexpr (!std::is_const_v<G>) {
     g.codepoint = codepoint;
@@ -1100,6 +1154,7 @@ void visitGlyphFields(Ar& ar, G& g) {
     g.style = style;
     g.emphasis = emphasis;
     g.lineHeadFlush = lineHeadFlush;
+    g.scale8 = scale8;
   }
 }
 

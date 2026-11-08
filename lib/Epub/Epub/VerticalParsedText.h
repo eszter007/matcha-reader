@@ -48,6 +48,10 @@ int verticalNominalInkGapPx(const GfxRenderer& renderer, int fontId, int cellPx,
 // unavailable, e.g. an SD font not yet resident.
 int verticalCellBaselineOffset(const GfxRenderer& renderer, int fontId, int cellPx, bool* measured = nullptr);
 
+struct VerticalGlyph;
+// A glyph's cell at the size it is set at, given the body text's cell.
+int glyphCellPx(const VerticalGlyph& g, int bodyCellPx);
+
 // A single positioned glyph cell within a vertically-laid-out page.
 // `paragraphIndex` + `byteOffset` identify exactly where this character
 // came from in the source text -- this is the hook point for phase 2
@@ -76,7 +80,10 @@ struct VerticalGlyph {
   uint32_t style : 7 = 0;       // EpdFontFamily::Style flags (BOLD, ITALIC, etc.)
   uint32_t renderKind : 3 = Upright;
   uint32_t emphasis : 1 = 0;  // text-emphasis (sesame dots beside character)
-  uint32_t paragraphIndex : 31 = 0;
+  uint32_t paragraphIndex : 25 = 0;
+  // CSS font-size in eighths of the body size (8 = as is), snapped as horizontal text snaps it
+  // (fontScaleTagForScale). 0 reads as 8.
+  uint32_t scale8 : 6 = 8;
   // Opening bracket starting its column: set flush to the line head (tentsuki), the half em
   // before it deleted. Decided in layout, which knows where columns start (indents included).
   uint32_t lineHeadFlush : 1 = 0;
@@ -256,6 +263,8 @@ class VerticalParsedText {
     uint32_t visibleTextOffset = 0;
     // The book's text-indent (CSS) for a paragraph that starts in this run, in quarter ems.
     uint8_t indentQuarters = 0;
+    // CSS font-size in eighths of the body size; see VerticalGlyph::scale8.
+    uint8_t scale8 = 8;
   };
 
   // continuesPreviousParagraph: pass true when this call carries the NEXT CHUNK of a paragraph
@@ -441,7 +450,8 @@ class VerticalParsedText {
     // This character's share of its ruby, as a span of rubyPool_ (0 = none). A span rather than a
     // std::string keeps the entry at 24 bytes instead of 44: stream_ reserves 512 of them for the
     // whole build.
-    uint16_t rubyLen = 0;
+    uint16_t rubyLen : 10 = 0;  // a character's share of a reading; setRuby() caps it
+    uint16_t scale8 : 6 = 8;    // see VerticalGlyph::scale8
     // See RubyRun::visibleTextOffset. Carried per character so the page that a character
     // opens can be stamped with it; NOT carried on VerticalGlyph, which is deliberately a
     // fixed-size POD (4 bytes x ~500 glyphs/page is a page buffer this device cannot spare).
@@ -513,6 +523,27 @@ class VerticalParsedText {
   [[nodiscard]] int boxPadPx() const { return boxGeomCellPx_ / 4 > 1 ? boxGeomCellPx_ / 4 : 1; }
   bool boxContinuedFromPrevPage_ = false;
   void appendBoxRectToPage(VerticalPage& p, uint16_t startCol, uint16_t endCol, bool openLeft, bool openRight) const;
+  // Width of each column on the page being filled (0 = nothing measured: one body em), and the
+  // previous page's, for a character pulled back onto it. Text larger than the body widens its column.
+  static constexpr uint16_t MAX_PAGE_COLUMNS = VerticalGlyph::MAX_GRID_CELLS + 1;
+  mutable uint16_t pendingColW_[MAX_PAGE_COLUMNS] = {};
+  uint16_t prevPageColW_[MAX_PAGE_COLUMNS] = {};
+  // Whether any column on the page (the previous page) is wider than a body em. Most pages are all
+  // body text, and then the widths need neither resolving nor clearing.
+  bool pendingColWidened_ = false;
+  // Scratch for spreading a finished page's columns to the foot in one pass (see the layout).
+  int16_t spreadLastRow_[MAX_PAGE_COLUMNS] = {};
+  uint16_t spreadLastY_[MAX_PAGE_COLUMNS] = {};
+  uint8_t spreadLastScale_[MAX_PAGE_COLUMNS] = {};
+  int16_t spreadPx_[MAX_PAGE_COLUMNS] = {};
+  bool prevPageColWidened_ = false;
+  int columnWidthPx(const uint16_t (&widths)[MAX_PAGE_COLUMNS], uint16_t col) const;
+  int columnLeftPx(const uint16_t (&widths)[MAX_PAGE_COLUMNS], uint16_t col) const;
+  // How far a glyph placed against the one-em grid moves once its column's real width is known.
+  int columnXDelta(const uint16_t (&widths)[MAX_PAGE_COLUMNS], const VerticalGlyph& g) const;
+  // Moves every glyph of a finished page to its column's real place.
+  void resolveColumnX(VerticalPage& p) const;
+  void clearColumnWidths();
   void alignBlockColumns(VerticalPage& p, uint16_t startCol, uint16_t endCol) const;
   static uint16_t lastBlockColumn(const VerticalPage& p, uint16_t startCol);
 
@@ -534,6 +565,8 @@ class VerticalParsedText {
   bool pendingTrailingBreak_ = false;
   uint16_t pendingColumn_ = 0;
   uint16_t pendingRow_ = 0;
+  int pendingRowY_ = 0;         // pixel top of the next cell in the pending column, carried like the row
+  int pendingLastCellTop_ = 0;  // cell top of the last glyph placed, for rules that add to its column
   // The current column's slide (see layoutPages()): carried like the row, or a batch boundary
   // inside a slid column drops it and the next glyph lands on the one before (#415).
   int pendingColumnYShift_ = 0;
@@ -566,6 +599,12 @@ class VerticalParsedText {
   struct LayoutCursor;
 
   void reserveStreamFor(size_t utf8Bytes);
+  // Per-run decode scratch for addAnnotatedParagraph(), reused across runs (see there).
+  std::vector<size_t> scratchOffsets_;
+  std::vector<uint32_t> scratchCps_;
+  std::vector<uint32_t> scratchCpIndex_;
+  std::vector<size_t> scratchBreaks_;
+  std::vector<uint32_t> scratchRuby_;
 
   // Font metrics for this object's fontId, measured once and reused for every paragraph of the chapter.
   // Each probe pages its reference glyph (漢/中) in from the SD font, whose on-demand slot table is

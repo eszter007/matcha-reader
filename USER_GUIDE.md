@@ -1387,6 +1387,9 @@ in vertical text, other Japanese books horizontally. To open every Japanese book
 Japanese)** in **Settings → Reader → Text Settings → Japanese** to **On** or **Off**. A book with no language set, or the wrong one, is recognised
 from its kana the first time you open it.
 
+**Text sizes.** Vertical text keeps the sizes the book sets: titles and headings are larger, notes smaller. A larger
+character takes more room down its column, and a column is as wide as the largest text in it.
+
 **Furigana.** The reader shows the furigana that a book already has. It cannot add furigana itself. For a book
 without them, you can add them once on a computer before copying the book to the card:
 
