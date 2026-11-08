@@ -1531,7 +1531,7 @@ Chinese book. One difference: the cursor stops on every word, including words th
 
 **Word forms.** Words on the page are often not in the form the dictionary lists. When a lookup finds nothing,
 the reader tries again with other forms of the word. It checks the dictionary's own `.syn` file first, if there
-is one, and then the rules for the book's language. In every language a capital letter at the start of a
+is one, and then the rules for the book's language. When the `.syn` file sends one form to several words, the panel shows each of them: `went` gives `go` and then `wend`. In every language a capital letter at the start of a
 sentence is ignored, accents included, so `École` finds `école` and `Über` finds `über`.
 
 French has extra rules:

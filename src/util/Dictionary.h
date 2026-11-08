@@ -97,6 +97,12 @@ class Dictionary {
   bool lookup(const char* word, std::string& definitionOut, std::string& matchedHeadwordOut,
               LookupResult* outResult = nullptr);
 
+  // A .syn entry can point at several headwords (よんで -> 読む and 呼ぶ). lookup() returns the
+  // first; the others it found are read here, one entry each, until the next lookup().
+  uint8_t moreSynonymMatches() const { return synonymMoreCount; }
+  bool readSynonymMatch(uint8_t index, std::string& definitionOut, std::string& headwordOut,
+                        LookupResult* outResult = nullptr);
+
   static std::string cleanWord(const char* word);
 
   static constexpr uint32_t MAX_DEFINITION_BYTES = 64 * 1024;
@@ -177,7 +183,9 @@ class Dictionary {
   DictLocation locateByOrdinal(LookupSession& session, uint32_t ordinal, std::string* matchedHeadwordOut);
 
   // Bisect the .syn/.sidx synonym index for target; on a hit follow its ordinal
-  // through locateByOrdinal(). Returns not-found when no .syn exists.
+  // through locateByOrdinal(). Returns not-found when no .syn exists. Further
+  // matches for the same synonym, other headwords than the first, are kept in
+  // synonymMore.
   DictLocation locateSynonym(LookupSession& session, const char* target, std::string* matchedHeadwordOut);
 
   // One streaming pass over sourcePath writing a sampled-offset sidecar. Each
@@ -217,6 +225,12 @@ class Dictionary {
   static constexpr uint8_t MAX_SAME_HEADWORD = 8;
   DictLocation sameHeadword[MAX_SAME_HEADWORD - 1];
   uint8_t sameHeadwordCount = 0;
+
+  // The headwords after the first that the last lookup's .syn match points at, in dictionary
+  // order and without repeats. Fixed, so a lookup allocates no container; more are cut off.
+  DictLocation synonymMore[MAX_SAME_HEADWORD - 1];
+  std::string synonymMoreHeadword[MAX_SAME_HEADWORD - 1];
+  uint8_t synonymMoreCount = 0;
 
   // Shared scan buffer: lookups are single-threaded and this avoids a
   // 256-byte array on the stack of every locate() call.
