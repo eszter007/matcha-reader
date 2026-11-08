@@ -3,12 +3,11 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "StatsJson.h"
 #include "util/RemoteProgress.h"
 
 namespace {
-bool equals(const char* value, const size_t len, const char* expected) {
-  return len == strlen(expected) && memcmp(value, expected, len) == 0;
-}
+using statsjson::equals;
 
 // A JSON number into a NUL-terminated buffer for strto*.
 void copyNumber(const char* v, const size_t len, char (&buf)[32]) {

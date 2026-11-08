@@ -6,6 +6,8 @@
 
 #include <cstring>
 
+#include "stats/StatsRecords.h"
+
 namespace bookactivity {
 namespace {
 constexpr uint8_t MAGIC[4] = {'B', 'K', 'A', 'C'};
@@ -15,24 +17,12 @@ constexpr size_t HEADER_BYTES = 5;  // magic(4) version(1)
 constexpr size_t BOOK_BYTES = 14;
 constexpr size_t DAY_BYTES = 6;  // date(4) minutes(2)
 
-void putU16(uint8_t* p, const uint16_t v) { memcpy(p, &v, 2); }
-void putU32(uint8_t* p, const uint32_t v) { memcpy(p, &v, 4); }
-uint16_t getU16(const uint8_t* p) {
-  uint16_t v;
-  memcpy(&v, p, 2);
-  return v;
-}
-uint32_t getU32(const uint8_t* p) {
-  uint32_t v;
-  memcpy(&v, p, 4);
-  return v;
-}
-void putDate(uint8_t* p, const BookDay& d) {
-  putU16(p, d.year);
-  p[2] = d.month;
-  p[3] = d.day;
-}
-BookDay getDate(const uint8_t* p) { return {getU16(p), p[2], p[3], 0}; }
+using statsrecords::getDate;
+using statsrecords::getU16;
+using statsrecords::getU32;
+using statsrecords::putDate;
+using statsrecords::putU16;
+using statsrecords::putU32;
 
 std::string partPath() { return path() + ".part"; }
 }  // namespace

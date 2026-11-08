@@ -13,6 +13,7 @@
 #include "components/icons/flame.h"
 #include "components/icons/stats_icons.h"
 #include "fontIds.h"
+#include "stats/StatsRecords.h"
 #include "util/DateFormat.h"
 
 namespace StatsWidgets {
@@ -29,11 +30,7 @@ Today getToday() {
           (t.tm_wday + 6) % 7};
 }
 
-int daysInMonth(const uint16_t y, const uint8_t m) {
-  static constexpr int dm[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  if (m == 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) return 29;
-  return dm[m];
-}
+int daysInMonth(const uint16_t y, const uint8_t m) { return statsrecords::daysInMonth(y, m); }
 
 int firstDowOfMonth(const uint16_t y, const uint8_t m) {
   // Tomohiko Sakamoto's algorithm returns 0=Sun
