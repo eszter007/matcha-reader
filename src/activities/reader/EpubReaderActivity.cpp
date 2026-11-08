@@ -40,13 +40,13 @@
 #include "../../util/BookmarkFile.h"
 #include "BookmarkEntry.h"
 #include "ChapterBuildGate.h"
+#include "ChapterListActivity.h"
 #include "ClipSelectionActivity.h"
 #include "ClippingStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "DictionaryWordSelectActivity.h"
 #include "EpubReaderBookmarksActivity.h"
-#include "EpubReaderChapterSelectionActivity.h"
 #include "EpubReaderClippingListActivity.h"
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
@@ -2267,7 +2267,8 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
         }
         section.reset();
       }
-      startActivityForResult(std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, tocIdx),
+      startActivityForResult(std::make_unique<ChapterListActivity>(renderer, mappedInput,
+                                                                   std::make_unique<EpubChapterSource>(epub, tocIdx)),
                              [this](const ActivityResult& result) {
                                if (result.isCancelled) {
                                  openReaderMenu();
