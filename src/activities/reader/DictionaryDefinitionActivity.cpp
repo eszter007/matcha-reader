@@ -100,6 +100,13 @@ DictionaryDefinitionActivity::DictionaryDefinitionActivity(GfxRenderer& renderer
 // The card keeps the definition as it came from the dictionary; the layout frees its copy.
 void DictionaryDefinitionActivity::prepareDraft(Entry& entry) {
   if (!entry.draft.valid()) return;
+  if (entry.definitionText) {
+    // The whole entry, led by its grammar line ("5-dan verb · transitive") when it has one.
+    std::string text = entry.grammar.empty() ? std::string() : entry.grammar + "\n";
+    text += sentencemining::capUtf8(entry.definition, sentencemining::MAX_DEFINITION_BYTES);
+    entry.draft.card.definition = sentencemining::definitionHtml(text);
+    return;
+  }
   entry.draft.card.definition =
       entry.html ? sentencemining::capHtml(entry.definition) : sentencemining::definitionHtml(entry.definition);
 }
@@ -157,7 +164,7 @@ void DictionaryDefinitionActivity::onEnter() {
     requestUpdate();
     return;
   }
-  showEntry(0, false);
+  showEntry(startEntry < entries.size() ? startEntry : 0, false);
   requestUpdate();
 }
 
@@ -206,7 +213,7 @@ bool DictionaryDefinitionActivity::stepPage(const int direction) {
     } else if (more.next && !onLoadingPage) {
       onLoadingPage = true;
     } else {
-      return false;
+      return stepWord(1, false);
     }
   } else {
     if (onLoadingPage) {
@@ -218,8 +225,22 @@ bool DictionaryDefinitionActivity::stepPage(const int direction) {
       RenderLock lock;
       showEntry(currentEntry - 1, true);
     } else {
-      return false;
+      return stepWord(-1, true);
     }
+  }
+  requestUpdate();
+  return true;
+}
+
+bool DictionaryDefinitionActivity::stepWord(const int direction, const bool atEnd) {
+  if (!steps.step) return false;
+  std::vector<Entry> next;
+  {
+    RenderLock lock;  // the step moves the word the backdrop draws, and the render task reads it
+    if (!steps.step(steps.ctx, direction, next) || next.empty()) return false;
+    entries = std::move(next);
+    for (auto& entry : entries) prepareDraft(entry);
+    showEntry(direction > 0 ? 0 : entries.size() - 1, atEnd);
   }
   requestUpdate();
   return true;
@@ -234,7 +255,7 @@ bool DictionaryDefinitionActivity::skipEntry(const int direction) {
     } else if (more.next) {
       onLoadingPage = true;
     } else {
-      return false;
+      return stepWord(1, false);
     }
   } else {
     if (onLoadingPage) {
@@ -248,7 +269,7 @@ bool DictionaryDefinitionActivity::skipEntry(const int direction) {
     } else if (currentPage > 0) {
       currentPage = 0;
     } else {
-      return false;
+      return stepWord(-1, false);
     }
   }
   requestUpdate();
@@ -336,6 +357,7 @@ void DictionaryDefinitionActivity::loop() {
     }
     case PanelInput::Event::None:
       if (!nestedHost.cursorActive() && !cursorWords.empty()) std::vector<std::string>{}.swap(cursorWords);
+      if (hostBusy && !RenderLock::peek()) hostBusy = hostTick.tick(hostTick.ctx);
       return;
     case PanelInput::Event::LongBack:
       // Leaves a nested lookup altogether, every panel of the chain at once.
@@ -426,10 +448,14 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   if (showingEntry() && totalPages > 1) {
     snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, totalPages);
   }
+  if (backdrop.draw) backdrop.draw(backdrop.ctx);
   const char* headword = showingEntry() ? entries[currentEntry].headword.c_str() : "";
   const std::string label = footerLabel();
+  const char* kind = showingEntry() && entries[currentEntry].kind != StrId::STR_NONE_OPT
+                         ? I18N.get(entries[currentEntry].kind)
+                         : nullptr;
   clipHandles.draw(renderer);  // under the card, beside the word on the page
-  const auto layout = DictionaryPanel::draw(renderer, headword, label.c_str(), counter, nullptr,
+  const auto layout = DictionaryPanel::draw(renderer, headword, label.c_str(), counter, kind,
                                             miningAvailable() && mappedInput.hasTouch(), miningFeedback_.saved());
   if (!showingEntry()) {
     // Loading while words are still being looked up; nothing found once they all have been.
@@ -442,6 +468,22 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   // of one on-demand overflow read per character on every page turn.
   const int fontId = definitionFontId();
   auto* fcm = renderer.getFontCacheManager();
+  if (showingEntry() && entries[currentEntry].definitionText && fcm) {
+    // Japanese/Chinese entries span many compressed glyph groups: load them in one pass first, or
+    // each missing character falls through the slow one-at-a-time path while drawing.
+    fcm->clearCache();
+    // The first page needs only the start of the text (~1KB covers a screen of Latin or CJK);
+    // warming a long merged entry whole cost about a second per step.
+    constexpr size_t kFirstPageBytes = 1024;
+    if (currentPage == 0 && definition.size() > kFirstPageBytes) {
+      size_t cut = kFirstPageBytes;  // back up to a UTF-8 lead byte so the last character is whole
+      while (cut > 0 && (static_cast<unsigned char>(definition[cut]) & 0xC0) == 0x80) cut--;
+      std::string head = definition.substr(0, cut);
+      DefinitionText::prewarmStyledText(renderer, DefinitionText::wordLookupFontId(), head);
+    } else {
+      DefinitionText::prewarmStyledText(renderer, DefinitionText::wordLookupFontId(), definition);
+    }
+  }
   auto scope = fcm->createPrewarmScope();
   drawBody(fontId, layout.body.x, layout.body.y);  // scan pass: records codepoints only
   scope.endScanAndPrewarm();

@@ -15,7 +15,6 @@ class Page;
 #include "DefinitionTextRenderer.h"
 #include "DictionaryDefinitionActivity.h"
 #include "JapaneseNestedLookup.h"
-#include "NestedLookupHost.h"
 #include "WordSelectionScan.h"
 #include "activities/Activity.h"
 #include "clippings/LookupClipHandles.h"
@@ -106,9 +105,18 @@ class EpubReaderWordLookupActivity final : public Activity {
 
  private:
   bool pageTurnReversed = false;
-  NestedLookupHost nestedHost;  // long press / hold Confirm: look up a word of the definition
-  void openNestedLookup(int x, int y);
-  void showNestedPanel(std::unique_ptr<DictionaryDefinitionActivity> panel, StrId failure);
+  // The definition panel is open over this activity, which keeps the page, cursor and scan.
+  bool panelOpen = false;
+  bool panelFailed = false;  // the panel could not be allocated: low memory until Confirm retries
+  void openPanel();
+  static bool scanTick(void* ctx);
+  void appendEntries(size_t first, std::vector<DictionaryDefinitionActivity::Entry>& out);
+  void drawPageBehindPanel();
+  static bool stepWord(void* ctx, int direction, std::vector<DictionaryDefinitionActivity::Entry>& out);
+  static bool nextSelectionEntries(void* ctx, const std::vector<DictionaryDefinitionActivity::Entry>& shown,
+                                   std::vector<DictionaryDefinitionActivity::Entry>& fresh);
+  static StrId selectionFailure(void* ctx);
+  static void drawBackdrop(void* ctx);
   WordSelectionScan scan;
 
   // Select: the page with a highlight box on the current word. Definition: the full-screen
@@ -167,9 +175,6 @@ class EpubReaderWordLookupActivity final : public Activity {
   // inverted debris on the page.
   HighlightBox drawnBoxes[kMaxHighlightBoxes];
   int drawnBoxCount = 0;
-  // Handles on the word behind the definition card (touch boards): written by the render task
-  // under boxMux, read by the loop's hit test. They are opaque, so moving them repaints the page.
-  LookupClipHandles clipHandles;
 
   // The reader opens the panel on a long press, so the Confirm release that follows belongs to
   // that press, not to a selection. Ignore it until a fresh press is seen.
@@ -235,7 +240,6 @@ class EpubReaderWordLookupActivity final : public Activity {
   void enterDefinition();
   void returnToSelect();
   bool handleSelectInput();
-  bool handleDefinitionInput();
   void moveSelection(int delta);
   void jumpColumn(int direction);
   // Index math for a reading-order step, WITHOUT the dictionary read moveCursor() does. Returns
@@ -314,27 +318,10 @@ class EpubReaderWordLookupActivity final : public Activity {
   // appendDict != 0: resultDefinition holds one further entry from that dictionary; its pages go
   // after the existing ones instead of replacing them.
   void splitDefinitionIntoSections(uint8_t appendDict = 0);
-  void moveSection(int delta);
-  // A screenful through the entry, then onto the neighbouring page at its end.
-  void readOn(int delta);
-  void skipPage(int delta);
-  // Text and footer label for what is on screen: the current section in tategaki, the whole
-  // merged definition otherwise.
-  const std::string& visibleDefinition() const;
-  const char* visibleLabel() const;
-  const char* visibleKind() const;
-  const char* visibleHeadword() const;
-  const char* visibleReading() const;
-  const char* visibleGrammar() const;
+  int scrollOffset = 0;  // lines scrolled within current entry
 
-  int scrollOffset = 0;     // lines scrolled within current entry
-  int totalLines = 0;       // total lines in current definition
-  int maxScroll = 0;        // max scroll offset (leaves a screenful visible)
-  int visibleCapacity = 1;  // body lines that fit at once; the step size in paged mode
-
-  // Vertical (tategaki) reading pages the definition a screenful at a time and shows a page
-  // counter, instead of the free scrolling the horizontal and manga panels keep. scrollOffset
-  // is still the source of truth -- paging just quantizes it to whole screenfuls.
+  // With word geometry the entry shows one page per source; without it, one text through which
+  // reading on moves to the page's next word.
   bool pagedDefinition() const { return selectCtx.valid(); }
 
   // Scan-result persistence (empty path = disabled).
@@ -378,13 +365,11 @@ class EpubReaderWordLookupActivity final : public Activity {
   // Sentence mining: saves the visible entry with its sentence (Select, or the panel's + button).
   // The corner turns into a check once it is saved, and a short popup reports each save.
   MiningContext mining_;
-  DictionaryPanel::MiningFeedback miningFeedback_;
   // Hashes of the headwords shown this session, so browsing back and forth counts each word
   // once; the total goes to BookStats in one write on exit.
   static constexpr size_t MAX_COUNTED_LOOKUPS = 256;
   std::vector<uint32_t> countedLookups_;
   void countLookup();
-  void saveSentence();
   std::string miningSentence() const;
   void performLookup();
   void performLookupImpl();
@@ -418,12 +403,11 @@ class EpubReaderWordLookupActivity final : public Activity {
   std::vector<SelectionSpan> selectionSpans;
   void appendSelectionEntry(DictEntry&& entry, size_t textOffset, size_t matchBytes);
   void countSelectionWord(size_t firstNew);
-  std::string selectionMiningSentence() const;
+  std::string selectionMiningSentence(size_t section) const;
   // While the walk runs, one page past the last entry says more is coming. It holds no section:
   // the section vectors only ever hold entries.
   bool loadingPageShown() const { return selectionWalk == SelectionWalk::Running && !sectionText.empty(); }
   bool onLoadingPage() const { return loadingPageShown() && currentSection >= static_cast<int>(sectionText.size()); }
-  int pageCount() const { return static_cast<int>(sectionText.size()) + (loadingPageShown() ? 1 : 0); }
   std::atomic<bool> noMatchPopupPending{false};
   size_t currentAllGlyphIndex() const;
   std::string buildLookupText() const;
@@ -431,7 +415,4 @@ class EpubReaderWordLookupActivity final : public Activity {
   bool initialRenderDone = false;
   int fastRefreshCount = 0;
   static constexpr int kFullRefreshInterval = 10;
-
-  // Draws the definition text (or the loading/no-match notice) into the panel's inner rectangle.
-  void renderContentArea(const Rect& body);
 };

@@ -53,13 +53,4 @@ std::string wordAt(const GfxRenderer& renderer, const DefinitionText::WrapGeomet
   return lookupTextAt(text, DefinitionText::hitTest(renderer, geometry, text, x, y));
 }
 
-std::unique_ptr<DictionaryDefinitionActivity> open(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                                   const std::string& word, StrId& failure) {
-  if (word.empty()) {
-    failure = StrId::STR_NO_MATCH;
-    return nullptr;
-  }
-  return DictionaryDefinitionActivity::openNested(renderer, mappedInput, {nullptr, &lookup}, word.c_str(), 1, failure);
-}
-
 }  // namespace japanese_nested

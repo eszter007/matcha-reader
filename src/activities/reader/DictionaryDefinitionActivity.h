@@ -37,6 +37,29 @@ class DictionaryDefinitionActivity final : public Activity {
     bool definitionText = false;
     std::string reading;
     std::string grammar;
+    StrId kind = StrId::STR_NONE_OPT;  // tag beside the headword (Vocab, Grammar, Name); none by default
+  };
+
+  // Steps to the neighbouring word of the page when reading on or skipping runs past the first or
+  // last entry, for a lookup that moves through the page's words (manga, a book page without word
+  // geometry). step() puts that word's entries in `out`; false at the page's ends.
+  struct WordSteps {
+    void* ctx = nullptr;
+    bool (*step)(void* ctx, int direction, std::vector<Entry>& out) = nullptr;
+  };
+
+  // Redraws what lies behind the panel (the page and its word highlight) at the start of each render,
+  // for a lookup whose word changes while the panel is up.
+  struct Backdrop {
+    void* ctx = nullptr;
+    void (*draw)(void* ctx) = nullptr;
+  };
+
+  // Work of the screen under the panel that must go on while the panel is up (a page still being
+  // mapped). Called on idle frames; returns true while there is more to do.
+  struct HostTick {
+    void* ctx = nullptr;
+    bool (*tick)(void* ctx) = nullptr;
   };
 
   // Supplies further entries while the view is up (a touch selection's other words). next() puts
@@ -75,7 +98,17 @@ class DictionaryDefinitionActivity final : public Activity {
   // Handles on the looked-up word behind the panel; a drag on one finishes with ClipStartResult.
   void setClipHandles(const LookupClipHandles& handles) { clipHandles = handles; }
   void setMoreEntries(const MoreEntries& source) { more = source; }
-  bool skipLoopDelay() override { return more.next != nullptr; }
+  // step() runs under RenderLock, which the same task may take again inside it.
+  void setWordSteps(const WordSteps& source) { steps = source; }
+  // draw() runs on the render task.
+  void setBackdrop(const Backdrop& source) { backdrop = source; }
+  void setHostTick(const HostTick& source) {
+    hostTick = source;
+    hostBusy = source.tick != nullptr;
+  }
+  // The entry the panel opens on (the grammar entry when that is the better match).
+  void setStartEntry(const size_t index) { startEntry = index; }
+  bool skipLoopDelay() override { return more.next != nullptr || hostBusy; }
 
   // The book behind the panel reverses its page turns (Reversed Page Turn in a vertical book).
   void setPageTurnReversed(const bool reversed) { pageTurnReversed = reversed; }
@@ -105,6 +138,14 @@ class DictionaryDefinitionActivity final : public Activity {
   void lookUpAt(int x, int y);
   LookupClipHandles clipHandles;
   MoreEntries more;
+  WordSteps steps;
+  Backdrop backdrop;
+  HostTick hostTick;
+  bool hostBusy = false;
+  size_t startEntry = 0;
+  // The neighbouring word's entries, when steps is set: the first page going forward, the last
+  // entry's last page (atEnd) or first page going back. False at the page's ends.
+  bool stepWord(int direction, bool atEnd);
   // Past the last entry while more are coming: a Loading page the reader can step onto, which the
   // next entry takes over. Also the only page while nothing has been found yet.
   bool onLoadingPage = false;

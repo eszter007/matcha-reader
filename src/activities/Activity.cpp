@@ -24,8 +24,8 @@ void Activity::setResult(ActivityResult&& result) { this->result = std::move(res
 void Activity::finish() { activityManager.popActivity(); }
 
 void Activity::finishCancelled() {
-  ActivityResult result;
-  result.isCancelled = true;
-  setResult(std::move(result));
+  ActivityResult cancelled;
+  cancelled.isCancelled = true;
+  setResult(std::move(cancelled));
   finish();
 }

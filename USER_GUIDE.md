@@ -1277,8 +1277,8 @@ one you were reading, in the same panel.
 | Back | Return to reading |
 | Power (short click) | Same as Back, when **Short Power Button Click** is set to **Word Lookup** |
 
-The bottom of the entry shows where you are (e.g. 10/35) and which dictionary answered (e.g. `Vocab | JMdict` or
-`Vocab | CC-CEDICT`). You only land on words the dictionary has. When stepping from word to word in manga, each word
+The bottom of the entry shows which dictionary answered (e.g. `Vocab | JMdict` or `Vocab | CC-CEDICT`) and, when
+the entry runs over more than one screen, which screen you are on (e.g. 1/3). You only land on words the dictionary has. When stepping from word to word in manga, each word
 shows one entry so stepping stays quick.
 
 **Settings**
