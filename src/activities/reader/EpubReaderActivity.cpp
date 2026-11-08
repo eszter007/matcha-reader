@@ -1121,8 +1121,7 @@ void EpubReaderActivity::readerLoop() {
   if (pendingRefine != NO_IMAGE_REFINE && (section || verticalSection) && lastRenderCompleteMs != 0 &&
       !verticalBuildInProgress_.load(std::memory_order_relaxed) &&
       millis() - lastRenderCompleteMs >= IMAGE_REFINE_IDLE_MS && !RenderLock::peek()) {
-    const int shownPage = verticalSection ? verticalSection->currentPage : section->currentPage;
-    const uint32_t currentKey = (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(shownPage);
+    const uint32_t currentKey = (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(shownPage(0));
     if (pendingRefine == currentKey &&
         pendingImageRefine_.compare_exchange_strong(pendingRefine, NO_IMAGE_REFINE, std::memory_order_relaxed)) {
       // A refine only adds gray tones to the picture already on the glass. When the B/W pass could
@@ -1666,7 +1665,7 @@ void EpubReaderActivity::readerLoop() {
   const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
   const bool longPress = !fromTilt && heldMs >= ReaderUtils::SKIP_HOLD_MS;
   if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP) {
-    const int curPage = verticalSection ? verticalSection->currentPage : (section ? section->currentPage : 0);
+    const int curPage = shownPage(0);
     if (!nextTriggered && (section || verticalSection) && curPage > 0) {
       if (verticalSection)
         verticalSection->currentPage = 0;
@@ -2152,9 +2151,7 @@ void EpubReaderActivity::applyProgressChange(const ProgressChangeResult& sync) {
 
   int targetSpineIndex = sync.spineIndex;
   int targetPage = sync.page;
-  const int activeTotalPages = verticalSection ? verticalSection->pageCount
-                               : section       ? section->estimatedTotalPages()
-                                               : 0;
+  const int activeTotalPages = chapterPageTotal(0);
   const bool cachedPageMatchesActiveSection = (section || verticalSection) && sync.totalPages > 0 &&
                                               currentSpineIndex == sync.spineIndex && sync.page >= 0 &&
                                               sync.page < sync.totalPages && activeTotalPages == sync.totalPages;
@@ -2354,8 +2351,8 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
         RenderLock lock(*this);
         if (epub && (section || verticalSection)) {
           uint16_t backupSpine = currentSpineIndex;
-          uint16_t backupPage = verticalSection ? verticalSection->currentPage : section->currentPage;
-          uint16_t backupPageCount = verticalSection ? verticalSection->pageCount : section->pageCount;
+          uint16_t backupPage = shownPage(0);
+          uint16_t backupPageCount = builtPageCount(0);
           section.reset();
           verticalSection.reset();
           epub->clearCache();
@@ -2513,12 +2510,8 @@ bool EpubReaderActivity::launchKOReaderSync(const bool withClockAndInsights) {
     return true;
   }
 
-  const int currentPage = verticalSection ? verticalSection->currentPage
-                          : section       ? section->currentPage
-                                          : nextPageNumber;
-  const int totalPages = verticalSection ? verticalSection->pageCount
-                         : section       ? section->estimatedTotalPages()
-                                         : cachedChapterTotalPageCount;
+  const int currentPage = shownPage(nextPageNumber);
+  const int totalPages = chapterPageTotal(cachedChapterTotalPageCount);
 
   // Pre-compute local KO position and chapter name while Epub is still in RAM.
   // getCurrentPosition() carries the spine index, page, total, visible text offset and
@@ -2706,8 +2699,8 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
   pendingImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
   requestedImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
 
-  const int curPage = verticalSection ? verticalSection->currentPage : (section ? section->currentPage : 0);
-  const int pgCount = verticalSection ? verticalSection->pageCount : (section ? section->pageCount : 0);
+  const int curPage = shownPage(0);
+  const int pgCount = builtPageCount(0);
   bool moved = true;
 
   if (isForwardTurn) {
@@ -4828,14 +4821,12 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
       verticalBuildInProgress_.load(std::memory_order_relaxed) || (section && section->isBuilding());
 
   // Memo key: the raw watermark, which advances as the build lays pages out.
-  const int livePages = verticalSection ? verticalSection->pageCount : (section ? section->pageCount : 0);
+  const int livePages = builtPageCount(0);
   // Model input: the chapter's estimated total, the same number sectionPageSpan() shows. The
   // watermark makes a half-built chapter look only as long as the pages laid out so far, which
   // shrinks the X/Y span and, through spinePagesReal, the whole-book percentage with it. Vertical
   // builds in one pass, so its pageCount is already the total.
-  const int liveTotalPages = verticalSection ? verticalSection->pageCount
-                             : section       ? section->estimatedTotalPages()
-                                             : 0;
+  const int liveTotalPages = chapterPageTotal(0);
   const bool vertical = useVerticalText();
   if (chapterSpanSpine == currentSpineIndex && chapterSpanLivePages == livePages && chapterSpanVertical == vertical &&
       chapterSpanBuildActive == buildActive) {
@@ -4985,10 +4976,10 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
 
 EpubReaderActivity::SectionPageSpan EpubReaderActivity::sectionPageSpan() const {
   if (!verticalSection && lookupPageHeld_) return lookupSpan_;
-  const int rawPage = verticalSection ? verticalSection->currentPage : section ? section->currentPage : 0;
+  const int rawPage = shownPage(0);
   // estimatedTotalPages() rather than pageCount: while a giant spine builds, pageCount is only
   // the watermark reached so far, so "page X of Y" would count against a total that keeps moving.
-  const int rawCount = verticalSection ? verticalSection->pageCount : section ? section->estimatedTotalPages() : 0;
+  const int rawCount = chapterPageTotal(0);
   if (verticalSection && verticalSection->isBuilding()) {
     // Mid-build, pageCount is only how far the slices got, and the page on screen can be the one
     // the current slice just laid out. Count against the chapter's last known length, as below.
@@ -6024,7 +6015,7 @@ void EpubReaderActivity::stepLookupPrescan() {
   constexpr unsigned long PRESCAN_REST_MS = 1500;  // after the page is up: past a run of turns
   constexpr uint32_t PRESCAN_SLICE_MS = 25;
   constexpr uint32_t PRESCAN_MIN_ALLOC = 40 * 1024;
-  const int page = verticalSection ? verticalSection->currentPage : section ? section->currentPage : -1;
+  const int page = shownPage(-1);
   if (prescan_ && (prescanSpine_ != currentSpineIndex || prescanPage_ != page)) {
     prescan_.reset();  // the reader moved on
     DictIndex::releaseCaches();
@@ -6388,7 +6379,7 @@ void EpubReaderActivity::openTranslationFor(std::string text, const StrId title)
   // (see MIN_HEAP_FOR_TLS in EpubReaderTranslationActivity.cpp). Sync nextPageNumber first
   // so the normal reload-from-cache path in render() resumes on the same page when we
   // return -- same pattern as the page-turn/spine-change call sites in this file.
-  nextPageNumber = verticalSection ? verticalSection->currentPage : section ? section->currentPage : nextPageNumber;
+  nextPageNumber = shownPage(nextPageNumber);
   {
     RenderLock lock(*this);  // the render task may still be in its warm tail
     section.reset();
@@ -6481,7 +6472,7 @@ int EpubReaderActivity::currentTocIndex() const {
   if (!epub) return -1;
   const int first = epub->getTocIndexForSpineIndex(currentSpineIndex);
   if (first < 0 || (!section && !verticalSection)) return first;
-  const int currentPage = verticalSection ? verticalSection->currentPage : section->currentPage;
+  const int currentPage = shownPage(0);
   // Bounds the TOC reads for a book with one huge file of many sections.
   static constexpr int MAX_SECTIONS_SCANNED = 64;
   const int last = std::min(epub->getTocItemsCount(), first + 1 + MAX_SECTIONS_SCANNED);
@@ -6937,8 +6928,8 @@ void EpubReaderActivity::renderOverlay() {
 
   if (overlay == Overlay::Toolbar) {
     chapterTitle = currentChapterTitle();
-    const int pageCount = verticalSection ? verticalSection->pageCount : section->estimatedTotalPages();
-    const int currentPage = verticalSection ? verticalSection->currentPage : section->currentPage;
+    const int pageCount = chapterPageTotal(0);
+    const int currentPage = shownPage(0);
     const float chapterProgress =
         pageCount > 0 ? static_cast<float>(currentPage + 1) / static_cast<float>(pageCount) : 0.0f;
     const float bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress);
@@ -7666,7 +7657,7 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
     }
     // A child screen (menu, footnote list) may have released the section;
     // nextPageNumber then holds the page it was on.
-    const int page = verticalSection ? verticalSection->currentPage : section ? section->currentPage : nextPageNumber;
+    const int page = shownPage(nextPageNumber);
     savedPositions[footnoteDepth] = {currentSpineIndex, page};
     footnoteDepth++;
     LOG_DBG("ERS", "Saved position [%d]: spine %d, page %d", footnoteDepth, currentSpineIndex, page);
@@ -7763,14 +7754,14 @@ void EpubReaderActivity::addBookmark() {
   if ((!section && !verticalSection) || !epub) {
     return;
   }
-  const int curPage = verticalSection ? verticalSection->currentPage : section ? section->currentPage : -1;
+  const int curPage = shownPage(-1);
   LOG_DBG("ERS", "Toggle bookmark at spine %d, page %d", currentSpineIndex, curPage);
   int currentPage;
   int pageCount;
   {
     RenderLock lock(*this);
-    pageCount = verticalSection ? verticalSection->pageCount : section->estimatedTotalPages();
-    currentPage = verticalSection ? verticalSection->currentPage : section->currentPage;
+    pageCount = chapterPageTotal(0);
+    currentPage = shownPage(0);
   }
 
   SavedProgressPosition progress = ProgressMapper::toSavedProgress(epub, getCurrentPosition());
@@ -7839,8 +7830,8 @@ void EpubReaderActivity::updateBookmarkFlag() {
     currentPageBookmarked = false;
     return;
   }
-  const int page = verticalSection ? verticalSection->currentPage : section->currentPage;
-  const int pageCount = verticalSection ? verticalSection->pageCount : section->estimatedTotalPages();
+  const int page = shownPage(0);
+  const int pageCount = chapterPageTotal(0);
   const ProgressRange pageRange = getPageProgressRange(epub, currentSpineIndex, page, pageCount);
   currentPageBookmarked = std::any_of(cachedBookmarks.begin(), cachedBookmarks.end(), [&](const BookmarkEntry& b) {
     return bookmarkMatchesProgress(b, currentSpineIndex, page, pageCount, pageRange);
@@ -7892,13 +7883,21 @@ int EpubReaderActivity::getProgressBasisPoints() const {
   return std::clamp(static_cast<int>(progress * 10000.0f + 0.5f), 0, 10000);
 }
 
+int EpubReaderActivity::shownPage(const int fallback) const {
+  return verticalSection ? verticalSection->currentPage : section ? section->currentPage : fallback;
+}
+
+int EpubReaderActivity::builtPageCount(const int fallback) const {
+  return verticalSection ? verticalSection->pageCount : section ? section->pageCount : fallback;
+}
+
+int EpubReaderActivity::chapterPageTotal(const int fallback) const {
+  return verticalSection ? verticalSection->pageCount : section ? section->estimatedTotalPages() : fallback;
+}
+
 CrossPointPosition EpubReaderActivity::getCurrentPosition() const {
-  const int currentPage = verticalSection ? verticalSection->currentPage
-                          : section       ? section->currentPage
-                                          : nextPageNumber;
-  const int totalPages = verticalSection ? verticalSection->pageCount
-                         : section       ? section->estimatedTotalPages()
-                                         : cachedChapterTotalPageCount;
+  const int currentPage = shownPage(nextPageNumber);
+  const int totalPages = chapterPageTotal(cachedChapterTotalPageCount);
   std::optional<uint16_t> paragraphIndex;
   if (section && currentPage >= 0 && currentPage < section->pageCount) {
     const uint16_t paragraphPage =
