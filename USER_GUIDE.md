@@ -1380,6 +1380,10 @@ Reader menu → **Translate Page** translates the current page into English.
 `/.system/` folder on the SD card. A `/system/` folder works too. The dotted name hides the folder in the file
 browser.
 
+If Google's servers are busy (an error ending in **(503)**, common with a free-tier key) or the key's quota for
+the model is used up, the reader tries a lighter Gemini model before giving up. To choose the model yourself,
+save its name, for example `gemini-flash-lite-latest`, in a text file named `gemini.model` next to `gemini.key`.
+
 **What happens**
 
 1. The reader connects to the last Wi-Fi network you used. If there is none, or it does not answer, the Wi-Fi list

@@ -76,6 +76,7 @@ class EpubReaderTranslationActivity final : public Activity {
 
   bool readApiKey(std::string& keyOut);
   bool callGeminiApi(const std::string& apiKey);
+  int postToModel(const std::string& apiKey, const std::string& model, std::string& response);
 
   void onWifiComplete(bool success);
 };
