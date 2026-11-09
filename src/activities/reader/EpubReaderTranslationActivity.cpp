@@ -435,7 +435,8 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
     httpCode = postToModel(apiKey, models[i], response);
     if (httpCode == 200 && !response.empty()) break;
     if (httpCode != 503 && httpCode != 429 && httpCode != 404) break;
-    if (i + 1 < modelCount) LOG_INF("XLAT", "%s answered %d; trying %s", models[i].c_str(), httpCode, models[i + 1].c_str());
+    if (i + 1 < modelCount)
+      LOG_INF("XLAT", "%s answered %d; trying %s", models[i].c_str(), httpCode, models[i + 1].c_str());
   }
 
   if (httpCode != 200 || response.empty()) {
