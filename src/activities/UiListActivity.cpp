@@ -225,6 +225,9 @@ void UiListActivity::loop() {
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
     auto& n = activeNav();
+    // The last build drew every row: nothing is off-screen to scroll to. The nav's own clamp uses
+    // its row-height estimate, which can be smaller than what a tall screen really fits.
+    if (n.inputPageRows() >= listCount()) return;
     const int delta = swipe == MappedInputManager::SwipeDir::Up ? n.inputPageRows() : -n.inputPageRows();
     LOG_DBG("LIST", "%s swipe delta=%d count=%d", name.c_str(), delta, listCount());
     n.requestScroll(delta);
