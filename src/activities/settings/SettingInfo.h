@@ -37,6 +37,7 @@ enum class SettingAction {
   SleepSettings,
   ShortcutsSettings,
   DictionarySettings,
+  TranslationSettings,
   About,
 };
 

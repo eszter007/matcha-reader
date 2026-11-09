@@ -35,6 +35,7 @@
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
 #include "TextProfileMenuActivity.h"
+#include "TranslationSettingsActivity.h"
 #include "activities/home/StatsSyncActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
@@ -161,6 +162,7 @@ void SettingsActivity::rebuildSettings() {
   // Sub-screens and per-board configurators lead their section, above its own rows.
   addAction(SettingsSection::Reader, StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings);
   addAction(SettingsSection::Reader, StrId::STR_DICTIONARY_SETTINGS, SettingAction::DictionarySettings);
+  addAction(SettingsSection::Reader, StrId::STR_TRANSLATION_SETTINGS, SettingAction::TranslationSettings);
   addAction(SettingsSection::Controls, StrId::STR_CAT_SHORTCUTS, SettingAction::ShortcutsSettings);
   if (!BoardConfig::hasTouch()) {
     addAction(SettingsSection::Controls, StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons);
@@ -307,6 +309,15 @@ void SettingsActivity::toggleSelectedSetting() {
       auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, section, page);
       if (!activity) {
         LOG_ERR("SET", "OOM: settings sub-screen");
+        return;
+      }
+      startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
+      return;
+    }
+    case SettingAction::TranslationSettings: {
+      auto activity = makeUniqueNoThrow<TranslationSettingsActivity>(renderer, mappedInput);
+      if (!activity) {
+        LOG_ERR("SET", "OOM: translation settings");
         return;
       }
       startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });

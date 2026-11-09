@@ -21,6 +21,7 @@
 #include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/GeminiConfig.h"
 
 namespace {
 
@@ -50,14 +51,7 @@ constexpr uint32_t WIFI_STACK_RESERVE = 36000;
 // no public API to ask ESP-IDF's WiFi driver "do you have enough heap", so this margin is a
 // conservative empirical floor above the crash point, not a documented ESP-IDF constant.
 constexpr uint32_t MIN_HEAP_FOR_WIFI_INIT = 70000;
-static std::string apiKeyPath() { return sdsystem::findUserFile("gemini.key"); }
-constexpr const char* GEMINI_MODEL = "gemini-3.8-flash";
-// Tried when the model in use answers 503 (overloaded), 429 (quota) or 404 (not offered to this
-// key). Google sheds free-tier traffic first when a model is busy, so a lighter model often still
-// answers. An alias, so it follows Google's current lite model.
-constexpr const char* GEMINI_FALLBACK_MODEL = "gemini-flash-lite-latest";
-// Optional: a model name in this file, beside gemini.key, is tried first.
-static std::string modelPath() { return sdsystem::findUserFile("gemini.model"); }
+
 // The page behind the panel, kept across the full-screen Wi-Fi list and a silent restart.
 static std::string backgroundPath() { return sdsystem::path("translate_bg.bin"); }
 // A saved network either answers within this or is out of range; the Wi-Fi list takes over then.
@@ -246,62 +240,7 @@ void EpubReaderTranslationActivity::onExit() {
   }
 }
 
-bool EpubReaderTranslationActivity::readApiKey(std::string& keyOut) {
-  // 192, not 256: the stack budget for a local is under 256 bytes (CLAUDE.md), and this is
-  // still more than three times the longest key Google issues (a current AI Studio key is ~53
-  // characters, the older AIza form 39).
-  char buf[192];
-  size_t len = Storage.readFileToBuffer(apiKeyPath().c_str(), buf, sizeof(buf));
-  if (len == 0) return false;
-  // readFileToBuffer stops at bufferSize-1 and reports the truncated length, so a key longer
-  // than the buffer arrives silently cut in half and is rejected by the API as malformed. A
-  // full buffer now means "this is not a key" rather than "here is most of one".
-  if (len >= sizeof(buf) - 1) {
-    LOG_ERR("XLAT", "gemini.key is %u+ bytes; that is not an API key", static_cast<unsigned>(len));
-    return false;
-  }
-
-  size_t start = 0;
-  // A UTF-8 BOM is what an editor on Windows writes when the file is saved as UTF-8, and the
-  // documented way to install a key is to paste it into a text file. The three bytes go out in
-  // front of the key, the API rejects it, and nothing on screen suggests the file is at fault.
-  if (len - start >= 3 && static_cast<unsigned char>(buf[start]) == 0xEF &&
-      static_cast<unsigned char>(buf[start + 1]) == 0xBB && static_cast<unsigned char>(buf[start + 2]) == 0xBF) {
-    start += 3;
-  }
-  // Trim whitespace/newlines from BOTH ends: a leading space or newline corrupts the key exactly
-  // as invisibly as a trailing one, and only the trailing end was handled.
-  while (start < len && (buf[start] == '\n' || buf[start] == '\r' || buf[start] == ' ' || buf[start] == '\t')) {
-    start++;
-  }
-  while (len > start && (buf[len - 1] == '\n' || buf[len - 1] == '\r' || buf[len - 1] == ' ' || buf[len - 1] == '\t')) {
-    len--;
-  }
-  if (len <= start) return false;
-
-  keyOut.assign(buf + start, len - start);
-  return true;
-}
-
-// The model named in gemini.model, if any: one line, model-name characters only.
-static bool readUserModel(std::string& modelOut) {
-  char buf[64];
-  size_t len = Storage.readFileToBuffer(modelPath().c_str(), buf, sizeof(buf));
-  if (len == 0 || len >= sizeof(buf) - 1) return false;
-  size_t start = 0;
-  while (start < len && (buf[start] == ' ' || buf[start] == '\t' || buf[start] == '\r' || buf[start] == '\n' ||
-                         static_cast<unsigned char>(buf[start]) >= 0x80)) {  // a UTF-8 BOM too
-    start++;
-  }
-  size_t end = start;
-  while (end < len && ((buf[end] >= 'a' && buf[end] <= 'z') || (buf[end] >= '0' && buf[end] <= '9') ||
-                       buf[end] == '-' || buf[end] == '.' || buf[end] == '_')) {
-    end++;
-  }
-  if (end == start) return false;
-  modelOut.assign(buf + start, end - start);
-  return true;
-}
+bool EpubReaderTranslationActivity::readApiKey(std::string& keyOut) { return gemini::readKey(keyOut); }
 
 // What the screen says when Google refuses the request. The status alone separates the causes a
 // reader can actually act on -- a rejected key, an account with no billing set up, a quota that
@@ -424,9 +363,9 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
   // before is busy, out of quota or not offered to this key.
   std::string models[3];
   int modelCount = 0;
-  std::string userModel;
-  if (readUserModel(userModel)) models[modelCount++] = userModel;
-  for (const char* model : {GEMINI_MODEL, GEMINI_FALLBACK_MODEL}) {
+  const std::string userModel = gemini::readModel();
+  if (!userModel.empty()) models[modelCount++] = userModel;
+  for (const char* model : {gemini::DEFAULT_MODEL, gemini::LITE_MODEL}) {
     if (modelCount == 0 || models[0] != model) models[modelCount++] = model;
   }
   int httpCode = 0;
