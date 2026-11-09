@@ -161,6 +161,15 @@ void ActivityManager::loop() {
       return;
     }
 
+    // The EEGO A4's fast waveform ghosts and menus never ask for anything else, so their screens
+    // get a cleaning HALF pass at the reader's Refresh Frequency. The reader keeps its own count.
+    {
+      const int every = SETTINGS.refreshFrequency == CrossPointSettings::REFRESH_NEVER
+                            ? 0
+                            : std::min(SETTINGS.getRefreshFrequency(), 255);
+      renderer.setFastRefreshCleanup(BoardConfig::isEegoA4() && !isReaderActivity() ? static_cast<uint8_t>(every) : 0);
+    }
+
     // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed.
     // Not while leaving: a reader that let go of its book for a sync would close itself and drop
     // the sync, and the page turner can hold a screen change over several passes.

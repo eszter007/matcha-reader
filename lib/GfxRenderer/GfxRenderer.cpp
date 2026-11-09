@@ -2435,6 +2435,16 @@ HalDisplay::RefreshMode GfxRenderer::applyPromotedRefresh(const HalDisplay::Refr
   return promotedRefresh_;
 }
 
+HalDisplay::RefreshMode GfxRenderer::applyFastCleanup(const HalDisplay::RefreshMode refreshMode) const {
+  if (refreshMode != HalDisplay::FAST_REFRESH) {
+    fastSinceClean_ = 0;
+    return refreshMode;
+  }
+  if (fastCleanupEvery_ == 0 || ++fastSinceClean_ < fastCleanupEvery_) return refreshMode;
+  fastSinceClean_ = 0;
+  return HalDisplay::HALF_REFRESH;
+}
+
 void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode) const {
   if (frameTimed) {
     LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", millis() - start_ms);
@@ -2442,7 +2452,7 @@ void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode) const {
   }
   // Residue is tracked against the mode the panel actually runs, not the one the caller asked
   // for -- a promotion to HALF/FULL scrubs just as well as a direct one.
-  refreshMode = applyPromotedRefresh(refreshMode);
+  refreshMode = applyFastCleanup(applyPromotedRefresh(refreshMode));
   panelResidue_ = refreshMode == HalDisplay::FAST_REFRESH;
   // A HALF/FULL pass drives every pixel to its target, which re-establishes the B/W baseline in
   // the controller's RED RAM. A FAST pass does not, so a gray plane sitting there survives it.
@@ -2451,7 +2461,7 @@ void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode) const {
 }
 
 void GfxRenderer::displayBufferAsync(HalDisplay::RefreshMode refreshMode) const {
-  refreshMode = applyPromotedRefresh(refreshMode);
+  refreshMode = applyFastCleanup(applyPromotedRefresh(refreshMode));
   panelResidue_ = refreshMode == HalDisplay::FAST_REFRESH;
   if (refreshMode != HalDisplay::FAST_REFRESH) grayPlanesResident_ = false;
   // The async path has no turn-off-screen hook, which the sunlight fading fix

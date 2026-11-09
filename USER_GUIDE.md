@@ -344,7 +344,8 @@ any profile of **Settings → Reader → Text Settings**.
 
 - **Refresh Frequency**: How often the whole screen flashes black and white while you read. A full refresh clears the
   faint leftovers of earlier pages (ghosting). Choose every **1**, **5**, **10**, **15** (default) or **30** pages, or
-  **Never**. In manga each panel step counts as a page.
+  **Never**. In manga each panel step counts as a page. On the EEGO A4 the menus follow it too: after that many screen
+  changes they get one full refresh, because its menus otherwise slowly turn grey.
 
 - **UI Theme**: The look of the menus.
   - **Classic**: the original CrossPoint look.
