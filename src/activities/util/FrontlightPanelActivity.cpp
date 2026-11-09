@@ -19,6 +19,7 @@
 #include "components/icons/customListIcons.h"
 #include "components/icons/listIcons.h"
 #include "components/icons/panelIcons.h"
+#include "components/icons/settingsTablerIcons.h"
 #include "fontIds.h"
 #include "util/SlideSwitch.h"
 
@@ -32,18 +33,17 @@ constexpr fui::ActionId ACTION_BRIGHTNESS_STEP = 4;
 constexpr fui::ActionId ACTION_WARMTH_STEP = 5;
 
 // iOS-style geometry. The panel is a card hanging from the top of the screen:
-// a grabber, full-width slider pills, then a 2-column tile grid. The chrome
+// full-width slider pills, then a row of round quick buttons. The chrome
 // itself is fui::sheet / fui::sliderRow / fui::tileGrid; these constants only
 // size the bands, and computePanelBottom() mirrors them.
 constexpr int16_t kPanelSideMargin = 16;
-constexpr int16_t kGrabberHeight = 5;     // fui::SheetProps default, mirrored here
 constexpr int16_t kSliderRowHeight = 56;  // the pill itself (finger-sized)
 constexpr int16_t kRowIconSize = 32;      // leading icon naming each slider
 // Round quick-setting button: finger-sized circle with a caption under it.
 constexpr int16_t kQuickCircle = 56;
 constexpr int16_t kQuickIcon = 32;
 constexpr int16_t kQuickLabelGap = 4;
-constexpr int kQuickLabelLines = 2;
+constexpr int kQuickLabelLines = 1;
 // One percent per press, on the -/+ buttons and on the physical Left/Right keys
 // alike (both repeat while held), so a level can be set exactly.
 constexpr int BRIGHTNESS_STEP = 1;
@@ -332,9 +332,8 @@ int FrontlightPanelActivity::computePanelBottom() const {
   if (mappedInput.hasTouch()) {
     y += tokens.spaceSm + kQuickCircle + kQuickLabelGap + kQuickLabelLines * uiTarget.lineHeight(tokens.smallText.font);
   }
-  // The sheet's grabber band: content margin + grabber + air to the edge.
-  // buildPanelScreen() feeds the same theme spacings into SheetProps.
-  y += tokens.spaceLg + kGrabberHeight + tokens.spaceLg + tokens.spaceMd;
+  // Air below the last row, the same spacing buildPanelScreen() gives SheetProps.
+  y += tokens.spaceLg;
   return y;
 }
 
@@ -356,6 +355,8 @@ void FrontlightPanelActivity::addSliderRow(UiScreen& screen, const uint8_t* icon
   // captionGap with the theme's spacing, so the row is themed and placed here and handed to the
   // component directly -- which also leaves room at the left for the icon.
   rowProps.label = nullptr;
+  rowProps.decrementIcon = fui::bitmapFromIcon(icon_tabler_minus_20);
+  rowProps.incrementIcon = fui::bitmapFromIcon(icon_tabler_plus_20);
   rowProps.value = nullptr;
   rowProps.sliderValue = value;
   rowProps.sliderAction = sliderAction;
@@ -398,16 +399,15 @@ void FrontlightPanelActivity::addSliderRow(UiScreen& screen, const uint8_t* icon
 void FrontlightPanelActivity::buildPanelScreen(UiScreen& screen) {
   const auto& theme = screen.theme();
 
-  // Sheet chrome first: the card body, the 2px rule along its bottom edge, and
-  // the grabber on the edge the sheet is dragged from. Screen::sheet() also
+  // Sheet chrome first: the card body and the 2px rule along its bottom edge. Screen::sheet() also
   // clamps the content area to the sheet, so every band below lays out inside
-  // it. (No header: the panel is a floating card, and its own grabber says
-  // what it is.)
+  // it. (No header: the panel is a floating card.)
   fui::SheetProps sheetProps;
-  // A roomy band above the bottom rule: the grabber gets a full spaceLg of
-  // air on both sides so the last row of content never crowds the sheet edge.
-  sheetProps.grabberMargin = theme.spaceLg;
-  sheetProps.grabberInset = static_cast<int16_t>(theme.spaceLg + theme.spaceMd);
+  // No grabber: just air between the last row and the bottom rule.
+  sheetProps.grabberWidth = 0;
+  sheetProps.grabberHeight = 0;
+  sheetProps.grabberMargin = 0;
+  sheetProps.grabberInset = theme.spaceLg;
   screen.sheet(sheetProps, static_cast<int16_t>(panelBottom));
   screen.insetContent(fui::Insets{0, kPanelSideMargin, 0, kPanelSideMargin});
 
@@ -447,66 +447,54 @@ void FrontlightPanelActivity::buildPanelScreen(UiScreen& screen) {
   }
 }
 
+namespace {
+// An orientation as the reader toolbar draws it: a tall or wide page, with a bar along the edge
+// that is its top. The Rotate button shows the one a tap gives, as every button shows its action.
+void drawOrientationPicture(const GfxRenderer& renderer, const int orientation, const int cx, const int cy) {
+  const bool landscape = orientation % 2 == 1;
+  const bool turned = orientation >= 2;
+  const int w = landscape ? 30 : 22;
+  const int h = landscape ? 22 : 30;
+  const int x = cx - w / 2;
+  const int y = cy - h / 2;
+  renderer.drawRoundedRect(x, y, w, h, /*lineWidth=*/2, /*cornerRadius=*/3, true);
+  renderer.fillRect(x + 5, turned ? y + h - 8 : y + 5, w - 10, 3);
+}
+}  // namespace
+
 void FrontlightPanelActivity::drawQuickRow() {
   if (quickRowRect.width <= 0) return;
   const bool touchOn = SETTINGS.touchReaderControls != CrossPointSettings::TOUCH_READER_OFF;
-  // The orientation button shows and names the mode it would GIVE you, not the one you are in:
-  // four modes cycle, so a readout sitting among four buttons that all promise an action is the
-  // one thing in the row that would have to be read differently.
-  const int nextOrientation = (SETTINGS.orientation + 1) % 4;
-  const bool nextIsLandscape = nextOrientation % 2 == 1;
   // Every glyph names the action, not the state: tap the moon to go dark, the sun to come back.
   const bool bluetoothOn = SETTINGS.ble.enabled != 0;
   const uint8_t* icons[kQuickMax] = {SETTINGS.screenInverted ? PanelSunIcon : PanelMoonIcon,
                                      PanelRefreshIcon,
-                                     nextIsLandscape ? PanelLandscapeIcon : PanelPortraitIcon,
+                                     nullptr,  // the orientation picture, drawn below
                                      touchOn ? PanelTouchOffIcon : PanelTouchOnIcon,
                                      lightOn ? PanelBulbOffIcon : PanelBulbIcon,
                                      bluetoothOn ? PanelBluetoothOffIcon : PanelBluetoothIcon};
-  static constexpr StrId kOrientNames[4] = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW,
-                                            StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW};
-  // Every caption names what the tap DOES, like the glyph above it, and all five say it the same
-  // way -- mixing an action ("Dark Mode") with a readout ("Portrait") in one row makes the reader
-  // work out which is which. "Touch Off" was the worst of it: with touch currently on it reads
-  // just as easily as the status "touch: off", the exact opposite of the truth, so those two
-  // carry a verb instead.
-  char touchLabel[64];
-  snprintf(touchLabel, sizeof(touchLabel), "%s %s", I18N.get(touchOn ? StrId::STR_TURN_OFF : StrId::STR_TURN_ON),
-           tr(STR_TOUCH_TOGGLE));
-  char lightLabel[64];
-  snprintf(lightLabel, sizeof(lightLabel), "%s %s", I18N.get(lightOn ? StrId::STR_TURN_OFF : StrId::STR_TURN_ON),
-           tr(STR_LIGHT));
-  const char* labels[kQuickMax] = {I18N.get(SETTINGS.screenInverted ? StrId::STR_LIGHT_MODE : StrId::STR_DARK_MODE),
-                                   tr(STR_FORCE_REFRESH), I18N.get(kOrientNames[nextOrientation]), touchLabel,
-                                   lightLabel,
-                                   // "Turn On Bluetooth" does not fit a sixth of the panel; the icon shows the action.
-                                   tr(STR_BLUETOOTH)};
+  // One word each, so every caption fits one line; the icon above shows what a tap does.
+  const char* labels[kQuickMax] = {tr(STR_DARK),         tr(STR_QS_REFRESH), tr(STR_QS_ROTATE),
+                                   tr(STR_TOUCH_TOGGLE), tr(STR_LIGHT),      tr(STR_BLUETOOTH)};
   const int count = quickCount();
 
   const int slot = quickRowRect.width / count;
-  const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
   for (int i = 0; i < count; ++i) {
     const int cx = quickRowRect.x + i * slot + slot / 2;
     const int circleX = cx - kQuickCircle / 2;
     renderer.drawRoundedRect(circleX, quickRowRect.y, kQuickCircle, kQuickCircle, /*lineWidth=*/2, kQuickCircle / 2,
                              true);
-    renderer.drawIcon(icons[i], cx - kQuickIcon / 2, quickRowRect.y + (kQuickCircle - kQuickIcon) / 2, kQuickIcon);
-    // Two lines: "Night Mode" and "Refresh Screen" do not fit a fifth of the panel on one, and
-    // truncating them to "Night M..." says less than the icon above already does.
-    // A one-word caption ("Bluetooth") is never split mid-word; it may be wider than its slot.
-    const auto lines = std::strchr(labels[i], ' ') == nullptr
-                           ? std::vector<std::string>{labels[i]}
-                           : renderer.wrappedText(SMALL_FONT_ID, labels[i], slot - 4, kQuickLabelLines);
-    int labelY = quickRowRect.y + kQuickCircle + kQuickLabelGap;
-    for (const auto& line : lines) {
-      const int labelWidth = renderer.getTextWidth(SMALL_FONT_ID, line.c_str());
-      // The last caption, if wider than its slot, ends at the row's edge instead of reaching into its
-      // neighbour.
-      const bool alignRight = i == count - 1 && labelWidth > slot - 4;
-      const int labelX = alignRight ? quickRowRect.x + quickRowRect.width - labelWidth : cx - labelWidth / 2;
-      renderer.drawText(SMALL_FONT_ID, labelX, labelY, line.c_str(), true);
-      labelY += lineHeight;
+    if (icons[i]) {
+      renderer.drawIcon(icons[i], cx - kQuickIcon / 2, quickRowRect.y + (kQuickCircle - kQuickIcon) / 2, kQuickIcon);
+    } else {
+      drawOrientationPicture(renderer, (SETTINGS.orientation + 1) % 4, cx, quickRowRect.y + kQuickCircle / 2);
     }
+    // One word, never split; the last caption, if wider than its slot, ends at the row's edge
+    // instead of reaching into its neighbour.
+    const int labelWidth = renderer.getTextWidth(SMALL_FONT_ID, labels[i]);
+    const bool alignRight = i == count - 1 && labelWidth > slot - 4;
+    const int labelX = alignRight ? quickRowRect.x + quickRowRect.width - labelWidth : cx - labelWidth / 2;
+    renderer.drawText(SMALL_FONT_ID, labelX, quickRowRect.y + kQuickCircle + kQuickLabelGap, labels[i], true);
   }
 }
 
@@ -531,7 +519,7 @@ void FrontlightPanelActivity::runQuickButton(const int idx) {
 void FrontlightPanelActivity::render(RenderLock&&) {
   panelBottom = computePanelBottom();
 
-  // fui::sheet draws the card body, its bottom rule, and the grabber during
+  // fui::sheet draws the card body and its bottom rule during
   // renderUi(); the battery band at the card's top is part of the screen build.
   renderUi();
   drawQuickRow();
