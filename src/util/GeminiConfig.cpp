@@ -4,6 +4,8 @@
 #include <Logging.h>
 #include <SdSystemDir.h>
 
+#include <algorithm>
+
 namespace gemini {
 namespace {
 constexpr const char* KEY_FILE = "gemini.key";
@@ -66,9 +68,10 @@ std::string readModel() {
   std::string model;
   if (!readTrimmed<64>(MODEL_FILE, model)) return "";
   // Model names are lower-case ASCII; anything else is not a name the API would accept.
-  for (const char c : model) {
-    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_')) return "";
-  }
+  const bool foreign = std::any_of(model.begin(), model.end(), [](const char c) {
+    return !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_');
+  });
+  if (foreign) return "";
   return model == DEFAULT_MODEL ? "" : model;
 }
 
