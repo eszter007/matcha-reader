@@ -474,8 +474,8 @@ void FrontlightPanelActivity::drawQuickRow() {
                                      lightOn ? PanelBulbOffIcon : PanelBulbIcon,
                                      bluetoothOn ? PanelBluetoothOffIcon : PanelBluetoothIcon};
   // One word each, so every caption fits one line; the icon above shows what a tap does.
-  const char* labels[kQuickMax] = {tr(STR_DARK),         tr(STR_QS_REFRESH), tr(STR_QS_ROTATE),
-                                   tr(STR_TOUCH_TOGGLE), tr(STR_LIGHT),      tr(STR_BLUETOOTH)};
+  const char* labels[kQuickMax] = {tr(STR_QS_DARK),      tr(STR_QS_REFRESH), tr(STR_QS_ROTATE),
+                                   tr(STR_TOUCH_TOGGLE), tr(STR_QS_LIGHT),   tr(STR_BLUETOOTH)};
   const int count = quickCount();
 
   const int slot = quickRowRect.width / count;
