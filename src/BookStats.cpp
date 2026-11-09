@@ -255,6 +255,28 @@ void BookStats::recordMinutes(const uint16_t year, const uint8_t month, const ui
   days.insert(days.begin(), {year, month, day, minutes});
 }
 
+bool BookStats::setDayMinutes(const char* path, const uint16_t year, const uint8_t month, const uint8_t day,
+                              const uint16_t minutes, uint16_t& oldMinutes) {
+  oldMinutes = 0;
+  if (!path || !*path) return false;
+  std::lock_guard<std::mutex> lock(fileMutex());
+  BookStats b;
+  if (!b.load(path)) return false;
+  for (auto it = b.days.begin(); it != b.days.end(); ++it) {
+    if (it->year != year || it->month != month || it->day != day) continue;
+    oldMinutes = it->minutes;
+    if (minutes == 0) {
+      b.days.erase(it);
+    } else {
+      it->minutes = minutes;
+    }
+    return b.save();
+  }
+  if (minutes == 0) return true;
+  b.recordMinutes(year, month, day, minutes);
+  return b.save();
+}
+
 bool BookStats::recordOpen(const char* path) {
   if (!path || !*path) return false;
   std::lock_guard<std::mutex> lock(fileMutex());

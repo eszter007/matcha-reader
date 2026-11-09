@@ -15,6 +15,7 @@
       <a href="/">Home</a>
       <a href="/files">File Manager</a>
       <a href="/settings">Settings</a>
+      <a href="/insights">Edit Insights</a>
       <a href="/fonts">Fonts</a>
       <a href="/plugins">Plugins</a>
     </nav>
@@ -31,6 +32,7 @@
       <a href="/">Home</a>
       <a href="/files">File Manager</a>
       <a href="/settings">Settings</a>
+      <a href="/insights">Edit Insights</a>
       <a href="/fonts">Fonts</a>
       <a href="/plugins">Plugins</a>
     </nav>

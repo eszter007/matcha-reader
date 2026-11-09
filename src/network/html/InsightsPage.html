@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Edit Insights - Matcha Reader</title>
+    <style>
+      .stats-note { color: var(--label-color); margin: 0; }
+      .web-ui .setting-row.book-row { cursor: pointer; border-radius: 8px; padding: 10px 12px; flex-wrap: nowrap; }
+      .book-row:hover { background: rgba(0, 0, 0, 0.04); }
+      .book-row.selected { background: rgba(0, 0, 0, 0.06); box-shadow: inset 3px 0 0 var(--accent-color); }
+      .book-row .chevron { color: var(--label-color); font-size: 1.3em; }
+      .book-meta { color: var(--label-color); font-size: 0.9em; }
+      .days-summary { color: var(--label-color); margin: -4px 0 8px; }
+      .web-ui .day-row .setting-control { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+      .web-ui .day-row .setting-control input[type="number"] { width: 64px; min-width: 0; }
+      .web-ui .day-row .btn:disabled { opacity: 0.4; cursor: default; }
+      .row-msg { font-size: 0.85em; color: var(--label-color); width: 100%; }
+      .row-msg.error { color: #a33; }
+      .synced { color: var(--label-color); font-size: 0.9em; }
+      .web-ui .add-day { border-bottom: none; margin-top: 8px; }
+    </style>
+  <link rel="stylesheet" href="/assets/web.css" />
+  <link rel="icon" type="image/svg+xml" href="/assets/matcha-icon.svg" />
+  </head>
+  <body class="web-ui">
+    <!--#include file="shared/Header.html.inc" -->
+<main class="page-content">
+
+    <div class="card">
+      <h2>Edit Insights</h2>
+      <p class="stats-note" id="note">
+        Only days that have not been synced yet can be edited. Once a day is sent to the sync server, the
+        server keeps the higher number and brings it back at the next sync.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Books</h2>
+      <div id="books"><p class="empty-state">Loading...</p></div>
+    </div>
+
+    <div class="card" id="daysCard" style="display: none">
+      <h2 id="daysTitle">Days</h2>
+      <p class="days-summary" id="daysSummary"></p>
+      <div id="days"></div>
+      <div class="setting-row day-row add-day">
+        <span class="setting-label">Add a day</span>
+        <span class="setting-control">
+          <input type="date" id="newDate" />
+          <input type="number" id="newMinutes" min="1" max="1440" placeholder="min" />
+          <button class="btn btn-small" type="button" onclick="addDay(this)">Add</button>
+          <span class="row-msg" id="addMsg"></span>
+        </span>
+      </div>
+    </div>
+
+    </main>
+<!--#include file="shared/Footer.html.inc" -->
+  <script>
+    let lockedThrough;  // "YYYY-MM-DD", the last day the sync server has; null when none, undefined before loading
+    let currentPath = null;
+    let currentDays = [];
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+    }
+    function bookTitle(path) {
+      const name = path.substring(path.lastIndexOf('/') + 1);
+      return name.replace(/\.(epub|txt|md|xtc|xtch)$/i, '');
+    }
+    function isLocked(date) {
+      return !!lockedThrough && date <= lockedThrough;
+    }
+    function isoDay(d) {
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    function nextDay(date) {
+      const d = new Date(date + 'T12:00:00');
+      d.setDate(d.getDate() + 1);
+      return isoDay(d);
+    }
+    function niceDate(date) {
+      return new Date(date + 'T12:00:00').toLocaleDateString(undefined, {weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'});
+    }
+    function formatMinutes(m) {
+      return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
+    }
+    function showMsg(el, text, isError) {
+      el.textContent = text;
+      el.classList.toggle('error', !!isError);
+    }
+
+    async function loadBooks() {
+      const box = document.getElementById('books');
+      try {
+        const res = await fetch('/api/insights/books');
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        const firstLoad = lockedThrough === undefined;
+        lockedThrough = data.lockedThrough;
+        if (firstLoad && lockedThrough) {
+          document.getElementById('note').insertAdjacentHTML('beforeend',
+            ' Synced up to <strong>' + escapeHtml(niceDate(lockedThrough)) + '</strong>.');
+        }
+        const books = data.books.sort((a, b) => b.lastRead.localeCompare(a.lastRead));
+        if (books.length === 0) {
+          box.innerHTML = '<p class="empty-state">No reading time recorded yet.</p>';
+          return;
+        }
+        box.innerHTML = books.map(b =>
+          '<div class="setting-row book-row" role="button" tabindex="0" data-path="' + escapeHtml(b.path) + '">' +
+          '<span class="setting-label">' + escapeHtml(bookTitle(b.path)) +
+          '<br><span class="book-meta">' + formatMinutes(b.minutes) + ' · last read ' + escapeHtml(niceDate(b.lastRead)) +
+          (b.finished ? ' · finished' : '') + '</span></span><span class="chevron">›</span></div>').join('');
+        box.querySelectorAll('.book-row').forEach(row => {
+          row.classList.toggle('selected', row.dataset.path === currentPath);
+          row.addEventListener('click', () => openBook(row.dataset.path, true));
+          row.addEventListener('keydown', e => { if (e.key === 'Enter') openBook(row.dataset.path, true); });
+        });
+      } catch (e) {
+        box.innerHTML = '<p class="empty-state">Could not load insights: ' + escapeHtml(e.message) + '</p>';
+      }
+    }
+
+    function dayRow(d) {
+      const date = escapeHtml(d.date);
+      const label = '<span class="setting-label">' + escapeHtml(niceDate(d.date)) + '</span>';
+      if (isLocked(d.date)) {
+        return '<div class="setting-row day-row">' + label + '<span class="synced">' + formatMinutes(d.minutes) + ' · synced</span></div>';
+      }
+      return '<div class="setting-row day-row">' + label + '<span class="setting-control">' +
+        '<input type="number" min="0" max="1440" value="' + d.minutes + '" data-date="' + date + '" data-orig="' + d.minutes + '"> min' +
+        '<button class="btn btn-small save" type="button" disabled>Save</button>' +
+        '<button class="btn-small btn-delete" type="button">Delete</button>' +
+        '<span class="row-msg"></span></span></div>';
+    }
+
+    async function openBook(path, scroll) {
+      currentPath = path;
+      document.querySelectorAll('.book-row').forEach(r => r.classList.toggle('selected', r.dataset.path === path));
+      const card = document.getElementById('daysCard');
+      card.style.display = '';
+      document.getElementById('daysTitle').textContent = bookTitle(path);
+      const newDate = document.getElementById('newDate');
+      newDate.max = isoDay(new Date());
+      newDate.min = lockedThrough ? nextDay(lockedThrough) : '';
+      if (!newDate.value) newDate.value = newDate.max;
+      const box = document.getElementById('days');
+      box.innerHTML = '<p class="empty-state">Loading...</p>';
+      if (scroll) card.scrollIntoView({behavior: 'smooth', block: 'start'});
+      try {
+        const res = await fetch('/api/insights/book?path=' + encodeURIComponent(path));
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        currentDays = data.days.slice().reverse();
+        const total = currentDays.reduce((t, d) => t + d.minutes, 0);
+        document.getElementById('daysSummary').textContent = currentDays.length === 0 ? '' :
+          formatMinutes(total) + ' over ' + currentDays.length + (currentDays.length === 1 ? ' day' : ' days');
+        if (currentDays.length === 0) {
+          box.innerHTML = '<p class="empty-state">No reading days.</p>';
+          return;
+        }
+        box.innerHTML = currentDays.map(dayRow).join('');
+        box.querySelectorAll('.day-row').forEach(wireRow);
+      } catch (e) {
+        box.innerHTML = '<p class="empty-state">Could not load this book: ' + escapeHtml(e.message) + '</p>';
+      }
+    }
+
+    function wireRow(row) {
+      const input = row.querySelector('input');
+      if (!input) return;
+      const save = row.querySelector('.save');
+      const msg = row.querySelector('.row-msg');
+      input.addEventListener('input', () => { save.disabled = input.value === input.dataset.orig; showMsg(msg, ''); });
+      input.addEventListener('keydown', e => { if (e.key === 'Enter' && !save.disabled) save.click(); });
+      save.addEventListener('click', () => saveDay(input, msg));
+      row.querySelector('.btn-delete').addEventListener('click', () => deleteDay(input, msg));
+    }
+
+    async function postDay(date, minutes, msg) {
+      if (isLocked(date)) {
+        showMsg(msg, 'This day is already synced and cannot be edited.', true);
+        return false;
+      }
+      try {
+        const res = await fetch('/api/insights/day', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({path: currentPath, date: date, minutes: minutes})
+        });
+        if (!res.ok) {
+          showMsg(msg, await res.text(), true);
+          return false;
+        }
+      } catch (e) {
+        showMsg(msg, 'Could not reach the reader.', true);
+        return false;
+      }
+      await loadBooks();
+      await openBook(currentPath, false);
+      return true;
+    }
+
+    async function saveDay(input, msg) {
+      const minutes = parseInt(input.value, 10);
+      if (isNaN(minutes) || minutes < 0 || minutes > 1440) {
+        showMsg(msg, 'Enter 0 to 1440 minutes.', true);
+        return;
+      }
+      if (minutes === 0 && !confirm('Delete the reading time of ' + niceDate(input.dataset.date) + '?')) return;
+      const date = input.dataset.date;
+      if (!(await postDay(date, minutes, msg)) || minutes === 0) return;
+      const row = document.querySelector('#days input[data-date="' + date + '"]');
+      if (row) showMsg(row.parentElement.querySelector('.row-msg'), 'Saved.');
+    }
+
+    async function deleteDay(input, msg) {
+      if (!confirm('Delete the reading time of ' + niceDate(input.dataset.date) + '?')) return;
+      await postDay(input.dataset.date, 0, msg);
+    }
+
+    async function addDay() {
+      const msg = document.getElementById('addMsg');
+      const date = document.getElementById('newDate').value;
+      const minutesInput = document.getElementById('newMinutes');
+      const minutes = parseInt(minutesInput.value, 10);
+      if (!date || isNaN(minutes) || minutes < 1 || minutes > 1440) {
+        showMsg(msg, 'Choose a date and 1 to 1440 minutes.', true);
+        return;
+      }
+      if (date > isoDay(new Date())) {
+        showMsg(msg, 'That day has not happened yet.', true);
+        return;
+      }
+      const existing = currentDays.find(d => d.date === date);
+      if (existing && !confirm(niceDate(date) + ' already has ' + formatMinutes(existing.minutes) + '. Replace it with ' + formatMinutes(minutes) + '?')) return;
+      if (await postDay(date, minutes, msg)) {
+        minutesInput.value = '';
+        showMsg(msg, 'Added ' + formatMinutes(minutes) + ' on ' + niceDate(date) + '.');
+      }
+    }
+
+    document.getElementById('newMinutes').addEventListener('keydown', e => { if (e.key === 'Enter') addDay(); });
+    loadBooks();
+  </script>
+  </body>
+</html>

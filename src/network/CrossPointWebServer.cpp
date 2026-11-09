@@ -37,11 +37,13 @@
 #include <cstring>
 #include <string_view>
 
+#include "BookStats.h"
 #include "ClippingStore.h"
 #include "CrossPointSettings.h"
 #include "FontInstaller.h"
 #include "OpdsServerStore.h"
 #include "ProtectedPaths.h"
+#include "ReadingStatsStore.h"
 #include "SdCardFontSystem.h"
 #include "SettingsList.h"
 #include "WebDAVHandler.h"
@@ -50,6 +52,7 @@
 #include "html/FilesPageHtml.generated.h"
 #include "html/FontsPageHtml.generated.h"
 #include "html/HomePageHtml.generated.h"
+#include "html/InsightsPageHtml.generated.h"
 #include "html/PluginsPageHtml.generated.h"
 #include "html/RunnerPageHtml.generated.h"
 #include "html/SettingsPageHtml.generated.h"
@@ -59,6 +62,7 @@
 #include "html/js/epub_optimizerJs.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 #include "html/js/plugin_hostJs.generated.h"
+#include "stats/StatsEditor.h"
 #include "util/BookCacheUtils.h"
 #include "util/DeleteUtils.h"
 #include "util/DictionaryRegistry.h"
@@ -374,6 +378,11 @@ class CrossPointWebServer::RouteHandler final : public RequestHandler {
         {"/settings", HTTP_GET, [](S& s) { s.handleSettingsPage(); }, nullptr},
         {"/api/settings", HTTP_GET, [](S& s) { s.handleGetSettings(); }, nullptr},
         {"/api/settings", HTTP_POST, [](S& s) { s.handlePostSettings(); }, nullptr},
+
+        {"/insights", HTTP_GET, [](S& s) { s.handleInsightsPage(); }, nullptr},
+        {"/api/insights/books", HTTP_GET, [](S& s) { s.handleGetStatsBooks(); }, nullptr},
+        {"/api/insights/book", HTTP_GET, [](S& s) { s.handleGetStatsBook(); }, nullptr},
+        {"/api/insights/day", HTTP_POST, [](S& s) { s.handlePostStatsDay(); }, nullptr},
 
         {"/fonts", HTTP_GET, [](S& s) { s.handleFontsPage(); }, nullptr},
         {"/api/fonts", HTTP_GET, [](S& s) { s.handleFontList(); }, nullptr},
@@ -1672,6 +1681,127 @@ void CrossPointWebServer::handleDelete() const {
     server->send(200, "text/plain", "All items deleted successfully");
   } else {
     server->send(500, "text/plain", "Failed to delete some items: " + failedItems);
+  }
+}
+
+namespace {
+// "YYYY-MM-DD" for a day counted from 1970-01-01 (Howard Hinnant's civil_from_days).
+void civilDate(const int32_t z0, char out[11]) {
+  const int32_t z = z0 + 719468;
+  const int32_t era = (z >= 0 ? z : z - 146096) / 146097;
+  const auto doe = static_cast<uint32_t>(z - era * 146097);
+  const uint32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  const uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  const uint32_t mp = (5 * doy + 2) / 153;
+  const uint32_t d = doy - (153 * mp + 2) / 5 + 1;
+  const uint32_t m = mp < 10 ? mp + 3 : mp - 9;
+  const int32_t y = static_cast<int32_t>(yoe) + era * 400 + (m <= 2 ? 1 : 0);
+  snprintf(out, 11, "%04ld-%02lu-%02lu", static_cast<long>(y), static_cast<unsigned long>(m),
+           static_cast<unsigned long>(d));
+}
+// Days from 1970-01-01 to 2000-01-01: the sync markers count from 2000.
+constexpr int32_t DAYS_1970_TO_2000 = 10957;
+}  // namespace
+
+void CrossPointWebServer::handleInsightsPage() const {
+  sendStaticContent(server.get(), InsightsPageHtml, sizeof(InsightsPageHtml), InsightsPageHtmlETag, "text/html");
+}
+
+// The books with recorded time, and the last day the sync server has (days up to it cannot change).
+void CrossPointWebServer::handleGetStatsBooks() const {
+  ReadingStatsStore::Loaded stats;
+  if (!stats.loaded()) {
+    server->send(503, "text/plain", "Reading stats unavailable");
+    return;
+  }
+  server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server->send(200, "application/json", "");
+  ChunkedReply reply(*server);
+  JsonDocument doc;
+  const int32_t locked = statsEditor::lockedThroughDay();
+  char date[11];
+  reply.write("{\"lockedThrough\":");
+  if (locked > 0) {
+    civilDate(locked + DAYS_1970_TO_2000, date);
+    reply.write("\"");
+    reply.write(date);
+    reply.write("\"");
+  } else {
+    reply.write("null");
+  }
+  reply.write(",\"books\":[");
+  bool first = true;
+  for (const auto& b : READING_STATS_STORE.getBooks()) {
+    doc.clear();
+    doc["path"] = b.path;
+    doc["language"] = b.language;
+    doc["minutes"] = b.minutesRead;
+    doc["finished"] = READING_STATS_STORE.isFinished(b.path);
+    // lastReadDay counts from the store's own epoch, not 1970.
+    civilDate(b.lastReadDay - ReadingStatsStore::dayNumber(1970, 1, 1), date);
+    doc["lastRead"] = date;
+    if (!first) reply.write(",");
+    first = false;
+    serializeJson(doc, reply);
+  }
+  reply.write("]}");
+  reply.end();
+}
+
+// One book's reading days.
+void CrossPointWebServer::handleGetStatsBook() const {
+  const String path = server->arg("path");
+  BookStats book;
+  if (path.isEmpty() || !book.load(path.c_str())) {
+    server->send(404, "text/plain", "No stats for this book");
+    return;
+  }
+  server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server->send(200, "application/json", "");
+  ChunkedReply reply(*server);
+  char line[64];
+  snprintf(line, sizeof(line), "{\"sessions\":%lu,\"days\":[", static_cast<unsigned long>(book.getSessions()));
+  reply.write(line);
+  bool first = true;
+  for (const auto& d : book.getDays()) {
+    snprintf(line, sizeof(line), "%s{\"date\":\"%04u-%02u-%02u\",\"minutes\":%u}", first ? "" : ",", d.year, d.month,
+             d.day, d.minutes);
+    reply.write(line);
+    first = false;
+  }
+  reply.write("]}");
+  reply.end();
+}
+
+// {"path", "date": "YYYY-MM-DD", "minutes"}: sets one book's minutes on one day.
+void CrossPointWebServer::handlePostStatsDay() const {
+  JsonDocument doc;
+  if (!server->hasArg("plain") || deserializeJson(doc, server->arg("plain"))) {
+    server->send(400, "text/plain", "Invalid JSON");
+    return;
+  }
+  const char* path = doc["path"] | "";
+  const char* date = doc["date"] | "";
+  const int minutes = doc["minutes"] | -1;
+  unsigned y = 0, m = 0, d = 0;
+  if (!*path || sscanf(date, "%4u-%2u-%2u", &y, &m, &d) != 3 || minutes < 0 || minutes > 1440) {
+    server->send(400, "text/plain", "Need path, date and 0-1440 minutes");
+    return;
+  }
+  switch (statsEditor::setBookDay(path, static_cast<uint16_t>(y), static_cast<uint8_t>(m), static_cast<uint8_t>(d),
+                                  static_cast<uint16_t>(minutes))) {
+    case statsEditor::Result::Ok:
+      server->send(200, "text/plain", "OK");
+      return;
+    case statsEditor::Result::Locked:
+      server->send(409, "text/plain", "That day is already synced");
+      return;
+    case statsEditor::Result::BadDate:
+      server->send(400, "text/plain", "Invalid date");
+      return;
+    case statsEditor::Result::Failed:
+      server->send(500, "text/plain", "Could not save");
+      return;
   }
 }
 
