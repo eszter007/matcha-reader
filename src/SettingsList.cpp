@@ -1,5 +1,7 @@
 #include "SettingsList.h"
 
+#include "util/GeminiConfig.h"
+
 void forEachBaseSetting(const SettingVisitor visit, void* context) {
   // Load and save walk this list, so every condition here must be fixed before
   // settings load. Runtime probes belong in isHiddenOnDevice().
@@ -290,6 +292,34 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   emit(SettingInfo::Value(StrId::STR_WARMTH, &CrossPointSettings::frontlightWarmth, {0, 100, 5}, "frontlightWarmth"));
 #endif
   emit(SettingInfo::Toggle(StrId::STR_FRONTLIGHT, &CrossPointSettings::frontlightOn, "frontlightOn"));
+
+  // --- Translation (web; the device has its own Translation screen) ---
+  emit(SettingInfo::DynamicString(
+           StrId::STR_GEMINI_API_KEY,
+           [] {
+             std::string key;
+             gemini::readKey(key);
+             return key;
+           },
+           [](const std::string& v) { gemini::writeKey(v); }, "geminiApiKey", StrId::STR_TRANSLATION_SETTINGS)
+           .withObfuscated());
+  emit(SettingInfo::DynamicEnum(
+      StrId::STR_GEMINI_MODEL,
+      {StrId::STR_GEMINI_MODEL_DEFAULT, StrId::STR_GEMINI_MODEL_LITE, StrId::STR_GEMINI_MODEL_CUSTOM},
+      [] { return static_cast<uint8_t>(gemini::modelChoice()); },
+      [](const uint8_t v) {
+        // Custom takes its name from the field below.
+        if (v == static_cast<uint8_t>(gemini::ModelChoice::Default)) gemini::writeModel("");
+        if (v == static_cast<uint8_t>(gemini::ModelChoice::Lite)) gemini::writeModel(gemini::LITE_MODEL);
+      },
+      "geminiModelChoice", StrId::STR_TRANSLATION_SETTINGS));
+  emit(SettingInfo::DynamicString(
+      StrId::STR_GEMINI_CUSTOM_MODEL,
+      [] { return gemini::modelChoice() == gemini::ModelChoice::Custom ? gemini::readModel() : std::string(); },
+      [](const std::string& v) {
+        if (!v.empty()) gemini::writeModel(v);
+      },
+      "geminiCustomModel", StrId::STR_TRANSLATION_SETTINGS));
 
   // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
   emit(SettingInfo::DynamicString(
