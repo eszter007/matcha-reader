@@ -52,6 +52,12 @@ constexpr uint32_t WIFI_STACK_RESERVE = 36000;
 constexpr uint32_t MIN_HEAP_FOR_WIFI_INIT = 70000;
 static std::string apiKeyPath() { return sdsystem::findUserFile("gemini.key"); }
 constexpr const char* GEMINI_MODEL = "gemini-3.8-flash";
+// Tried when the model in use answers 503 (overloaded), 429 (quota) or 404 (not offered to this
+// key). Google sheds free-tier traffic first when a model is busy, so a lighter model often still
+// answers. An alias, so it follows Google's current lite model.
+constexpr const char* GEMINI_FALLBACK_MODEL = "gemini-flash-lite-latest";
+// Optional: a model name in this file, beside gemini.key, is tried first.
+static std::string modelPath() { return sdsystem::findUserFile("gemini.model"); }
 // The page behind the panel, kept across the full-screen Wi-Fi list and a silent restart.
 static std::string backgroundPath() { return sdsystem::path("translate_bg.bin"); }
 // A saved network either answers within this or is out of range; the Wi-Fi list takes over then.
@@ -277,6 +283,26 @@ bool EpubReaderTranslationActivity::readApiKey(std::string& keyOut) {
   return true;
 }
 
+// The model named in gemini.model, if any: one line, model-name characters only.
+static bool readUserModel(std::string& modelOut) {
+  char buf[64];
+  size_t len = Storage.readFileToBuffer(modelPath().c_str(), buf, sizeof(buf));
+  if (len == 0 || len >= sizeof(buf) - 1) return false;
+  size_t start = 0;
+  while (start < len && (buf[start] == ' ' || buf[start] == '\t' || buf[start] == '\r' || buf[start] == '\n' ||
+                         static_cast<unsigned char>(buf[start]) >= 0x80)) {  // a UTF-8 BOM too
+    start++;
+  }
+  size_t end = start;
+  while (end < len && ((buf[end] >= 'a' && buf[end] <= 'z') || (buf[end] >= '0' && buf[end] <= '9') ||
+                       buf[end] == '-' || buf[end] == '.' || buf[end] == '_')) {
+    end++;
+  }
+  if (end == start) return false;
+  modelOut.assign(buf + start, end - start);
+  return true;
+}
+
 // What the screen says when Google refuses the request. The status alone separates the causes a
 // reader can actually act on -- a rejected key, an account with no billing set up, a quota that
 // has run out -- from one another and from "the network is down", which is what a single generic
@@ -309,9 +335,12 @@ static std::string translationHttpError(const int httpCode) {
   return msg;
 }
 
-bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
+// One request to one model. Returns the HTTP status (negative when no connection), the body in
+// response.
+int EpubReaderTranslationActivity::postToModel(const std::string& apiKey, const std::string& model,
+                                               std::string& response) {
   std::string url = "https://generativelanguage.googleapis.com/v1beta/models/";
-  url += GEMINI_MODEL;
+  url += model;
   url += ":generateContent?key=";
   url += apiKey;
   // Only the translated text. The full reply also carries the model's thought signature and
@@ -320,6 +349,45 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
   // ran out of contiguous heap and aborted.
   url += "&$fields=candidates.content.parts.text";
 
+  JsonDocument reqDoc;
+  auto contents = reqDoc["contents"].to<JsonArray>();
+  auto part = contents.add<JsonObject>();
+  auto parts = part["parts"].to<JsonArray>();
+  auto textPart = parts.add<JsonObject>();
+  textPart["text"] = std::string(
+                         "Translate the following text to English. "
+                         "Return only the translation, no commentary.\n\n") +
+                     sourceText;
+
+  auto config = reqDoc["generationConfig"].to<JsonObject>();
+  config["maxOutputTokens"] = 2048;
+  // The model thinks before answering, and those tokens count against maxOutputTokens: at its
+  // default level a long page could use up the budget and return no translation, or outlast the
+  // timeout below. A translation needs little reasoning; "low" is the lowest level Gemini 3
+  // accepts. Older models take no thinkingLevel and reject a request that names one.
+  if (model.rfind("gemini-3", 0) == 0) config["thinkingConfig"].to<JsonObject>()["thinkingLevel"] = "low";
+
+  std::string body;
+  serializeJson(reqDoc, body);
+
+  freeink::SecureHttpClient http;
+  http.setInsecure();  // same as KOReaderSync: the wolfSSL transport has no CA bundle wired up
+  http.setTimeout(30000);
+  if (!http.begin(url)) {
+    LOG_ERR("XLAT", "Failed to open connection");
+    return -1;
+  }
+  http.addHeader("Content-Type", "application/json");
+
+  const int httpCode = http.POST(body);
+  response = http.getString();
+  http.end();
+
+  LOG_DBG("XLAT", "%s: HTTP %d (%u bytes)", model.c_str(), httpCode, static_cast<unsigned>(response.size()));
+  return httpCode;
+}
+
+bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
   // TLS/HTTP client init needs one large *contiguous* buffer (record buffers, X.509 parsing,
   // etc.), so the gate must check the largest allocatable block, not total free heap -- on a
   // fragmented heap (e.g. after CJK font/vertical-text work, which this session found leaves the
@@ -352,41 +420,24 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
     return false;
   }
 
-  JsonDocument reqDoc;
-  auto contents = reqDoc["contents"].to<JsonArray>();
-  auto part = contents.add<JsonObject>();
-  auto parts = part["parts"].to<JsonArray>();
-  auto textPart = parts.add<JsonObject>();
-  textPart["text"] = std::string(
-                         "Translate the following text to English. "
-                         "Return only the translation, no commentary.\n\n") +
-                     sourceText;
-
-  auto config = reqDoc["generationConfig"].to<JsonObject>();
-  config["maxOutputTokens"] = 2048;
-  // The model thinks before answering, and those tokens count against maxOutputTokens: at its
-  // default level a long page could use up the budget and return no translation, or outlast the
-  // timeout below. A translation needs little reasoning; "low" is the lowest level 3.8 accepts.
-  config["thinkingConfig"].to<JsonObject>()["thinkingLevel"] = "low";
-
-  std::string body;
-  serializeJson(reqDoc, body);
-
-  freeink::SecureHttpClient http;
-  http.setInsecure();  // same as KOReaderSync: the wolfSSL transport has no CA bundle wired up
-  http.setTimeout(30000);
-  if (!http.begin(url)) {
-    LOG_ERR("XLAT", "Failed to open connection");
-    errorMessage = tr(STR_TRANSLATION_FAILED);
-    return false;
+  // The reader's own model first, then Matcha's, then the lighter fallback; each only when the one
+  // before is busy, out of quota or not offered to this key.
+  std::string models[3];
+  int modelCount = 0;
+  std::string userModel;
+  if (readUserModel(userModel)) models[modelCount++] = userModel;
+  for (const char* model : {GEMINI_MODEL, GEMINI_FALLBACK_MODEL}) {
+    if (modelCount == 0 || models[0] != model) models[modelCount++] = model;
   }
-  http.addHeader("Content-Type", "application/json");
-
-  const int httpCode = http.POST(body);
-  const std::string response = http.getString();
-  http.end();
-
-  LOG_DBG("XLAT", "Gemini response: HTTP %d (%u bytes)", httpCode, static_cast<unsigned>(response.size()));
+  int httpCode = 0;
+  std::string response;
+  for (int i = 0; i < modelCount; ++i) {
+    httpCode = postToModel(apiKey, models[i], response);
+    if (httpCode == 200 && !response.empty()) break;
+    if (httpCode != 503 && httpCode != 429 && httpCode != 404) break;
+    if (i + 1 < modelCount)
+      LOG_INF("XLAT", "%s answered %d; trying %s", models[i].c_str(), httpCode, models[i + 1].c_str());
+  }
 
   if (httpCode != 200 || response.empty()) {
     LOG_ERR("XLAT", "API call failed: http=%d", httpCode);
