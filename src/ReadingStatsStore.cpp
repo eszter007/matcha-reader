@@ -207,6 +207,42 @@ void ReadingStatsStore::addBookMinutes(const char* bookPath, const char* languag
   books.push_back({bookPath, lang, minutes, today});
 }
 
+void ReadingStatsStore::adjustBookDay(const char* bookPath, const uint16_t year, const uint8_t month, const uint8_t day,
+                                      const int32_t delta) {
+  if (!bookPath || !*bookPath || delta == 0) return;
+  BookReading* book = nullptr;
+  for (auto& b : books) {
+    if (b.path == bookPath) book = &b;
+  }
+  const char* language = book ? book->language.c_str() : "";
+  if (delta > 0) {
+    const auto add = static_cast<uint16_t>(delta > UINT16_MAX ? UINT16_MAX : delta);
+    addMinutes(year, month, day, add);
+    addLanguageMinutes(language, add, year, month, day);
+    if (book) book->minutesRead += add;
+    return;
+  }
+  const auto take = static_cast<uint32_t>(-delta);
+  const int epoch = daysSinceEpoch(year, month, day);
+  for (auto it = days.begin(); it != days.end(); ++it) {
+    if (daysSinceEpoch(it->year, it->month, it->day) != epoch) continue;
+    it->minutesRead = static_cast<uint16_t>(it->minutesRead > take ? it->minutesRead - take : 0);
+    if (it->minutesRead == 0) days.erase(it);
+    break;
+  }
+  char lang[4];
+  normalizeLanguage(language, lang);
+  for (auto it = languageDays.begin(); it != languageDays.end(); ++it) {
+    if (daysSinceEpoch(it->year, it->month, it->day) != epoch || memcmp(it->language, lang, sizeof(lang)) != 0) {
+      continue;
+    }
+    it->minutesRead = static_cast<uint16_t>(it->minutesRead > take ? it->minutesRead - take : 0);
+    if (it->minutesRead == 0) languageDays.erase(it);
+    break;
+  }
+  if (book) book->minutesRead = book->minutesRead > take ? book->minutesRead - take : 0;
+}
+
 void ReadingStatsStore::addLanguageMinutes(const char* language, const uint16_t minutes, const uint16_t year,
                                            const uint8_t month, const uint8_t day) {
   char lang[4];

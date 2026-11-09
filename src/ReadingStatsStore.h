@@ -154,6 +154,11 @@ class ReadingStatsStore {
   void addBookMinutes(const char* bookPath, const char* language, uint16_t minutes, uint16_t year, uint8_t month,
                       uint8_t day);
   const std::vector<BookReading>& getBooks() const { return books; }
+  // A correction to one book's day (the web Stats editor): `delta` minutes, negative to take off, on
+  // the day's total, the book language's day and the book's total. Nothing drops below zero, a day
+  // left at zero is removed, and the book's last-read day is kept. Time of day has no dates, so it
+  // stays as it was.
+  void adjustBookDay(const char* bookPath, uint16_t year, uint8_t month, uint8_t day, int32_t delta);
   // Same minutes again, bucketed by day and language. Unlike addBookMinutes this DOES record an
   // empty language, as its own "unknown" bucket -- dropping it would make the per-language days
   // silently disagree with the overall ones for anyone reading TXT/XTC.

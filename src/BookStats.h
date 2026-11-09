@@ -60,6 +60,11 @@ class BookStats {
   // saved for Anki. One SD write per call, so lookup screens batch theirs until they close.
   static bool addCounts(const char* bookPath, uint32_t lookups, uint32_t sentences);
 
+  // Sets one day's minutes and saves (the web Stats editor); 0 removes the day. oldMinutes gets what
+  // the day held before, so the caller can correct the overall totals by the difference.
+  static bool setDayMinutes(const char* bookPath, uint16_t year, uint8_t month, uint8_t day, uint16_t minutes,
+                            uint16_t& oldMinutes);
+
   // Adds reading minutes to the day and saves (the readers' periodic flush).
   static bool addMinutes(const char* bookPath, uint16_t year, uint8_t month, uint8_t day, uint16_t minutes);
 

@@ -737,6 +737,12 @@ Good to know:
 - To keep a stored password while editing, leave the password field empty.
 - You can save a hidden network here. Whether the device can then connect to it depends on the device's own Wi-Fi connection screen.
 
+**Insights:** the **Edit Insights** tab of the same web page lists every book with recorded reading time. Pick a book
+to see its reading days, change a day's minutes (0 removes the day), or add a missing day. Your totals,
+streaks and calendar follow the change. Only days that have not been synced yet can be changed: once a day
+reaches the sync server, the server keeps the higher number and sends it back at the next sync. The time of day
+breakdown and the number of sessions stay as they were.
+
 #### 3.6.11 KOReader Sync Quick Setup
 
 Sync keeps your reading position the same on every device that uses the same sync server and account. That includes KOReader apps on phones and other e-readers.

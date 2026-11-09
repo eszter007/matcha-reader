@@ -125,6 +125,12 @@ class CrossPointWebServer {
   void handleGetSettings() const;
   void handlePostSettings();
 
+  // Insights editor (reading time per book and day)
+  void handleInsightsPage() const;
+  void handleGetStatsBooks() const;
+  void handleGetStatsBook() const;
+  void handlePostStatsDay() const;
+
   // Font management handlers
   void handleFontsPage() const;
   void handleFontList() const;
