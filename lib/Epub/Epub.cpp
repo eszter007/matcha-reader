@@ -128,13 +128,21 @@ class CancellablePrint final : public Print {
   size_t write(uint8_t value) override { return write(&value, 1); }
   size_t write(const uint8_t* buffer, size_t size) override {
     if (shouldCancel && shouldCancel(cancelCtx)) return 0;
+    // Background work (a cover conversion, a lookup scan) runs at the main loop's priority. A long
+    // decrypt-and-write would keep the idle task off the CPU until the task watchdog resets.
+    if (millis() - lastYieldMs >= YIELD_EVERY_MS) {
+      vTaskDelay(1);
+      lastYieldMs = millis();
+    }
     return output.write(buffer, size);
   }
 
  private:
+  static constexpr uint32_t YIELD_EVERY_MS = 100;
   Print& output;
   BmpConvertCancelFn shouldCancel;
   void* cancelCtx;
+  uint32_t lastYieldMs = millis();
 };
 
 // Notes when the sink took less than it was offered: an early-stop reader (an image-header probe)
