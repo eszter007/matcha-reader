@@ -118,7 +118,7 @@ The X4 Pro and the M5Stack Paper Mono have a built-in light. On the X4 Pro you c
 
 * **Open the panel:** Swipe down from the top edge of the screen. This works on almost every screen, including Home, Browse Files and a book. Tapping the status bar at the top also opens it.
 * **Adjust the light:** Drag the **Brightness** and **Warmth** sliders. The light changes as you drag.
-* **Turn the light on or off:** Tap the **Light** button in the row of quick buttons, or press **Confirm**. The same row also has buttons for **Night Mode**, a screen refresh, screen rotation and touch controls, and on devices with Bluetooth a button that turns the Bluetooth page turner on or off.
+* **Turn the light on or off:** Tap the **Light** button in the row of quick buttons, or press **Confirm**. The same row has **Dark**, **Refresh**, **Rotate** and **Touch**, and on devices with Bluetooth a **Bluetooth** button for the page turner. Each icon shows what a tap does: **Rotate** shows the page the way it will turn to.
 * **Use the buttons:** While the panel is open, **Side Up**/**Side Down**, **Left**/**Right** and the page-turn buttons change the brightness. Hold a button to keep changing it. On devices with side buttons on the edge, the upper button always makes the light brighter.
 * **Close the panel:** Swipe up, tap below the panel, or press **Back**.
 * **Quick on/off (X4 Pro only):** Double-click **Power**. This shortcut is **Double-Click Power for Light** in **Settings → Controls → Shortcuts** and is on by default.
