@@ -131,6 +131,11 @@ class GfxRenderer {
   mutable HalDisplay::RefreshMode promotedRefresh_ = HalDisplay::FAST_REFRESH;
   // Swap in (and clear) the promoted mode, if one is pending.
   HalDisplay::RefreshMode applyPromotedRefresh(HalDisplay::RefreshMode refreshMode) const;
+  // See setFastRefreshCleanup(): 0 = off, and the fast refreshes since the last clean one.
+  mutable uint8_t fastCleanupEvery_ = 0;
+  mutable uint8_t fastSinceClean_ = 0;
+  // Turns every fastCleanupEvery_-th fast refresh in a row into a HALF one.
+  HalDisplay::RefreshMode applyFastCleanup(HalDisplay::RefreshMode refreshMode) const;
 
   // Tiled grayscale strip target. When active, drawPixel()/clearScreen()
   // operate on a caller-owned scratch holding one horizontal band of physical
@@ -380,6 +385,9 @@ class GfxRenderer {
     promotedRefreshPending_ = true;
     promotedRefresh_ = mode;
   }
+  // Every `every`-th fast refresh in a row runs as HALF, clearing what fast passes leave behind on a
+  // panel whose fast waveform ghosts. 0 turns it off. Set per screen by ActivityManager.
+  void setFastRefreshCleanup(const uint8_t every) const { fastCleanupEvery_ = every; }
   // For a caller whose waveform is not a displayBuffer() (a deferred grayscale base): whether a
   // promotion is waiting, and taking it -- `mode` when none is.
   [[nodiscard]] bool refreshPromotionPending() const { return promotedRefreshPending_; }
