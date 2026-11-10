@@ -42,6 +42,7 @@
 namespace fui = freeink::ui;
 
 namespace {
+constexpr unsigned long GO_HOME_MS = 1000;
 // ACTION_PAGE values: which pagination link a tab follows.
 constexpr int16_t PAGE_FIRST = 0;
 constexpr int16_t PAGE_PREV = 1;
@@ -529,7 +530,8 @@ void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
 }
 
 void OpdsBookBrowserActivity::onBackButton() {
-  if (state == State::CHECK_WIFI || navigationHistory.empty()) {
+  // Holding Back leaves the catalog from any depth.
+  if (state == State::CHECK_WIFI || navigationHistory.empty() || mappedInput.getHeldTime() >= GO_HOME_MS) {
     leaveBrowser();
     return;
   }

@@ -697,6 +697,9 @@ void HomeActivity::render(RenderLock&&) {
       firstRenderDone = true;
       requestUpdate();
     }
+    renderer.displayBuffer(cleanInitialRefresh && !firstRenderDone ? HalDisplay::HALF_REFRESH
+                                                                   : HalDisplay::FAST_REFRESH);
+    firstRenderDone = true;
     return;
   }
   // A cover snapshot from the other output polarity holds the other byte form (night mode keeps images pre-inverted so
