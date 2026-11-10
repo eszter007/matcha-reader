@@ -10,9 +10,6 @@
 
 namespace {
 constexpr int ICON_SIZE = 32;
-// Underline under the tab you are in, matching the cover grid's previous fui tab band.
-constexpr int UNDERLINE_HEIGHT = 2;
-constexpr int UNDERLINE_GAP = 6;
 
 struct TabIcons {
   const uint8_t* outline;
@@ -52,7 +49,7 @@ void HomeTabBar::draw(const GfxRenderer& renderer, const HomeTab active, const i
   const int bandTop = top(renderer);
   const int step = slotStep(renderer);
   if (step <= 0) return;
-  const int iconY = bandTop + (height() - ICON_SIZE - UNDERLINE_GAP - UNDERLINE_HEIGHT) / 2;
+  const int iconY = bandTop + (height() - ICON_SIZE) / 2;
 
   renderer.fillRect(0, bandTop, renderer.getScreenWidth(), height(), false);
 
@@ -60,7 +57,7 @@ void HomeTabBar::draw(const GfxRenderer& renderer, const HomeTab active, const i
   // board's cursor enters the band on the active slot, and with nothing drawn there the first
   // Left/Right press looked like a dead key. Nothing moves a cursor into the band on a board
   // without those keys, so `focused` is simply -1 there. On a touch board it shows only while
-  // buttons are in use; the underline still marks the tab you are in.
+  // buttons are in use; the filled icon marks the tab you are in.
   const int cursor = MappedInputManager::buttonCursorShown() ? focused : -1;
   for (int i = 0; i < COUNT; ++i) {
     const int slotX = barLeft() + i * step;
@@ -69,12 +66,6 @@ void HomeTabBar::draw(const GfxRenderer& renderer, const HomeTab active, const i
       UITheme::drawFocusRing(renderer, Rect{slotX, bandTop, step, height()});
     }
     renderer.drawIcon(isActive ? ICONS[i].filled : ICONS[i].outline, slotX + (step - ICON_SIZE) / 2, iconY, ICON_SIZE);
-    // The underline marks where the cursor is once it is in the band, and which tab you are in
-    // only while it is not: both at once read as two selections.
-    if (cursor >= 0 ? i == cursor : isActive) {
-      const int lineWidth = ICON_SIZE + 8;
-      renderer.fillRect(slotX + (step - lineWidth) / 2, iconY + ICON_SIZE + UNDERLINE_GAP, lineWidth, UNDERLINE_HEIGHT);
-    }
   }
 }
 
