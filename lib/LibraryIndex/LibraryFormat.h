@@ -33,7 +33,7 @@ inline constexpr uint8_t CLIX_FORMAT_VERSION = 2;
 // Bump when the fold, a permutation's sort key, or the set of entries that count as books changes.
 // Forces fold and ranks to be rebuilt while firstSeen values are preserved, so
 // arrival history survives.
-inline constexpr uint8_t CLIX_FOLD_VERSION = 5;
+inline constexpr uint8_t CLIX_FOLD_VERSION = 6;
 
 inline constexpr uint32_t CLIX_ALIGN = 512;
 inline constexpr size_t CLIX_FOLD_BYTES = 96;

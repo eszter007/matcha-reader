@@ -95,6 +95,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 113 (fork numbering)
+
+Upstream's version 74, merged. The binary layout is unchanged and completed and partial sections
+are rebuilt. Runtime TrueType advances no longer round up before the final pixel snap, which can
+change cached line breaks and word positions. Bitmap fonts and `.cpfont` files are unchanged.
+Book metadata and saved progress are kept.
+
 ### Version 112 (fork numbering)
 
 The header gains a `u32` after the word spacing: the signature of the publisher fonts (`@font-face`)
@@ -758,6 +765,7 @@ fold bump rebuilds ranks while preserving `firstSeen`.
 Fold version 4 preserves leading articles in title sort and search keys.
 Fold version 5 adds manga: a `.matcha` file, and a folder holding `panels.idx`, which is one
 book keyed by that file's size and time and titled by the folder name.
+Fold version 6 drops all Unicode 18.0 Hebrew combining marks, including U+05C8 and U+05C9.
 
 Sections are 512-byte aligned so each starts on an SD block boundary.
 

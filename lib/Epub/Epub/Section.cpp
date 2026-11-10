@@ -304,7 +304,10 @@ namespace {
 // v111: upstream merge (their v72 and v73): ruby layout reserves room for an overhanging
 //       annotation and spaces the base under a wider one, as Chromium does; TrueType fonts
 //       advance .notdef for missing glyphs. Lines move. The framing is unchanged.
-constexpr uint8_t SECTION_FILE_VERSION = 112;
+// v113: upstream merge (their v74): TrueType glyph advances keep their fraction until pixel
+//       placement instead of being rounded twice, so lines set in a vector font move. The framing
+//       is unchanged.
+constexpr uint8_t SECTION_FILE_VERSION = 113;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
