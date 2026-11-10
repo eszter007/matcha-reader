@@ -532,6 +532,9 @@ void MangaWordLookupActivity::loop() {
 
 // Shown only until the first word is found: the entry itself opens in the definition panel.
 void MangaWordLookupActivity::render(RenderLock&&) {
+  // A found word opens in the panel on the next tick; drawing this placeholder first flashed an
+  // empty "No match found" panel for one refresh.
+  if (hasResult && !panelFailed) return;
   const auto layout = DictionaryPanel::draw(renderer, "", nullptr, nullptr, nullptr, false, false);
   const bool stillWorking = lookupInFlight || !scan.isDone();
   UITheme::drawCenteredText(renderer, layout.body, UI_12_FONT_ID, layout.body.y + layout.body.height / 2,
