@@ -2,6 +2,7 @@
 
 #include <EpdFontFamily.h>
 #include <HalDisplay.h>
+#include <VectorFontSupport.h>
 
 namespace BidiUtils {
 // Paragraph base direction for the Unicode BiDi algorithm (UAX#9).
@@ -97,6 +98,24 @@ class GfxRenderer {
   // TTF (vector) fonts: rebuilt per page by ensureSdCardFontReady(). Mutable for
   // the same reason as sdCardFonts_ (const layout path triggers a rebuild).
   mutable std::map<int, TtfEpdFont*> ttfFonts_;
+
+#if CROSSPOINT_VECTOR_FONTS
+  // Text drawn larger or smaller than its vector font (CSS font-size, headings) is drawn from a
+  // copy of the font rasterized at that size; other fonts draw the scaled bitmap. Layout still
+  // measures with the registered font; only the glyph images change.
+  struct SizedVectorFace {
+    const TtfEpdFont* root = nullptr;
+    uint16_t pointSize = 0;
+    TtfEpdFont* font = nullptr;  // owned; nullptr with root set = creating it failed
+    uint32_t lastUse = 0;
+  };
+  // E.g. h1-h3 and a span; more sizes than this on one page rebuild faces in turn.
+  static constexpr size_t SIZED_VECTOR_FACE_SLOTS = 4;
+  mutable SizedVectorFace sizedVectorFaces_[SIZED_VECTOR_FACE_SLOTS];
+  mutable uint32_t sizedVectorClock_ = 0;
+#endif
+  // Frees the copies made from `root`; nullptr frees all of them.
+  void releaseSizedVectorFaces(const TtfEpdFont* root) const;
 
   // Mutable because drawText() is const but needs to delegate scan-mode
   // recording to the (non-const) FontCacheManager. Same pragmatic compromise
@@ -222,7 +241,10 @@ class GfxRenderer {
  public:
   explicit GfxRenderer(HalDisplay& halDisplay)
       : display(halDisplay), renderMode(BW), orientation(Portrait), fadingFix(false) {}
-  ~GfxRenderer() { freeBwBufferChunks(); }
+  ~GfxRenderer() {
+    releaseSizedVectorFaces(nullptr);
+    freeBwBufferChunks();
+  }
 
   // Setup
   void begin();  // must be called right after display.begin()
@@ -294,7 +316,11 @@ class GfxRenderer {
   // rebuilds their per-page glyph set on demand — the eager analogue of the SD
   // font prewarm. The TtfEpdFont is owned by the caller (SdCardFontSystem).
   void registerTtfFont(int fontId, TtfEpdFont* font) { ttfFonts_[fontId] = font; }
-  void unregisterTtfFont(int fontId) { ttfFonts_.erase(fontId); }
+  // Also drops the sized copies made from this font: they borrow its FreeType faces, so owners
+  // unregister a font before they free or reload it.
+  void unregisterTtfFont(int fontId);
+  // The copy of `fontId`'s vector face at `scale` (8.8), or nullptr to draw the scaled bitmap.
+  TtfEpdFont* sizedVectorFace(int fontId, uint16_t scale) const;
   const std::map<int, TtfEpdFont*>& getTtfFonts() const { return ttfFonts_; }
   // True when this id is backed by a vector (TTF/OTF) face, whose glyphs are rasterized on
   // demand rather than held in a resident table. Measurement has to resolve those through

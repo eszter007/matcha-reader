@@ -12,6 +12,7 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <new>
 
 #include "../Memory/Memory.h"
 #include "FontCacheManager.h"
@@ -236,9 +237,89 @@ void GfxRenderer::begin() {
                                 for (auto& entry : ttfFonts_) {
                                   if (entry.second) entry.second->releaseResidentCaches();
                                 }
+                                // Shed, never delete: the sink can run from inside a sized face's
+                                // own glyph fault, which releaseResidentCaches() already skips.
+                                for (auto& slot : sizedVectorFaces_) {
+                                  if (slot.font) slot.font->releaseResidentCaches();
+                                }
                                 const size_t after = freeink::MemoryManager::instance().freeBytes();
                                 return after > before ? after - before : 0;
                               }});
+#endif
+}
+
+void GfxRenderer::unregisterTtfFont(const int fontId) {
+  const auto it = ttfFonts_.find(fontId);
+  if (it == ttfFonts_.end()) return;
+#if CROSSPOINT_VECTOR_FONTS
+  // Only a root owns FreeType faces; a registered variant (a UI or lookup size) borrows them.
+  if (it->second && it->second->root() == it->second) releaseSizedVectorFaces(it->second);
+#endif
+  ttfFonts_.erase(it);
+}
+
+void GfxRenderer::releaseSizedVectorFaces(const TtfEpdFont* root) const {
+#if CROSSPOINT_VECTOR_FONTS
+  for (auto& slot : sizedVectorFaces_) {
+    if (slot.root == nullptr || (root != nullptr && slot.root != root)) continue;
+    delete slot.font;
+    slot = {};
+  }
+#else
+  (void)root;
+#endif
+}
+
+TtfEpdFont* GfxRenderer::sizedVectorFace(const int fontId, const uint16_t scale) const {
+#if CROSSPOINT_VECTOR_FONTS
+  // Below this, a few percent of size is less than a pixel of stretch and not worth a face.
+  static constexpr uint16_t MIN_POINT_SIZE = 6;
+  static constexpr uint16_t MAX_POINT_SIZE = 96;
+  // A cap, not a reservation: the arena (PSRAM, FontPsram) grows to what the page draws. A
+  // paragraph of large kanji is a few hundred glyphs of ~1 KB each.
+  static constexpr size_t GLYPH_CACHE_BYTES = 256 * 1024;
+  static constexpr uint16_t MAX_GLYPHS = 1024;
+
+  if (scale == 256) return nullptr;
+  const auto it = ttfFonts_.find(fontId);
+  if (it == ttfFonts_.end() || it->second == nullptr) return nullptr;
+  TtfEpdFont* base = it->second;
+  const uint32_t target = (static_cast<uint32_t>(base->pointSize()) * scale + 128) / 256;
+  if (target == base->pointSize() || target < MIN_POINT_SIZE || target > MAX_POINT_SIZE) return nullptr;
+
+  const TtfEpdFont* root = base->root();
+  SizedVectorFace* victim = &sizedVectorFaces_[0];
+  for (auto& slot : sizedVectorFaces_) {
+    if (slot.root == root && slot.pointSize == target) {
+      slot.lastUse = ++sizedVectorClock_;
+      return slot.font;  // nullptr when creating it failed: stay on the scaled bitmap
+    }
+    if (slot.root == nullptr) {
+      victim = &slot;
+    } else if (victim->root != nullptr && slot.lastUse < victim->lastUse) {
+      victim = &slot;
+    }
+  }
+
+  delete victim->font;
+  *victim = {};
+  // The slot is filled only once the face works; a failure is remembered so it is not retried
+  // per glyph, until the root is released or the slot is reused.
+  auto* face = new (std::nothrow) TtfEpdFont();
+  if (face == nullptr) {
+    LOG_ERR("GFX", "OOM: sized vector face %upt", static_cast<unsigned>(target));
+  } else if (!face->loadVariantOf(*base, static_cast<uint16_t>(target), /*twoBit=*/true, GLYPH_CACHE_BYTES,
+                                  MAX_GLYPHS)) {
+    LOG_ERR("GFX", "Sized vector face %upt failed", static_cast<unsigned>(target));
+    delete face;
+    face = nullptr;
+  }
+  *victim = {root, static_cast<uint16_t>(target), face, ++sizedVectorClock_};
+  return face;
+#else
+  (void)fontId;
+  (void)scale;
+  return nullptr;
 #endif
 }
 
@@ -950,6 +1031,28 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
   }
 }
 
+// Draws one glyph of a word set at `scale`. A vector font's own glyph comes from a copy of the
+// font rasterized at that size, at the same pen position, so it stays sharp; everything else
+// (bitmap fonts, glyphs borrowed from a fallback, SUP/SUB) is the scaled bitmap.
+template <TextRotation Rotation = TextRotation::None>
+static void drawGlyphAtScale(const GfxRenderer& renderer, const GfxRenderer::RenderMode renderMode, const int fontId,
+                             const EpdFontFamily& font, const uint32_t cp, const int cursorX, const int cursorY,
+                             const bool black, const EpdFontFamily::Style style, const uint16_t scale) {
+#if CROSSPOINT_VECTOR_FONTS
+  const bool supSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
+  if (scale != 256 && !supSub && font.getDataForGlyph(cp, style) == font.getData(style)) {
+    if (TtfEpdFont* sized = renderer.sizedVectorFace(fontId, scale)) {
+      const EpdFontFamily sharp = sized->family();
+      renderCharImpl<Rotation>(renderer, renderMode, sharp, cp, cursorX, cursorY, black, style);
+      return;
+    }
+  }
+#else
+  (void)fontId;
+#endif
+  renderCharAtScale<Rotation>(renderer, renderMode, font, cp, cursorX, cursorY, black, style, scale);
+}
+
 // IMPORTANT: This function is in critical rendering path and is called for every pixel. Please keep it as simple and
 // efficient as possible.
 void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
@@ -1342,7 +1445,7 @@ int GfxRenderer::layoutTextScaled(const int resolvedFontId, const int x, const i
     } else {
       prevScale = scale;
     }
-    if (draw) renderCharAtScale(*this, renderMode, font, cp, lastBaseX, yPos, black, style, prevScale);
+    if (draw) drawGlyphAtScale(*this, renderMode, resolvedFontId, font, cp, lastBaseX, yPos, black, style, prevScale);
     prevCp = cp;
   }
   pen256 += fp4::toPixel(prevAdvanceFP) * prevScale;  // final glyph's advance
@@ -3782,10 +3885,11 @@ void GfxRenderer::drawTextRotatedScaled(const int fontId, const int x, const int
     }
     const int offset = static_cast<int>((pen256 + 128) / 256);
     if (clockwise) {
-      renderCharAtScale<TextRotation::Rotated90CW>(*this, renderMode, font, cp, x, y - offset, black, style, prevScale);
+      drawGlyphAtScale<TextRotation::Rotated90CW>(*this, renderMode, fontId, font, cp, x, y - offset, black, style,
+                                                  prevScale);
     } else {
-      renderCharAtScale<TextRotation::Rotated90CCW>(*this, renderMode, font, cp, x, y + offset, black, style,
-                                                    prevScale);
+      drawGlyphAtScale<TextRotation::Rotated90CCW>(*this, renderMode, fontId, font, cp, x, y + offset, black, style,
+                                                   prevScale);
     }
     prevCp = cp;
   }

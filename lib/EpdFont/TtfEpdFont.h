@@ -75,6 +75,10 @@ class TtfEpdFont {
 
   EpdFontFamily family() const;
 
+  uint16_t pointSize() const { return pointSize_; }
+  // The font whose FreeType faces this one draws with: itself, or the master a variant borrows.
+  const TtfEpdFont* root() const { return master_ ? master_ : this; }
+
   // Whether the face's cmap carries this codepoint. Answered from the always-live regular face,
   // so it holds before any glyph has been rasterized -- which is what the companion-font
   // decision needs: a vector family has no resident glyph table to inspect.
