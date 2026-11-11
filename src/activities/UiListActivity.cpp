@@ -308,6 +308,9 @@ void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, c
   if (ringFocus() != TabRing::Focus::Content) props.selectedIndex = -1;
   // A touch board draws no row cursor until a button is pressed (see buttonCursorShown).
   if (!MappedInputManager::buttonCursorShown()) props.selectedIndex = -1;
+  // With no cursor drawn, the list cannot report the selection as drawn, and a pending follow
+  // would walk the viewport down until the selected row sat at the top.
+  if (props.selectedIndex < 0) n.followPending = false;
 }
 
 void UiListActivity::drawChrome() {
