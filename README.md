@@ -35,7 +35,7 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
 
 **Vocabulary history.** Optionally keep every word you look up, in any language and in manga, in `Vocabulary.txt` on the SD card. See [Guide §6.1](USER_GUIDE.md#vocabulary-history).
 
-**Page translation.** Translates the page to English with Gemini, in the same panel. Needs Wi-Fi and your own API key. See [Guide §6.2](USER_GUIDE.md#62-page-translation).
+**Page translation.** Translates the page with Gemini, into English or a language you pick in the settings, in the same panel. Needs Wi-Fi and your own API key. See [Guide §6.2](USER_GUIDE.md#62-page-translation).
 
 <p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
 

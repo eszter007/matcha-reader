@@ -293,10 +293,11 @@ int EpubReaderTranslationActivity::postToModel(const std::string& apiKey, const 
   auto part = contents.add<JsonObject>();
   auto parts = part["parts"].to<JsonArray>();
   auto textPart = parts.add<JsonObject>();
-  textPart["text"] = std::string(
-                         "Translate the following text to English. "
-                         "Return only the translation, no commentary.\n\n") +
-                     sourceText;
+  std::string prompt = "Translate the following text to ";
+  prompt += gemini::targetLanguageName(SETTINGS.translationTarget);
+  prompt += ". Return only the translation, no commentary.\n\n";
+  prompt += sourceText;
+  textPart["text"] = prompt;
 
   auto config = reqDoc["generationConfig"].to<JsonObject>();
   config["maxOutputTokens"] = 2048;

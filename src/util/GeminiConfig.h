@@ -1,5 +1,7 @@
 #pragma once
 
+#include <I18n.h>
+
 #include <cstdint>
 #include <string>
 
@@ -28,5 +30,42 @@ bool writeModel(const std::string& model);
 // The model setting as a choice: the default, the lite model, or any other name.
 enum class ModelChoice : uint8_t { Default, Lite, Custom };
 ModelChoice modelChoice();
+
+// Languages page translation can translate into: the label shown in the settings, and the
+// English name the request asks the model for. Persisted by index: append only.
+struct TargetLanguage {
+  StrId label;
+  const char* promptName;
+};
+constexpr TargetLanguage TARGET_LANGUAGES[] = {
+    {StrId::STR_XLAT_LANG_EN, "English"},
+    {StrId::STR_XLAT_LANG_DE, "German"},
+    {StrId::STR_XLAT_LANG_FR, "French"},
+    {StrId::STR_XLAT_LANG_ES, "Spanish"},
+    {StrId::STR_XLAT_LANG_IT, "Italian"},
+    {StrId::STR_XLAT_LANG_PT, "Portuguese"},
+    {StrId::STR_XLAT_LANG_NL, "Dutch"},
+    {StrId::STR_XLAT_LANG_HU, "Hungarian"},
+    {StrId::STR_XLAT_LANG_PL, "Polish"},
+    {StrId::STR_XLAT_LANG_RU, "Russian"},
+    {StrId::STR_XLAT_LANG_UK, "Ukrainian"},
+    {StrId::STR_XLAT_LANG_JA, "Japanese"},
+    {StrId::STR_XLAT_LANG_ZH, "Simplified Chinese"},
+    {StrId::STR_XLAT_LANG_KO, "Korean"},
+};
+constexpr uint8_t TARGET_LANGUAGE_COUNT = sizeof(TARGET_LANGUAGES) / sizeof(TARGET_LANGUAGES[0]);
+// The translationTarget value that means "the language typed in gemini.lang".
+constexpr uint8_t TARGET_CUSTOM = TARGET_LANGUAGE_COUNT;
+constexpr size_t CUSTOM_LANGUAGE_MAX = 40;
+
+// The typed target language, trimmed, or "" when there is none.
+std::string readCustomLanguage();
+// Saves it; "" removes the file.
+bool writeCustomLanguage(const std::string& language);
+// The language name to put in the request for a translationTarget value. Custom with nothing
+// typed falls back to English.
+std::string targetLanguageName(uint8_t index);
+// The label for the settings row: the language's name, or the typed text for Custom.
+std::string targetLanguageLabel(uint8_t index);
 
 }  // namespace gemini

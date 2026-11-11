@@ -3,10 +3,12 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
+#include <array>
 #include <memory>
 #include <string>
 #include <utility>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
@@ -18,9 +20,18 @@ namespace fui = freeink::ui;
 namespace {
 constexpr int IDX_KEY = 0;
 constexpr int IDX_MODEL = 1;
+constexpr int IDX_TARGET = 2;
 
 constexpr StrId menuNames[TranslationSettingsActivity::MENU_ITEMS] = {StrId::STR_GEMINI_API_KEY,
-                                                                      StrId::STR_GEMINI_MODEL};
+                                                                      StrId::STR_GEMINI_MODEL, StrId::STR_TRANSLATE_TO};
+
+// The listed languages, then Custom (gemini::TARGET_CUSTOM).
+constexpr auto targetLabels = [] {
+  std::array<StrId, gemini::TARGET_LANGUAGE_COUNT + 1> labels{};
+  for (size_t i = 0; i < gemini::TARGET_LANGUAGE_COUNT; i++) labels[i] = gemini::TARGET_LANGUAGES[i].label;
+  labels[gemini::TARGET_CUSTOM] = StrId::STR_GEMINI_MODEL_CUSTOM;
+  return labels;
+}();
 
 // Indexed by gemini::ModelChoice.
 constexpr int MODEL_ITEMS = 3;
@@ -55,6 +66,17 @@ void TranslationSettingsActivity::editCustomModel() {
       });
 }
 
+void TranslationSettingsActivity::editCustomLanguage() {
+  startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_XLAT_CUSTOM_LANGUAGE),
+                                                                 gemini::readCustomLanguage(),
+                                                                 gemini::CUSTOM_LANGUAGE_MAX, InputType::Text),
+                         [this](const ActivityResult& result) {
+                           if (!result.isCancelled)
+                             gemini::writeCustomLanguage(std::get<KeyboardResult>(result.data).text);
+                           requestUpdate();
+                         });
+}
+
 void TranslationSettingsActivity::activateIndex(const int index) {
   if (optionPopup.isActive()) return;
   app.clearTapFlash();
@@ -83,6 +105,15 @@ void TranslationSettingsActivity::activateIndex(const int index) {
                        }
                      });
     requestUpdate();
+  } else if (index == IDX_TARGET) {
+    optionPopup.show(StrId::STR_TRANSLATE_TO, targetLabels.data(), static_cast<int>(targetLabels.size()),
+                     static_cast<int>(SETTINGS.translationTarget), [this](const int selected) {
+                       SETTINGS.translationTarget = static_cast<uint8_t>(selected);
+                       SETTINGS.saveToFile();
+                       if (selected == gemini::TARGET_CUSTOM) editCustomLanguage();
+                       requestUpdate();
+                     });
+    requestUpdate();
   }
 }
 
@@ -96,6 +127,7 @@ void TranslationSettingsActivity::buildScreen(UiScreen& screen) {
   if (rowValues_[IDX_KEY].empty()) rowValues_[IDX_KEY] = tr(STR_NOT_SET);
   const std::string model = gemini::readModel();
   rowValues_[IDX_MODEL] = model.empty() ? gemini::DEFAULT_MODEL : model;
+  rowValues_[IDX_TARGET] = gemini::targetLanguageLabel(SETTINGS.translationTarget);
   for (int i = 0; i < MENU_ITEMS; i++) rowItems_[i].value = rowValues_[i].c_str();
 
   fui::ListProps props;
