@@ -561,6 +561,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     WORD_LOOKUP_FONT_SIZE_COUNT
   };
   uint8_t wordLookupFontSize = WORD_LOOKUP_FONT_SMALL;
+  // Page translation's target language: an index into gemini::TARGET_LANGUAGES (0 = English).
+  uint8_t translationTarget = 0;
   // Append every successful dictionary lookup to /Vocabulary.txt (default off).
   uint8_t vocabularyHistoryEnabled = 0;
   // Reader menu open gesture (SHOW_READER_MENU: off / center tap / bottom-edge

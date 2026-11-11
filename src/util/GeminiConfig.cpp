@@ -10,6 +10,7 @@ namespace gemini {
 namespace {
 constexpr const char* KEY_FILE = "gemini.key";
 constexpr const char* MODEL_FILE = "gemini.model";
+constexpr const char* LANGUAGE_FILE = "gemini.lang";
 
 bool isSpace(const char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 
@@ -84,6 +85,36 @@ ModelChoice modelChoice() {
   const std::string model = readModel();
   if (model.empty()) return ModelChoice::Default;
   return model == LITE_MODEL ? ModelChoice::Lite : ModelChoice::Custom;
+}
+
+std::string readCustomLanguage() {
+  std::string language;
+  // CUSTOM_LANGUAGE_MAX bytes plus room for whitespace and a BOM.
+  if (!readTrimmed<64>(LANGUAGE_FILE, language)) return "";
+  if (language.size() > CUSTOM_LANGUAGE_MAX) language.resize(CUSTOM_LANGUAGE_MAX);
+  return language;
+}
+
+bool writeCustomLanguage(const std::string& language) {
+  std::string name = trimmed(language);
+  if (name.size() > CUSTOM_LANGUAGE_MAX) name.resize(CUSTOM_LANGUAGE_MAX);
+  return writeLine(LANGUAGE_FILE, name);
+}
+
+std::string targetLanguageName(const uint8_t index) {
+  if (index == TARGET_CUSTOM) {
+    std::string custom = readCustomLanguage();
+    return custom.empty() ? TARGET_LANGUAGES[0].promptName : custom;
+  }
+  return TARGET_LANGUAGES[index < TARGET_LANGUAGE_COUNT ? index : 0].promptName;
+}
+
+std::string targetLanguageLabel(const uint8_t index) {
+  if (index == TARGET_CUSTOM) {
+    std::string custom = readCustomLanguage();
+    return custom.empty() ? I18N.get(StrId::STR_GEMINI_MODEL_CUSTOM) : custom;
+  }
+  return I18N.get(TARGET_LANGUAGES[index < TARGET_LANGUAGE_COUNT ? index : 0].label);
 }
 
 }  // namespace gemini

@@ -318,6 +318,19 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
         if (!v.empty()) gemini::writeModel(v);
       },
       "geminiCustomModel", StrId::STR_TRANSLATION_SETTINGS));
+  {
+    std::vector<StrId> labels;
+    labels.reserve(gemini::TARGET_LANGUAGE_COUNT + 1);
+    for (const auto& lang : gemini::TARGET_LANGUAGES) labels.push_back(lang.label);
+    labels.push_back(StrId::STR_GEMINI_MODEL_CUSTOM);
+    emit(SettingInfo::Enum(StrId::STR_TRANSLATE_TO, &CrossPointSettings::translationTarget, std::move(labels),
+                           "translationTarget", StrId::STR_TRANSLATION_SETTINGS));
+  }
+  // Used when Translate To is Custom.
+  emit(SettingInfo::DynamicString(
+      StrId::STR_XLAT_CUSTOM_LANGUAGE, [] { return gemini::readCustomLanguage(); },
+      [](const std::string& v) { gemini::writeCustomLanguage(v); }, "translationCustomLanguage",
+      StrId::STR_TRANSLATION_SETTINGS));
 
   // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
   emit(SettingInfo::DynamicString(

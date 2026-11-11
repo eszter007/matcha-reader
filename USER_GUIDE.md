@@ -1383,7 +1383,12 @@ If the file cannot be written, the lookup still opens and nothing is saved.
 
 ### 6.2 Page Translation
 
-Reader menu → **Translate Page** translates the current page into English.
+Reader menu → **Translate Page** translates the current page into English. To translate into another language,
+choose it under **Settings → Reader → Translation Settings → Translate To**. The choices are English (default),
+German, French, Spanish, Italian, Portuguese, Dutch, Hungarian, Polish, Russian, Ukrainian, Japanese, Chinese
+(Simplified) and Korean. Pick **Custom** to type any other language, for example `Brazilian Portuguese` or `Catalan`
+(up to 40 characters). You can also set both in the web **Settings** page while File Transfer is running. The typed
+language is saved as `gemini.lang` next to `gemini.key`.
 
 **Before the first use**, get a Gemini API key from Google and save it as a text file named `gemini.key` in the
 `/.system/` folder on the SD card. A `/system/` folder works too. The dotted name hides the folder in the file
