@@ -316,6 +316,23 @@ inline std::vector<uint8_t> shortPowerButtonOrder() {
   return order;
 }
 
+// Short power click labels, indexed by stored SHORT_PWRBTN value.
+inline std::vector<StrId> shortPowerButtonLabels() {
+  return {StrId::STR_STATE_OFF,       StrId::STR_SLEEP,        StrId::STR_NEXT_PAGE_OPT,  StrId::STR_FORCE_REFRESH,
+          StrId::STR_FOOTNOTES,       StrId::STR_WORD_LOOKUP,  StrId::STR_CONFIRM,        StrId::STR_PREVIOUS_PAGE,
+          StrId::STR_SAVE_CLIPPING,   StrId::STR_BOOKMARK_OPTION, StrId::STR_KOSYNC,      StrId::STR_READER_MENU,
+          StrId::STR_SYNC_STATS_CLOCK, StrId::STR_CLOCK_SYNC,  StrId::STR_FRONTLIGHT};
+}
+
+// X4 Pro double click: the short-click actions plus Frontlight, its default.
+inline SettingInfo buildDoublePowerButtonSetting() {
+  auto order = shortPowerButtonOrder();
+  order.insert(order.begin() + 1, CrossPointSettings::PWR_FRONTLIGHT);
+  return SettingInfo::Enum(StrId::STR_POWER_DOUBLE_CLICK, &CrossPointSettings::doublePwrBtn, shortPowerButtonLabels(),
+                           "doublePwrBtn", StrId::STR_CAT_SHORTCUTS)
+      .withEnumOrder(std::move(order));
+}
+
 inline std::vector<StrId> homeThemeValues() {
   static constexpr StrId VALUES[] = {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
                                      StrId::STR_THEME_ROUNDEDRAFF, StrId::STR_THEME_COVER_GRID};

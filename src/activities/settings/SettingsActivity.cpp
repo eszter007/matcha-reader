@@ -62,7 +62,8 @@ bool showOnDevice(const SettingInfo& setting) {
   // Merged into the Text Settings screen.
   if (setting.category == StrId::STR_CAT_READER && setting.inTextSettings) return false;
   if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
-      SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
+      SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES &&
+      !(BoardConfig::isX4Pro() && SETTINGS.doublePwrBtn == CrossPointSettings::FOOTNOTES)) {
     return false;
   }
   // The per-direction gestures only apply while Touch Reader Controls is on.
@@ -85,8 +86,7 @@ bool showOnDevice(const SettingInfo& setting) {
 
 // End = not a row here: other categories (KOReader Sync, Status Bar, ...)
 // only group the web UI; their rows live on their own sub-screens.
-// Shortcuts belongs to Controls but opens as a sub-screen from a row in it
-// (isSubScreenCategory); a new sub-screen category goes in both functions.
+// Shortcuts rows sit in the Controls groups; in a book, Reader Settings lists them alone.
 SettingsSection sectionFor(const SettingInfo& setting) {
   if (setting.category == StrId::STR_CAT_DISPLAY) return SettingsSection::Display;
   if (setting.category == StrId::STR_CAT_READER) return SettingsSection::Reader;
@@ -98,8 +98,6 @@ SettingsSection sectionFor(const SettingInfo& setting) {
   if (setting.category == StrId::STR_CAT_SHORTCUTS) return SettingsSection::Controls;
   return SettingsSection::End;
 }
-
-bool isSubScreenCategory(const StrId category) { return category == StrId::STR_CAT_SHORTCUTS; }
 
 // Position of a row on the Dictionary Settings sub-screen, or -1 for a row it does not show.
 // These Reader rows move there from the Reader page but keep their Reader category, so Reader
@@ -121,6 +119,35 @@ int dictionaryRowOrder(const SettingInfo& setting) {
   }
 }
 
+// The shared long-press setting deliberately appears in both button groups.
+bool belongsToControlsGroup(const SettingInfo& setting, ControlsGroup group) {
+  const auto field = setting.valuePtr;
+  const bool power = field == &CrossPointSettings::shortPwrBtn || field == &CrossPointSettings::powerUpAction ||
+                     (setting.key && std::strcmp(setting.key, "doublePwrBtn") == 0);
+  const bool menu = setting.key && std::strcmp(setting.key, "longPressMenuFunction") == 0;
+  const bool shared = field == &CrossPointSettings::longPressButtonBehavior;
+  switch (group) {
+    case ControlsGroup::Power:
+      return power || field == &CrossPointSettings::pwrBtnFootnoteBack;
+    case ControlsGroup::Front:
+      return shared || menu || field == &CrossPointSettings::frontButtonFollowOrientation ||
+             field == &CrossPointSettings::backShortToFileBrowser;
+    case ControlsGroup::Side:
+      return shared || field == &CrossPointSettings::upperSideButtonAction ||
+             field == &CrossPointSettings::lowerSideButtonAction;
+    case ControlsGroup::Touch:
+      return field == &CrossPointSettings::touchReaderControls || field == &CrossPointSettings::pageTurnGesture ||
+             field == &CrossPointSettings::tiltPageTurn ||
+             field == &CrossPointSettings::previousPageGesture || field == &CrossPointSettings::showReaderMenu;
+    case ControlsGroup::Root:
+      return !belongsToControlsGroup(setting, ControlsGroup::Power) &&
+             !belongsToControlsGroup(setting, ControlsGroup::Front) &&
+             !belongsToControlsGroup(setting, ControlsGroup::Side) &&
+             !belongsToControlsGroup(setting, ControlsGroup::Touch);
+  }
+  return false;
+}
+
 // Device-only action rows added per section, beyond the shared list (System has the most).
 constexpr size_t EXTRA_ROWS_PER_SECTION = 8;
 }  // namespace
@@ -138,16 +165,21 @@ void SettingsActivity::rebuildSettings() {
   // Copy only the rows of the one category shown here; each section's title is its category
   // (Connectivity's matches none: it has only action rows).
   const bool dictionaryPage = subCategory == StrId::STR_DICTIONARY_SETTINGS;
-  const StrId category = subCategory != StrId::STR_NONE_OPT && !dictionaryPage
-                             ? subCategory
-                             : SETTINGS_SECTION_TITLES[static_cast<size_t>(section)];
+  // Controls takes the Shortcuts rows too: its groups sort both categories.
+  const bool controlsPage = section == SettingsSection::Controls && subCategory == StrId::STR_NONE_OPT;
+  const StrId category = subCategory != StrId::STR_NONE_OPT && !dictionaryPage ? subCategory
+                         : controlsPage                                       ? StrId::STR_NONE_OPT
+                                                                              : SETTINGS_SECTION_TITLES[static_cast<size_t>(section)];
   auto all = getSettingsList(&sdFontSystem.registry(), &dictionaries, category);
 
   const auto belongsHere = [this, dictionaryPage](const SettingInfo& setting) {
     if (!showOnDevice(setting)) return false;
     if (dictionaryPage) return dictionaryRowOrder(setting) >= 0;
     if (subCategory != StrId::STR_NONE_OPT) return setting.category == subCategory;
-    return sectionFor(setting) == section && !isSubScreenCategory(setting.category) && dictionaryRowOrder(setting) < 0;
+    if (sectionFor(setting) != section || dictionaryRowOrder(setting) >= 0) return false;
+    // Controls shows its rows by group; in a book, Reader Settings opens the Shortcuts rows alone.
+    if (section == SettingsSection::Controls) return belongsToControlsGroup(setting, controlsGroup);
+    return true;
   };
   const size_t count = std::count_if(all.begin(), all.end(), belongsHere);
   settings.clear();
@@ -163,9 +195,30 @@ void SettingsActivity::rebuildSettings() {
   addAction(SettingsSection::Reader, StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings);
   addAction(SettingsSection::Reader, StrId::STR_DICTIONARY_SETTINGS, SettingAction::DictionarySettings);
   addAction(SettingsSection::Reader, StrId::STR_TRANSLATION_SETTINGS, SettingAction::TranslationSettings);
-  addAction(SettingsSection::Controls, StrId::STR_CAT_SHORTCUTS, SettingAction::ShortcutsSettings);
-  if (!BoardConfig::hasTouch()) {
-    addAction(SettingsSection::Controls, StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons);
+  if (section == SettingsSection::Controls && subCategory == StrId::STR_NONE_OPT) {
+    if (controlsGroup == ControlsGroup::Root) {
+      if (BoardConfig::hasHomeKey()) {
+        addAction(section, StrId::STR_HOME_BUTTON, SettingAction::HomeButton);
+      }
+      const auto addGroup = [&](ControlsGroup group, StrId title, SettingAction action) {
+        if (std::any_of(all.begin(), all.end(),
+                        [&](const SettingInfo& setting) {
+                          return sectionFor(setting) == section && showOnDevice(setting) &&
+                                 belongsToControlsGroup(setting, group);
+                        }) ||
+            (group == ControlsGroup::Front && !BoardConfig::hasTouch())) {
+          addAction(section, title, action);
+        }
+      };
+      addGroup(ControlsGroup::Power, StrId::STR_POWER_BUTTON, SettingAction::ControlsPower);
+      if (!BoardConfig::hasTouch()) {
+        addGroup(ControlsGroup::Front, StrId::STR_FRONT_BUTTONS, SettingAction::ControlsFront);
+      }
+      addGroup(ControlsGroup::Side, StrId::STR_SIDE_BUTTONS, SettingAction::ControlsSide);
+      addGroup(ControlsGroup::Touch, StrId::STR_TAPS_AND_GESTURES, SettingAction::ControlsTouch);
+    } else if (controlsGroup == ControlsGroup::Front && !BoardConfig::hasTouch()) {
+      addAction(section, StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons);
+    }
   }
   // The Home key's gestures lead the Shortcuts sub-screen.
   if (subCategory == StrId::STR_CAT_SHORTCUTS && BoardConfig::hasHomeKey()) {
@@ -174,7 +227,19 @@ void SettingsActivity::rebuildSettings() {
 
   for (auto& setting : all) {
     if (!belongsHere(setting)) continue;
+    if (section == SettingsSection::Controls && subCategory == StrId::STR_NONE_OPT &&
+        setting.valuePtr == &CrossPointSettings::longPressButtonBehavior) {
+      setting.nameId = StrId::STR_PAGE_TURN_LONG_PRESS;
+    }
     settings.push_back(std::move(setting));
+  }
+  if (section == SettingsSection::Controls && controlsGroup == ControlsGroup::Front) {
+    for (const char* key : {"longPressButtonBehavior", "longPressMenuFunction"}) {
+      const auto row = std::find_if(settings.begin(), settings.end(), [key](const SettingInfo& setting) {
+        return setting.key && std::strcmp(setting.key, key) == 0;
+      });
+      if (row != settings.end()) std::rotate(row, row + 1, settings.end());
+    }
   }
   if (dictionaryPage) {
     std::sort(settings.begin(), settings.end(),
@@ -219,8 +284,12 @@ void SettingsActivity::rebuildSettings() {
 }
 
 SettingsActivity::SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                   const SettingsSection section, const StrId subCategory)
-    : UiListActivity("Settings", renderer, mappedInput), section(section), subCategory(subCategory) {}
+                                   const SettingsSection section, const StrId subCategory,
+                                   const ControlsGroup controlsGroup)
+    : UiListActivity("Settings", renderer, mappedInput),
+      section(section),
+      subCategory(subCategory),
+      controlsGroup(controlsGroup) {}
 
 void SettingsActivity::onEnter() {
   UiListActivity::onEnter();
@@ -248,6 +317,18 @@ void SettingsActivity::rebuildRowItems() {
 
 const char* SettingsActivity::headerTitle() const {
   if (subCategory != StrId::STR_NONE_OPT) return I18N.get(subCategory);
+  switch (controlsGroup) {
+    case ControlsGroup::Power:
+      return tr(STR_POWER_BUTTON);
+    case ControlsGroup::Front:
+      return tr(STR_FRONT_BUTTONS);
+    case ControlsGroup::Side:
+      return tr(STR_SIDE_BUTTONS);
+    case ControlsGroup::Touch:
+      return tr(STR_TAPS_AND_GESTURES);
+    case ControlsGroup::Root:
+      break;
+  }
   return I18N.get(SETTINGS_SECTION_TITLES[static_cast<size_t>(section)]);
 }
 
@@ -302,6 +383,36 @@ void SettingsActivity::toggleSelectedSetting() {
   }
 
   switch (setting.action) {
+    case SettingAction::ControlsPower:
+    case SettingAction::ControlsFront:
+    case SettingAction::ControlsSide:
+    case SettingAction::ControlsTouch: {
+      ControlsGroup group = ControlsGroup::Root;
+      switch (setting.action) {
+        case SettingAction::ControlsPower:
+          group = ControlsGroup::Power;
+          break;
+        case SettingAction::ControlsFront:
+          group = ControlsGroup::Front;
+          break;
+        case SettingAction::ControlsSide:
+          group = ControlsGroup::Side;
+          break;
+        case SettingAction::ControlsTouch:
+          group = ControlsGroup::Touch;
+          break;
+        default:
+          break;  // Only the four group actions reach this branch.
+      }
+      // The activity stack owns the child until Back returns to this menu.
+      auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, SettingsSection::Controls, StrId::STR_NONE_OPT, group);
+      if (!activity) {
+        LOG_ERR("SET", "OOM: Controls settings (%u bytes)", static_cast<unsigned>(sizeof(SettingsActivity)));
+        return;
+      }
+      startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
+      return;
+    }
     case SettingAction::ShortcutsSettings:
     case SettingAction::DictionarySettings: {
       const StrId page = setting.action == SettingAction::ShortcutsSettings ? StrId::STR_CAT_SHORTCUTS

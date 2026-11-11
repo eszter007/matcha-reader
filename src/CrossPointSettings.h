@@ -213,6 +213,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     PWR_READER_MENU = 11,
     PWR_SYNC_STATS_CLOCK = 12,
     PWR_SYNC_CLOCK = 13,
+    // Upstream's 10: the X4 Pro double-click default, appended like the entries above.
+    PWR_FRONTLIGHT = 14,
     SHORT_PWRBTN_COUNT
   };
 
@@ -368,9 +370,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t textAntiAliasing = 1;
   // Short power button click behaviour
   uint8_t shortPwrBtn = IGNORE;
-  // X4 Pro: double-click power toggles the frontlight. Disabling frees the
-  // power button for shortPwrBtn actions without the double-click wait.
-  uint8_t doubleClickPwrLight = 1;
+  // X4 Pro double click; Ignore disables the single-click delay.
+  uint8_t doublePwrBtn = PWR_FRONTLIGHT;
   // Power + Side Up, a SIDE_BUTTON_ACTION. Sleep, Refresh and the syncs work on any screen; the
   // rest only in a book. Default is never offered: the combination has no built-in role.
   uint8_t powerUpAction = SIDE_BTN_NONE;

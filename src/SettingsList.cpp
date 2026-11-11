@@ -215,9 +215,7 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
            .withEnumOrder(sideButtonOrder(/*powerUp=*/true)));
   // Erased below unless the board is an X4 Pro.
   // Double-click power frontlight shortcut only exists on the X4 Pro.
-  if (BoardConfig::isX4Pro())
-    emit(SettingInfo::Toggle(StrId::STR_DBL_CLICK_PWR_LIGHT, &CrossPointSettings::doubleClickPwrLight,
-                             "doubleClickPwrLight", StrId::STR_CAT_SHORTCUTS));
+  if (BoardConfig::isX4Pro()) emit(buildDoublePowerButtonSetting());
   // Word Lookup keeps index 5 on every board -- it is Matcha's and already persisted.
   // Confirm is appended at 6 (upstream put it at 5); Previous Page at 7; Save Clipping at 8.
   // The indices are identical on touch and button boards so a stored value keeps its

@@ -13,12 +13,15 @@
 #include "activities/UiListActivity.h"
 #include "components/OptionPopup.h"
 
+enum class ControlsGroup : uint8_t { Root, Power, Front, Side, Touch };
+
 // The rows of one SettingsSection; activating a row toggles/cycles it, opens
 // its option popup, or launches its sub-screen. With a subCategory (Shortcuts)
 // it lists only that category's rows, reached from a row in section.
 class SettingsActivity final : public UiListActivity, private SettingRowEditor::Host {
   const SettingsSection section;
   const StrId subCategory;
+  const ControlsGroup controlsGroup;
   std::vector<SettingInfo> settings;
 
   OptionPopup optionPopup;
@@ -46,7 +49,7 @@ class SettingsActivity final : public UiListActivity, private SettingRowEditor::
 
  public:
   SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, SettingsSection section,
-                   StrId subCategory = StrId::STR_NONE_OPT);
+                   StrId subCategory = StrId::STR_NONE_OPT, ControlsGroup controlsGroup = ControlsGroup::Root);
   void onEnter() override;
   void render(RenderLock&& lock) override;
 };
