@@ -137,8 +137,8 @@ bool belongsToControlsGroup(const SettingInfo& setting, ControlsGroup group) {
              field == &CrossPointSettings::lowerSideButtonAction;
     case ControlsGroup::Touch:
       return field == &CrossPointSettings::touchReaderControls || field == &CrossPointSettings::pageTurnGesture ||
-             field == &CrossPointSettings::tiltPageTurn ||
-             field == &CrossPointSettings::previousPageGesture || field == &CrossPointSettings::showReaderMenu;
+             field == &CrossPointSettings::tiltPageTurn || field == &CrossPointSettings::previousPageGesture ||
+             field == &CrossPointSettings::showReaderMenu;
     case ControlsGroup::Root:
       return !belongsToControlsGroup(setting, ControlsGroup::Power) &&
              !belongsToControlsGroup(setting, ControlsGroup::Front) &&
@@ -168,8 +168,8 @@ void SettingsActivity::rebuildSettings() {
   // Controls takes the Shortcuts rows too: its groups sort both categories.
   const bool controlsPage = section == SettingsSection::Controls && subCategory == StrId::STR_NONE_OPT;
   const StrId category = subCategory != StrId::STR_NONE_OPT && !dictionaryPage ? subCategory
-                         : controlsPage                                       ? StrId::STR_NONE_OPT
-                                                                              : SETTINGS_SECTION_TITLES[static_cast<size_t>(section)];
+                         : controlsPage                                        ? StrId::STR_NONE_OPT
+                                        : SETTINGS_SECTION_TITLES[static_cast<size_t>(section)];
   auto all = getSettingsList(&sdFontSystem.registry(), &dictionaries, category);
 
   const auto belongsHere = [this, dictionaryPage](const SettingInfo& setting) {
@@ -405,7 +405,8 @@ void SettingsActivity::toggleSelectedSetting() {
           break;  // Only the four group actions reach this branch.
       }
       // The activity stack owns the child until Back returns to this menu.
-      auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, SettingsSection::Controls, StrId::STR_NONE_OPT, group);
+      auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, SettingsSection::Controls,
+                                                          StrId::STR_NONE_OPT, group);
       if (!activity) {
         LOG_ERR("SET", "OOM: Controls settings (%u bytes)", static_cast<unsigned>(sizeof(SettingsActivity)));
         return;

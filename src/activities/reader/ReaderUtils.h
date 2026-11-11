@@ -199,9 +199,8 @@ inline PageTurnResult detectPageTurnImpl(const MappedInputManager& input, const 
   // apply to them -- they are added after the swap below, and a button set to "Next Page"
   // advances in a tategaki book exactly as it does in a horizontal one. The shared roles keep
   // being reversed, which is what that setting is for.
-  const bool explicitPrev =
-      input.sideActionFired(CrossPointSettings::SIDE_BTN_PREV_PAGE) ||
-      input.wasPowerAction(CrossPointSettings::SHORT_PWRBTN::PWR_PREV_PAGE);
+  const bool explicitPrev = input.sideActionFired(CrossPointSettings::SIDE_BTN_PREV_PAGE) ||
+                            input.wasPowerAction(CrossPointSettings::SHORT_PWRBTN::PWR_PREV_PAGE);
   const bool explicitNext = input.sideActionFired(CrossPointSettings::SIDE_BTN_NEXT_PAGE) ||
                             (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
                              input.wasReleased(MappedInputManager::Button::Power));
