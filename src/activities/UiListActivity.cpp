@@ -315,9 +315,11 @@ void UiListActivity::drawChrome() {
   if (!title) return;
   const auto& metrics = UITheme::getInstance().getMetrics();
   // The rule under the title only earns its place once there is content behind it: at the top of
-  // a list it is a second horizontal line stacked on the band below it.
+  // a list it is a second horizontal line stacked on the band below it. The cover theme draws no
+  // header rules at all.
+  const bool rule = !HomeTabBar::enabled() && activeNav().top > 0;
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight}, title, nullptr,
-                 HomeTabBar::showsBackButton(hasTabBar()), activeNav().top > 0 ? 1 : 0);
+                 HomeTabBar::showsBackButton(hasTabBar()), rule ? 1 : 0);
 }
 
 bool UiListActivity::hasTabBar() const { return tabBarTab() != HomeTab::Count && HomeTabBar::enabled(); }
