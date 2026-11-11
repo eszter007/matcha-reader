@@ -27,10 +27,10 @@ uint32_t millis() { return clockMs; }
 int overflows = 0;
 #define LOG_ERR(...) (++overflows)
 struct RenderLock {
-  enum class Mode { Try };
+  struct Try {};
   static inline bool busy = true;
-  explicit RenderLock(Mode) {}
-  bool ownsLock() const { return !busy; }
+  explicit RenderLock(Try) {}
+  bool held() const { return !busy; }
 };
 struct MappedInputManager {
   enum class Button { ScreenLeft, ScreenRight, ScreenUp, ScreenDown, Confirm, Back, NavPrevious, NavNext };

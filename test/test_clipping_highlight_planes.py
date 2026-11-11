@@ -7,7 +7,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 source = (ROOT / "src/activities/reader/EpubReaderActivity.cpp").read_text()
 fill = "const auto fillHighlight =" + source.split("const auto fillHighlight =", 1)[1].split("\n  uint16_t pageWordIndex", 1)[0]
-render = "auto renderGrayscalePass =" + source.split("auto renderGrayscalePass =", 1)[1].split("\n\n  if (pageHasImagesNeedingDecode)", 1)[0]
+render = "auto renderGrayscalePass =" + source.split("auto renderGrayscalePass =", 1)[1].split("\n\n  if (pageHasImages) {", 1)[0]
 harness = r"""
 #include <cassert>
 #include <memory>
@@ -43,13 +43,14 @@ int main() {
   int order = 0;
   struct Page {
     int& order;
-    void render(GfxRenderer&, int, int, int) { assert(++order == 2); }
+    void render(GfxRenderer&, int, int, int, bool) { assert(++order == 2); }
     void renderImages(GfxRenderer&, int, int, int) { assert(++order == 2); }
   };
   auto page = std::make_unique<Page>(order);
   const int fontId = 0, orientedMarginTop = 0, orientedMarginLeft = 0;
   const bool absoluteImageGrayscale = false;
   bool needsTextGrayscale = true;
+  auto useFurigana = [] { return false; };
   auto drawClippingHighlights = [&](Page&, int, int, int) { assert(++order == 1); };
   auto renderStatusBar = [&] { assert(++order == 3); };
 """ + render + r"""
