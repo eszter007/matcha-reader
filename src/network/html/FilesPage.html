@@ -2845,6 +2845,11 @@ async function fetchVersion() {
       if (data.device === 'X3' || data.device === 'X4') {
         DETECTED_DEVICE = data.device;
         applyDeviceTarget();
+      } else if (data.device && data.viewport && data.viewport.width > 0 && data.viewport.height > 0) {
+        // Other boards: size images to the reading area the device reports.
+        DEVICE_PROFILES[data.device] = { width: data.viewport.width, height: data.viewport.height, label: data.device };
+        DETECTED_DEVICE = data.device;
+        applyDeviceTarget();
       }
     }
   } catch (e) {
