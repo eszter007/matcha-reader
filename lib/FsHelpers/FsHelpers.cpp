@@ -238,6 +238,11 @@ bool hasTxtExtension(std::string_view fileName) { return checkFileExtension(file
 
 bool hasMarkdownExtension(std::string_view fileName) { return checkFileExtension(fileName, ".md"); }
 
+bool isCrashReportFile(std::string_view path) {
+  const size_t slash = path.rfind('/');
+  return path.substr(slash == std::string_view::npos ? 0 : slash + 1) == "crash_report.txt";
+}
+
 bool hasReflowableBookExtension(std::string_view fileName) {
   return hasEpubExtension(fileName) || hasTxtExtension(fileName) || hasMarkdownExtension(fileName);
 }

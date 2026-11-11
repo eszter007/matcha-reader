@@ -67,10 +67,6 @@ bool writeExactChunked(HalFile& file, const void* input, const size_t length) {
   return true;
 }
 
-// Diagnostic artifact written by HalSystem::checkPanic() to the SD root -- a .txt file the
-// library walk would otherwise list as a book.
-bool isCrashReportFile(const char* name) { return strcmp(name, "crash_report.txt") == 0; }
-
 }  // namespace
 
 // One SD pass for every CJK title/author on the screen; repaints then hit the resident tables
@@ -603,7 +599,7 @@ void CoverLibraryActivity::scanDirectoryEntry() {
   if ((!FsHelpers::hasEpubExtension(filename) && !FsHelpers::hasXtcExtension(filename) &&
        !FsHelpers::hasTxtExtension(filename) && !FsHelpers::hasMarkdownExtension(filename) &&
        !FsHelpers::hasMatchaExtension(filename)) ||
-      isCrashReportFile(name)) {
+      FsHelpers::isCrashReportFile(name)) {
     return;
   }
 
