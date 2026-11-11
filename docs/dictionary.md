@@ -39,7 +39,7 @@ Three ways to start a lookup while reading:
   on first. A press that lands between words opens ordinary word selection instead, so the gesture is never a dead
   end. Closing a definition opened this way returns to the page.
 - Open the reader menu (**Confirm**) and choose **Look Up**.
-- Or set **Settings → Controls → Long-press Menu** to "Dictionary", then hold **Confirm** (~0.4s) on the reading page.
+- Or set **Settings → Controls → Front buttons → Menu long press** to "Dictionary", then hold **Confirm** (~0.4s) on the reading page.
 
 ### Selecting Text
 

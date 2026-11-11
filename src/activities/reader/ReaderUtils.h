@@ -201,8 +201,7 @@ inline PageTurnResult detectPageTurnImpl(const MappedInputManager& input, const 
   // being reversed, which is what that setting is for.
   const bool explicitPrev =
       input.sideActionFired(CrossPointSettings::SIDE_BTN_PREV_PAGE) ||
-      (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PWR_PREV_PAGE &&
-       input.wasReleased(MappedInputManager::Button::Power) && !gpio.wasReleased(HalGPIO::BTN_DOWN));
+      input.wasPowerAction(CrossPointSettings::SHORT_PWRBTN::PWR_PREV_PAGE);
   const bool explicitNext = input.sideActionFired(CrossPointSettings::SIDE_BTN_NEXT_PAGE) ||
                             (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
                              input.wasReleased(MappedInputManager::Button::Power));
@@ -241,8 +240,7 @@ inline PageTurnResult detectPageTurnForOrientation(const MappedInputManager& inp
 // Word Lookup. What it DOES depends on the view: on the page it selects the highlighted word;
 // in the definition it closes the dictionary outright.
 inline bool wordLookupPowerClick(const MappedInputManager& input) {
-  return SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
-         input.wasReleased(MappedInputManager::Button::Power) && !gpio.wasReleased(HalGPIO::BTN_DOWN);
+  return input.wasPowerAction(CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP);
 }
 
 // Stepping inside a panel that has no pages of its own (word select, a definition): the X3/X4
@@ -254,12 +252,8 @@ enum class PanelStep : uint8_t { None, Previous, Next };
 inline PanelStep lookupPanelStep(const MappedInputManager& input) {
   if (input.sideActionFired(CrossPointSettings::SIDE_BTN_PREV_PAGE)) return PanelStep::Previous;
   if (input.sideActionFired(CrossPointSettings::SIDE_BTN_NEXT_PAGE)) return PanelStep::Next;
-  // Skipped when Down is also released so the screenshot combo does not step the cursor.
-  if (!input.wasReleased(MappedInputManager::Button::Power) || gpio.wasReleased(HalGPIO::BTN_DOWN)) {
-    return PanelStep::None;
-  }
-  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PWR_PREV_PAGE) return PanelStep::Previous;
-  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN) return PanelStep::Next;
+  if (input.wasPowerAction(CrossPointSettings::SHORT_PWRBTN::PWR_PREV_PAGE)) return PanelStep::Previous;
+  if (input.wasPowerAction(CrossPointSettings::SHORT_PWRBTN::PAGE_TURN)) return PanelStep::Next;
   return PanelStep::None;
 }
 

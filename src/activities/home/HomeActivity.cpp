@@ -47,7 +47,7 @@ int HomeActivity::getMenuItemCount() const {
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
-  if (hasLibrarySlot() && !coverGridUi) {
+  if (slotItem() != HomeMenuItem::NONE && !coverGridUi) {
     count++;
   }
   return count;
@@ -358,7 +358,7 @@ void HomeActivity::onEnter() {
   selectorIndex =
       initialMenuItem == HomeMenuItem::NONE
           ? 0
-          : base + (coverGridUi ? tabIndexFor(initialMenuItem) : menuItemToIndex(initialMenuItem, hasLibrarySlot()));
+          : base + (coverGridUi ? tabIndexFor(initialMenuItem) : menuItemToIndex(initialMenuItem, slotItem()));
 
   // Trigger first update
   requestUpdate();
@@ -462,15 +462,18 @@ void HomeActivity::loop() {
       }
       return;
     }
-    switch (indexToMenuItem(menuIndex, hasLibrarySlot())) {
+    switch (indexToMenuItem(menuIndex, slotItem())) {
       case HomeMenuItem::FILE_BROWSER:
         onFileBrowserOpen();
         break;
       case HomeMenuItem::LIBRARY:
         onLibraryOpen();
         break;
-      case HomeMenuItem::OPDS_BROWSER:  // the library slot
-        hasPlugins ? onPluginsOpen() : onOpdsBrowserOpen();
+      case HomeMenuItem::PLUGINS:
+        onPluginsOpen();
+        break;
+      case HomeMenuItem::OPDS_BROWSER:
+        onOpdsBrowserOpen();
         break;
       case HomeMenuItem::FILE_TRANSFER:
         onFileTransferOpen();
@@ -642,9 +645,8 @@ void HomeActivity::render(RenderLock&&) {
                                         tr(STR_STATS), tr(STR_SETTINGS_TITLE)};
   std::vector<UIIcon> menuIcons = {Library, Folder, Transfer, Stats, Settings};
 
-  // One slot for network catalogs: the plugin list when any plugin is installed (it lists the
-  // OPDS servers too), the OPDS browser alone otherwise.
-  if (hasLibrarySlot()) {
+  // Plugins while the plugin system is on, else the OPDS browser when a server is set (see slotItem).
+  if (slotItem() != HomeMenuItem::NONE) {
     menuItems.insert(menuItems.begin() + 2, hasPlugins ? tr(STR_PLUGINS) : tr(STR_OPDS_BROWSER));
     menuIcons.insert(menuIcons.begin() + 2, hasPlugins ? Plugins : Library);
   }
@@ -760,4 +762,4 @@ void HomeActivity::onStatsOpen() { activityManager.goToReadingStats(); }
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
 
-void HomeActivity::onPluginsOpen() { activityManager.goToPlugins(hasOpdsServers); }
+void HomeActivity::onPluginsOpen() { activityManager.goToPlugins(); }

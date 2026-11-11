@@ -424,8 +424,8 @@ void ActivityManager::goToOpdsServers() {
   replaceActivity(std::move(activity));
 }
 
-void ActivityManager::goToPlugins(bool showOpds) {
-  auto activity = makeUniqueNoThrow<PluginCatalogActivity>(renderer, mappedInput, showOpds, /*rootMode=*/true);
+void ActivityManager::goToPlugins() {
+  auto activity = makeUniqueNoThrow<PluginCatalogActivity>(renderer, mappedInput, /*rootMode=*/true);
   if (!activity) {
     LOG_ERR("ACT", "OOM: plugin catalog activity");
     return;
@@ -483,7 +483,9 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::FILE_BROWSER;
     } else if (activityName == "Library") {
       initialMenuItem = HomeMenuItem::LIBRARY;
-    } else if (activityName == "OpdsBookBrowser" || activityName == "PluginCatalog") {
+    } else if (activityName == "PluginCatalog") {
+      initialMenuItem = HomeMenuItem::PLUGINS;
+    } else if (activityName == "OpdsBookBrowser") {
       initialMenuItem = HomeMenuItem::OPDS_BROWSER;
     } else if (activityName == "CrossPointWebServer") {
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;

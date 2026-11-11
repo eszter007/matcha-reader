@@ -69,7 +69,7 @@ void EpubReaderFootnotesActivity::cancel() { finishCancelled(); }
 
 void EpubReaderFootnotesActivity::loop() {
   // The Power button jumps to the note, as Confirm does.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Power)) {
+  if (mappedInput.wasPowerSingleClick()) {
     jumpToNote();
     return;
   }

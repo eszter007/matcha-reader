@@ -102,7 +102,7 @@ While reading, you can also press **Confirm** to open the reader menu and choose
 
 ### Syncing the Clock
 
-Set **Power + Up** in **Settings → Controls → Shortcuts** to **Sync Clock**. It is off by default. After that, pressing **Power** and **Side Up** together sets the clock from the internet, on any screen. **Sync Clock** is also offered for the power button, the side buttons and the Home key gestures.
+Set **Power + Up** in **Settings → Controls → Power button** to **Sync Clock**. It is off by default. After that, pressing **Power** and **Side Up** together sets the clock from the internet, on any screen. **Sync Clock** is also offered for the power button, the side buttons and the Home key gestures.
 
 * If Wi-Fi is not connected, the network list opens first.
 * When the new time appears, press **Back**. If you started in a book, you go back to the book.
@@ -121,7 +121,7 @@ The X4 Pro and the M5Stack Paper Mono have a built-in light. On the X4 Pro you c
 * **Turn the light on or off:** Tap the **Light** button in the row of quick buttons, or press **Confirm**. The same row has **Dark**, **Refresh**, **Rotate** and **Touch**, and on devices with Bluetooth a **Bluetooth** button for the page turner. Each icon shows what a tap does: **Rotate** shows the page the way it will turn to.
 * **Use the buttons:** While the panel is open, **Side Up**/**Side Down**, **Left**/**Right** and the page-turn buttons change the brightness. Hold a button to keep changing it. On devices with side buttons on the edge, the upper button always makes the light brighter.
 * **Close the panel:** Swipe up, tap below the panel, or press **Back**.
-* **Quick on/off (X4 Pro only):** Double-click **Power**. This shortcut is **Double-Click Power for Light** in **Settings → Controls → Shortcuts** and is on by default.
+* **Quick on/off (X4 Pro only):** Double-click **Power**. This shortcut is **Double click** in **Settings → Controls → Power button** and is set to **Frontlight** by default.
 
 > [!NOTE]
 > Brightness and warmth are not in **[Display Settings](#362-display)** on purpose. The pull-down panel is the only place to change them.
@@ -136,7 +136,7 @@ If the light stays off after the device wakes from sleep, check **Restore Light 
 
 **Hold the Power button for about half a second** to turn the device on or off.
 
-To turn the device off with a short press instead, set **Short Power Button Click** to **Sleep** in **Settings → Controls → Shortcuts** (see **[Controls Settings](#367-controls)**).
+To turn the device off with a short press instead, set **Short click** to **Sleep** in **Settings → Controls → Power button** (see **[Controls Settings](#367-controls)**).
 
 To restart a frozen device, or after a firmware update, press and release **Reset**, then quickly press and hold **Power** for a few seconds.
 
@@ -158,7 +158,7 @@ Home is where you start. From here you can open:
 * your most recent book, in **[Reading Mode](#4-reading-mode)**
 * the **[Library](#34-library-screen)**
 * **[Browse Files](#33-browse-files-screen)**
-* **OPDS Browser** (online book catalogs), or **Plugins** if you have plugins installed
+* **Plugins** when the plugin system is on, otherwise **OPDS Browser** (online book catalogs) once a server is saved
 * **[File Transfer](#35-file-transfer-screen)**
 * **Insights** (your [reading insights](#7-reading-insights))
 * **[Settings](#36-settings)**
@@ -237,6 +237,7 @@ Use File Transfer to put books on the device and manage its files over Wi-Fi. Wh
 * **Join a Network**: connect to your Wi-Fi.
 * **Calibre Wireless**: receive books from Calibre (see [3.5.1](#351-calibre-wireless-transfers)).
 * **Create Hotspot**: the device makes its own Wi-Fi network for your computer or phone to join.
+* **OPDS Browser**: browse your OPDS catalogs, or add a server when none is saved (see [OPDS Servers](#369-opds-servers-multiple-libraries)). While plugins are off and a server is saved, it is on the Home screen instead.
 * **USB Drive**: manage the SD card from your computer over a USB cable. Only boards that support it show this option, e.g. the X4 Pro and Paper Mono.
 
 For the Wi-Fi modes, the device starts a small web server and shows an address. Open that address in a browser on your computer or phone. The [web server docs](./docs/webserver.md) explain how to connect and upload files.
@@ -537,20 +538,20 @@ to that book only.
 
 Which rows you see depends on your device. Touch devices hide the rows that only make sense with front buttons.
 
-- **Shortcuts**: Opens the button shortcuts, in this order. Each one is described further down.
-  - **Home Button Gestures** (devices with a Home key)
-  - **Long-Press Button Behavior**
-  - **Long-Press Menu** (button devices)
-  - **Power + Up**
-  - **Double-Click Power for Light** (X4 Pro)
-  - **Short Power Button Click**
-  - **Tilt Page Turn** (devices with a motion sensor, e.g. the X3)
-  - **Quick return from links** (only while **Short Power Button Click** is **Links and footnotes**)
-  - **Upper Side Button in Reader** and **Lower Side Button in Reader**
-  - **Slide Switch** (BOOX Picco): what the slide switch controls: **Frontlight**, **Night Mode** or **Touch Reader Controls**
-  - **Short Back to File Browser** (button devices)
+The rows are grouped by the control they change. Each one is described further down.
 
-- **Remap Front Buttons** (button devices): Choose what each button below the screen does.
+- **Home Button Gestures** (devices with a Home key)
+- **Power button**: **Short click**, **Double click** (X4 Pro), **Power + Up**, and **Quick return from links**
+  (only while a click is set to **Links and footnotes**).
+- **Front buttons** (button devices): **Remap Front Buttons**, **Orient Front Buttons**, **Short Back to File
+  Browser**, **Page turn long press** and **Menu long press**.
+- **Side buttons**: **Upper Side Button in Reader**, **Lower Side Button in Reader** and **Page turn long press**.
+  **Page turn long press** is the same setting in both groups.
+- **Taps and gestures**: **Touch Reader Controls**, the page-turn gestures, **Show Reader Menu** and **Tilt Page
+  Turn** (devices with a motion sensor, e.g. the X3).
+- The other rows, such as **Haptic Feedback** and **Slide Switch** (BOOX Picco), stay directly in Controls.
+
+- **Remap Front Buttons** (button devices, in Front buttons): Choose what each button below the screen does.
 
 - **Haptic Feedback** (off by default, devices with a vibration motor only): A short buzz when the device accepts a
   touch.
@@ -579,7 +580,7 @@ Which rows you see depends on your device. Touch devices hide the rows that only
 - **Back Resumes Last Book** (off by default; X3, X4 and X4 Classic): On the Home screen, **Back** reopens the book
   you read last, and its hint reads **Resume**.
 
-- **Upper / Lower Side Button in Reader** (in Shortcuts): What each side button does while reading. On the X4 Pro and
+- **Upper / Lower Side Button in Reader** (in Side buttons): What each side button does while reading. On the X4 Pro and
   X4 Classic the rows are called **Left** and **Right Side Button in Reader**.
   - Options: **Default** (previous page on the upper button, next page on the lower), **Off**, **Previous Page**,
     **Next Page**, **Sleep**, **Refresh Screen**, **Links and footnotes**, **Word Lookup**, **Create Clipping**,
@@ -595,13 +596,13 @@ Which rows you see depends on your device. Touch devices hide the rows that only
   **Confirm**, **KOSync**, **Bookmark**, **Dictionary**, **Reader Menu**, **Toggle Frontlight**, **Create
   Clipping**, **Sync Insights & Clock** or **Sync Clock**. A tap is **Home** by default.
 
-- **Long-Press Button Behavior**: What holding a page-turn button does.
+- **Page turn long press**: What holding a page-turn button does.
   - **Off** (default): nothing extra.
   - **Chapter Skip**: jumps to the next chapter, or back to the start of the chapter, then to the previous one.
     In XTC books and manga, which have no chapters to skip by, it jumps 10 pages.
   - **Orientation Change**: turns the screen to the next orientation.
 
-- **Long-Press Menu** (button devices): What holding **Confirm** does while reading. A short press always opens the
+- **Menu long press** (button devices, in Front buttons): What holding **Confirm** does while reading. A short press always opens the
   reader menu.
   - **Off** (default): holding does nothing.
   - **KOSync**: hold about 1 second to start CrossPoint Sync. Works once sync is set up.
@@ -615,9 +616,11 @@ Which rows you see depends on your device. Touch devices hide the rows that only
   other options only while reading. See
   [Syncing the Clock](#syncing-the-clock).
 
-- **Double-Click Power for Light** (on by default, X4 Pro): Double-click Power to switch the frontlight on or off.
+- **Double click** (X4 Pro, in Power button): What a quick double click of Power does. It offers the **Short click**
+  actions plus **Frontlight**, the default, which switches the light on or off. **Off** lets a single click act at
+  once; with any other choice a single click waits half a second for a possible second click.
 
-- **Short Power Button Click**: What a quick press of the power button does.
+- **Short click** (in Power button): What a quick press of the power button does.
   - **Off** (default): nothing. Hold the button to switch off.
   - **Previous Page**: while reading, goes back one page.
   - **Next Page**: while reading, turns to the next page. Hold the button to switch off.
@@ -661,7 +664,7 @@ Which rows you see depends on your device. Touch devices hide the rows that only
   looks up the nearest word, so a slightly missed word does not open the menu. In manga, holding inside a speech bubble still looks up
   the text.
 
-- **Quick return from links** (on by default, in Shortcuts): Only shown while **Short Power Button Click** is
+- **Quick return from links** (on by default, in Power button): Only shown while **Short click** is
   **Links and footnotes**. A quick press of Power on a footnote page then takes you back, like the Back button.
 
 - **Short Back to File Browser** (off by default, button devices): Swaps what Back does in a book. A short press
@@ -872,7 +875,7 @@ To sync, press **Confirm** while reading to open the reader menu, then select **
 
 This works in every reader: EPUB, TXT and Markdown, XTC/XTCH and manga. An XTC or manga book syncs its page, the way KOReader syncs a PDF or CBZ. A manga also finds the position of the same title read as `Title.cbz`, `.epub`, `.pdf`, `.xtc` or `.xtch` on another device. Those files number their pages differently, so the reader then goes by the share of the book read, e.g. 40%.
 
-For a shortcut, set **Settings → Controls → Shortcuts → Long-Press Menu** to **KOSync**. Holding **Confirm** then starts a sync, in every reader. In XTC and manga, KOSync is the only Long-Press Menu choice that works.
+For a shortcut, set **Settings → Controls → Front buttons → Menu long press** to **KOSync**. Holding **Confirm** then starts a sync, in every reader. In XTC and manga, KOSync is the only Menu long press choice that works.
 
 **Sync Behavior** decides what happens when the device and the server disagree:
 - **Smart Sync** (default for new setups) handles the easy cases on its own. It uploads your position when the server has none or when you are further ahead. It jumps to the server's position when that one is further ahead. If both already match, it confirms and changes nothing. It never asks, also not when you open a book.
@@ -1023,13 +1026,13 @@ When a book is open, the buttons switch to reading controls.
 
 On a touch device, **Next Page** and **Previous Page** in **Settings → Controls** choose whether taps, swipes or both turn the page.
 
-You can give each side button a different job (e.g. Sleep or Footnotes) in **Settings → Controls → Shortcuts**, under **Upper Side Button in Reader** and **Lower Side Button in Reader**. On the X4 Pro the two rows are called **Left Side Button in Reader** and **Right Side Button in Reader**.
+You can give each side button a different job (e.g. Sleep or Footnotes) in **Settings → Controls → Side buttons**, under **Upper Side Button in Reader** and **Lower Side Button in Reader**. On the X4 Pro the two rows are called **Left Side Button in Reader** and **Right Side Button in Reader**.
 
-The Power button can turn pages too. Set **Short Power Button Click** (also in Shortcuts) to **Next Page** or **Previous Page**.
+The Power button can turn pages too. Set **Short click** in **Settings → Controls → Power button** to **Next Page** or **Previous Page**.
 
 ### Chapter Navigation
 
-To jump a whole chapter with a long press, open **Settings → Controls → Shortcuts** and set **Long-Press Button Behavior** to **Chapter Skip**. It is off by default.
+To jump a whole chapter with a long press, open **Settings → Controls → Front buttons** (or **Side buttons**) and set **Page turn long press** to **Chapter Skip**. It is off by default.
 
 With it on, hold **Right** (or **Side Down**) for about a second to go to the next chapter. Hold **Left** (or **Side Up**) to go back to the start of the chapter, and hold again to reach the previous one.
 
@@ -1041,7 +1044,7 @@ Auto Page Turn moves to the next page on its own, so you can read without touchi
 
 ### Tilt Page Turn (X3 only)
 
-The Xteink X3 can turn pages when you tilt it. Turn this on with **Tilt Page Turn** in **Settings → Controls → Shortcuts**. **Inverted** swaps the tilt directions. The setting only appears on devices with a motion sensor.
+The Xteink X3 can turn pages when you tilt it. Turn this on with **Tilt Page Turn** in **Settings → Controls → Taps and gestures**. **Inverted** swaps the tilt directions. The setting only appears on devices with a motion sensor.
 
 ### Images in Books
 
@@ -1073,7 +1076,7 @@ You can look up words with an offline dictionary on the SD card. To set it up:
 1. Copy a StarDict dictionary into the `/dictionaries/` folder (or `/.dictionaries/`, see [6.7](#67-dictionary-files-and-language-selection)).
 2. Select it in **Settings → Reader → Dictionary Settings → Fallback for other languages**. Inside a book, the same row in **Reader Settings** is called **Dictionary**.
 
-To look up a word with the buttons, choose **Look Up** in the **[Reader Menu](#5-reader-menu)**. Use **Left** and **Right** to highlight a word, then press **Confirm** to see its definition. On button-only devices you can also start a lookup by holding **Confirm**, if **Long-Press Menu** in **Settings → Controls → Shortcuts** is set to **Dictionary**.
+To look up a word with the buttons, choose **Look Up** in the **[Reader Menu](#5-reader-menu)**. Use **Left** and **Right** to highlight a word, then press **Confirm** to see its definition. On button-only devices you can also start a lookup by holding **Confirm**, if **Menu long press** in **Settings → Controls → Front buttons** is set to **Dictionary**.
 
 On a touch device, press and hold a word on the page. Its definition opens straight away. If your page turns use swipes only, a short tap on a word opens the definition and holding a word starts a clipping instead (see [3.6.7](#367-controls)). Page through a long definition with your page-turn gesture, and tap outside the card to close it.
 
@@ -1087,9 +1090,9 @@ See [docs/dictionary.md](docs/dictionary.md) for supported formats and where to 
 | **Go to Browse Files**    | Hold **Back** for about a second. The **[Browse Files](#33-browse-files-screen)** screen opens. |
 | **Open the Reader Menu**  | Press **Confirm**. On a touch device, tap the middle of the page.                      |
 
-**Short Back to File Browser** in **Settings → Controls → Shortcuts** swaps the two **Back** actions.
+**Short Back to File Browser** in **Settings → Controls → Front buttons** swaps the two **Back** actions.
 
-**Hold Confirm (button-only devices).** Holding **Confirm** does whatever **Long-Press Menu** is set to. The choices are **Bookmark** (adds or removes a bookmark), **KOSync** (opens KOReader Sync), **Dictionary** (starts a word lookup), **Create Clipping** (starts a text selection), **Links and footnotes** (opens the footnote panel) and **Off**, which is the default. A short press always opens the Reader Menu. Touch devices don't have this setting. There, the Power button or Home button shortcuts do these jobs.
+**Hold Confirm (button-only devices).** Holding **Confirm** does whatever **Menu long press** is set to. The choices are **Bookmark** (adds or removes a bookmark), **KOSync** (opens KOReader Sync), **Dictionary** (starts a word lookup), **Create Clipping** (starts a text selection), **Links and footnotes** (opens the footnote panel) and **Off**, which is the default. A short press always opens the Reader Menu. Touch devices don't have this setting. There, the Power button or Home button shortcuts do these jobs.
 
 ### Supported Languages
 
@@ -1160,7 +1163,7 @@ Press **Back** to return to the Reader Menu without changing chapter.
 
 A bookmark saves your place so you can come back to it later.
 
-**To add a bookmark**, choose **Toggle Bookmark** in the Reader Menu. A short message says **Bookmark Added.** Choosing it again on the same page removes the bookmark. With the **Toolbar** menu style, tap the bookmark on the dock's chapter line instead. On button-only devices you can also hold **Confirm**, if **Long-Press Menu** is set to **Bookmark** (see [System Navigation](#system-navigation)).
+**To add a bookmark**, choose **Toggle Bookmark** in the Reader Menu. A short message says **Bookmark Added.** Choosing it again on the same page removes the bookmark. With the **Toolbar** menu style, tap the bookmark on the dock's chapter line instead. On button-only devices you can also hold **Confirm**, if **Menu long press** is set to **Bookmark** (see [System Navigation](#system-navigation)).
 
 **To open a bookmark**, choose **Bookmarks** in the Reader Menu, highlight one and press **Confirm**.
 
@@ -1214,7 +1217,7 @@ Word Lookup shows the dictionary entry for a word on the page.
 - Open the reader menu and choose **Word Lookup**. It is listed for Japanese and Chinese books once their
   dictionary is installed.
 - On a touch device, hold your finger on a word. Its entry opens straight away.
-- For one-press access, go to **Settings → Controls → Shortcuts** and set **Short Power Button Click** to
+- For one-press access, go to **Settings → Controls → Power button** and set **Short click** to
   **Word Lookup**. A side button can be set to **Word Lookup** on the same screen.
 
 Lookup opens on the page you were reading, vertical or horizontal, with one word highlighted. On a touch device
@@ -1239,7 +1242,7 @@ buttons can reach every word with them alone.
 | --- | --- |
 | **Look Up** (Confirm) | Open the entry for the highlighted word |
 | Back | Return to reading |
-| Power (short click) | Open the entry, when **Short Power Button Click** is set to **Word Lookup** |
+| Power (short click) | Open the entry, when **Short click** is set to **Word Lookup** |
 
 No button labels are shown on this screen. A label bar would cover the last line of text.
 
@@ -1293,7 +1296,7 @@ one you were reading, in the same panel.
 | Hold Up / Left | Skip to the previous word |
 | Select | Save the word and its sentence for sentence mining (see below) |
 | Back | Return to reading |
-| Power (short click) | Same as Back, when **Short Power Button Click** is set to **Word Lookup** |
+| Power (short click) | Same as Back, when **Short click** is set to **Word Lookup** |
 
 The bottom of the entry shows which dictionary answered (e.g. `Vocab | JMdict` or `Vocab | CC-CEDICT`) and, when
 there is more than one screen to page through, which one you are on, counting the screens of every entry (e.g. 1/3). You only land on words the dictionary has. When stepping from word to word in manga, each word
@@ -1624,7 +1627,7 @@ author and progress.
 | Hold Back | Open the file browser at the book | Open the file browser at the book |
 
 Side buttons with their own action, Tilt Page Turn and the other reader shortcuts work in manga as they do in books
-(see **Settings → Controls → Shortcuts**).
+(see **Settings → Controls**).
 
 <p align="center">
   <img src="docs/images/screenshots/manga-full-page.png" width="240" alt="Full page view">

@@ -21,7 +21,7 @@ class RenderLock;  // forward declaration
 
 // LIBRARY covers both views: the cover grid and upstream's indexed list, chosen by
 // SETTINGS.libraryView. READING_STATS is this fork's own entry.
-enum class HomeMenuItem { NONE, FILE_BROWSER, LIBRARY, OPDS_BROWSER, FILE_TRANSFER, READING_STATS, SETTINGS_MENU };
+enum class HomeMenuItem { NONE, FILE_BROWSER, LIBRARY, PLUGINS, OPDS_BROWSER, FILE_TRANSFER, READING_STATS, SETTINGS_MENU };
 
 /**
  * ActivityManager
@@ -120,7 +120,7 @@ class ActivityManager {
   // The server list as the Library's OPDS tab: picking a server opens the browser, so moving
   // across the tabs never starts Wi-Fi.
   void goToOpdsServers();
-  void goToPlugins(bool showOpds);
+  void goToPlugins();
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();
