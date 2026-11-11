@@ -1,6 +1,7 @@
 #include "RecentBooksStore.h"
 
 #include <BufferedFile.h>
+#include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
 
@@ -81,6 +82,8 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc, const size_t maxBooks) {
     if (recentBooks.size() >= maxBooks) break;
     RecentBook book;
     book.path = obj["path"] | "";
+    // Opened from the file browser before it was kept out of recents.
+    if (FsHelpers::isCrashReportFile(book.path)) continue;
     book.title = obj["title"] | "";
     book.author = obj["author"] | "";
     book.coverBmpPath = obj["coverBmpPath"] | "";
@@ -97,6 +100,8 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc, const size_t maxBooks) {
 
 void RecentBooksStore::addBook(const std::string& path, const std::string& title, const std::string& author,
                                const std::string& coverBmpPath) {
+  // The crash log opens in the text reader but is not a book: Home and the Library skip it.
+  if (FsHelpers::isCrashReportFile(path)) return;
   // Drop stale entries first so a new add can't evict a valid book in their stead.
   pruneMissing();
 

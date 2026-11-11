@@ -96,6 +96,10 @@ bool hasMarkdownExtension(std::string_view fileName);
 
 bool hasReflowableBookExtension(std::string_view fileName);
 
+// The crash log HalSystem writes to the SD root. A .txt file, but not a book: only the file
+// browser lists it. Takes a path or a bare file name.
+bool isCrashReportFile(std::string_view path);
+
 // Check for .css extension (case-insensitive)
 bool hasCssExtension(std::string_view fileName);
 inline bool hasCssExtension(const String& fileName) {
