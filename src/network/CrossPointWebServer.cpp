@@ -49,6 +49,7 @@
 #include "WebDAVHandler.h"
 #include "WifiCredentialStore.h"
 #include "WifiPowerSaveGuard.h"
+#include "components/UITheme.h"
 #include "html/FilesPageHtml.generated.h"
 #include "html/FontsPageHtml.generated.h"
 #include "html/HomePageHtml.generated.h"
@@ -857,6 +858,20 @@ void CrossPointWebServer::handleStatus() const {
 #else
   doc["device"] = BoardConfig::ACTIVE.name;
 #endif
+  {
+    // Portrait reading area, for the upload page's image optimizer: the panel minus the bezel
+    // insets, the reader's screen margin, and at the bottom the status bar when it is taller
+    // (EpubReaderActivity::readerBottomReserve, horizontal text).
+    const auto& board = BoardConfig::ACTIVE;
+    const auto& inset = board.viewableInsets;
+    const int margin = SETTINGS.screenMargin;
+    const int portraitW = std::min(board.displayWidth, board.displayHeight);
+    const int portraitH = std::max(board.displayWidth, board.displayHeight);
+    JsonObject viewport = doc["viewport"].to<JsonObject>();
+    viewport["width"] = portraitW - inset.left - inset.right - 2 * margin;
+    const int bottom = std::max(margin, static_cast<int>(UITheme::getInstance().getStatusBarHeight()));
+    viewport["height"] = portraitH - inset.top - inset.bottom - margin - bottom;
+  }
 
   char snBuf[33] = {0};
   bool valid = false;
