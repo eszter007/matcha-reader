@@ -315,6 +315,7 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   pendingReaderPath.clear();
   // Note: no lock here, this is usually called by loop() and we may run into deadlock
   if (currentActivity) {
+    noteReaderResidue(*newActivity);
     // Defer launch if we're currently in an activity, to avoid deleting the current activity
     // leading to the "delete this" problem
     pendingActivity = std::move(newActivity);
@@ -324,6 +325,16 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
     currentActivity = std::move(newActivity);
     currentActivity->onEnter();
   }
+}
+
+void ActivityManager::noteReaderResidue(const Activity& next) {
+  // Menu screens refresh FAST, which cannot clear a reader page (see goHome). Home scrubs itself,
+  // but a key press drops that pass, so the first other screen after a book takes it instead,
+  // unless a HALF/FULL pass already ran. Sleep and readers pick their own waveform.
+  readerResidueOwed = readerResidueOwed || currentActivity->isReaderActivity();
+  if (!readerResidueOwed || next.name == "Home" || next.name == "Sleep") return;
+  if (!next.isReaderActivity() && renderer.panelHasResidue()) renderer.promoteNextRefresh(HalDisplay::HALF_REFRESH);
+  readerResidueOwed = false;
 }
 
 void ActivityManager::goToFileTransfer() {

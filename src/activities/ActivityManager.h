@@ -57,6 +57,9 @@ class ActivityManager {
   // build needs. Empty when none is pending.
   std::string pendingReaderPath;
   bool pendingReaderFastRefresh = false;
+  // Set on leaving a reader until a menu screen takes the scrub. See noteReaderResidue().
+  bool readerResidueOwed = false;
+  void noteReaderResidue(const Activity& next);
 
   // Task to render and display the activity
   TaskHandle_t renderTaskHandle = nullptr;
