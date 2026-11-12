@@ -162,7 +162,7 @@ Home is where you start. From here you can open:
 * **Plugins** when the plugin system is on, otherwise **OPDS Browser** (online book catalogs) once a server is saved
 * **[File Transfer](#35-file-transfer-screen)**
 * **Insights** (your [reading insights](#7-reading-insights))
-* **[Flashcards](#68-flashcards)**, when **Show in Tab Bar** is on in **Settings → Flashcards**
+* **[Flashcards](#68-flashcards)**, when **Enable Flashcards** is on in **Settings → Flashcards**
 * **[Settings](#36-settings)**
 
 In the **Cover Grid** theme, Home shows book covers instead of a menu. The book you are reading sits in a large card at the top, and the others follow below. The first time the device sees a book, it makes the cover in the background. Until a cover is ready, you see the book's title in its place. Pressing a button pauses this work. If a cover fails, the device tries again the next time you open Home.
@@ -175,7 +175,7 @@ In the **Cover Grid** theme, Home shows book covers instead of a menu. The book 
 
 #### 3.1.1 Tabs and Button Navigation (Cover Grid theme)
 
-In the Cover Grid theme, a row of tabs runs along the bottom of Home, Library, File Transfer, Insights and Settings, plus Flashcards when **Show in Tab Bar** is on in **Settings → Flashcards**. It stays in place as you move between them. The tab you are on has a filled icon.
+In the Cover Grid theme, a row of tabs runs along the bottom of Home, Library, File Transfer, Insights and Settings, plus Flashcards when **Enable Flashcards** is on in **Settings → Flashcards**. It stays in place as you move between them. The tab you are on has a filled icon.
 
 On a touch device, tap a tab.
 
@@ -700,7 +700,7 @@ The rows are grouped by the control they change. Each one is described further d
 
 **Settings → Flashcards** sets how [Flashcards](#68-flashcards) schedules your cards:
 
-- **Show in Tab Bar** (off by default): adds Flashcards to Home and to the bottom tabs.
+- **Enable Flashcards** (off by default): adds Flashcards to Home and to the bottom tabs. **Open Flashcards**, just below it, opens it from here either way.
 - **Desired Retention**: how sure you want to be to still know a card when it comes back: **80%**, **85%**, **90%** (default) or **95%**. Higher means shorter gaps and more reviews.
 - **New Cards per Day**: **5**, **10**, **20**, **30** or **50** new cards per deck each day.
 - **Maximum Interval**: the longest gap before a card comes back: **1 month**, **6 months**, **1 year** or **No limit**.
@@ -1801,7 +1801,7 @@ still be chosen as the fallback dictionary. Japanese files in the old `dict/` fo
 
 Flashcards turns the words you save with [sentence mining](#sentence-mining) into cards you can review on the device. Each language's `sentences-<lang>.csv` is one deck. Reviews are scheduled with FSRS, the scheduler Anki uses, so a card comes back just before you would forget it. Your progress is kept in the device's system folder; the CSV files are not changed by reviewing.
 
-**Opening it:** turn on **Show in Tab Bar** in [Settings → Flashcards](#flashcards-settings). Flashcards then appears on Home and in the bottom tabs.
+**Opening it:** turn on **Enable Flashcards** in [Settings → Flashcards](#flashcards-settings). Flashcards then appears on Home and in the bottom tabs.
 
 **The overview** shows how many cards are waiting today, then one row per deck with its count. Decks are named in their own language (日本語, 中文, Deutsch…). Korean and Cantonese use the name in your device language, because the menu font has no Hangul and no 粵. Choose a deck to start. A deck with nothing due cannot be opened. When nothing is due anywhere, the overview says **Nothing due today** (or **On vacation**).
 
