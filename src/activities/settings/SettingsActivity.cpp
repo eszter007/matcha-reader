@@ -36,6 +36,7 @@
 #include "StatusBarSettingsActivity.h"
 #include "TextProfileMenuActivity.h"
 #include "TranslationSettingsActivity.h"
+#include "activities/flashcards/AnkiSyncActivity.h"
 #include "activities/home/StatsSyncActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
@@ -175,6 +176,9 @@ void SettingsActivity::rebuildSettings() {
   auto all = getSettingsList(&sdFontSystem.registry(), &dictionaries, category);
 
   const auto belongsHere = [this, dictionaryPage](const SettingInfo& setting) {
+    // Anki Sync's rows are kept off the Connectivity list (sectionFor() has no section for them)
+    // and shown on their own page.
+    if (subCategory == StrId::STR_ANKI_SYNC) return setting.category == StrId::STR_ANKI_SYNC;
     if (!showOnDevice(setting)) return false;
     if (dictionaryPage) return dictionaryRowOrder(setting) >= 0;
     if (subCategory != StrId::STR_NONE_OPT) return setting.category == subCategory;
@@ -287,6 +291,7 @@ void SettingsActivity::rebuildSettings() {
   }
   addAction(SettingsSection::Connectivity, StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync);
   addAction(SettingsSection::Connectivity, StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser);
+  addAction(SettingsSection::Connectivity, StrId::STR_ANKI_SYNC, SettingAction::AnkiSync);
   rebuildRowItems();
 }
 
@@ -443,6 +448,25 @@ void SettingsActivity::toggleSelectedSetting() {
         return;
       }
       startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
+      return;
+    }
+    case SettingAction::AnkiSync: {
+      auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, SettingsSection::Connectivity,
+                                                          StrId::STR_ANKI_SYNC);
+      if (!activity) {
+        LOG_ERR("SET", "OOM: Anki settings");
+        return;
+      }
+      startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
+      return;
+    }
+    case SettingAction::AnkiTest: {
+      auto test = makeUniqueNoThrow<AnkiSyncActivity>(renderer, mappedInput, AnkiSyncActivity::Mode::Test);
+      if (!test) {
+        LOG_ERR("SET", "OOM: Anki connection test");
+        return;
+      }
+      startActivityForResult(std::move(test), [this](const ActivityResult&) { requestUpdate(); });
       return;
     }
     case SettingAction::OpenFlashcards:

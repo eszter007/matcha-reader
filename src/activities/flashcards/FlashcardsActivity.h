@@ -28,11 +28,12 @@ class FlashcardsActivity final : public UiListActivity {
   int selectedRow_ = -1;
   int dueTotal_ = 0;
   int rowHeight_ = 0;
+  bool syncRow_ = false;  // the last row is "Sync with Anki"
 
   void reload();
   // Height of the numeral, caption and ornament above the rows.
   int heroHeight() const;
-  int listCount() const override { return static_cast<int>(decks.size()); }
+  int listCount() const override { return static_cast<int>(decks.size()) + (syncRow_ ? 1 : 0); }
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
   void onBackButton() override;

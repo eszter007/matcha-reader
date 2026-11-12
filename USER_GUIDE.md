@@ -694,6 +694,8 @@ The rows are grouped by the control they change. Each one is described further d
 
 - **CrossPoint Sync**: Sync your reading position with the CrossPoint sync server or any KOReader-compatible sync server. See [KOReader Sync Quick Setup](#3611-koreader-sync-quick-setup) below.
 
+- **Anki Sync**: Sync Anki decks and their review progress with Anki desktop (with AnkiConnect) or a self-hosted companion server. Sync is optional. The page has **Anki Address**, **Anki Key**, **Anki Decks** (deck names separated by commas, as Anki shows them), **Sync AnkiWeb Too** and **Test Connection**. These rows are also on the web settings page, except **Test Connection**. See [Anki decks](#anki-decks).
+
 - **OPDS Servers**: Save online book catalogs (OPDS libraries) so you can browse them and download books straight to the device. See [OPDS Servers (Multiple Libraries)](#369-opds-servers-multiple-libraries) below. ([What is OPDS?](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System))
 
 #### Flashcards settings
@@ -1812,6 +1814,17 @@ Flashcards turns the words you save with [sentence mining](#sentence-mining) int
 - **Rate** with **Again**, **Hard**, **Good** or **Easy**. Each box shows when the card would come back. **Left** and **Right** choose a box and **Confirm** rates; on a touch device, tap a box. A side button turns the card back to the front. **Again** shows the card again a few cards later.
 
 When the deck is done, the screen says **All caught up** with the number of cards reviewed; **Confirm** or a tap closes it. **Back** leaves at any time; your progress is saved.
+
+#### Anki decks
+
+Anki decks are listed in the overview next to your own decks. Each card is drawn with its deck's own template and style, and is rated the same way. A long side is paged with the side buttons before the card turns. A card whose content is too large for the device says so; review that card in Anki.
+
+There are two ways to get a deck onto the device:
+
+- **Import, without sync:** convert an exported `.apkg` on a computer with `tools/anki_import/apkg_to_flashcards.py`, and copy the result to the SD card. Progress then stays on the device.
+- **Sync:** set up [Anki Sync](#368-connectivity), then choose **Sync with Anki** at the bottom of the overview. It turns Wi-Fi on, downloads the chosen decks, and sends reviews both ways.
+
+The commands and the server setup are in [docs/anki](docs/anki/README.md#anki-decks-on-the-reader).
 
 ## 7. Reading Insights
 

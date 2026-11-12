@@ -1901,11 +1901,21 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               // ImageBlock's lazy extractor). This is what keeps first-open of an
               // image-heavy chapter from stalling for seconds per image.
               ImageDimensions dims = {0, 0};
-              ImageDimsProbe headerProbe;
-              self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
-              bool gotDimensions = headerProbe.getDimensions(dims);
+              bool gotDimensions = false;
+              // A standalone page (a flashcard face) has no book: its images are plain files next to
+              // it, used in place, never extracted or removed.
+              const bool standalone = self->epub == nullptr;
+              if (standalone) {
+                cachedImagePath = resolvedPath;
+                ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(resolvedPath);
+                gotDimensions = decoder && decoder->getDimensions(resolvedPath, dims);
+              } else {
+                ImageDimsProbe headerProbe;
+                self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
+                gotDimensions = headerProbe.getDimensions(dims);
+              }
 
-              if (!gotDimensions) {
+              if (!gotDimensions && !standalone) {
                 // Retry with framebuffer scratch when the heap cannot fit the inflate window.
                 GfxRenderer::FrameBufferLoan probeLoan(self->renderer);
                 ImageDimsProbe retryProbe;
@@ -1913,7 +1923,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 gotDimensions = retryProbe.getDimensions(dims);
               }
 
-              if (!gotDimensions) {
+              if (!gotDimensions && !standalone) {
                 // No header within the stream (rare) — fall back to extracting the
                 // whole image and probing the file. That can take seconds, so
                 // surface the indexing popup first (single-shot per parser).
@@ -1976,7 +1986,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               // the reserved box. Costs a too-generous reservation on the failure path, which is
               // strictly better than losing the image. Falls through to the old behaviour when
               // there is no href to recover from, which is the only genuinely unrecoverable case.
-              if (!gotDimensions && !resolvedPath.empty()) {
+              if (!gotDimensions && !resolvedPath.empty() && !standalone) {
                 // Never leave a partial behind: render() skips lazy extraction when the file
                 // already exists, and would then decode a truncated image.
                 Storage.remove(cachedImagePath.c_str());

@@ -2,6 +2,7 @@
 
 #include <FlashcardCsv.h>
 #include <GfxRenderer.h>
+#include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -20,10 +21,31 @@
 #include "SdCardFontSystem.h"
 #include "activities/reader/DefinitionTextRenderer.h"
 #include "components/UITheme.h"
+#include "flashcards/AnkiDeck.h"
 #include "fontIds.h"
+#include "util/CardHtmlPages.h"
 #include "util/CjkScript.h"
 
 namespace {
+// An Anki deck carries no language: its script is read from a card. Kana means Japanese;
+// Han characters without kana mean Chinese.
+CjkScript detectScript(const std::string& path) {
+  HalFile file;
+  if (path.empty() || !Storage.openFileForRead("FLASH", path, file)) return CjkScript::None;
+  char buf[1024];
+  const int n = file.read(buf, sizeof(buf));
+  if (n <= 0) return CjkScript::None;
+  bool han = false;
+  const auto* p = reinterpret_cast<const unsigned char*>(buf);
+  const auto* end = p + n;
+  while (p < end && *p) {
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (cp >= 0x3041 && cp <= 0x30FF) return CjkScript::Japanese;
+    if (cp >= 0x4E00 && cp <= 0x9FFF) han = true;
+  }
+  return han ? CjkScript::SimplifiedChinese : CjkScript::None;
+}
+
 constexpr int PAD = 22;
 constexpr int BAND_HEIGHT = 80;      // the rating boxes (60) and the gap above them
 constexpr int MAX_SPINE_CHARS = 10;  // keeps drawSpine's per-character strings under 256 bytes of stack
@@ -335,9 +357,11 @@ void FlashcardReviewActivity::onEnter() {
   // Load the deck's CJK companion face, as a book in that script does: without it the card's
   // kanji fall back to the small built-in set.
   sdFontSystem.ensureLoaded(renderer);
-  sdFontSystem.setCjkFallbackNeeded(renderer, cjk::scriptForLanguage(language));
-  Hyphenator::setPreferredLanguage(language);
   opened = session.open(language);
+  script = cjk::scriptForLanguage(language);
+  if (opened && ankideck::isAnkiKey(language) && session.current(card)) script = detectScript(card.frontPath);
+  sdFontSystem.setCjkFallbackNeeded(renderer, script);
+  Hyphenator::setPreferredLanguage(language);
   loadCard();
   requestUpdate();
 }
@@ -353,6 +377,7 @@ void FlashcardReviewActivity::loadCard() {
   selected = 2;
   cardOk = opened && session.current(card);
   cardIsNew = session.currentIsNew();
+  layoutHtmlSide();
   session.previews(intervals);
 }
 
@@ -400,6 +425,7 @@ void FlashcardReviewActivity::loop() {
     }
     if (cardRect().contains(tx, ty)) {
       showBack = !showBack;
+      layoutHtmlSide();
       requestUpdate();
     }
     return;
@@ -408,16 +434,31 @@ void FlashcardReviewActivity::loop() {
     if (mappedInput.wasReleased(Button::Confirm)) finish();
     return;
   }
+  // A long Anki side pages first: the side buttons move through it before they turn the card.
+  if (isHtmlCard() && htmlPages.size() > 1) {
+    if (mappedInput.wasReleased(Button::PageForward) && htmlPage + 1 < htmlPages.size()) {
+      htmlPage++;
+      requestUpdate();
+      return;
+    }
+    if (mappedInput.wasReleased(Button::PageBack) && htmlPage > 0) {
+      htmlPage--;
+      requestUpdate();
+      return;
+    }
+  }
   const bool turn = mappedInput.wasReleased(Button::PageForward) || mappedInput.wasReleased(Button::PageBack);
   if (!showBack) {
     if (mappedInput.wasReleased(Button::Confirm) || turn) {
       showBack = true;
+      layoutHtmlSide();
       requestUpdate();
     }
     return;
   }
   if (turn) {
     showBack = false;
+    layoutHtmlSide();
     requestUpdate();
   } else if (mappedInput.wasPressed(Button::Left)) {
     selected = (selected + 3) % 4;
@@ -770,6 +811,10 @@ void FlashcardReviewActivity::drawCard(const Rect4& c) const {
   renderer.drawRect(c.x, c.y, c.w, c.h, 2, true);
   const Rect4 inner{c.x + 6, c.y + 6, c.w - 12, c.h - 12};
   renderer.drawRect(inner.x, inner.y, inner.w, inner.h, true);
+  if (isHtmlCard()) {
+    drawHtmlCard(inner);
+    return;
+  }
   const int spineW = std::clamp(inner.w * 26 / 100, 90, 160);
   // A Japanese card is bound on the right, as a vertical book is; it stays there when turned.
   const bool rightSpine = cjk::scriptForLanguage(language) == CjkScript::Japanese;
@@ -788,6 +833,44 @@ void FlashcardReviewActivity::drawCard(const Rect4& c) const {
     drawBack(body);
   } else {
     drawFront(body);
+  }
+}
+
+int FlashcardReviewActivity::htmlFont() const { return sdFontSystem.effectiveReaderFontId(script); }
+
+FlashcardReviewActivity::Rect4 FlashcardReviewActivity::htmlBodyRect() const {
+  const Rect4 c = cardRect();
+  // Inside the double rule, with room at the foot for the page count.
+  return {c.x + 6 + 18, c.y + 6 + 16, c.w - 12 - 36, c.h - 12 - 32 - 18};
+}
+
+void FlashcardReviewActivity::layoutHtmlSide() {
+  htmlPages.clear();
+  htmlPage = 0;
+  if (!cardOk || !isHtmlCard() || card.tooLarge) return;
+  const Rect4 body = htmlBodyRect();
+  const std::string& path = showBack ? card.backPath : card.frontPath;
+  if (!buildCardHtmlPages(renderer, path, card.cssPath, static_cast<uint16_t>(body.w), static_cast<uint16_t>(body.h),
+                          htmlFont(), /*furigana=*/true, htmlPages)) {
+    LOG_ERR("FLASH", "Card side %s not laid out", path.c_str());
+  }
+}
+
+void FlashcardReviewActivity::drawHtmlCard(const Rect4& inner) const {
+  const Rect area{inner.x, inner.y, inner.w, inner.h};
+  if (!cardOk || card.tooLarge || htmlPages.empty()) {
+    UITheme::drawCenteredText(renderer, area, UI_12_FONT_ID, inner.y + inner.h / 2,
+                              card.tooLarge ? tr(STR_FLASH_CARD_TOO_LARGE) : tr(STR_FLASH_CARD_ERROR));
+    return;
+  }
+  const Rect4 body = htmlBodyRect();
+  htmlPages[std::min(htmlPage, htmlPages.size() - 1)]->render(renderer, htmlFont(), body.x, body.y);
+  if (htmlPages.size() > 1) {
+    char count[16];
+    snprintf(count, sizeof(count), "%u / %u", static_cast<unsigned>(htmlPage + 1),
+             static_cast<unsigned>(htmlPages.size()));
+    const int w = renderer.getTextWidth(SMALL_FONT_ID, count);
+    renderer.drawText(SMALL_FONT_ID, inner.x + inner.w - 18 - w, inner.y + inner.h - 26, count, true);
   }
 }
 

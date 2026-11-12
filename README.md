@@ -35,6 +35,13 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
 
 **Flashcards.** Review the words you saved right on the device, one deck per language, scheduled with FSRS. Each card shows the word on a spine and the sentence you found it in. Japanese cards read vertically, with the reading beside each kanji on the back. Turn it on in Settings → Flashcards. See [Guide §6.8](USER_GUIDE.md#68-flashcards).
 
+**Anki decks.** Review your Anki decks on the device, each card drawn with its own template. You can import an exported `.apkg` with a script, or sync both ways with Anki desktop or a self-hosted server. Sync is optional. See [Guide §6.8](USER_GUIDE.md#anki-decks).
+
+<p align="center">
+  <img src="docs/images/screenshots/flashcards-anki-decks.png" width="200" alt="The Flashcards tab: Anki decks such as HSK 1, Kaishi 1.5k and the Open Anki JLPT N5 deck next to the reader's own decks, with a Sync with Anki button under the list">
+  <img src="docs/images/screenshots/flashcard-anki-hsk.png" width="200" alt="Back of a card from an HSK 1 Anki deck, drawn with the deck's own template: 的 with zhuyin and pinyin">
+</p>
+
 <p align="center">
   <img src="docs/images/screenshots/flashcard-french.png" width="200" alt="Front of a French flashcard: flâner on the spine and the sentence from L'Étranger with the word in bold">
   <img src="docs/images/screenshots/flashcard-chinese.png" width="200" alt="Back of a Chinese flashcard: 麻煩 with pinyin and zhuyin, two senses and the sentence from 小王子">

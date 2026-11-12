@@ -25,8 +25,40 @@ struct CardState {
   uint8_t flags = 0;
 };
 
+// One rating, kept until a sync hands it to Anki (flashcards-<deck>.log, 24 bytes each).
+struct ReviewLogEntry {
+  uint64_t id = 0;        // the card
+  int64_t timeMs = 0;     // when, ms since 1970; becomes the review's id in Anki
+  uint16_t interval = 0;  // days until it is due again
+  uint16_t previous = 0;  // the interval before this review
+  uint8_t rating = 0;     // 1 = Again .. 4 = Easy
+  uint8_t kind = 0;       // 0 learning, 1 review, 2 relearning (Anki's revlog types)
+};
+
+// The oldest logged reviews of a deck, at most MAX_LOG_ENTRIES; dropReviewLog() removes them once
+// Anki has them, and the next read returns the rest.
+constexpr size_t MAX_LOG_ENTRIES = 200;
+bool readReviewLog(const std::string& deck, std::vector<ReviewLogEntry>& out);
+bool dropReviewLog(const std::string& deck, size_t count);
+
+// A review done in Anki, folded into the device's progress by a sync.
+struct PulledReview {
+  uint64_t id = 0;        // the card
+  int64_t timeMs = 0;     // when it was answered
+  uint8_t rating = 0;     // 1 = Again .. 4 = Easy
+  uint16_t interval = 0;  // days Anki gave it (0 while still learning)
+};
+
+// Applies Anki's reviews (oldest first) to a deck's progress: each runs the device's FSRS for the
+// memory state, and Anki's own interval sets the due date.
+bool applyPulledReviews(const std::string& deck, const std::vector<PulledReview>& reviews);
+// The progress of the given cards, for handing back to Anki. Missing cards are left out.
+bool readStates(const std::string& deck, const std::vector<uint64_t>& ids, std::vector<CardState>& out,
+                uint16_t& today);
+
 struct DeckSummary {
-  std::string language;  // file's language code, e.g. "ja"
+  std::string language;  // the deck key: a mining file's language code ("ja"), or "anki-<id>" for an Anki deck
+  std::string label;     // an Anki deck's own name; empty for mining decks
   uint16_t total = 0;
   uint16_t due = 0;
   uint16_t fresh = 0;  // new cards available today, after the daily limit
@@ -40,6 +72,12 @@ struct CardText {
   std::string definition;
   std::string book;
   std::string furigana;  // Anki furigana syntax; empty when unknown
+  // A card from an Anki deck: its two sides as rendered XHTML files, and the deck's CSS. The
+  // fields above are then empty.
+  std::string frontPath;
+  std::string backPath;
+  std::string cssPath;
+  bool tooLarge = false;  // Anki's rendering did not fit the device
 };
 
 // The user's scheduling settings (Settings > Flashcards).
@@ -89,7 +127,7 @@ class Session {
  private:
   struct QueueItem {
     uint64_t id;
-    uint32_t offset;  // byte offset of the card's CSV row
+    uint32_t offset;  // byte offset of the card's CSV row; an Anki card's index flags
   };
 
   CardState* find(uint64_t id);
@@ -99,6 +137,7 @@ class Session {
   std::string lang;
   std::string csvPath;
   bool upgraded = false;          // the file has the Furigana column
+  bool anki = false;              // an Anki deck: cards come from its index, sides from XHTML files
   std::vector<CardState> states;  // sorted by id
   std::vector<QueueItem> queue;
   size_t position = 0;
@@ -107,6 +146,7 @@ class Session {
   uint16_t day = 0;
   uint16_t newToday = 0;
   uint8_t unsaved = 0;
+  std::vector<ReviewLogEntry> pendingLog;  // ratings not yet appended to the review log
 };
 
 }  // namespace flashcards

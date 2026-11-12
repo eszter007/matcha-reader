@@ -1,5 +1,7 @@
 #include "SettingsList.h"
 
+#include <AnkiSyncStore.h>
+
 #include "util/GeminiConfig.h"
 
 void forEachBaseSetting(const SettingVisitor visit, void* context) {
@@ -348,6 +350,44 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
       StrId::STR_XLAT_CUSTOM_LANGUAGE, [] { return gemini::readCustomLanguage(); },
       [](const std::string& v) { gemini::writeCustomLanguage(v); }, "translationCustomLanguage",
       StrId::STR_TRANSLATION_SETTINGS));
+
+  // --- Anki Sync (AnkiSyncStore); also on its own page under Connectivity ---
+  emit(SettingInfo::DynamicString(
+      StrId::STR_ANKI_ADDRESS, [] { return ANKI_STORE.getUrl(); },
+      [](const std::string& v) {
+        ANKI_STORE.setUrl(v);
+        ANKI_STORE.saveToFile();
+      },
+      "ankiUrl", StrId::STR_ANKI_SYNC));
+  emit(SettingInfo::DynamicString(
+           StrId::STR_ANKI_KEY, [] { return ANKI_STORE.getKey(); },
+           [](const std::string& v) {
+             ANKI_STORE.setKey(v);
+             ANKI_STORE.saveToFile();
+           },
+           "ankiKey", StrId::STR_ANKI_SYNC)
+           .withObfuscated());
+  emit(SettingInfo::DynamicString(
+      StrId::STR_ANKI_DECKS, [] { return ankisync::joinDeckNames(ANKI_STORE.getSyncedDecks()); },
+      [](const std::string& v) {
+        ANKI_STORE.setSyncedDecks(ankisync::splitDeckNames(v));
+        ANKI_STORE.saveToFile();
+      },
+      "ankiDecks", StrId::STR_ANKI_SYNC));
+  emit(SettingInfo::DynamicEnum(
+      StrId::STR_ANKI_SYNC_ANKIWEB, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
+      [] { return static_cast<uint8_t>(ANKI_STORE.getSyncAnkiWeb() ? 1 : 0); },
+      [](const uint8_t v) {
+        ANKI_STORE.setSyncAnkiWeb(v != 0);
+        ANKI_STORE.saveToFile();
+      },
+      "ankiSyncAnkiWeb", StrId::STR_ANKI_SYNC));
+  {
+    SettingInfo test = SettingInfo::Action(StrId::STR_ANKI_TEST, SettingAction::AnkiTest);
+    test.category = StrId::STR_ANKI_SYNC;
+    test.webHidden = true;  // needs the device's own Wi-Fi
+    emit(std::move(test));
+  }
 
   // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
   emit(SettingInfo::DynamicString(

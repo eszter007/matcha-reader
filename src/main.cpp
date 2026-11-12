@@ -32,6 +32,7 @@
 #include <cstdarg>
 #include <cstring>
 
+#include "AnkiSyncStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
@@ -766,6 +767,7 @@ void setup() {
   // from there. A missing or stale pack leaves the UI in English rather than failing the boot.
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
+  ANKI_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
   OPDS_TOKENS.loadFromFile();
   LCP_PASSPHRASES.loadFromFile();

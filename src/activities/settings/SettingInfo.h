@@ -44,6 +44,8 @@ enum class SettingAction {
   TranslationSettings,
   About,
   OpenFlashcards,
+  AnkiSync,
+  AnkiTest,
 };
 
 struct SettingInfo {
