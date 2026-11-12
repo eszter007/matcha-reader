@@ -289,6 +289,10 @@ class EpubReaderWordLookupActivity final : public Activity {
   std::string resultHeadword;
   std::string resultDefinition;
   std::string resultReading;
+  std::string resultFurigana;  // the dictionary's per-kanji reading (Anki syntax), if it has one
+  // The furigana printed over the looked-up word on the page, in Anki syntax: the first choice
+  // for a saved card's Furigana field.
+  std::string pageFurigana;
   std::string resultGrammar;
   int resultMatchLen = 0;
   bool hasGrammar = false;
@@ -305,6 +309,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   std::vector<std::string> sectionText;
   std::vector<std::string> sectionLabel;
   std::vector<std::string> sectionReading;
+  std::vector<std::string> sectionFurigana;
   std::vector<std::string> sectionGrammar;
   // Which Japanese index answered each piece: several can answer one lookup, so the panel names
   // it. StrId rather than a string: these are UI words, not the dictionaries' own titles.

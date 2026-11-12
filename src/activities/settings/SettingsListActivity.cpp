@@ -20,12 +20,13 @@ namespace {
 constexpr int16_t ICON_SIZE = 32;
 // Row icons, indexed by SettingsSection. Cover Grid's tab bar draws Tabler icons, so its rows do too.
 constexpr const freeink::Icon* SECTION_ICONS[SETTINGS_SECTION_COUNT] = {
-    &icon_settings_32,       &icon_smartphone_32, &icon_moon_32,    &icon_home_library_32,
-    &icon_home_chart_bar_32, &icon_book_open_32,  &icon_pointer_32, &icon_wifi_32,
+    &icon_settings_32,  &icon_smartphone_32, &icon_moon_32, &icon_home_library_32,      &icon_home_chart_bar_32,
+    &icon_book_open_32, &icon_pointer_32,    &icon_wifi_32, &icon_tabler_flashcards_32,
 };
 constexpr const freeink::Icon* SECTION_ICONS_TABLER[SETTINGS_SECTION_COUNT] = {
-    &icon_tabler_settings_32, &icon_tabler_display_32, &icon_tabler_sleep_32,    &icon_tabler_library_32,
-    &icon_tabler_stats_32,    &icon_tabler_reader_32,  &icon_tabler_controls_32, &icon_tabler_network_32,
+    &icon_tabler_settings_32, &icon_tabler_display_32, &icon_tabler_sleep_32,
+    &icon_tabler_library_32,  &icon_tabler_stats_32,   &icon_tabler_reader_32,
+    &icon_tabler_controls_32, &icon_tabler_network_32, &icon_tabler_flashcards_32,
 };
 }  // namespace
 

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <DictIndex.h>
 #include <FontCacheManager.h>
+#include <Furigana.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -185,6 +186,7 @@ bool MangaWordLookupActivity::resultEntries(std::vector<DictionaryDefinitionActi
   auto& draft = entry.draft;
   draft.card.word = resultHeadword;
   draft.card.reading = resultReading;
+  if (furigana::matchesReading(resultFurigana, resultReading)) draft.card.furigana = resultFurigana;
   draft.card.sentence = miningSentence();
   draft.card.book = mining_.bookTitle;
   draft.card.author = mining_.bookAuthor;
@@ -323,6 +325,7 @@ void MangaWordLookupActivity::performLookupImpl() {
   resultDict = 0;
   resultDefinition.clear();
   resultReading.clear();
+  resultFurigana.clear();
   resultGrammar.clear();
   resultDictionaryLabel.clear();
   resultMatchLen = 0;
@@ -363,6 +366,7 @@ void MangaWordLookupActivity::performLookupImpl() {
     DefinitionText::EntryMetadata metadata;
     DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
     resultReading = std::move(metadata.reading);
+    resultFurigana = std::move(metadata.furigana);
     resultGrammar = std::move(metadata.grammar);
     resultDict = result.entry.sourceDict;
     resultSource = dictsource::name(resultDict);
@@ -422,6 +426,7 @@ void MangaWordLookupActivity::performLookupImpl() {
           DefinitionText::EntryMetadata grammarMetadata;
           DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, grammarMetadata);
           resultReading = std::move(grammarMetadata.reading);
+          resultFurigana = std::move(grammarMetadata.furigana);
           resultGrammar = std::move(grammarMetadata.grammar);
           resultDictionaryLabel = std::move(grammarMetadata.source);
           resultDict = DictIndex::DICT_GRAMMAR;

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for the Chinese helpers in convert_jmdict.py: python3 tools/dict_convert/test_convert.py"""
 
+import json
 import os
 import sys
 import tempfile
@@ -269,6 +270,49 @@ class ThirdPass(unittest.TestCase):
         texts = conv.format_definitions_moedict(entry)
         self.assertEqual(len(texts), 2)
         self.assertTrue(texts[1].startswith("【hào ㄏㄠˋ】"))
+
+
+class Furigana(unittest.TestCase):
+    def test_anki_string(self):
+        f = conv.furigana_to_anki
+        self.assertEqual(f([{"ruby": "木", "rt": "こ"}, {"ruby": "漏", "rt": "も"}, {"ruby": "れ"},
+                            {"ruby": "日", "rt": "び"}]), "木[こ]漏[も]れ 日[び]")
+        self.assertEqual(f([{"ruby": "今日", "rt": "きょう"}]), "今日[きょう]")
+        self.assertEqual(f([{"ruby": "お"}, {"ruby": "茶", "rt": "ちゃ"}]), "お 茶[ちゃ]")
+        self.assertEqual(f([{"ruby": "食", "rt": "た"}, {"ruby": "べる"}]), "食[た]べる")
+
+    def test_anki_string_skips(self):
+        self.assertEqual(conv.furigana_to_anki([{"ruby": "ある"}]), "")
+        self.assertEqual(conv.furigana_to_anki([]), "")
+        self.assertEqual(conv.furigana_to_anki([{"ruby": "｝"}, {"ruby": "日", "rt": "ひ"}]), "")
+
+    def test_load_with_bom(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "f.json")
+            with open(path, "w", encoding="utf-8-sig") as f:
+                f.write('[{"text":"今日","reading":"きょう","furigana":[{"ruby":"今日","rt":"きょう"}]},'
+                        '{"text":"ある","reading":"ある","furigana":[{"ruby":"ある"}]}]')
+            self.assertEqual(conv.load_furigana(path), {("今日", "きょう"): "今日[きょう]"})
+
+    def test_jmdict_per_kanji_reading_line(self):
+        entry = {"kanji": [{"text": "今日"}, {"text": "本日"}],
+                 "kana": [{"text": "きょう", "appliesToKanji": ["今日"]},
+                          {"text": "こんにち", "appliesToKanji": ["*"]}],
+                 "sense": [{"gloss": [{"text": "today"}]}]}
+        furigana = {("今日", "きょう"): "今日[きょう]"}
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "jmdict.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"words": [entry]}, f)
+            records = {r[0].decode(): r[1].decode() for r in conv.convert_jmdict(path, furigana)}
+        self.assertEqual(records["今日"], "【きょう、こんにち】｛今日[きょう]｝\ntoday")
+        self.assertEqual(records["本日"], "【きょう、こんにち】\ntoday")
+        self.assertEqual(records["きょう"], "【きょう、こんにち】\ntoday")
+
+    def test_yomitan_reading_line(self):
+        self.assertEqual(conv.format_definition_yomitan("今日", "きょう", ["today"], "今日[きょう]"),
+                         "【きょう】｛今日[きょう]｝\n\ntoday")
+        self.assertEqual(conv.format_definition_yomitan("今日", "きょう", ["today"]), "【きょう】\n\ntoday")
 
 
 if __name__ == "__main__":

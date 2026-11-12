@@ -93,8 +93,8 @@ TabRing::Result TabRing::handleInput(Host& host, const MappedInputManager& input
     const int hit = HomeTabBar::hitTest(input, renderer, tapped);
     if (hit >= 0) {
       if (tapped) {
-        if (static_cast<HomeTab>(hit) != host.ringBottomTab()) haptic_feedback::touchAction();
-        host.ringActivateBottomTab(static_cast<HomeTab>(hit));
+        if (HomeTabBar::tabAt(hit) != host.ringBottomTab()) haptic_feedback::touchAction();
+        host.ringActivateBottomTab(HomeTabBar::tabAt(hit));
       }
       return Result::Handled;
     }
@@ -128,10 +128,11 @@ TabRing::Result TabRing::handleInput(Host& host, const MappedInputManager& input
 
   // A Left/Right from the content steps from the tab you are in, so the cursor lands next to
   // where you already are rather than at an end.
-  const int own = static_cast<int>(host.ringBottomTab());
+  const int own = HomeTabBar::slotOf(host.ringBottomTab());
   if (left || right) {
     if (at != Focus::BottomBar) host.ringSetFocus(Focus::BottomBar, false);
-    slot = (slot + (right ? 1 : HomeTabBar::COUNT - 1)) % HomeTabBar::COUNT;
+    const int n = HomeTabBar::count();
+    slot = (slot + (right ? 1 : n - 1)) % n;
     host.ringChanged();
     return Result::BarStepped;
   }
@@ -139,7 +140,7 @@ TabRing::Result TabRing::handleInput(Host& host, const MappedInputManager& input
     if (slot == own) {
       leaveBottomBar(host);
     } else {
-      host.ringActivateBottomTab(static_cast<HomeTab>(slot));
+      host.ringActivateBottomTab(HomeTabBar::tabAt(slot));
     }
     return Result::Handled;
   }

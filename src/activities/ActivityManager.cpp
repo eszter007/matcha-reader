@@ -20,6 +20,7 @@
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
 #include "components/HeaderBackTapTarget.h"
+#include "flashcards/FlashcardsActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
@@ -341,6 +342,15 @@ void ActivityManager::goToFileTransfer() {
   auto activity = makeUniqueNoThrow<CrossPointWebServerActivity>(renderer, mappedInput);
   if (!activity) {
     LOG_ERR("ACT", "Not enough memory to open File Transfer");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+
+void ActivityManager::goToFlashcards() {
+  auto activity = makeUniqueNoThrow<FlashcardsActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: flashcards activity");
     return;
   }
   replaceActivity(std::move(activity));

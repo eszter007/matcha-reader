@@ -43,6 +43,7 @@ enum class SettingAction {
   DictionarySettings,
   TranslationSettings,
   About,
+  OpenFlashcards,
 };
 
 struct SettingInfo {

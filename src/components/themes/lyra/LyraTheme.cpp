@@ -27,6 +27,7 @@
 #include "components/icons/recent.h"
 #include "components/icons/settings2.h"
 #include "components/icons/stats_icons.h"
+#include "components/icons/tabBarIcons.h"
 #include "components/icons/transfer.h"
 #include "components/icons/wifi.h"
 #include "fontIds.h"
@@ -67,6 +68,8 @@ const uint8_t* iconForName(UIIcon icon) {
       return BookmarkIcon;
     case UIIcon::Blocks:
       return BlocksIcon;
+    case UIIcon::Flashcards:
+      return FlashcardsTabIcon;
     default:
       return nullptr;
   }
@@ -584,11 +587,14 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
                                const std::function<std::string(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
   const bool prewarmed = prewarmRows(renderer, UI_12_FONT_ID, 1 << EpdFontFamily::REGULAR, 0, buttonCount, buttonLabel);
+  // Rows keep their full height while they fit; a longer menu tightens the pitch so the last row
+  // stays clear of the button hints.
+  const int fullPitch = LyraMetrics::values.menuRowHeight + LyraMetrics::values.menuSpacing;
+  const int pitch = buttonCount > 0 ? std::min(fullPitch, rect.height / buttonCount) : fullPitch;
+  const int rowHeight = std::min<int>(LyraMetrics::values.menuRowHeight, pitch - 4);
   for (int i = 0; i < buttonCount; ++i) {
     int tileWidth = rect.width - LyraMetrics::values.contentSidePadding * 2;
-    Rect tileRect = Rect{rect.x + LyraMetrics::values.contentSidePadding,
-                         rect.y + i * (LyraMetrics::values.menuRowHeight + LyraMetrics::values.menuSpacing), tileWidth,
-                         LyraMetrics::values.menuRowHeight};
+    Rect tileRect = Rect{rect.x + LyraMetrics::values.contentSidePadding, rect.y + i * pitch, tileWidth, rowHeight};
 
     const bool selected = selectedIndex == i;
 
@@ -600,13 +606,13 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
     const char* label = labelStr.c_str();
     int textX = tileRect.x + 16;
     const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
-    const int textY = tileRect.y + (LyraMetrics::values.menuRowHeight - lineHeight) / 2;
+    const int textY = tileRect.y + (rowHeight - lineHeight) / 2;
 
     if (rowIcon != nullptr) {
       UIIcon icon = rowIcon(i);
       const uint8_t* iconBitmap = iconForName(icon);
       if (iconBitmap != nullptr) {
-        const int iconY = tileRect.y + (LyraMetrics::values.menuRowHeight - mainMenuIconSize) / 2;
+        const int iconY = tileRect.y + (rowHeight - mainMenuIconSize) / 2;
         renderer.drawIcon(iconBitmap, textX, iconY, mainMenuIconSize);
         textX += mainMenuIconSize + hPaddingInSelection + 2;
       }

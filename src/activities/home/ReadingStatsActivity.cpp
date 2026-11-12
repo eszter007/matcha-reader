@@ -80,7 +80,7 @@ void ReadingStatsActivity::stepTab(const int direction) {
 
 void ReadingStatsActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) {
   refreshFocused = false;
-  tabFocus = focus == TabRing::Focus::BottomBar ? static_cast<int>(HomeTab::Stats) : -1;
+  tabFocus = focus == TabRing::Focus::BottomBar ? HomeTabBar::slotOf(HomeTab::Stats) : -1;
   // The top of the ring is the top of the page, where the tabs are; coming up out of the bar
   // lands at the page's end.
   if (focus == TabRing::Focus::TopTabs) scrollOffset = 0;

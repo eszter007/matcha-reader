@@ -124,8 +124,34 @@ std::string headerLines() {
   return "#separator:comma\n"
          "#html:true\n"
          "#guid column:1\n"
-         "#tags column:10\n"
-         "#columns:GUID,Word,Reading,Sentence,Definition,Book,Author,Date,Dictionary,Tags\n";
+         "#tags column:11\n"
+         "#columns:GUID,Word,Reading,Sentence,Definition,Book,Author,Date,Dictionary,Furigana,Tags\n";
+}
+
+bool isLegacyHeader(const std::string_view head) { return head.find("#tags column:10\n") != std::string_view::npos; }
+
+void LegacyRowMigrator::feed(const std::string_view chunk, std::string& out) {
+  // Tags was the tenth field: the empty Furigana field goes in after the ninth comma.
+  constexpr uint8_t TAGS_COMMAS = 9;
+  for (const char c : chunk) {
+    if (atLineStart_ && !inQuotes_) {
+      comment_ = c == '#';
+      commas_ = 0;
+    }
+    atLineStart_ = false;
+    if (comment_) {
+      if (c == '\n') atLineStart_ = true;
+      continue;
+    }
+    out += c;
+    if (c == '"') {
+      inQuotes_ = !inQuotes_;  // a doubled quote toggles twice
+    } else if (!inQuotes_ && c == ',') {
+      if (++commas_ == TAGS_COMMAS) out += ',';
+    } else if (!inQuotes_ && c == '\n') {
+      atLineStart_ = true;
+    }
+  }
 }
 
 std::string csvField(std::string_view value) {
@@ -305,9 +331,10 @@ std::string formatRow(const Card& card) {
 
   std::string row;
   row.reserve(guid.size() + card.word.size() + card.reading.size() + card.sentence.size() + definition.size() +
-              card.book.size() + card.author.size() + card.date.size() + card.dictionary.size() + tags.size() + 32);
-  const std::string_view fields[] = {guid,      card.word,   card.reading, card.sentence,   definition,
-                                     card.book, card.author, card.date,    card.dictionary, tags};
+              card.book.size() + card.author.size() + card.date.size() + card.dictionary.size() + card.furigana.size() +
+              tags.size() + 32);
+  const std::string_view fields[] = {guid,        card.word, card.reading,    card.sentence, definition, card.book,
+                                     card.author, card.date, card.dictionary, card.furigana, tags};
   bool first = true;
   for (const auto field : fields) {
     if (!first) row += ',';

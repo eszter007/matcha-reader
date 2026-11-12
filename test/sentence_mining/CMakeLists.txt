@@ -1,6 +1,7 @@
 add_executable(SentenceMiningTest
   SentenceMiningTest.cpp
   ${REPO_ROOT}/lib/SentenceMining/SentenceMiningCsv.cpp
+  ${REPO_ROOT}/lib/SentenceMining/Furigana.cpp
 )
 
 target_include_directories(SentenceMiningTest PRIVATE

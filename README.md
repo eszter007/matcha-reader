@@ -31,7 +31,15 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
   <img src="docs/images/screenshots/word-lookup-chinese.png" width="260" alt="Word lookup panel over a page of 紅樓夢: 繁華 with pinyin and zhuyin, both scripts and two senses">
 </p>
 
-**Sentence mining.** Save a word with its sentence to a CSV per language that Anki imports as is. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
+**Sentence mining.** Save a word with its sentence to a CSV per language that Anki imports as is. Japanese words also get their furigana per kanji, from the book or the dictionary. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
+
+**Flashcards.** Review the words you saved right on the device, one deck per language, scheduled with FSRS. Each card shows the word on a spine and the sentence you found it in. Japanese cards read vertically, with the reading beside each kanji on the back. Turn it on in Settings → Flashcards. See [Guide §6.8](USER_GUIDE.md#68-flashcards).
+
+<p align="center">
+  <img src="docs/images/screenshots/flashcard-french.png" width="200" alt="Front of a French flashcard: flâner on the spine and the sentence from L'Étranger with the word in bold">
+  <img src="docs/images/screenshots/flashcard-chinese.png" width="200" alt="Back of a Chinese flashcard: 麻煩 with pinyin and zhuyin, two senses and the sentence from 小王子">
+  <img src="docs/images/screenshots/flashcard-japanese.png" width="200" alt="Back of a Japanese flashcard: 木漏れ日 on the spine with こ, も and び beside their kanji, the definition and the sentence from ノルウェイの森">
+</p>
 
 **Vocabulary history.** Optionally keep every word you look up, in any language and in manga, in `Vocabulary.txt` on the SD card. See [Guide §6.1](USER_GUIDE.md#vocabulary-history).
 

@@ -73,6 +73,7 @@ This guide covers the **CrossPoint** firmware as shipped in Matcha Reader: the b
     - [6.5 Books in Other Languages](#65-books-in-other-languages)
     - [6.6 Manga, Manhua and Comics](#66-manga-manhua-and-comics)
     - [6.7 Dictionary Files and Language Selection](#67-dictionary-files-and-language-selection)
+    - [6.8 Flashcards](#68-flashcards)
   - [7. Reading Insights](#7-reading-insights)
     - [7.1 Insights](#71-insights)
     - [7.2 Per-book Insights](#72-per-book-insights)
@@ -161,6 +162,7 @@ Home is where you start. From here you can open:
 * **Plugins** when the plugin system is on, otherwise **OPDS Browser** (online book catalogs) once a server is saved
 * **[File Transfer](#35-file-transfer-screen)**
 * **Insights** (your [reading insights](#7-reading-insights))
+* **[Flashcards](#68-flashcards)**, when **Show in Tab Bar** is on in **Settings → Flashcards**
 * **[Settings](#36-settings)**
 
 In the **Cover Grid** theme, Home shows book covers instead of a menu. The book you are reading sits in a large card at the top, and the others follow below. The first time the device sees a book, it makes the cover in the background. Until a cover is ready, you see the book's title in its place. Pressing a button pauses this work. If a cover fails, the device tries again the next time you open Home.
@@ -173,7 +175,7 @@ In the **Cover Grid** theme, Home shows book covers instead of a menu. The book 
 
 #### 3.1.1 Tabs and Button Navigation (Cover Grid theme)
 
-In the Cover Grid theme, a row of tabs runs along the bottom of Home, Library, File Transfer, Insights and Settings. It stays in place as you move between them. The tab you are on has a filled icon.
+In the Cover Grid theme, a row of tabs runs along the bottom of Home, Library, File Transfer, Insights and Settings, plus Flashcards when **Show in Tab Bar** is on in **Settings → Flashcards**. It stays in place as you move between them. The tab you are on has a filled icon.
 
 On a touch device, tap a tab.
 
@@ -181,7 +183,7 @@ On a device with buttons only, the cursor moves in one loop through the whole sc
 
 * **Up / Side Up** and **Down / Side Down** move the cursor around the loop.
 * **Confirm** on a top tab moves to the next one, e.g. **Books**, **Shelves**, **OPDS** and **Files** in the Library, or the languages in Insights. After the last top tab, the cursor moves to the bottom tabs.
-* **Left** and **Right** on a top tab move to the previous or next one. In the bottom tabs, they move between Home, Library, File Transfer, Insights and Settings.
+* **Left** and **Right** on a top tab move to the previous or next one. In the bottom tabs, they move between Home, Library, File Transfer, Insights, Flashcards (when shown) and Settings.
 * **Confirm** on a bottom tab opens that screen. **Confirm** on the tab you are already on sends the cursor back to the first top tab.
 * **Back** leaves the screen. Hold **Back** to go to Home.
 
@@ -693,6 +695,16 @@ The rows are grouped by the control they change. Each one is described further d
 - **CrossPoint Sync**: Sync your reading position with the CrossPoint sync server or any KOReader-compatible sync server. See [KOReader Sync Quick Setup](#3611-koreader-sync-quick-setup) below.
 
 - **OPDS Servers**: Save online book catalogs (OPDS libraries) so you can browse them and download books straight to the device. See [OPDS Servers (Multiple Libraries)](#369-opds-servers-multiple-libraries) below. ([What is OPDS?](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System))
+
+#### Flashcards settings
+
+**Settings → Flashcards** sets how [Flashcards](#68-flashcards) schedules your cards:
+
+- **Show in Tab Bar** (off by default): adds Flashcards to Home and to the bottom tabs.
+- **Desired Retention**: how sure you want to be to still know a card when it comes back: **80%**, **85%**, **90%** (default) or **95%**. Higher means shorter gaps and more reviews.
+- **New Cards per Day**: **5**, **10**, **20**, **30** or **50** new cards per deck each day.
+- **Maximum Interval**: the longest gap before a card comes back: **1 month**, **6 months**, **1 year** or **No limit**.
+- **Vacation Mode**: pauses reviews. While it is on, nothing comes due, no new cards are added and the overview says **On vacation**. When you turn it off, every due date moves forward by the days you were away, so the reviews do not pile up. The device needs the clock to be set to count those days; until then it waits.
 
 #### 3.6.9 OPDS Servers (Multiple Libraries)
 
@@ -1338,6 +1350,7 @@ into its own Anki deck. Each card holds:
 | Book, Author | Where it came from |
 | Date | The day you saved it |
 | Dictionary | Which dictionary answered |
+| Furigana | Japanese only: the reading over each kanji in Anki's furigana format, e.g. `木[こ]漏[も]れ 日[び]`. It comes from the book's own furigana when the word has it, otherwise from the dictionary when it was converted with furigana (see [Dictionary setup](docs/dictionary-setup.md#japanese)). Empty when neither knows |
 | Tags | `matcha` and the book title |
 
 A sentence cut off at the bottom of the page is completed from the next page. In manga, the sentence is the text of
@@ -1351,6 +1364,14 @@ the speech bubble the word is in.
 The file tells Anki how it is laid out, so you do not need to set up columns. The file keeps growing as you save
 more words. You can import the same file again later: Anki updates the cards it already has and adds only the new
 ones.
+
+To show the Furigana column as ruby in Anki, add a Furigana field to your note type and put `{{furigana:Furigana}}`
+on the card template. A ready-made note type that looks like the device's flashcards is in
+[docs/anki](docs/anki/README.md).
+
+Files saved before the Furigana column existed are updated the next time you save a word or open the deck under
+Flashcards: an empty Furigana field is added to every row and the header is rewritten. Import the updated file
+into Anki as usual, and map the new column to your Furigana field (or ignore it).
 
 The file is plain CSV, so a spreadsheet or another flashcard app can open it too.
 
@@ -1775,6 +1796,22 @@ the copy in `.dictionaries/` wins.
 Older setups still work. A dictionary folder placed directly under `dictionaries/`, outside a language folder, can
 still be chosen as the fallback dictionary. Japanese files in the old `dict/` folder are still found.
 
+
+### 6.8 Flashcards
+
+Flashcards turns the words you save with [sentence mining](#sentence-mining) into cards you can review on the device. Each language's `sentences-<lang>.csv` is one deck. Reviews are scheduled with FSRS, the scheduler Anki uses, so a card comes back just before you would forget it. Your progress is kept in the device's system folder; the CSV files are not changed by reviewing.
+
+**Opening it:** turn on **Show in Tab Bar** in [Settings → Flashcards](#flashcards-settings). Flashcards then appears on Home and in the bottom tabs.
+
+**The overview** shows how many cards are waiting today, then one row per deck with its count. Decks are named in their own language (日本語, 中文, Deutsch…). Korean and Cantonese use the name in your device language, because the menu font has no Hangul and no 粵. Choose a deck to start. A deck with nothing due cannot be opened. When nothing is due anywhere, the overview says **Nothing due today** (or **On vacation**).
+
+**A card:**
+
+- **Front:** the word on the card's spine and the sentence you saved it from, with the word in bold, and the book's title at the bottom. Japanese cards are set vertically, in columns from right to left, with the spine on the right.
+- **Turn** (**Confirm**, a side button, or **Tap to turn**) shows the back: the reading, the definition and the sentence again. On a Japanese card the reading stands beside each kanji on the spine, like furigana. It uses the card's Furigana column when there is one; otherwise it is placed from the word's kana.
+- **Rate** with **Again**, **Hard**, **Good** or **Easy**. Each box shows when the card would come back. **Left** and **Right** choose a box and **Confirm** rates; on a touch device, tap a box. A side button turns the card back to the front. **Again** shows the card again a few cards later.
+
+When the deck is done, the screen says **All caught up** with the number of cards reviewed; **Confirm** or a tap closes it. **Back** leaves at any time; your progress is saved.
 
 ## 7. Reading Insights
 

@@ -459,6 +459,14 @@ void extractEntryMetadata(std::string& text, const std::string& fallbackHeadword
       const size_t close = firstLine.find(kClose, marker + sizeof(kOpen) - 1);
       if (close != std::string::npos) {
         metadata.reading = firstLine.substr(marker + sizeof(kOpen) - 1, close - marker - (sizeof(kOpen) - 1));
+        static constexpr char kFuriOpen[] = "\xef\xbd\x9b";   // ｛
+        static constexpr char kFuriClose[] = "\xef\xbd\x9d";  // ｝
+        const size_t afterClose = close + sizeof(kClose) - 1;
+        if (firstLine.compare(afterClose, sizeof(kFuriOpen) - 1, kFuriOpen) == 0) {
+          const size_t from = afterClose + sizeof(kFuriOpen) - 1;
+          const size_t to = firstLine.find(kFuriClose, from);
+          if (to != std::string::npos) metadata.furigana = firstLine.substr(from, to - from);
+        }
         text.erase(0, lineEnd == std::string::npos ? text.size() : lineEnd + 1);
         while (!text.empty() &&
                (text.front() == ' ' || text.front() == '\t' || text.front() == '\r' || text.front() == '\n'))

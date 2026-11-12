@@ -82,6 +82,8 @@ class UiListActivity : public Activity, protected UiAppHost, public TabRing::Hos
   virtual void drawChrome();
   // Button hints, drawn after the app renders. Default: Back/Select/Up/Down.
   virtual void drawFooter();
+  // Label for the Confirm hint; empty hides it when the selected row has nothing to open.
+  virtual const char* confirmHint() const;
 
   // --- helpers ---------------------------------------------------------------
   // Measure visibleRows for the screen band, apply follow-on-build, clamp the

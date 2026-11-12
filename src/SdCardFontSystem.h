@@ -286,6 +286,14 @@ class SdCardFontSystem {
   // Open one style source file (resident if small, streamed if large) into
   // ttfSources_[style]. Returns false on open/read failure.
   bool openTtfSource(uint8_t style, const std::string& path);
+  // Opens `path` into `source` (resident if small, streamed if large); openTtfSource() and the
+  // companion use it.
+  struct TtfSource;
+  bool openTtfSourceInto(TtfSource& source, const std::string& path);
+  // A vector CJK extension (NotoSerifJP.ttf) as the CJK companion: the .cpfont manager cannot
+  // load it, so it goes through the FreeInkFont engine like the selected TTF does.
+  bool loadCompanionTtf(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t pointSize);
+  void unloadCompanionTtf(GfxRenderer& renderer);
   // Register every present source with `font` (shared bytes / file handles).
   void addTtfSources(TtfEpdFont& font);
   // Close/free all style sources.
@@ -365,6 +373,12 @@ class SdCardFontSystem {
     uint8_t pointSize = 0;
   };
   TtfLookupFace ttfLookup_[2];
+  // The CJK companion when it is a vector family (see loadCompanionTtf).
+  std::unique_ptr<TtfEpdFont> companionTtf_;
+  TtfSource companionTtfSource_;
+  std::string companionTtfFamily_;
+  int companionTtfFontId_ = 0;
+  uint8_t companionTtfPointSize_ = 0;
 #endif  // CROSSPOINT_VECTOR_FONTS
 };
 

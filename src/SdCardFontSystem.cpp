@@ -892,6 +892,9 @@ void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t po
     renderer.setFaceScale(selectedId, 256, 256, /*sizeFallbacks=*/false, /*matchOwnEm=*/partial);
   }
   if (!needsCompanion) {
+#if CROSSPOINT_VECTOR_FONTS
+    unloadCompanionTtf(renderer);
+#endif
     if (!fallbackManager_.currentFamilyName().empty()) {
       // Unloading clears every UI fallback registration, the selected family's included; put
       // those back so list rows keep its glyphs after a companion comes and goes.
@@ -938,6 +941,21 @@ void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t po
     const auto* want = fam->findNearestSize(loadPt);
     LOG_DBG("SDFS", "Companion candidate %s: asked %u -> nearest %u", fam->name.c_str(), loadPt,
             want ? want->pointSize : 0);
+#if CROSSPOINT_VECTOR_FONTS
+    if (fam->vector) {
+      if (companionTtf_ && companionTtfFamily_ == fam->name && companionTtfPointSize_ == loadPt) return;
+      if (!fallbackManager_.currentFamilyName().empty()) fallbackManager_.unloadAll(renderer);
+      if (loadCompanionTtf(*fam, renderer, loadPt) && companionTtf_->coversCodepoint(cjkProbe()) &&
+          companionTtf_->coversCodepoint('a')) {
+        LOG_DBG("SDFS", "Companion fallback font (vector): %s", fam->name.c_str());
+        if (!selectedHasCjk) lendCompanionToUiFonts(renderer, companionTtfFontId_, loadPt);
+        return;
+      }
+      unloadCompanionTtf(renderer);
+      continue;
+    }
+    unloadCompanionTtf(renderer);
+#endif
     // Already loaded at the right size? Keep it.
     if (fallbackManager_.currentFamilyName() == fam->name) {
       if (want && want->pointSize == fallbackManager_.currentPointSize()) return;
@@ -982,6 +1000,9 @@ void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t po
           "No companion could be loaded at %u -- a CJK book will fall back to the "
           "selected font and its size",
           pointSize);
+#if CROSSPOINT_VECTOR_FONTS
+  unloadCompanionTtf(renderer);
+#endif
   if (!fallbackManager_.currentFamilyName().empty()) {
     fallbackManager_.unloadAll(renderer);
     setupUiFallbacks(renderer);  // unloadAll() cleared the selected family's UI registrations too
@@ -994,7 +1015,12 @@ void SdCardFontSystem::updateGlobalFallback(GfxRenderer& renderer) {
   const EpdFontFamily* target = defaultGlobalFallback_;
   const std::string& selected = manager_.currentFamilyName();
   const std::string& fallback = fallbackManager_.currentFamilyName();
-  if (!fallback.empty()) {
+#if CROSSPOINT_VECTOR_FONTS
+  if (companionTtfFontId_ != 0) {
+    target = &renderer.getFontMap().at(companionTtfFontId_);
+  } else
+#endif
+      if (!fallback.empty()) {
     // A companion is loaded exactly because something (Latin or CJK) is missing from the
     // selected font -- it covers both scripts, so it is the most capable last resort.
     target = &renderer.getFontMap().at(fallbackManager_.getFontId(fallback));
@@ -1091,6 +1117,9 @@ void SdCardFontSystem::releaseAllResidentFonts(GfxRenderer& renderer) {
 }
 
 int SdCardFontSystem::companionFontId() const {
+#if CROSSPOINT_VECTOR_FONTS
+  if (companionTtfFontId_ != 0) return companionTtfFontId_;
+#endif
   const std::string& fallback = fallbackManager_.currentFamilyName();
   return fallback.empty() ? 0 : fallbackManager_.getFontId(fallback);
 }
@@ -1105,6 +1134,60 @@ bool SdCardFontSystem::selectedFontCovers(const uint32_t cp) const {
 }
 
 #if CROSSPOINT_VECTOR_FONTS
+
+bool SdCardFontSystem::loadCompanionTtf(const SdCardFontFamilyInfo& family, GfxRenderer& renderer,
+                                        const uint8_t pointSize) {
+  unloadCompanionTtf(renderer);
+  if (family.files.empty()) return false;
+  char path[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
+  // Regular only: bold and italic come from the wght axis or synthesis.
+  const SdCardFontFileInfo* regular = &family.files.front();
+  for (const auto& f : family.files) {
+    if (f.style == 0) regular = &f;
+  }
+  if (!family.filePath(*regular, path, sizeof(path)) || !openTtfSourceInto(companionTtfSource_, path)) return false;
+  companionTtf_ = makeUniqueNoThrow<TtfEpdFont>();
+  if (!companionTtf_) {
+    LOG_ERR("SDFS", "OOM: companion TtfEpdFont for %s", family.name.c_str());
+    unloadCompanionTtf(renderer);
+    return false;
+  }
+  TtfSource& s = companionTtfSource_;
+  if (s.streamed) {
+    companionTtf_->addStreamSource(0, &SdCardFontSystem::prefixRead, &s, s.size);
+  } else {
+    companionTtf_->addResidentSource(0, s.bytes.data(), static_cast<uint32_t>(s.bytes.size()));
+  }
+  // Same budget reasoning as the selected TTF (loadTtfFamily): a CJK page faults 300+ glyphs.
+  const bool havePsram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) > 0;
+  if (!companionTtf_->load(pointSize, /*twoBit=*/true, havePsram ? 1024 * 1024 : 32 * 1024, havePsram ? 4096 : 768)) {
+    LOG_ERR("SDFS", "FreeInkFont could not parse companion %s", family.name.c_str());
+    unloadCompanionTtf(renderer);
+    return false;
+  }
+  companionTtf_->build(" ");
+  companionTtfFontId_ = computeTtfFontId((family.name + "\x01companion").c_str(), pointSize);
+  renderer.insertFont(companionTtfFontId_, companionTtf_->family());
+  renderer.registerTtfFont(companionTtfFontId_, companionTtf_.get());
+  companionTtfFamily_ = family.name;
+  companionTtfPointSize_ = pointSize;
+  return true;
+}
+
+void SdCardFontSystem::unloadCompanionTtf(GfxRenderer& renderer) {
+  if (companionTtfFontId_ != 0) {
+    renderer.unregisterTtfFont(companionTtfFontId_);
+    renderer.removeFont(companionTtfFontId_);
+    companionTtfFontId_ = 0;
+  }
+  companionTtf_.reset();
+  companionTtfSource_.file.close();
+  companionTtfSource_.bytes.clear();
+  companionTtfSource_.present = false;
+  companionTtfSource_.streamed = false;
+  companionTtfFamily_.clear();
+  companionTtfPointSize_ = 0;
+}
 
 void SdCardFontSystem::freeTtfSources() {
   for (auto& s : ttfSources_) {
@@ -1182,6 +1265,10 @@ void SdCardFontSystem::unloadTtf(GfxRenderer& renderer) {
 
 bool SdCardFontSystem::openTtfSource(const uint8_t style, const std::string& path) {
   if (style >= 4) return false;
+  return openTtfSourceInto(ttfSources_[style], path);
+}
+
+bool SdCardFontSystem::openTtfSourceInto(TtfSource& s, const std::string& path) {
   // Small fonts are read fully into RAM (fastest, fewest SD reads; PSRAM when
   // present). Large fonts (e.g. multi-MB variable/CJK) STREAM from SD so the
   // whole file never sits in RAM — the handle is kept open for the font's life.
@@ -1206,7 +1293,6 @@ bool SdCardFontSystem::openTtfSource(const uint8_t style, const std::string& pat
     f.close();
     return false;
   }
-  TtfSource& s = ttfSources_[style];
   // A resident buffer lands in PSRAM when fiFontMalloc can place it there;
   // otherwise it competes with everything else in internal DRAM. PsramAlloc
   // aborts on OOM, so this gate is load-bearing on no-PSRAM boards (X4/C3):

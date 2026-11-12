@@ -70,6 +70,23 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   emit(SettingInfo::Enum(StrId::STR_INSIGHTS_DATA, &CrossPointSettings::insightsAllDevices,
                          {StrId::STR_INSIGHTS_THIS_DEVICE, StrId::STR_INSIGHTS_ALL_DEVICES}, "insightsAllDevices",
                          StrId::STR_STATS));
+  // The Flashcards section: review of the sentence-mining export (FlashcardStore.h).
+  emit(SettingInfo::Toggle(StrId::STR_FLASH_SHOW_TAB, &CrossPointSettings::flashcardsTab, "flashcardsTab",
+                           StrId::STR_FLASHCARDS));
+  emit(SettingInfo::Enum(
+      StrId::STR_FLASH_RETENTION, &CrossPointSettings::flashcardRetention,
+      {StrId::STR_FLASH_PCT_80, StrId::STR_FLASH_PCT_85, StrId::STR_FLASH_PCT_90, StrId::STR_FLASH_PCT_95},
+      "flashcardRetention", StrId::STR_FLASHCARDS));
+  emit(SettingInfo::Enum(StrId::STR_FLASH_NEW_PER_DAY, &CrossPointSettings::flashcardNewPerDay,
+                         {StrId::STR_FLASH_N_5, StrId::STR_FLASH_N_10, StrId::STR_FLASH_N_20, StrId::STR_FLASH_N_30,
+                          StrId::STR_FLASH_N_50},
+                         "flashcardNewPerDay", StrId::STR_FLASHCARDS));
+  emit(SettingInfo::Enum(
+      StrId::STR_FLASH_MAX_INTERVAL, &CrossPointSettings::flashcardMaxInterval,
+      {StrId::STR_FLASH_1_MONTH, StrId::STR_FLASH_6_MONTHS, StrId::STR_FLASH_1_YEAR, StrId::STR_FLASH_NO_LIMIT},
+      "flashcardMaxInterval", StrId::STR_FLASHCARDS));
+  emit(SettingInfo::Toggle(StrId::STR_FLASH_VACATION, &CrossPointSettings::flashcardVacation, "flashcardVacation",
+                           StrId::STR_FLASHCARDS));
 
   // --- Reader ---
   // Built-in font-family entry. Replaced per-call with a registry-aware

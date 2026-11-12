@@ -76,7 +76,7 @@ class HomeActivity final : public Activity {
   const bool cleanInitialRefresh;
 
   // Convert HomeMenuItem to menu index (used in onEnter)
-  static int menuItemToIndex(HomeMenuItem item, HomeMenuItem slot) {
+  static int menuItemToIndex(HomeMenuItem item, HomeMenuItem slot, bool flashcards) {
     int i = 0;
     if (item == HomeMenuItem::LIBRARY) return i;
     ++i;
@@ -90,6 +90,10 @@ class HomeActivity final : public Activity {
     ++i;
     if (item == HomeMenuItem::READING_STATS) return i;
     ++i;
+    if (flashcards) {
+      if (item == HomeMenuItem::FLASHCARDS) return i;
+      ++i;
+    }
     if (item == HomeMenuItem::SETTINGS_MENU) return i;
     return 0;
   }
@@ -101,29 +105,32 @@ class HomeActivity final : public Activity {
     switch (item) {
       case HomeMenuItem::FILE_BROWSER:
         // The browser lives inside the Library here, so its bottom-bar home is the Library tab.
-        return static_cast<int>(HomeTab::Library);
+        return HomeTabBar::slotOf(HomeTab::Library);
       case HomeMenuItem::LIBRARY:
-        return static_cast<int>(HomeTab::Library);
+        return HomeTabBar::slotOf(HomeTab::Library);
       case HomeMenuItem::FILE_TRANSFER:
-        return static_cast<int>(HomeTab::Transfer);
+        return HomeTabBar::slotOf(HomeTab::Transfer);
       case HomeMenuItem::READING_STATS:
-        return static_cast<int>(HomeTab::Stats);
+        return HomeTabBar::slotOf(HomeTab::Stats);
+      case HomeMenuItem::FLASHCARDS:
+        return HomeTabBar::slotOf(HomeTab::Flashcards);
       case HomeMenuItem::SETTINGS_MENU:
-        return static_cast<int>(HomeTab::Settings);
+        return HomeTabBar::slotOf(HomeTab::Settings);
       default:
         // OPDS has no tab of its own; land on Home rather than on whatever shares its index.
-        return static_cast<int>(HomeTab::Home);
+        return HomeTabBar::slotOf(HomeTab::Home);
     }
   }
 
   // Convert menu index to HomeMenuItem (used in loop)
-  static HomeMenuItem indexToMenuItem(int idx, HomeMenuItem slot) {
+  static HomeMenuItem indexToMenuItem(int idx, HomeMenuItem slot, bool flashcards) {
     int i = 0;
     if (idx == i++) return HomeMenuItem::LIBRARY;
     if (idx == i++) return HomeMenuItem::FILE_BROWSER;
     if (slot != HomeMenuItem::NONE && idx == i++) return slot;
     if (idx == i++) return HomeMenuItem::FILE_TRANSFER;
     if (idx == i++) return HomeMenuItem::READING_STATS;
+    if (flashcards && idx == i++) return HomeMenuItem::FLASHCARDS;
     if (idx == i) return HomeMenuItem::SETTINGS_MENU;
     return HomeMenuItem::NONE;
   }
@@ -134,6 +141,8 @@ class HomeActivity final : public Activity {
   void onStatsOpen();
   void onOpdsBrowserOpen();
   void onPluginsOpen();
+  // The Flashcards row of the list home, shown with the same setting as its tab.
+  static bool showsFlashcards();
 
   int getMenuItemCount() const;
   bool storeCoverBuffer();    // Store frame buffer for cover image

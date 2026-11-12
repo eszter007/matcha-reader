@@ -50,6 +50,8 @@ python3 tools/dict_convert/convert_jmdict.py \
   --output-dir /path/to/sd/dictionaries/jp/    # add --name names / --name grammar for the others
 ```
 
+Add `--furigana auto` to attach the reading over each kanji from [JmdictFurigana](https://github.com/Doublevil/JmdictFurigana) (downloaded once into `--output-dir`, about 5 MB), or `--furigana JmdictFurigana.json` for a copy you already have. Saved words then get a Furigana column, and flashcards place each reading beside its kanji. A book's own furigana is used first when the word has it.
+
 To add furigana to a Japanese book that has none, annotate the EPUB once before copying it to the card. Readings depend on context, so this always goes through Gemini (the book's text is sent to it under your own key):
 
 ```bash

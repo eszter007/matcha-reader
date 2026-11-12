@@ -43,13 +43,14 @@ constexpr unsigned long LONG_PRESS_MS = 1000;
 int HomeActivity::getMenuItemCount() const {
   // The cover grid's band is the six-entry tab bar (Home included, and no OPDS), not the classic
   // home menu, so its selector space is books followed by exactly those six.
-  int count = coverGridUi ? HomeTabBar::COUNT : 5;  // Library, Browse Files, File Transfer, Insights, Settings
+  int count = coverGridUi ? HomeTabBar::count() : 5;  // Library, Browse Files, File Transfer, Insights, Settings
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
   if (slotItem() != HomeMenuItem::NONE && !coverGridUi) {
     count++;
   }
+  if (showsFlashcards() && !coverGridUi) count++;
   return count;
 }
 
@@ -355,10 +356,10 @@ void HomeActivity::onEnter() {
   if (coverGridUi) coverGridUi->begin(recentBooks, hasOpdsServers, hasContinueReading);
 
   const auto base = static_cast<int>(recentBooks.size());
-  selectorIndex =
-      initialMenuItem == HomeMenuItem::NONE
-          ? 0
-          : base + (coverGridUi ? tabIndexFor(initialMenuItem) : menuItemToIndex(initialMenuItem, slotItem()));
+  selectorIndex = initialMenuItem == HomeMenuItem::NONE
+                      ? 0
+                      : base + (coverGridUi ? tabIndexFor(initialMenuItem)
+                                            : menuItemToIndex(initialMenuItem, slotItem(), showsFlashcards()));
 
   // Trigger first update
   requestUpdate();
@@ -457,12 +458,12 @@ void HomeActivity::loop() {
     if (coverGridUi) {
       // Tab band: the index IS the tab. Home is the screen we are on, so it falls through as a
       // no-op rather than rebuilding this activity under the user's finger.
-      if (menuIndex >= 0 && menuIndex < HomeTabBar::COUNT) {
-        HomeTabBar::activate(static_cast<HomeTab>(menuIndex), HomeTab::Home);
+      if (menuIndex >= 0 && menuIndex < HomeTabBar::count()) {
+        HomeTabBar::activate(HomeTabBar::tabAt(menuIndex), HomeTab::Home);
       }
       return;
     }
-    switch (indexToMenuItem(menuIndex, slotItem())) {
+    switch (indexToMenuItem(menuIndex, slotItem(), showsFlashcards())) {
       case HomeMenuItem::FILE_BROWSER:
         onFileBrowserOpen();
         break;
@@ -480,6 +481,9 @@ void HomeActivity::loop() {
         break;
       case HomeMenuItem::READING_STATS:
         onStatsOpen();
+        break;
+      case HomeMenuItem::FLASHCARDS:
+        activityManager.goToFlashcards();
         break;
       case HomeMenuItem::SETTINGS_MENU:
         onSettingsOpen();
@@ -644,6 +648,10 @@ void HomeActivity::render(RenderLock&&) {
   std::vector<const char*> menuItems = {tr(STR_MENU_RECENT_BOOKS), tr(STR_BROWSE_FILES), tr(STR_FILE_TRANSFER),
                                         tr(STR_STATS), tr(STR_SETTINGS_TITLE)};
   std::vector<UIIcon> menuIcons = {Library, Folder, Transfer, Stats, Settings};
+  if (showsFlashcards()) {
+    menuItems.insert(menuItems.end() - 1, tr(STR_FLASHCARDS));
+    menuIcons.insert(menuIcons.end() - 1, UIIcon::Flashcards);
+  }
 
   // Plugins while the plugin system is on, else the OPDS browser when a server is set (see slotItem).
   if (slotItem() != HomeMenuItem::NONE) {
@@ -761,5 +769,7 @@ void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 void HomeActivity::onStatsOpen() { activityManager.goToReadingStats(); }
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
+
+bool HomeActivity::showsFlashcards() { return SETTINGS.flashcardsTab != 0; }
 
 void HomeActivity::onPluginsOpen() { activityManager.goToPlugins(); }

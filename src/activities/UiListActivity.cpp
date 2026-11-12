@@ -244,7 +244,7 @@ TabRing::Focus UiListActivity::ringFocus() const {
 }
 
 void UiListActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) {
-  tabFocus = focus == TabRing::Focus::BottomBar ? static_cast<int>(tabBarTab()) : -1;
+  tabFocus = focus == TabRing::Focus::BottomBar ? HomeTabBar::slotOf(tabBarTab()) : -1;
   topBandFocused = focus == TabRing::Focus::TopTabs;
   if (focus == TabRing::Focus::Content) {
     const int count = listCount();
@@ -348,9 +348,11 @@ void UiListActivity::drawFooter() {
     HomeTabBar::draw(renderer, tabBarTab(), tabFocus);
     return;
   }
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmHint(), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
+
+const char* UiListActivity::confirmHint() const { return tr(STR_SELECT); }
 
 void UiListActivity::render(RenderLock&&) {
   const uint32_t seen = activityManager.updateRequestCount();

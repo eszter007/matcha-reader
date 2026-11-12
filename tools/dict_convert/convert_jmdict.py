@@ -20,6 +20,9 @@ Usage:
 #JMdict(default — downloads if no-- input given)
     python3 convert_jmdict.py [--input jmdict-eng-3.5.0.json] [--output-dir ./output]
 
+#JMdict with per-kanji furigana (a local JmdictFurigana .json/.zip, or "auto" to download)
+    python3 convert_jmdict.py --furigana auto --output-dir ./output
+
 #Yomitan dictionary zip
     python3 convert_jmdict.py --input jmdict-yomitan.zip --output-dir ./output
 
@@ -52,7 +55,10 @@ try:
 except ImportError:  # running from a copy of this file alone
     _gen_spx = None
 
-JMDICT_URL = "https://github.com/scriptin/jmdict-simplified/releases/latest/download/jmdict-eng-3.5.0.json.tgz"
+# The release file name carries the version, so the latest one is looked up rather than named.
+JMDICT_RELEASES_API = "https://api.github.com/repos/scriptin/jmdict-simplified/releases/latest"
+JMDICT_ASSET_RE = re.compile(r"^jmdict-eng-\d[^/]*\.json\.tgz$")
+FURIGANA_URL = "https://github.com/Doublevil/JmdictFurigana/releases/latest/download/JmdictFurigana.json.zip"
 HEADWORD_SIZE = 32
 RECORD_FORMAT = f"<{HEADWORD_SIZE}sIHBB"  # headword(32) + offset(4) + length(2) + priority(1) + pad(1)
 RECORD_SIZE = struct.calcsize(RECORD_FORMAT)
@@ -143,14 +149,25 @@ def write_binary(records: list, output_dir: str, name: str = "vocab", title: str
 # ── JMdict(jmdict - simplified JSON) ─────────────────────────────
 
 
+def latest_jmdict_url() -> str:
+    """URL of the full English JMdict (not the common-words subset) in the latest release."""
+    with urllib.request.urlopen(JMDICT_RELEASES_API) as response:
+        release = json.load(response)
+    for asset in release.get("assets", []):
+        if JMDICT_ASSET_RE.match(asset.get("name", "")):
+            return asset["browser_download_url"]
+    raise RuntimeError("No jmdict-eng .json.tgz in the latest jmdict-simplified release")
+
+
 def download_jmdict(output_path: str) -> str:
     """Download and extract jmdict-simplified JSON."""
     import tarfile
 
     tgz_path = output_path + ".tgz"
     if not os.path.exists(tgz_path):
-        print(f"Downloading {JMDICT_URL}...")
-        urllib.request.urlretrieve(JMDICT_URL, tgz_path)
+        url = latest_jmdict_url()
+        print(f"Downloading {url}...")
+        urllib.request.urlretrieve(url, tgz_path)
         print(f"Downloaded to {tgz_path}")
 
     json_path = None
@@ -166,6 +183,65 @@ def download_jmdict(output_path: str) -> str:
         sys.exit(1)
 
     return json_path
+
+
+# ── JmdictFurigana ─────────────────────────────────────────────
+
+
+def furigana_to_anki(segments) -> str:
+    """Anki furigana syntax (木[こ]漏[も]れ 日[び]) for JmdictFurigana segments; "" to skip."""
+    out = ""
+    has_rt = False
+    for seg in segments:
+        ruby = seg.get("ruby", "")
+        rt = seg.get("rt")
+        if rt:
+            # Anki takes the base as everything back to the previous space or "]".
+            if out and not out.endswith("]"):
+                out += " "
+            out += f"{ruby}[{rt}]"
+            has_rt = True
+        else:
+            out += ruby
+    if not has_rt or "｝" in out:
+        return ""
+    return out
+
+
+def load_furigana(path: str) -> dict:
+    """Load a JmdictFurigana .json (or a .zip holding it) into {(text, reading): anki_string}."""
+    import zipfile
+
+    print(f"Loading furigana {path}...")
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as z:
+            name = next((n for n in z.namelist() if n.endswith(".json")), None)
+            if not name:
+                print("ERROR: No .json file found in furigana zip", file=sys.stderr)
+                sys.exit(1)
+            raw = z.read(name)
+    else:
+        with open(path, "rb") as f:
+            raw = f.read()
+    data = json.loads(raw.decode("utf-8-sig"))
+    furigana = {}
+    for item in data:
+        anki = furigana_to_anki(item.get("furigana", []))
+        if anki:
+            furigana[(item.get("text", ""), item.get("reading", ""))] = anki
+    print(f"  {len(furigana)} furigana entries")
+    return furigana
+
+
+def download_furigana(output_dir: str) -> str:
+    """Download the latest JmdictFurigana .json.zip into output_dir (once)."""
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, "JmdictFurigana.json.zip")
+    if not os.path.exists(path):
+        print(f"Downloading {FURIGANA_URL}...")
+        urllib.request.urlretrieve(FURIGANA_URL, path)
+        print(f"Downloaded to {path}")
+    return path
 
 
 def compute_priority_jmdict(entry: dict) -> int:
@@ -232,13 +308,19 @@ def pos_flags_jmdict(entry: dict) -> int:
         tags.extend(sense.get("partOfSpeech", []))
     return pos_flags_from_tags(tags)
 
-def format_definition_jmdict(entry: dict) -> str:
-    """Format an entry's readings and glosses into a compact display string."""
+def format_definition_jmdict(entry: dict, furigana: str = "") -> str:
+    """Format an entry's readings and glosses into a compact display string.
+
+    furigana (Anki syntax) is appended to the reading line as ｛...｝; old firmware drops the line.
+    """
     parts = []
 
     readings = [k["text"] for k in entry.get("kana", [])]
     if readings:
-        parts.append("【" + "、".join(readings[:3]) + "】")
+        line = "【" + "、".join(readings[:3]) + "】"
+        if furigana:
+            line += "｛" + furigana + "｝"
+        parts.append(line)
 
     senses = entry.get("sense", [])
     for i, sense in enumerate(senses[:3]):
@@ -250,7 +332,18 @@ def format_definition_jmdict(entry: dict) -> str:
     return "\n".join(parts)
 
 
-def convert_jmdict(json_path: str) -> list:
+def furigana_for_kanji(entry: dict, kanji: str, furigana: dict) -> str:
+    """Furigana for the first kana reading that applies to kanji and has a dataset entry."""
+    for kana in entry.get("kana", []):
+        applies = kana.get("appliesToKanji", ["*"])
+        if "*" in applies or kanji in applies:
+            anki = furigana.get((kanji, kana["text"]))
+            if anki:
+                return anki
+    return ""
+
+
+def convert_jmdict(json_path: str, furigana: dict = None) -> list:
     """Convert JMdict JSON to index records."""
     print(f"Loading {json_path}...")
     with open(json_path, "r", encoding="utf-8") as f:
@@ -260,6 +353,7 @@ def convert_jmdict(json_path: str) -> list:
     print(f"Processing {len(words)} JMdict entries...")
 
     records = []
+    furigana_count = 0
     for entry in words:
         definition = format_definition_jmdict(entry)
         def_bytes = definition.encode("utf-8")
@@ -273,7 +367,13 @@ def convert_jmdict(json_path: str) -> list:
             if len(hw_bytes) >= HEADWORD_SIZE or hw_bytes in seen_headwords:
                 continue
             seen_headwords.add(hw_bytes)
-            records.append((hw_bytes, def_bytes, priority, pos_flags))
+            anki = furigana_for_kanji(entry, hw, furigana) if furigana else ""
+            if anki:
+                furigana_count += 1
+                records.append((hw_bytes, format_definition_jmdict(entry, anki).encode("utf-8"), priority,
+                                pos_flags))
+            else:
+                records.append((hw_bytes, def_bytes, priority, pos_flags))
 
 #Kana records of an entry that also has kanji headwords are READING records : text that
 #matches them is usually conjugation morphology, not the word(しながら vs 品柄).The
@@ -289,6 +389,8 @@ def convert_jmdict(json_path: str) -> list:
             records.append((hw_bytes, def_bytes, priority, kana_flags))
 
     print(f"Generated {len(records)} index records")
+    if furigana is not None:
+        print(f"Furigana attached to {furigana_count} headwords")
     return records
 
 # ── Yomitan / Yomichan(.zip) ───────────────────────────────────
@@ -388,12 +490,12 @@ def flatten_structured_content(content) -> str:
     return str(content)
 
 
-def format_definition_yomitan(headword: str, reading: str, definitions) -> str:
+def format_definition_yomitan(headword: str, reading: str, definitions, furigana: str = "") -> str:
     """Format a Yomitan entry's reading + definitions into display string."""
     parts = []
 #Only show reading if it differs from headword(skip for kana - only entries)
     if reading and reading != headword:
-        parts.append(f"【{reading}】")
+        parts.append(f"【{reading}】" + (f"｛{furigana}｝" if furigana else ""))
 
     def flatten_list_defn(d) -> str:
 #Yomitan list - form definitions(variant / redirect entries) like
@@ -465,7 +567,7 @@ def find_redirect_target(definitions) -> str:
     return search(definitions)
 
 
-def convert_yomitan(zip_path: str, reading_records: bool = True) -> tuple:
+def convert_yomitan(zip_path: str, reading_records: bool = True, furigana: dict = None) -> tuple:
     """Convert a Yomitan/Yomichan .zip dictionary to index records.
 
     reading_records=False skips the extra record per kana reading. Chinese dictionaries carry
@@ -514,7 +616,8 @@ def convert_yomitan(zip_path: str, reading_records: bool = True) -> tuple:
                 redirect = find_redirect_target(definitions)
                 all_entries.append((headword, reading, score, definitions, redirect, rules))
                 if not redirect:
-                    definition = format_definition_yomitan(headword, reading, definitions)
+                    anki = furigana.get((headword, reading), "") if furigana else ""
+                    definition = format_definition_yomitan(headword, reading, definitions, anki)
                     if definition:
                         priority = max(0, min(255, int(score) + 128)) if isinstance(score, (int, float)) else 100
                         prev = canonical_defs.get(headword)
@@ -524,6 +627,7 @@ def convert_yomitan(zip_path: str, reading_records: bool = True) -> tuple:
 #Pass 2 : emit records, resolving redirects to the target's real definition.
         records = []
         entry_count = 0
+        furigana_count = 0
         for headword, reading, score, definitions, redirect, rules in all_entries:
             if redirect:
                 target = canonical_defs.get(redirect)
@@ -533,7 +637,10 @@ def convert_yomitan(zip_path: str, reading_records: bool = True) -> tuple:
                 definition = f"= {redirect}\n{target[0]}"
                 priority = target[1]
             else:
-                definition = format_definition_yomitan(headword, reading, definitions)
+                anki = furigana.get((headword, reading), "") if furigana else ""
+                definition = format_definition_yomitan(headword, reading, definitions, anki)
+                if anki and reading != headword:
+                    furigana_count += 1
                 if not definition:
                     continue
                 priority = max(0, min(255, int(score) + 128)) if isinstance(score, (int, float)) else 100
@@ -561,6 +668,8 @@ def convert_yomitan(zip_path: str, reading_records: bool = True) -> tuple:
             entry_count += 1
 
     print(f"Processed {entry_count} Yomitan entries → {len(records)} index records")
+    if furigana is not None:
+        print(f"Furigana attached to {furigana_count} headwords")
     return records, title
 
 # ── MDict(.mdx) ────────────────────────────────────────────────
@@ -1388,6 +1497,11 @@ def main():
         choices=["auto", "count", "rank"],
         help="How to read --frequency: by the count column, by row order, or auto (default).",
     )
+    parser.add_argument(
+        "--furigana",
+        help="Japanese: JmdictFurigana .json (or .json.zip) to add per-kanji furigana to each kanji "
+        "headword's reading line, or 'auto' to download the latest release into --output-dir.",
+    )
     args = parser.parse_args()
 
     chinese = args.lang in ("zh", "yue")
@@ -1407,6 +1521,12 @@ def main():
             sys.exit(1)
         args.input = [download_jmdict(os.path.join(args.output_dir, "jmdict-eng"))]
 
+    furigana = None
+    if args.furigana and not chinese:
+        path = download_furigana(args.output_dir) if args.furigana == "auto" else args.furigana
+        # ~200k entries: a few tens of MB of Python strings/tuples, host-side only.
+        furigana = load_furigana(path)
+
     levels = load_levels(args.levels, args.level_name) if args.levels else {}
     jyutping = load_canto_readings(args.jyutping) if args.jyutping else {}
     sentence_pairs = load_sentence_pairs(args.examples, args.examples_script) if args.examples else None
@@ -1425,7 +1545,7 @@ def main():
             part = convert_mdict(path)
             title = os.path.splitext(os.path.basename(path))[0]
         elif fmt == "yomitan":
-            part, title = convert_yomitan(path, reading_records=not chinese)
+            part, title = convert_yomitan(path, reading_records=not chinese, furigana=furigana)
         elif fmt == "cedict":
             part, names = convert_cedict(path, zhuyin=args.zhuyin, split_names=args.split_names, levels=levels,
                                          jyutping=jyutping, sentence_pairs=sentence_pairs, twins=twins,
@@ -1440,7 +1560,7 @@ def main():
             part = convert_tsv(path)
             title = os.path.splitext(os.path.basename(path))[0]
         else:
-            part = convert_jmdict(path)
+            part = convert_jmdict(path, furigana=furigana)
         records.extend(part)
         if title:
             titles.append(title)

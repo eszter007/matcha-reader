@@ -22,10 +22,32 @@ struct Card {
   std::string author;
   std::string date;  // YYYY-MM-DD, or empty when the clock was never set
   std::string dictionary;
+  // Anki furigana syntax with the reading over each kanji, e.g. "木[こ]漏[も]れ 日[び]"; empty
+  // when the split is not known.
+  std::string furigana;
 };
 
 // The comment lines Anki reads before the data, written once when the file is created.
 std::string headerLines();
+
+// True when `head` (the file's first bytes) is the header of a file written before the
+// Furigana column existed, whose rows need migrating (LegacyRowMigrator) before more are added.
+bool isLegacyHeader(std::string_view head);
+
+// Rewrites a legacy file a chunk at a time: drops its header lines and puts an empty Furigana
+// field before each row's Tags field. The caller writes headerLines() first. Quoted fields may
+// hold commas and line breaks, so the state carries across chunks.
+class LegacyRowMigrator {
+ public:
+  // Appends the migrated form of `chunk` to `out`.
+  void feed(std::string_view chunk, std::string& out);
+
+ private:
+  uint8_t commas_ = 0;  // unquoted commas so far in this row
+  bool atLineStart_ = true;
+  bool comment_ = false;
+  bool inQuotes_ = false;
+};
 
 // One complete CSV line for `card`, terminated by '\n'. The GUID and tags are derived here.
 std::string formatRow(const Card& card);

@@ -25,6 +25,8 @@ namespace DefinitionText {
 
 struct EntryMetadata {
   std::string reading;
+  // Anki furigana syntax from the dictionary's `【reading】｛木[こ]漏[も]れ 日[び]｝`; empty when absent.
+  std::string furigana;
   std::string grammar;
   std::string source;
 };
