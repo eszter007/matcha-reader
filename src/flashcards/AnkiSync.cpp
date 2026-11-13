@@ -2,15 +2,15 @@
 
 #include <AnkiHtml.h>
 #include <AnkiSyncStore.h>
+#include <Epub/converters/ImageDecoderFactory.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
-#include <Epub/converters/ImageDecoderFactory.h>
+#include <esp_heap_caps.h>
 #include <mbedtls/base64.h>
 
-#include <esp_heap_caps.h>
-
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -21,6 +21,7 @@
 namespace ankisync {
 namespace {
 constexpr size_t BATCH = 50;                    // ids per request: no request grows with the deck
+constexpr size_t CHECKPOINT_BATCHES = 2;        // index saved every 100 cards: a cut-off sync resumes
 constexpr size_t MAX_CARD_XHTML = 40 * 1024;    // one side as stored
 constexpr size_t MAX_CSS = 32 * 1024;           // a deck's styling
 constexpr uint32_t OPERATION_TIMEOUT = 120000;  // AnkiWeb syncs and imports
@@ -53,8 +54,7 @@ bool writeText(const std::string& path, const std::string& text) {
 }
 
 // One side as a complete XHTML document for the chapter parser.
-bool writeSide(const std::string& path, const char* html, const size_t limit, std::string& scratch,
-               std::string& css) {
+bool writeSide(const std::string& path, const char* html, const size_t limit, std::string& scratch, std::string& css) {
   if (!ankihtml::toXhtml(html, scratch, limit)) return false;
   // WebP is drawn from a PNG copy (see fetchMedia).
   for (size_t at = 0; (at = scratch.find(".webp\"", at)) != std::string::npos; at += 9) {
@@ -139,24 +139,29 @@ uint32_t fnv1a(const char* text) {
 
 class DeckSync {
  public:
-  DeckSync(AnkiClient& client, const ProgressFn& progress, Result& result, const int64_t nowMs,
-           int64_t& nextPastMs)
+  DeckSync(AnkiClient& client, const ProgressFn& progress, Result& result, const int64_t nowMs, int64_t& nextPastMs)
       : client(client), progress(progress), result(result), nowMs(nowMs), nextPastMs(nextPastMs) {}
 
   bool run(const std::string& name, const std::string& deckId);
 
  private:
-  bool listCards(const std::string& name, std::vector<uint64_t>& ids);
+  // Card ids matching an Anki search, sorted; at most MAX_CARDS, `cut` set when there were more.
+  bool searchCards(const std::string& query, std::vector<uint64_t>& ids, bool* cut = nullptr);
+  // Cards whose notes changed since the deck's last full refresh. False when that is unknown, the
+  // list is incomplete or would save little, and every card's note is then checked.
+  bool editedSince(const std::string& name, const ankideck::DeckInfo& info, size_t deckSize,
+                   std::vector<uint64_t>& edited);
   // Note id and last change for ids[from, to). A reply too large for the buffer (notes with long
   // fields) is fetched again in halves.
   bool fetchNoteMods(const std::vector<uint64_t>& ids, size_t from, size_t to, std::vector<uint64_t>& noteIds,
                      std::vector<uint32_t>& noteMods);
-  bool refreshCards(const std::string& name, const std::string& deckId, const std::vector<uint64_t>& ids);
+  // edited: cards whose notes may have changed, sorted; nullptr when any may have.
+  bool refreshCards(const std::string& name, const std::string& deckId, const std::vector<uint64_t>& ids,
+                    const std::vector<uint64_t>* edited);
   bool pullReviews(ankideck::DeckInfo& info);
   bool pushReviews(ankideck::DeckInfo& info);
   // Sends one read of the log (history, then each card's schedule) and drops it from the log.
-  bool pushChunk(ankideck::DeckInfo& info, const std::string& key,
-                 const std::vector<flashcards::ReviewLogEntry>& log);
+  bool pushChunk(ankideck::DeckInfo& info, const std::string& key, const std::vector<flashcards::ReviewLogEntry>& log);
   // A sync's large tables and each card are checked first: a failed allocation aborts the device.
   bool roomFor(size_t bytes, const char* what);
 
@@ -181,16 +186,16 @@ bool DeckSync::roomFor(const size_t bytes, const char* what) {
   return false;
 }
 
-bool DeckSync::listCards(const std::string& name, std::vector<uint64_t>& ids) {
+bool DeckSync::searchCards(const std::string& query, std::vector<uint64_t>& ids, bool* cut) {
   ids.clear();
   // Two passes, counting first: the table is then reserved once at its size, never copied while
   // it grows. Pages stay small; a parsed page of ids costs about three times its text.
   static constexpr int PAGE = 200;
-  const auto eachPage = [this, &name](auto&& onPage) {
+  const auto eachPage = [this, &query](auto&& onPage) {
     std::string cursor;
     do {
       JsonDocument params, page;
-      params["query"] = "\"deck:" + name + "\"";
+      params["query"] = query;
       params["limit"] = PAGE;
       if (!cursor.empty()) params["cursor"] = cursor;
       if (!client.call("cards.search", params, page)) return false;
@@ -206,6 +211,7 @@ bool DeckSync::listCards(const std::string& name, std::vector<uint64_t>& ids) {
       })) {
     return false;
   }
+  if (cut) *cut = count >= flashcards::Session::MAX_CARDS;
   count = std::min(count, flashcards::Session::MAX_CARDS);
   if (!roomFor(count * sizeof(uint64_t), "card ids")) return false;
   ids.reserve(count);
@@ -220,6 +226,24 @@ bool DeckSync::listCards(const std::string& name, std::vector<uint64_t>& ids) {
   }
   std::sort(ids.begin(), ids.end());
   return true;
+}
+
+bool DeckSync::editedSince(const std::string& name, const ankideck::DeckInfo& info, const size_t deckSize,
+                           std::vector<uint64_t>& edited) {
+  if (nowMs <= 0 || info.cardsSyncedMs <= 0 || info.cardsSyncedMs > nowMs) return false;
+  // Anki counts edited:N in whole days from its day rollover: one day more covers the partial ones.
+  constexpr int64_t DAY_MS = 24LL * 60 * 60 * 1000;
+  const int64_t days = (nowMs - info.cardsSyncedMs) / DAY_MS + 2;
+  bool cut = false;
+  if (searchCards("\"deck:" + name + "\" edited:" + std::to_string(days), edited, &cut) && !cut &&
+      edited.size() <= deckSize / 2) {
+    return true;
+  }
+  // Checking every note works without the list: a failure here does not fail the sync.
+  result.error = AnkiClient::Error{};
+  edited.clear();
+  edited.shrink_to_fit();
+  return false;
 }
 
 bool DeckSync::fetchNoteMods(const std::vector<uint64_t>& ids, const size_t from, const size_t to,
@@ -256,7 +280,21 @@ bool DeckSync::fetchNoteMods(const std::vector<uint64_t>& ids, const size_t from
   return true;
 }
 
-bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, const std::vector<uint64_t>& ids) {
+// Cards that left the deck in Anki leave the device too; old records from index `from` with ids up
+// to `upTo` are checked.
+void dropRemoved(const std::string& deckId, ankideck::IndexReader& known, const std::vector<uint64_t>& ids,
+                 const size_t from, const uint64_t upTo) {
+  ankideck::CardRecord r;
+  for (size_t i = from; i < known.size() && known.at(i, r) && r.cardId <= upTo; i++) {
+    if (!std::binary_search(ids.begin(), ids.end(), r.cardId)) {
+      Storage.remove(ankideck::frontPath(deckId, r.cardId).c_str());
+      Storage.remove(ankideck::backPath(deckId, r.cardId).c_str());
+    }
+  }
+}
+
+bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, const std::vector<uint64_t>& ids,
+                            const std::vector<uint64_t>* edited) {
   const std::string dir = ankideck::dirFor(deckId);
   // What is already here, and the new index, both on the card: a large deck's two tables would
   // not fit in RAM beside Wi-Fi.
@@ -277,26 +315,66 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
   std::vector<uint32_t> cssSeen;  // hashes of the note types' CSS already handled
   std::string scratch;
 
+  // Per batch, reserved once.
+  std::vector<uint64_t> need, noteIds;
+  std::vector<uint32_t> noteMods;
+  std::vector<ankideck::CardRecord> olds;
+  if (!roomFor(BATCH * (2 * sizeof(uint64_t) + sizeof(uint32_t) + sizeof(ankideck::CardRecord)), "a batch")) {
+    return false;
+  }
+  olds.resize(BATCH);
+  need.reserve(BATCH);
+  noteIds.reserve(BATCH);
+  noteMods.reserve(BATCH);
+
   Progress p{name, 0, static_cast<uint32_t>(ids.size())};
+  uint32_t kept = 0, checkpoints = 0;
+  bool changed = false;    // since the last index save
+  size_t checkedUpTo = 0;  // old records before this index were saved by a checkpoint, all in ids
   for (size_t at = 0; at < ids.size(); at += BATCH) {
     const size_t end = std::min(ids.size(), at + BATCH);
-    // The notes behind this batch, for their last change.
-    std::vector<uint64_t> noteIds;
-    std::vector<uint32_t> noteMods;
-    noteIds.reserve(BATCH);
-    noteMods.reserve(BATCH);
-    if (!fetchNoteMods(ids, at, end, noteIds, noteMods)) return false;
+    // A card here already, with its note unedited since the last refresh, is kept
+    // without asking Anki about its note.
+    static_assert(BATCH <= 64, "one bit per card of a batch");
+    uint64_t had = 0, keep = 0;
+    need.clear();
     for (size_t i = at; i < end; i++) {
+      const uint64_t bit = 1ULL << (i - at);
+      // A record that cannot be read counts as absent: the card is rendered again.
+      ankideck::CardRecord& old = olds[i - at];
+      if (known.findNext(ids[i], old)) had |= bit;
+      // With the edited list, the index is trusted: a missing file is found by the reader, which
+      // asks for the next sync to check every card.
+      if ((had & bit) && edited && !std::binary_search(edited->begin(), edited->end(), ids[i])) {
+        keep |= bit;
+      } else {
+        need.push_back(ids[i]);
+      }
+    }
+    // The other notes, for their last change; noteIds and noteMods follow need's order.
+    noteIds.clear();
+    noteMods.clear();
+    if (!fetchNoteMods(need, 0, need.size(), noteIds, noteMods)) return false;
+    size_t next = 0;
+    for (size_t i = at; i < end; i++) {
+      const ankideck::CardRecord& old = olds[i - at];
+      if (keep & (1ULL << (i - at))) {
+        if (!fresh.add(old)) return false;
+        kept++;
+        continue;
+      }
       ankideck::CardRecord r;
       r.cardId = ids[i];
-      r.noteId = noteIds[i - at];
-      r.noteMod = noteMods[i - at];
-      // A record that cannot be read counts as absent: the card is rendered again.
-      ankideck::CardRecord old;
-      const bool had = known.find(r.cardId, old);
-      const bool current = had && old.noteMod == r.noteMod && (old.flags & ankideck::TOO_LARGE) == 0 &&
-                           Storage.exists(ankideck::frontPath(deckId, r.cardId).c_str());
+      r.noteId = noteIds[next];
+      r.noteMod = noteMods[next];
+      next++;
+      const bool wasHere = (had & (1ULL << (i - at))) != 0;
+      // A card too large stays so until its note changes: it is not fetched again meanwhile.
+      const bool current =
+          wasHere && old.noteMod == r.noteMod &&
+          ((old.flags & ankideck::TOO_LARGE) != 0 || Storage.exists(ankideck::frontPath(deckId, r.cardId).c_str()));
       if (current) {
+        kept++;
         if (!fresh.add(old)) return false;
         continue;
       }
@@ -304,7 +382,8 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
       renderParams["id"] = std::to_string(r.cardId);
       if (!client.call("cards.render", renderParams, rendered)) {
         if (client.error().kind != AnkiClient::Error::Kind::TooLarge) return false;
-        r.flags |= ankideck::TOO_LARGE;  // shown as a notice, tried again next sync
+        r.flags |= ankideck::TOO_LARGE;  // shown as a notice, tried again when the note changes
+        changed = true;
         if (!fresh.add(r)) return false;
         continue;
       }
@@ -344,21 +423,25 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
       for (const auto& file : media) {
         if (!fetchMedia(client, dir, file)) LOG_ERR("ANKI", "Image %s not fetched", file.c_str());
       }
-      if (!had) result.cardsAdded++;
+      if (!wasHere) result.cardsAdded++;
+      changed = true;
       if (!fresh.add(r)) return false;
     }
     p.done = static_cast<uint32_t>(end);
     progress(p);
-  }
-
-  // Cards that left the deck in Anki leave the device too.
-  ankideck::CardRecord r;
-  for (size_t i = 0; i < known.size() && known.at(i, r); i++) {
-    if (!std::binary_search(ids.begin(), ids.end(), r.cardId)) {
-      Storage.remove(ankideck::frontPath(deckId, r.cardId).c_str());
-      Storage.remove(ankideck::backPath(deckId, r.cardId).c_str());
+    if (changed && end < ids.size() && (at / BATCH + 1) % CHECKPOINT_BATCHES == 0) {
+      // The CSS first: the saved cards' sides link to it.
+      if (css.size() != cssBefore && !writeText(ankideck::cssPath(deckId), css)) return false;
+      dropRemoved(deckId, known, ids, checkedUpTo, ids[end - 1]);
+      if (!fresh.checkpoint(known, ids[end - 1], checkedUpTo)) return false;
+      checkpoints++;
+      changed = false;
     }
   }
+
+  LOG_INF("ANKI", "%s: %u cards, %u unchanged, %u index saves", name.c_str(), static_cast<unsigned>(ids.size()),
+          static_cast<unsigned>(kept), static_cast<unsigned>(checkpoints));
+  dropRemoved(deckId, known, ids, checkedUpTo, UINT64_MAX);
   if (css.size() != cssBefore && !writeText(ankideck::cssPath(deckId), css)) return false;
   known.close();  // before the new index replaces it
   return fresh.commit();
@@ -512,9 +595,14 @@ bool DeckSync::run(const std::string& name, const std::string& deckId) {
   }
   info.name = name;
   std::vector<uint64_t> ids;
-  if (!listCards(name, ids) || !refreshCards(name, deckId, ids)) {
-    return false;
+  if (!searchCards("\"deck:" + name + "\"", ids)) return false;
+  {
+    std::vector<uint64_t> edited;
+    const bool known = editedSince(name, info, ids.size(), edited);
+    if (!refreshCards(name, deckId, ids, known ? &edited : nullptr)) return false;
   }
+  // Only a complete refresh moves this on: the next sync asks for the notes edited since.
+  if (nowMs > 0) info.cardsSyncedMs = nowMs;
   // Pull before push: Anki's reviews land first, then the device's own go out on top.
   if (!pullReviews(info) || !pushReviews(info)) return false;
   // Past the schedule changes just made, so they are not pulled back as Anki's.

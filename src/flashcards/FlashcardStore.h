@@ -136,9 +136,10 @@ class Session {
 
   std::string lang;
   std::string csvPath;
-  bool upgraded = false;          // the file has the Furigana column
-  bool anki = false;              // an Anki deck: cards come from its index, sides from XHTML files
-  std::vector<CardState> states;  // sorted by id
+  bool upgraded = false;                    // the file has the Furigana column
+  bool anki = false;                        // an Anki deck: cards come from its index, sides from XHTML files
+  mutable bool cardsSyncForgotten = false;  // a missing card file was reported once this session
+  std::vector<CardState> states;            // sorted by id
   std::vector<QueueItem> queue;
   size_t position = 0;
   size_t reviewedCount = 0;

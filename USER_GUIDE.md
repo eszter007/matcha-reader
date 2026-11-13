@@ -1822,7 +1822,7 @@ Anki decks are listed in the overview next to your own decks. Each card is drawn
 There are two ways to get a deck onto the device:
 
 - **Import, without sync:** convert an exported `.apkg` on a computer with `tools/anki_import/apkg_to_flashcards.py`, and copy the result to the SD card. Progress then stays on the device.
-- **Sync:** set up [Anki Sync](#368-connectivity), then choose **Sync with Anki** at the bottom of the overview. It turns Wi-Fi on, downloads the chosen decks, and sends reviews both ways.
+- **Sync:** set up [Anki Sync](#368-connectivity), then choose **Sync with Anki** at the bottom of the overview. It turns Wi-Fi on, downloads the chosen decks, and sends reviews both ways. Later syncs download only new and changed cards. If a sync stops partway, the next one continues near where it stopped. A card too large for the device is downloaded again only after it is changed in Anki. A change to a card template or its style in Anki is not seen as a card change. Only the cards of notes you edit afterwards are downloaded with the new look.
 
 The commands and the server setup are in [docs/anki](docs/anki/README.md#anki-decks-on-the-reader).
 

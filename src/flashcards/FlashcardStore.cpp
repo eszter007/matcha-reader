@@ -394,7 +394,13 @@ bool Session::current(CardText& out) const {
     out.backPath = ankideck::backPath(deckId, item.id);
     out.cssPath = ankideck::cssPath(deckId);
     out.tooLarge = (item.offset & ankideck::TOO_LARGE) != 0;
-    return out.tooLarge || Storage.exists(out.frontPath.c_str());
+    if (out.tooLarge || Storage.exists(out.frontPath.c_str())) return true;
+    // The sync trusted its index for this card: the next one checks every card again.
+    if (!cardsSyncForgotten) {
+      ankideck::forgetCardsSynced(deckId);
+      cardsSyncForgotten = true;
+    }
+    return false;
   }
   HalFile file;
   if (!Storage.openFileForRead("FLASH", csvPath, file) || !file.seekSet(queue[position].offset)) return false;
