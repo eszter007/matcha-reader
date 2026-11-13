@@ -14,6 +14,7 @@ namespace ankisync {
 // An Anki deck reviewed on the device.
 struct SyncedDeck {
   std::string name;  // Anki deck name, e.g. "Kaishi 1.5k"
+  std::string id;    // Anki deck id once a sync has found it; follows the deck through renames
 };
 
 }  // namespace ankisync
@@ -38,6 +39,7 @@ class AnkiSyncStore : public PersistableStore<AnkiSyncStore> {
   bool isConfigured() const { return !url.empty(); }
 
   const std::vector<ankisync::SyncedDeck>& getSyncedDecks() const { return synced; }
+  // Names already synced keep their deck ids.
   void setSyncedDecks(std::vector<ankisync::SyncedDeck> decks);
 
  private:

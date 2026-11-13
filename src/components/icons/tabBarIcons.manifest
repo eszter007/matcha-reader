@@ -30,7 +30,5 @@ StatsIcon = chart-area-line
 StatsFilledIcon = chart-area-line-filled
 SettingsTabIcon = adjustments-horizontal
 SettingsTabFilledIcon = adjustments-horizontal-filled
-# cards.svg is drawn for this bar (Tabler ships no filled stack of cards): the filled variant keeps
-# the back card as an outline so the two still read as separate.
 FlashcardsTabIcon = cards
 FlashcardsTabFilledIcon = cards-filled

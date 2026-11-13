@@ -859,8 +859,10 @@ void FlashcardReviewActivity::layoutHtmlSide() {
 void FlashcardReviewActivity::drawHtmlCard(const Rect4& inner) const {
   const Rect area{inner.x, inner.y, inner.w, inner.h};
   if (!cardOk || card.tooLarge || htmlPages.empty()) {
-    UITheme::drawCenteredText(renderer, area, UI_12_FONT_ID, inner.y + inner.h / 2,
-                              card.tooLarge ? tr(STR_FLASH_CARD_TOO_LARGE) : tr(STR_FLASH_CARD_ERROR));
+    constexpr int PAD = 20;
+    UITheme::drawCenteredWrappedText(renderer, Rect{area.x + PAD, area.y, area.width - 2 * PAD, area.height},
+                                     UI_12_FONT_ID,
+                                     card.tooLarge ? tr(STR_FLASH_CARD_TOO_LARGE) : tr(STR_FLASH_CARD_ERROR), 6);
     return;
   }
   const Rect4 body = htmlBodyRect();

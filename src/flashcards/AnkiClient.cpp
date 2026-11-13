@@ -61,17 +61,16 @@ bool AnkiClient::call(const char* method, const JsonDocument& params, JsonDocume
   if (!auth.empty()) http.addHeader("Authorization", auth);
   length = 0;
   overflow = false;
-  const int status = http.sendRequest(
-      "POST", reinterpret_cast<const uint8_t*>(body.data()), body.size(),
-      [this](const uint8_t* data, const size_t len) {
-        if (length + len > capacity_) {
-          overflow = true;
-          return false;
-        }
-        memcpy(buffer.get() + length, data, len);
-        length += len;
-        return true;
-      });
+  const int status = http.sendRequest("POST", reinterpret_cast<const uint8_t*>(body.data()), body.size(),
+                                      [this](const uint8_t* data, const size_t len) {
+                                        if (length + len > capacity_) {
+                                          overflow = true;
+                                          return false;
+                                        }
+                                        memcpy(buffer.get() + length, data, len);
+                                        length += len;
+                                        return true;
+                                      });
   if (overflow) {
     error_ = {Error::Kind::TooLarge, 0, {}, "Reply too large"};
     LOG_ERR("ANKI", "%s: reply over %u bytes", method, static_cast<unsigned>(capacity_));
@@ -171,6 +170,8 @@ std::string AnkiClient::describeError() const {
       return "unreadable reply";
     case Error::Kind::Rpc:
       return error_.message.empty() ? error_.type : error_.message;
+    case Error::Kind::DeckMissing:
+      return "deck not in Anki";
   }
   return {};
 }

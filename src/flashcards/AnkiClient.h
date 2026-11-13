@@ -19,7 +19,18 @@ class AnkiClient {
   static constexpr size_t MIN_RESPONSE = 16 * 1024;
 
   struct Error {
-    enum class Kind : uint8_t { None, NoMemory, Network, Unauthorized, Forbidden, Http, TooLarge, BadReply, Rpc };
+    enum class Kind : uint8_t {
+      None,
+      NoMemory,
+      Network,
+      Unauthorized,
+      Forbidden,
+      Http,
+      TooLarge,
+      BadReply,
+      Rpc,
+      DeckMissing
+    };
     Kind kind = Kind::None;
     int code = 0;      // HTTP status, or the JSON-RPC error code
     std::string type;  // AnkiConnect's error.data.type, e.g. "notFound"

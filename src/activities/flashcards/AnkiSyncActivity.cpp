@@ -6,7 +6,6 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <WiFi.h>
-
 #include <sys/time.h>
 
 #include <cstdio>
@@ -14,10 +13,10 @@
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
-#include "activities/settings/SettingsSection.h"
-#include "components/HomeTabBar.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/settings/ClockSyncActivity.h"
+#include "activities/settings/SettingsSection.h"
+#include "components/HomeTabBar.h"
 #include "components/UITheme.h"
 #include "flashcards/AnkiClient.h"
 #include "flashcards/AnkiSync.h"
@@ -37,6 +36,8 @@ const char* errorText(const AnkiClient::Error& error) {
       return tr(STR_ANKI_KEY_REFUSED);
     case Kind::Forbidden:
       return tr(STR_ANKI_NOT_ALLOWED);
+    case Kind::DeckMissing:
+      return tr(STR_ANKI_DECK_MISSING);
     default:
       return tr(STR_ANKI_REPLY_ERROR);
   }

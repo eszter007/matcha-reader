@@ -16,7 +16,6 @@ tabler_reader = book
 tabler_controls = hand-finger
 tabler_network = wifi
 tabler_plugins = puzzle
-# Drawn for this fork (cards.svg); see tabBarIcons.manifest.
 tabler_flashcards = cards
 # The control centre slider steps, at 20px (generated with --sizes 20).
 tabler_minus = minus

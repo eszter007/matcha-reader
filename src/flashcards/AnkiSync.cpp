@@ -646,17 +646,45 @@ Result syncAll(AnkiClient& client, const ProgressFn& progress, const int64_t now
   }
   JsonDocument decks;
   if (!client.call("decks.list", decks)) return fail({});
-  for (const auto& wanted : ANKI_STORE.getSyncedDecks()) {
-    std::string deckId;
-    for (JsonVariantConst d : decks.as<JsonArrayConst>()) {
-      if (wanted.name == (d["name"] | "")) deckId = d["id"].as<const char*>();
+  // A copy: the loop renames entries, and the store is saved once after it.
+  std::vector<SyncedDeck> wanted = ANKI_STORE.getSyncedDecks();
+  bool renamed = false;
+  std::string missing;
+  for (auto& w : wanted) {
+    // The id follows a deck renamed in Anki. The name finds it the first time, and again when the
+    // deck was re-imported under a new id.
+    const char* name = nullptr;
+    const char* id = nullptr;
+    for (const bool byId : {true, false}) {
+      if (byId && w.id.empty()) continue;
+      for (JsonVariantConst d : decks.as<JsonArrayConst>()) {
+        const char* dId = d["id"] | "";
+        const char* dName = d["name"] | "";
+        if (byId ? w.id == dId : w.name == dName) {
+          name = dName;
+          id = dId;
+          break;
+        }
+      }
+      if (id) break;
     }
-    if (deckId.empty()) {
-      LOG_ERR("ANKI", "Deck %s is not in Anki", wanted.name.c_str());
+    if (!id || !*id) {
+      LOG_ERR("ANKI", "Deck %s is not in Anki", w.name.c_str());
+      if (missing.empty()) missing = w.name;
       continue;
     }
+    if (w.id != id || w.name != name) {
+      if (w.name != name) LOG_INF("ANKI", "Deck %s is now %s", w.name.c_str(), name);
+      w.id = id;
+      w.name = name;
+      renamed = true;
+    }
     DeckSync deck(client, progress, result, nowMs, nextPastMs);
-    if (!deck.run(wanted.name, deckId)) return fail(wanted.name);
+    if (!deck.run(w.name, w.id)) return fail(w.name);
+  }
+  if (renamed) {
+    ANKI_STORE.setSyncedDecks(std::move(wanted));
+    ANKI_STORE.saveToFile();
   }
   if (ANKI_STORE.getSyncAnkiWeb()) {
     JsonDocument params, done;
@@ -665,6 +693,13 @@ Result syncAll(AnkiClient& client, const ProgressFn& progress, const int64_t now
         client.error().type != "authenticationRequired") {
       return fail("AnkiWeb");
     }
+  }
+  // The other decks are synced; a missing one still fails the sync so it is not missed.
+  if (!missing.empty()) {
+    result.failedDeck = missing;
+    result.error = AnkiClient::Error{};
+    result.error.kind = AnkiClient::Error::Kind::DeckMissing;
+    return result;
   }
   result.ok = true;
   return result;

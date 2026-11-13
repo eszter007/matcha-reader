@@ -46,7 +46,11 @@ void AnkiSyncStore::toJson(JsonDocument& doc) const {
   doc["key_obf"] = obfuscation::obfuscateToBase64(key);
   doc["syncAnkiWeb"] = syncAnkiWeb;
   JsonArray syncedJson = doc["synced"].to<JsonArray>();
-  for (const auto& d : synced) syncedJson.add<JsonObject>()["name"] = d.name;
+  for (const auto& d : synced) {
+    JsonObject o = syncedJson.add<JsonObject>();
+    o["name"] = d.name;
+    if (!d.id.empty()) o["id"] = d.id;
+  }
 }
 
 bool AnkiSyncStore::fromJson(JsonVariantConst doc) {
@@ -64,7 +68,7 @@ bool AnkiSyncStore::fromJson(JsonVariantConst doc) {
   synced.clear();
   for (JsonVariantConst d : doc["synced"].as<JsonArrayConst>()) {
     if (synced.size() >= MAX_SYNCED) break;
-    SyncedDeck s{d["name"] | ""};
+    SyncedDeck s{d["name"] | "", d["id"] | ""};
     if (!s.name.empty()) synced.push_back(std::move(s));
   }
   return true;
@@ -72,5 +76,11 @@ bool AnkiSyncStore::fromJson(JsonVariantConst doc) {
 
 void AnkiSyncStore::setSyncedDecks(std::vector<SyncedDeck> decks) {
   if (decks.size() > MAX_SYNCED) decks.resize(MAX_SYNCED);
+  for (auto& d : decks) {
+    if (!d.id.empty()) continue;
+    for (const auto& old : synced) {
+      if (old.name == d.name) d.id = old.id;
+    }
+  }
   synced = std::move(decks);
 }
