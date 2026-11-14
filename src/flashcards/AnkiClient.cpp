@@ -35,8 +35,8 @@ void AnkiClient::end() {
   capacity_ = 0;
 }
 
-bool AnkiClient::call(const char* method, const JsonDocument& params, JsonDocument& result,
-                      const JsonDocument* filter) {
+bool AnkiClient::call(const char* method, const JsonDocument& params, JsonDocument& result, const JsonDocument* filter,
+                      JsonValueSkipper* skip) {
   error_ = {};
   result.clear();
   if (!buffer) {
@@ -62,7 +62,13 @@ bool AnkiClient::call(const char* method, const JsonDocument& params, JsonDocume
   length = 0;
   overflow = false;
   const int status = http.sendRequest("POST", reinterpret_cast<const uint8_t*>(body.data()), body.size(),
-                                      [this](const uint8_t* data, const size_t len) {
+                                      [this, skip](const uint8_t* data, const size_t len) {
+                                        if (poll) poll(pollCtx);
+                                        if (skip) {
+                                          overflow = !skip->feed(reinterpret_cast<const char*>(data), len, buffer.get(),
+                                                                 length, capacity_);
+                                          return !overflow;
+                                        }
                                         if (length + len > capacity_) {
                                           overflow = true;
                                           return false;
@@ -172,6 +178,8 @@ std::string AnkiClient::describeError() const {
       return error_.message.empty() ? error_.type : error_.message;
     case Error::Kind::DeckMissing:
       return "deck not in Anki";
+    case Error::Kind::Cancelled:
+      return "cancelled";
   }
   return {};
 }

@@ -56,6 +56,14 @@ bool readInfo(const std::string& deckId, DeckInfo& out) {
   out.name = doc["name"] | "";
   out.lastReviewId = doc["lastReviewId"] | static_cast<uint64_t>(0);
   out.cardsSyncedMs = doc["cardsSyncedMs"] | static_cast<int64_t>(0);
+  out.newPerDay = doc["newPerDay"] | -1;
+  out.retention = doc["retention"] | 0.0f;
+  out.maxInterval = doc["maxInterval"] | static_cast<uint16_t>(0);
+  out.fetchVersion = doc["fetchVersion"] | static_cast<uint8_t>(0);
+  out.cssHashes.clear();
+  for (JsonVariantConst h : doc["cssHashes"].as<JsonArrayConst>()) {
+    if (out.cssHashes.size() < MAX_CSS_HASHES) out.cssHashes.push_back(h.as<uint32_t>());
+  }
   return !out.name.empty();
 }
 
@@ -64,6 +72,14 @@ bool writeInfo(const DeckInfo& info) {
   doc["name"] = info.name;
   doc["lastReviewId"] = info.lastReviewId;
   if (info.cardsSyncedMs > 0) doc["cardsSyncedMs"] = info.cardsSyncedMs;
+  if (info.newPerDay >= 0) doc["newPerDay"] = info.newPerDay;
+  if (info.retention > 0) doc["retention"] = info.retention;
+  if (info.maxInterval > 0) doc["maxInterval"] = info.maxInterval;
+  if (info.fetchVersion > 0) doc["fetchVersion"] = info.fetchVersion;
+  if (!info.cssHashes.empty()) {
+    JsonArray hashes = doc["cssHashes"].to<JsonArray>();
+    for (const uint32_t h : info.cssHashes) hashes.add(h);
+  }
   return PersistableStoreBase::writeDocToFile((dirFor(info.id) + "deck.json").c_str(), doc);
 }
 
@@ -72,6 +88,46 @@ void forgetCardsSynced(const std::string& deckId) {
   if (!readInfo(deckId, info) || info.cardsSyncedMs == 0) return;
   info.cardsSyncedMs = 0;
   writeInfo(info);
+}
+
+bool writeBuried(const std::string& deckId, const int32_t day, const std::vector<uint64_t>& ids) {
+  const std::string path = dirFor(deckId) + "buried.bin";
+  if (ids.empty()) {
+    if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
+    return true;
+  }
+  HalFile file;
+  if (!Storage.openFileForWrite("ANKI", path, file)) return false;
+  const uint32_t count = static_cast<uint32_t>(std::min(ids.size(), MAX_BURIED));
+  if (file.write(reinterpret_cast<const uint8_t*>(&day), sizeof(day)) != sizeof(day) ||
+      file.write(reinterpret_cast<const uint8_t*>(&count), sizeof(count)) != sizeof(count)) {
+    return false;
+  }
+  const size_t bytes = count * sizeof(uint64_t);
+  return file.write(reinterpret_cast<const uint8_t*>(ids.data()), bytes) == bytes;
+}
+
+void readBuried(const std::string& deckId, const int32_t day, std::vector<uint64_t>& out) {
+  out.clear();
+  const std::string path = dirFor(deckId) + "buried.bin";
+  if (day < 0 || !Storage.exists(path.c_str())) return;
+  HalFile file;
+  if (!Storage.openFileForRead("ANKI", path, file)) return;
+  uint8_t head[8];
+  if (file.read(head, sizeof(head)) != static_cast<int>(sizeof(head))) return;
+  int32_t stored = 0;
+  uint32_t count = 0;
+  memcpy(&stored, head, sizeof(stored));
+  memcpy(&count, head + 4, sizeof(count));
+  if (stored != day || count == 0 || count > MAX_BURIED) return;
+  // std::vector allocates with throwing new: check the block first.
+  if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < count * sizeof(uint64_t) + 8 * 1024) {
+    LOG_ERR("ANKI", "OOM: %u buried cards", static_cast<unsigned>(count));
+    return;
+  }
+  out.resize(count);
+  const int bytes = static_cast<int>(count * sizeof(uint64_t));
+  if (file.read(reinterpret_cast<uint8_t*>(out.data()), bytes) != bytes) out.clear();
 }
 
 bool readIndex(const std::string& deckId, std::vector<CardRecord>& out) {

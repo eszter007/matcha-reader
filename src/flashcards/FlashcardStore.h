@@ -9,6 +9,10 @@
 // Flashcards built from the sentence-mining export: one deck per /sentence-mining/sentences-<lang>.csv,
 // one card per row. The CSV stays the user's (Anki imports it); review progress lives beside it in
 // the system folder, flashcards-<lang>.bin, so clearing the reading cache never loses it.
+namespace ankideck {
+struct DeckInfo;
+}
+
 namespace flashcards {
 
 constexpr const char* MINING_DIR = "/sentence-mining";
@@ -80,9 +84,10 @@ struct CardText {
   bool tooLarge = false;  // Anki's rendering did not fit the device
 };
 
-// The user's scheduling settings (Settings > Flashcards).
-fsrs::Params schedulingParams();
-uint16_t newCardsPerDay();
+// The user's scheduling settings (Settings > Flashcards), or an Anki deck's own preset where its
+// last sync read one.
+fsrs::Params schedulingParams(const ankideck::DeckInfo* deck = nullptr);
+uint16_t newCardsPerDay(const ankideck::DeckInfo* deck = nullptr);
 
 // Today as a day number since 2020-01-01; -1 when the clock was never set.
 int32_t today();
@@ -146,6 +151,8 @@ class Session {
   uint16_t ratingCounts[4] = {0, 0, 0, 0};
   uint16_t day = 0;
   uint16_t newToday = 0;
+  fsrs::Params params;  // this deck's scheduling, set by open()
+  uint16_t perDay = 0;
   uint8_t unsaved = 0;
   std::vector<ReviewLogEntry> pendingLog;  // ratings not yet appended to the review log
 };

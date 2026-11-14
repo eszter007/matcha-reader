@@ -233,17 +233,20 @@ void deckLanguages(std::vector<std::string>& out) {
 }
 }  // namespace
 
-fsrs::Params schedulingParams() {
+fsrs::Params schedulingParams(const ankideck::DeckInfo* deck) {
   static constexpr float RETENTION[] = {0.80f, 0.85f, 0.90f, 0.95f};
   static constexpr uint16_t MAX_DAYS[] = {30, 180, 365, 36500};
   fsrs::Params p;
   p.retention = RETENTION[std::min<uint8_t>(SETTINGS.flashcardRetention, 3)];
   p.maxInterval = MAX_DAYS[std::min<uint8_t>(SETTINGS.flashcardMaxInterval, 3)];
+  if (deck && deck->retention > 0) p.retention = std::clamp(deck->retention, 0.70f, 0.99f);
+  if (deck && deck->maxInterval > 0) p.maxInterval = deck->maxInterval;
   return p;
 }
 
-uint16_t newCardsPerDay() {
+uint16_t newCardsPerDay(const ankideck::DeckInfo* deck) {
   static constexpr uint16_t PER_DAY[] = {5, 10, 20, 30, 50};
+  if (deck && deck->newPerDay >= 0) return static_cast<uint16_t>(std::min<int32_t>(deck->newPerDay, 9999));
   return PER_DAY[std::min<uint8_t>(SETTINGS.flashcardNewPerDay, 4)];
 }
 
@@ -308,10 +311,13 @@ void listDecks(std::vector<DeckSummary>& out) {
     }
     const uint16_t now = todayOr(day);
     if (now != day) newToday = 0;
-    const uint16_t perDay = newCardsPerDay();
+    const uint16_t perDay = newCardsPerDay(&info);
     uint16_t fresh = 0;
+    std::vector<uint64_t> buried;
+    ankideck::readBuried(info.id, now, buried);
     for (const auto& c : cards) {
       deck.total++;
+      if (std::binary_search(buried.begin(), buried.end(), c.cardId)) continue;
       if (const CardState* s = findIn(states, c.cardId)) {
         if (s->due <= now) deck.due++;
       } else {
@@ -339,6 +345,10 @@ bool Session::open(const std::string& language) {
   reviewedCount = 0;
   std::fill(std::begin(ratingCounts), std::end(ratingCounts), 0);
   syncVacation();
+  ankideck::DeckInfo info;
+  const bool preset = anki && ankideck::readInfo(ankideck::idOf(language), info);
+  params = schedulingParams(preset ? &info : nullptr);
+  perDay = newCardsPerDay(preset ? &info : nullptr);
   if (!loadStates(language, states, day, newToday, MAX_QUEUE)) return false;
   const uint16_t now = todayOr(day);
   if (now != day) newToday = 0;
@@ -346,7 +356,6 @@ bool Session::open(const std::string& language) {
   if (onVacation()) return true;  // progress loaded, nothing queued
 
   std::vector<QueueItem> fresh;
-  const uint16_t perDay = newCardsPerDay();
   const size_t newLimit = perDay > newToday ? perDay - newToday : 0;
   queue.reserve(64);
   pendingLog.reserve(8);  // ratings between two saves
@@ -362,7 +371,11 @@ bool Session::open(const std::string& language) {
     // An Anki deck's cards come from its index, in Anki's order; offset holds the record's flags.
     std::vector<ankideck::CardRecord> cards;
     if (!ankideck::readIndex(ankideck::idOf(language), cards)) return false;
-    for (const auto& c : cards) consider(c.cardId, c.flags);
+    std::vector<uint64_t> buried;
+    ankideck::readBuried(ankideck::idOf(language), day, buried);
+    for (const auto& c : cards) {
+      if (!std::binary_search(buried.begin(), buried.end(), c.cardId)) consider(c.cardId, c.flags);
+    }
   } else {
     CsvRecordParser parser(1u << GUID, 32);
     const bool found = scanCsv(csvPath, parser, [&](const CsvRecordParser& row) {
@@ -430,7 +443,7 @@ void Session::previews(uint16_t out[4]) const {
   const CardState* s = finished() ? nullptr : find(queue[position].id);
   const fsrs::Memory memory = s ? fsrs::Memory{s->stability, s->difficulty} : fsrs::Memory{};
   const float elapsed = s ? static_cast<float>(day - s->lastReview) : 0;
-  fsrs::previewIntervals(memory, s == nullptr, elapsed, schedulingParams(), out);
+  fsrs::previewIntervals(memory, s == nullptr, elapsed, params, out);
 }
 
 void Session::rate(const fsrs::Rating rating) {
@@ -466,7 +479,7 @@ void Session::rate(const fsrs::Rating rating) {
     const size_t at = std::min(queue.size(), position + 4);
     if (queue.size() < MAX_QUEUE + 50) queue.insert(queue.begin() + static_cast<long>(at), item);
   } else {
-    s->due = static_cast<uint16_t>(day + fsrs::intervalDays(after.stability, schedulingParams()));
+    s->due = static_cast<uint16_t>(day + fsrs::intervalDays(after.stability, params));
   }
   // Logged for Anki only with a real clock: a review's time is its identity there.
   const time_t now = time(nullptr);

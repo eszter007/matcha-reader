@@ -2,6 +2,7 @@
 
 #include <AnkiSyncStore.h>
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -38,6 +39,8 @@ const char* errorText(const AnkiClient::Error& error) {
       return tr(STR_ANKI_NOT_ALLOWED);
     case Kind::DeckMissing:
       return tr(STR_ANKI_DECK_MISSING);
+    case Kind::Cancelled:
+      return tr(STR_ANKI_SYNC_CANCELLED);
     default:
       return tr(STR_ANKI_REPLY_ERROR);
   }
@@ -112,6 +115,32 @@ void AnkiSyncActivity::onWifi(const bool connected) {
   setStatus(State::Working, tr(STR_ANKI_SYNC_NOW));
 }
 
+// Reads the buttons every 10 ms, as the main loop would: the debounce needs reads that close.
+void AnkiSyncActivity::watchBack(void* arg) {
+  auto* self = static_cast<AnkiSyncActivity*>(arg);
+  using Button = MappedInputManager::Button;
+  while (!self->watchStop) {
+    gpio.update();
+    if (self->mappedInput.wasPressed(Button::Back) || self->mappedInput.wasReleased(Button::Back)) {
+      self->backSeen = true;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  self->watchRunning = false;
+  vTaskDelete(nullptr);
+}
+
+void AnkiSyncActivity::pollCancel(void* ctx) {
+  auto* self = static_cast<AnkiSyncActivity*>(ctx);
+  if (self->stopping || !self->backSeen) return;
+  self->stopping = true;
+  {
+    RenderLock lock(*self);
+    self->message = tr(STR_ANKI_SYNC_STOPPING);
+  }
+  self->requestUpdate(true);
+}
+
 void AnkiSyncActivity::run() {
   WifiPowerSaveGuard psGuard;
   AnkiClient client;
@@ -144,6 +173,14 @@ void AnkiSyncActivity::run() {
     }
     self->requestUpdate(true);
   };
+  // The sync holds the main loop: Back (a button, or the header's back on touch) is read between
+  // cards and while replies arrive, and remembered once seen.
+  progress.cancel = [](void* ctx) {
+    pollCancel(ctx);
+    return static_cast<AnkiSyncActivity*>(ctx)->stopping;
+  };
+  client.setPoll(pollCancel, this);
+
   // Reviews are identified by their time in Anki: the clock is set first.
   int64_t nowMs = 0;
   if (ClockSyncActivity::syncAndRecord()) {
@@ -153,7 +190,15 @@ void AnkiSyncActivity::run() {
   } else {
     LOG_ERR("ANKI", "Clock not set; review times kept as they are");
   }
+  watchStop = false;
+  watchRunning = xTaskCreate(&watchBack, "AnkiBack", 2048, this, 1, nullptr) == pdPASS;
+  if (!watchRunning) LOG_ERR("ANKI", "No Back watcher: the sync cannot be cancelled");
   const ankisync::Result result = ankisync::syncAll(client, progress, nowMs);
+  watchStop = true;
+  while (watchRunning) delay(5);
+  // Back still held from the cancel: its release must not close the result straight away.
+  gpio.update();
+  holdingBack = stopping && mappedInput.isPressed(MappedInputManager::Button::Back);
   client.end();
   detail.clear();
   if (result.ok) {
@@ -180,6 +225,10 @@ void AnkiSyncActivity::loop() {
     return;
   }
   if (state == State::Done || state == State::Failed) {
+    if (holdingBack) {
+      if (!mappedInput.isPressed(MappedInputManager::Button::Back)) holdingBack = false;
+      return;
+    }
     if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
         mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       finish();
@@ -204,6 +253,9 @@ void AnkiSyncActivity::render(RenderLock&&) {
   }
   if (state == State::Done || state == State::Failed) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  } else if (state == State::Working && mode == Mode::Sync && !stopping) {
+    const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
   renderer.displayBuffer();

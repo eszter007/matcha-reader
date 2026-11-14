@@ -28,7 +28,16 @@ struct DeckInfo {
   std::string name;           // Anki deck name
   uint64_t lastReviewId = 0;  // newest Anki review folded into the device's progress
   int64_t cardsSyncedMs = 0;  // start of the last complete card refresh, from the network clock
+  // From the deck's preset in Anki, when the last sync could read it; unset uses the device settings.
+  int32_t newPerDay = -1;
+  float retention = 0;
+  uint16_t maxInterval = 0;
+  uint8_t fetchVersion = 0;  // how its cards were last fetched; see FETCH_VERSION in AnkiSync.cpp
+  // Style blocks already in style.css: FNV-1a of a note type's CSS as the reply carried it
+  // (JsonValueSkipper::hash), or of a template's own <style> text.
+  std::vector<uint32_t> cssHashes;
 };
+constexpr size_t MAX_CSS_HASHES = 16;
 
 constexpr const char* KEY_PREFIX = "anki-";
 inline bool isAnkiKey(const std::string& key) { return key.rfind(KEY_PREFIX, 0) == 0; }
@@ -95,5 +104,12 @@ void list(std::vector<DeckInfo>& out);
 std::string frontPath(const std::string& deckId, uint64_t cardId);
 std::string backPath(const std::string& deckId, uint64_t cardId);
 std::string cssPath(const std::string& deckId);
+
+// Cards buried in Anki (until its next day), as the last sync saw them: `day` is the device day
+// of that sync (flashcards::today()), so a later day reads as none buried.
+constexpr size_t MAX_BURIED = 512;
+bool writeBuried(const std::string& deckId, int32_t day, const std::vector<uint64_t>& ids);
+// Sorted ids buried on `day`; empty for any other day or without a file.
+void readBuried(const std::string& deckId, int32_t day, std::vector<uint64_t>& out);
 
 }  // namespace ankideck

@@ -18,9 +18,12 @@ struct Progress {
 struct ProgressFn {
   void* ctx = nullptr;
   void (*fn)(void* ctx, const Progress& progress) = nullptr;
+  // Asked between cards: true stops the sync, keeping what is saved (Error::Kind::Cancelled).
+  bool (*cancel)(void* ctx) = nullptr;
   void operator()(const Progress& p) const {
     if (fn) fn(ctx, p);
   }
+  bool cancelled() const { return cancel && cancel(ctx); }
 };
 
 struct Result {

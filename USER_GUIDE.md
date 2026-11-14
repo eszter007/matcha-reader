@@ -708,6 +708,8 @@ The rows are grouped by the control they change. Each one is described further d
 - **Maximum Interval**: the longest gap before a card comes back: **1 month**, **6 months**, **1 year** or **No limit**.
 - **Vacation Mode**: pauses reviews. While it is on, nothing comes due, no new cards are added and the overview says **On vacation**. When you turn it off, every due date moves forward by the days you were away, so the reviews do not pile up. The device needs the clock to be set to count those days; until then it waits.
 
+An Anki deck uses its own preset in Anki for **New Cards per Day**, **Desired Retention** and **Maximum Interval**, once a sync has read them. The settings above are used for your own decks, and for an Anki deck when the sync cannot read its preset. **Vacation Mode** applies to all decks.
+
 #### 3.6.9 OPDS Servers (Multiple Libraries)
 
 You can save up to 8 catalogs (for example your Calibre library at home and a public catalog) and switch between them.
@@ -1822,7 +1824,7 @@ Anki decks are listed in the overview next to your own decks. Each card is drawn
 There are two ways to get a deck onto the device:
 
 - **Import, without sync:** convert an exported `.apkg` on a computer with `tools/anki_import/apkg_to_flashcards.py`, and copy the result to the SD card. Progress then stays on the device.
-- **Sync:** set up [Anki Sync](#368-connectivity), then choose **Sync with Anki** at the bottom of the overview. It turns Wi-Fi on, downloads the chosen decks, and sends reviews both ways. Later syncs download only new and changed cards. If a sync stops partway, the next one continues near where it stopped. A card too large for the device is downloaded again only after it is changed in Anki. A change to a card template or its style in Anki is not seen as a card change. Only the cards of notes you edit afterwards are downloaded with the new look. After a deck has synced once, renaming it in Anki is fine: the device finds it again and shows the new name in **Anki Decks**. If a deck in **Anki Decks** is not in Anki, the sync still syncs the other decks, then shows an error with the name of the first missing deck.
+- **Sync:** set up [Anki Sync](#368-connectivity), then choose **Sync with Anki** at the bottom of the overview. It turns Wi-Fi on, downloads the chosen decks, and sends reviews both ways. Later syncs download only new and changed cards. To stop a sync, press **Back** (on a touch device, tap the back arrow or swipe from the left edge); it stops after the current card and keeps the cards synced so far. If a sync stops partway, the next one continues near where it stopped. A card too large for the device is downloaded again only after it is changed in Anki. If a card does not fit in the memory left during a sync, it is left for the next sync. A change to a card template or its style in Anki is not seen as a card change. Only the cards of notes you edit afterwards are downloaded with the new look. After a deck has synced once, renaming it in Anki is fine: the device finds it again and shows the new name in **Anki Decks**. If a deck in **Anki Decks** is not in Anki, the sync still syncs the other decks, then shows an error with the name of the first missing deck. Cards suspended in Anki are left off the device, and come back with their progress when you unsuspend them. Cards buried in Anki are not shown on the day of the sync.
 
 The commands and the server setup are in [docs/anki](docs/anki/README.md#anki-decks-on-the-reader).
 
