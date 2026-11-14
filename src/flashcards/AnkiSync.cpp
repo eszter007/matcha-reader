@@ -299,6 +299,7 @@ class DeckSync {
   // Cards whose notes changed since the deck's last full refresh. False when that is unknown, the
   // list is incomplete or would save little, and every card's note is then checked.
   void readPreset(const char* presetId, ankideck::DeckInfo& info);
+  bool pushLeeches(const std::string& deckId, bool suspend);
   // Fetches the images not on the card yet; false when one could not be fetched.
   bool fetchAllMedia(const std::string& dir, const std::vector<std::string>& media,
                      std::vector<std::string>& failedMedia);
@@ -472,6 +473,47 @@ bool DeckSync::recheckMedia(const std::string& deckId, const std::string& dir, a
   return r.flags != before;
 }
 
+// Leeches found while reviewing: tagged "leech" in Anki and, when the preset says so, suspended
+// there, in batches of 64. True when all were sent; run() then deletes the list once the rest of
+// the sync has worked too (until then the device keeps skipping suspended leeches).
+bool DeckSync::pushLeeches(const std::string& deckId, const bool suspend) {
+  const std::string path = ankideck::leechPath(deckId);
+  if (!Storage.exists(path.c_str())) return false;
+  if (!roomFor(4096, "leeches")) {
+    result.error = AnkiClient::Error{};
+    return false;
+  }
+  HalFile file;
+  if (!Storage.openFileForRead("ANKI", path, file)) return false;
+  bool more = true;
+  while (more) {
+    JsonDocument cardsParams, notesParams, done;
+    JsonArray cards = cardsParams["ids"].to<JsonArray>();
+    JsonArray notes = notesParams["noteIds"].to<JsonArray>();
+    uint8_t rec[16];
+    int n = 0;
+    for (; n < 64 && file.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec)); n++) {
+      uint64_t card = 0, note = 0;
+      memcpy(&card, rec, 8);
+      memcpy(&note, rec + 8, 8);
+      cards.add(std::to_string(card));
+      if (note != 0) notes.add(std::to_string(note));
+    }
+    more = n == 64;
+    if (n == 0) break;
+    cardsParams["suspended"] = true;
+    notesParams["tags"][0] = "leech";
+    const bool tagged = notes.size() == 0 || client.call("tags.add", notesParams, done);
+    const bool suspended = !suspend || client.call("cards.setSuspended", cardsParams, done);
+    if (!tagged || !suspended) {
+      LOG_ERR("ANKI", "Leeches not sent; tried again next sync");
+      result.error = AnkiClient::Error{};
+      return false;
+    }
+  }
+  return true;
+}
+
 // The deck's options in Anki: new cards a day, desired retention, maximum interval. Without an
 // answer (an older Anki, a filtered deck) the deck keeps what it had, or the device settings.
 void DeckSync::readPreset(const char* presetId, ankideck::DeckInfo& info) {
@@ -484,6 +526,10 @@ void DeckSync::readPreset(const char* presetId, ankideck::DeckInfo& info) {
   filter["settings"]["reviewsPerDay"] = true;
   filter["settings"]["learnStepsMinutes"] = true;
   filter["settings"]["relearnStepsMinutes"] = true;
+  for (const char* key : {"reviewOrder", "newGatherOrder", "newSortOrder", "newMix", "buryNew", "buryReviews",
+                          "easyDaysPercentages", "leechThreshold", "leechAction"}) {
+    filter["settings"][key] = true;
+  }
   if (!client.call("deckPresets.get", params, preset, &filter)) {
     result.error = AnkiClient::Error{};
     return;
@@ -504,6 +550,31 @@ void DeckSync::readPreset(const char* presetId, ankideck::DeckInfo& info) {
   };
   steps(s["learnStepsMinutes"], info.learnSteps, info.learnCount);
   steps(s["relearnStepsMinutes"], info.relearnSteps, info.relearnCount);
+  // Orders the device has no equivalent for keep its own (by due date; new cards as Anki added them).
+  const char* review = s["reviewOrder"] | "";
+  info.reviewOrder = strcmp(review, "random") == 0               ? ankideck::DeckInfo::REVIEW_RANDOM
+                     : strcmp(review, "intervalAscending") == 0  ? ankideck::DeckInfo::REVIEW_INTERVAL_ASC
+                     : strcmp(review, "intervalDescending") == 0 ? ankideck::DeckInfo::REVIEW_INTERVAL_DESC
+                                                                 : ankideck::DeckInfo::REVIEW_DUE;
+  const char* gather = s["newGatherOrder"] | "";
+  const char* sort = s["newSortOrder"] | "";
+  info.newRandom = strncmp(gather, "random", 6) == 0 || strcmp(sort, "randomCard") == 0 ||
+                   strcmp(sort, "randomNoteThenTemplate") == 0 || strcmp(sort, "templateThenRandom") == 0;
+  const char* mix = s["newMix"] | "";
+  info.newMix = strcmp(mix, "beforeReviews") == 0 ? ankideck::DeckInfo::NEW_BEFORE
+                : strcmp(mix, "mixed") == 0       ? ankideck::DeckInfo::NEW_MIXED
+                                                  : ankideck::DeckInfo::NEW_AFTER;
+  info.buryNew = s["buryNew"] | false;
+  info.buryReviews = s["buryReviews"] | false;
+  if (s["easyDaysPercentages"].is<JsonArrayConst>() && s["easyDaysPercentages"].size() == 7) {
+    for (size_t i = 0; i < 7; i++) {
+      info.easyDays[i] =
+          static_cast<uint8_t>(std::clamp(s["easyDaysPercentages"][i].as<float>() * 100.0f + 0.5f, 0.0f, 100.0f));
+    }
+  }
+  if (s["leechThreshold"].is<int>())
+    info.leechThreshold = static_cast<uint8_t>(std::clamp(s["leechThreshold"].as<int>(), 0, 255));
+  info.leechSuspend = strcmp(s["leechAction"] | "suspend", "tagOnly") != 0;
   if (s["maximumIntervalDays"].is<uint32_t>()) {
     info.maxInterval = static_cast<uint16_t>(std::min<uint32_t>(s["maximumIntervalDays"].as<uint32_t>(), 36500));
   }
@@ -896,6 +967,7 @@ bool DeckSync::run(const std::string& name, const std::string& deckId, const cha
   }
   info.name = name;
   readPreset(presetId, info);
+  const bool leechesSent = pushLeeches(deckId, info.leechSuspend);
   retryTooLarge = info.fetchVersion < FETCH_VERSION;
   checkAllMedia = info.fetchVersion < MEDIA_STREAM_VERSION;
   this->info = &info;
@@ -919,7 +991,10 @@ bool DeckSync::run(const std::string& name, const std::string& deckId, const cha
   if (client.call("reviews.getLatestId", latestParams, latest) && !latest["id"].isNull()) {
     info.lastReviewId = std::max(info.lastReviewId, toId(latest["id"]));
   }
-  return ankideck::writeInfo(info);
+  if (!ankideck::writeInfo(info)) return false;
+  // Anki has the leeches and the card search has seen it suspend them.
+  if (leechesSent) Storage.remove(ankideck::leechPath(deckId).c_str());
+  return true;
 }
 }  // namespace
 

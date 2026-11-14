@@ -49,6 +49,8 @@ std::string backPath(const std::string& deckId, const uint64_t cardId) {
 }
 std::string cssPath(const std::string& deckId) { return dirFor(deckId) + "style.css"; }
 
+std::string leechPath(const std::string& deckId) { return dirFor(deckId) + "leeches.bin"; }
+
 bool readInfo(const std::string& deckId, DeckInfo& out) {
   JsonDocument doc;
   if (!PersistableStoreBase::readDocFromFile((dirFor(deckId) + "deck.json").c_str(), doc)) return false;
@@ -69,6 +71,16 @@ bool readInfo(const std::string& deckId, DeckInfo& out) {
   };
   readSteps(doc["learnSteps"], out.learnSteps, out.learnCount);
   readSteps(doc["relearnSteps"], out.relearnSteps, out.relearnCount);
+  out.reviewOrder = doc["reviewOrder"] | static_cast<uint8_t>(DeckInfo::REVIEW_DUE);
+  out.newRandom = doc["newRandom"] | false;
+  out.newMix = doc["newMix"] | static_cast<uint8_t>(DeckInfo::NEW_AFTER);
+  out.buryNew = doc["buryNew"] | false;
+  out.buryReviews = doc["buryReviews"] | false;
+  if (doc["easyDays"].is<JsonArrayConst>() && doc["easyDays"].size() == 7) {
+    for (size_t i = 0; i < 7; i++) out.easyDays[i] = doc["easyDays"][i] | static_cast<uint8_t>(100);
+  }
+  out.leechThreshold = doc["leechThreshold"] | static_cast<uint8_t>(0);
+  out.leechSuspend = doc["leechSuspend"] | true;
   out.fetchVersion = doc["fetchVersion"] | static_cast<uint8_t>(0);
   out.cssHashes.clear();
   for (JsonVariantConst h : doc["cssHashes"].as<JsonArrayConst>()) {
@@ -93,6 +105,19 @@ bool writeInfo(const DeckInfo& info) {
   };
   writeSteps("learnSteps", info.learnSteps, info.learnCount);
   writeSteps("relearnSteps", info.relearnSteps, info.relearnCount);
+  if (info.reviewOrder != DeckInfo::REVIEW_DUE) doc["reviewOrder"] = info.reviewOrder;
+  if (info.newRandom) doc["newRandom"] = true;
+  if (info.newMix != DeckInfo::NEW_AFTER) doc["newMix"] = info.newMix;
+  if (info.buryNew) doc["buryNew"] = true;
+  if (info.buryReviews) doc["buryReviews"] = true;
+  if (std::any_of(info.easyDays, info.easyDays + 7, [](const uint8_t p) { return p != 100; })) {
+    JsonArray days = doc["easyDays"].to<JsonArray>();
+    for (const uint8_t p : info.easyDays) days.add(p);
+  }
+  if (info.leechThreshold > 0) {
+    doc["leechThreshold"] = info.leechThreshold;
+    doc["leechSuspend"] = info.leechSuspend;
+  }
   if (info.fetchVersion > 0) doc["fetchVersion"] = info.fetchVersion;
   if (!info.cssHashes.empty()) {
     JsonArray hashes = doc["cssHashes"].to<JsonArray>();

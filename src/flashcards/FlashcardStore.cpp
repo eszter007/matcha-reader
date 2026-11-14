@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstring>
 #include <ctime>
+#include <random>
 
 #include "AnkiDeck.h"
 
@@ -260,6 +261,25 @@ int32_t today() {
 }
 
 namespace {
+// Card ids in a deck's list of leeches not yet sent to Anki, sorted; at most 512.
+void readLeeches(const std::string& deckId, std::vector<uint64_t>& out) {
+  out.clear();
+  const std::string path = ankideck::leechPath(deckId);
+  if (!Storage.exists(path.c_str())) return;
+  HalFile file;
+  if (!Storage.openFileForRead("FLASH", path, file)) return;
+  const size_t count = std::min<size_t>(file.fileSize() / 16, 512);
+  if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < count * sizeof(uint64_t) + 8 * 1024) return;
+  out.reserve(count);
+  uint8_t rec[16];
+  while (out.size() < count && file.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec))) {
+    uint64_t id = 0;
+    memcpy(&id, rec, 8);
+    out.push_back(id);
+  }
+  std::sort(out.begin(), out.end());
+}
+
 // Reviews of known cards done today: cards last rated today, less those first learned today.
 uint16_t reviewsDoneToday(const std::vector<CardState>& states, const uint16_t day, const uint16_t newToday) {
   uint16_t rated = 0;
@@ -336,12 +356,32 @@ void listDecks(std::vector<DeckSummary>& out) {
     const uint16_t perDay = newCardsPerDay(&info);
     uint16_t fresh = 0;
     uint16_t stepping = 0;  // between learning steps: outside the review limit, as in a session
-    std::vector<uint64_t> buried;
+    std::vector<uint64_t> buried, leeches, notesDone;
     ankideck::readBuried(info.id, now, buried);
+    if (info.leechThreshold > 0 && info.leechSuspend) readLeeches(info.id, leeches);
+    size_t today = 0;
+    for (const auto& c : states) today += c.reps > 0 && c.lastReview == now ? 1 : 0;
+    const bool bury = (info.buryNew || info.buryReviews) &&
+                      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= today * sizeof(uint64_t) + 8 * 1024;
+    if (bury) {
+      notesDone.reserve(today);
+      for (const auto& c : cards) {
+        const CardState* s = findIn(states, c.cardId);
+        if (s && s->reps > 0 && s->lastReview == now) notesDone.push_back(c.noteId);
+      }
+      std::sort(notesDone.begin(), notesDone.end());
+    }
     for (const auto& c : cards) {
       deck.total++;
       if (std::binary_search(buried.begin(), buried.end(), c.cardId)) continue;
-      if (const CardState* s = findIn(states, c.cardId)) {
+      if (std::binary_search(leeches.begin(), leeches.end(), c.cardId)) continue;
+      const CardState* known = findIn(states, c.cardId);
+      // A sibling of a note reviewed today waits for tomorrow, as in a session.
+      if (std::binary_search(notesDone.begin(), notesDone.end(), c.noteId) &&
+          !(known && known->reps > 0 && known->lastReview == now) && (known ? info.buryReviews : info.buryNew)) {
+        continue;
+      }
+      if (const CardState* s = known) {
         if (s->due > now) continue;
         if ((s->flags & CardState::LEARN_STEP) != 0) {
           stepping++;
@@ -391,11 +431,31 @@ bool Session::open(const std::string& language) {
     relearnCount = info.relearnCount;
     std::copy(info.relearnSteps, info.relearnSteps + relearnCount, relearnSteps);
   }
+  buryNew = preset && info.buryNew;
+  buryReviews = preset && info.buryReviews;
+  std::fill(std::begin(easyDays), std::end(easyDays), static_cast<uint8_t>(100));
+  if (preset) std::copy(info.easyDays, info.easyDays + 7, easyDays);
+  leechThreshold = preset ? info.leechThreshold : 0;
+  leechSuspend = !preset || info.leechSuspend;
+  notesDone.clear();
+  leeches.clear();
+  if (preset && info.leechThreshold > 0 && info.leechSuspend) readLeeches(ankideck::idOf(language), leeches);
   if (!loadStates(language, states, day, newToday, MAX_QUEUE)) return false;
   const uint16_t now = todayOr(day);
   if (now != day) newToday = 0;
   day = now;
   if (onVacation()) return true;  // progress loaded, nothing queued
+  {
+    // Notes of the cards reviewed today, and room for this session's.
+    size_t today = 0;
+    for (const auto& c : states) today += c.reps > 0 && c.lastReview == day ? 1 : 0;
+    // std::vector reserves with throwing new: without room, burying is skipped this session.
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= (today + 64) * sizeof(uint64_t) + 8 * 1024) {
+      notesDone.reserve(today + 64);
+    } else {
+      buryNew = buryReviews = false;
+    }
+  }
 
   std::vector<QueueItem> fresh;
   const size_t newLimit = perDay > newToday ? perDay - newToday : 0;
@@ -403,7 +463,9 @@ bool Session::open(const std::string& language) {
   pendingLog.reserve(8);  // ratings between two saves
   fresh.reserve(std::min<size_t>(newLimit, MAX_QUEUE));
   learning.reserve(32);  // cards between steps: at most 64, 24 bytes each
-  const auto consider = [&](const uint64_t id, const uint32_t offset) {
+  const auto consider = [&](const uint64_t id, const uint32_t offset, const uint64_t note = 0) {
+    // A leech the next sync suspends in Anki is not shown meanwhile.
+    if (std::binary_search(leeches.begin(), leeches.end(), id)) return;
     if (const CardState* s = find(id)) {
       // Between learning steps when the last session ended: it goes on from its saved step, due
       // now (the time of day is not kept), outside the review limit.
@@ -412,12 +474,12 @@ bool Session::open(const std::string& language) {
       const uint8_t count = relearn ? relearnCount : learnCount;  // the preset may have changed since
       if (saved > 0 && count > 0 && s->due <= day && learning.size() < 64) {
         const uint8_t step = std::min<uint8_t>(saved - 1, count - 1);
-        learning.push_back({{id, offset}, static_cast<uint32_t>(millis()), step, relearn});
+        learning.push_back({{id, offset, note}, static_cast<uint32_t>(millis()), step, relearn});
         return;
       }
-      if (s->due <= day && queue.size() < MAX_QUEUE) queue.push_back({id, offset});
+      if (s->due <= day && queue.size() < MAX_QUEUE) queue.push_back({id, offset, note});
     } else if (fresh.size() < newLimit && fresh.size() < MAX_QUEUE) {
-      fresh.push_back({id, offset});
+      fresh.push_back({id, offset, note});
     }
   };
   if (anki) {
@@ -427,8 +489,13 @@ bool Session::open(const std::string& language) {
     std::vector<uint64_t> buried;
     ankideck::readBuried(ankideck::idOf(language), day, buried);
     for (const auto& c : cards) {
-      if (!std::binary_search(buried.begin(), buried.end(), c.cardId)) consider(c.cardId, c.flags);
+      if (std::binary_search(buried.begin(), buried.end(), c.cardId)) continue;
+      // Notes already reviewed today bury their siblings for the rest of the day.
+      const CardState* s = find(c.cardId);
+      if ((buryNew || buryReviews) && s && s->reps > 0 && s->lastReview == day) notesDone.push_back(c.noteId);
+      consider(c.cardId, c.flags, c.noteId);
     }
+    std::sort(notesDone.begin(), notesDone.end());
   } else {
     CsvRecordParser parser(1u << GUID, 32);
     const bool found = scanCsv(csvPath, parser, [&](const CsvRecordParser& row) {
@@ -438,15 +505,47 @@ bool Session::open(const std::string& language) {
     });
     if (!found) return false;
   }
-  // Most overdue first, then new cards in the order they were saved.
+  // Most overdue first; Anki's daily review limit keeps the most overdue.
   std::stable_sort(queue.begin(), queue.end(),
                    [this](const QueueItem& a, const QueueItem& b) { return find(a.id)->due < find(b.id)->due; });
-  // Anki's daily review limit keeps the most overdue.
   const uint16_t allowed = reviewsLeft(preset ? &info : nullptr, states, day, newToday);
   if (queue.size() > allowed) queue.resize(allowed);
-  for (const auto& item : fresh) {
-    if (queue.size() >= MAX_QUEUE) break;
-    queue.push_back(item);
+  // Then the preset's order: of the reviews kept, and of the new cards (as added, or random).
+  const uint8_t order = preset ? info.reviewOrder : ankideck::DeckInfo::REVIEW_DUE;
+  std::minstd_rand shuffle(static_cast<uint32_t>(millis()) ^ static_cast<uint32_t>(time(nullptr)));
+  if (order == ankideck::DeckInfo::REVIEW_RANDOM) {
+    std::shuffle(queue.begin(), queue.end(), shuffle);
+  } else if (order == ankideck::DeckInfo::REVIEW_INTERVAL_ASC || order == ankideck::DeckInfo::REVIEW_INTERVAL_DESC) {
+    const bool asc = order == ankideck::DeckInfo::REVIEW_INTERVAL_ASC;
+    std::stable_sort(queue.begin(), queue.end(), [this, asc](const QueueItem& a, const QueueItem& b) {
+      const int ia = find(a.id)->due - find(a.id)->lastReview;
+      const int ib = find(b.id)->due - find(b.id)->lastReview;
+      return asc ? ia < ib : ia > ib;
+    });
+  }
+  if (preset && info.newRandom) std::shuffle(fresh.begin(), fresh.end(), shuffle);
+  const uint8_t mix = preset ? info.newMix : ankideck::DeckInfo::NEW_AFTER;
+  // The queue holds MAX_QUEUE at most: the side placed last is cut first, as Anki does.
+  if (mix == ankideck::DeckInfo::NEW_BEFORE) {
+    if (fresh.size() > MAX_QUEUE) fresh.resize(MAX_QUEUE);
+    if (queue.size() + fresh.size() > MAX_QUEUE) queue.resize(MAX_QUEUE - fresh.size());
+    queue.insert(queue.begin(), fresh.begin(), fresh.end());
+  } else if (mix == ankideck::DeckInfo::NEW_MIXED && !queue.empty() && !fresh.empty()) {
+    // Spread the new cards evenly among the reviews.
+    if (queue.size() + fresh.size() > MAX_QUEUE) fresh.resize(MAX_QUEUE > queue.size() ? MAX_QUEUE - queue.size() : 0);
+    std::vector<QueueItem> merged;
+    merged.reserve(queue.size() + fresh.size());
+    const size_t every = fresh.empty() ? queue.size() : std::max<size_t>(1, queue.size() / fresh.size());
+    size_t r = 0;
+    for (const auto& item : fresh) {
+      for (size_t k = 0; k < every && r < queue.size(); k++) merged.push_back(queue[r++]);
+      merged.push_back(item);
+    }
+    while (r < queue.size()) merged.push_back(queue[r++]);
+    queue.swap(merged);
+  } else {
+    if (queue.size() + fresh.size() > MAX_QUEUE) fresh.resize(MAX_QUEUE > queue.size() ? MAX_QUEUE - queue.size() : 0);
+    queue.insert(queue.end(), fresh.begin(), fresh.end());
   }
   pickNext();
   LOG_INF("FLASH", "Deck %s: %u queued, %u states", language.c_str(), static_cast<unsigned>(queue.size()),
@@ -458,6 +557,17 @@ bool Session::open(const std::string& language) {
 // shown early rather than leaving the session waiting.
 void Session::pickNext() {
   activeLearn = -1;
+  if (!leeches.empty()) {
+    learning.erase(std::remove_if(learning.begin(), learning.end(),
+                                  [this](const Learning& l) {
+                                    return std::binary_search(leeches.begin(), leeches.end(), l.item.id);
+                                  }),
+                   learning.end());
+  }
+  while (position < queue.size() &&
+         (buried(queue[position]) || std::binary_search(leeches.begin(), leeches.end(), queue[position].id))) {
+    position++;
+  }
   if (learning.empty()) return;
   int earliest = 0;
   for (size_t i = 1; i < learning.size(); i++) {
@@ -465,6 +575,50 @@ void Session::pickNext() {
   }
   const bool due = static_cast<int32_t>(millis() - learning[earliest].dueMs) >= 0;
   if (due || position >= queue.size()) activeLearn = earliest;
+}
+
+// A sibling of a note reviewed today, held back until tomorrow as the preset asks.
+bool Session::buried(const QueueItem& item) const {
+  if (item.note == 0 || notesDone.empty()) return false;
+  if (!std::binary_search(notesDone.begin(), notesDone.end(), item.note)) return false;
+  const CardState* s = find(item.id);
+  if (s && s->reps > 0 && s->lastReview == day) return false;  // this very card, again
+  return s == nullptr ? buryNew : buryReviews;
+}
+
+// Easy Days: within a few percent of the interval, the weekday with the most room is chosen.
+uint16_t Session::easyDay(const uint16_t interval) const {
+  if (interval < 3 || std::all_of(std::begin(easyDays), std::end(easyDays), [](uint8_t p) { return p == 100; })) {
+    return interval;
+  }
+  const int spread = std::max(1, interval * 5 / 100);
+  uint16_t best = interval;
+  int bestRoom = -1;
+  for (int d = -spread; d <= spread; d++) {
+    const int candidate = interval + d;
+    if (candidate < 1 || candidate > params.maxInterval) continue;
+    // Day 0 is 2020-01-01, a Wednesday; easyDays starts on Monday.
+    const int room = easyDays[(day + candidate + 2) % 7];
+    if (room > bestRoom || (room == bestRoom && std::abs(d) < std::abs(best - static_cast<int>(interval)))) {
+      bestRoom = room;
+      best = static_cast<uint16_t>(candidate);
+    }
+  }
+  return best;
+}
+
+// A leech: noted for the next sync, which tags it (and suspends it, as the preset says) in Anki.
+void Session::markLeech(const QueueItem& item, const CardState& s) {
+  if (!anki) return;
+  LOG_INF("FLASH", "Leech %llu after %u lapses", static_cast<unsigned long long>(item.id), s.lapses);
+  HalFile file;
+  if (!Storage.openFileForAppend("FLASH", ankideck::leechPath(ankideck::idOf(lang)).c_str(), file)) return;
+  if (leechSuspend && leeches.size() < 512)
+    leeches.insert(std::upper_bound(leeches.begin(), leeches.end(), item.id), item.id);
+  uint8_t rec[16];
+  memcpy(rec, &item.id, 8);
+  memcpy(rec + 8, &item.note, 8);
+  if (file.write(rec, sizeof(rec)) != sizeof(rec)) LOG_ERR("FLASH", "Leech not noted");
 }
 
 int Session::nextStep(const fsrs::Rating rating, const int current, const uint8_t count) {
@@ -549,7 +703,7 @@ void Session::previews(Interval out[4]) const {
   const int current = inLearning ? learning[activeLearn].step : 0;
   for (int i = 0; i < 4; i++) {
     const auto rating = static_cast<fsrs::Rating>(i + 1);
-    out[i].value = days[i];
+    out[i].value = easyDay(days[i]);
     // A review card only enters steps when it is forgotten.
     const bool steps = s == nullptr || inLearning || rating == fsrs::Rating::Again;
     if (!steps) continue;
@@ -559,7 +713,7 @@ void Session::previews(Interval out[4]) const {
     if (next < 0) {
       if (rating == fsrs::Rating::Again) {
         const fsrs::Memory m = s ? fsrs::next(memory, elapsed, rating) : fsrs::initial(rating);
-        out[i].value = fsrs::intervalDays(m.stability, params);
+        out[i].value = easyDay(fsrs::intervalDays(m.stability, params));
       }
       continue;
     }
@@ -606,7 +760,16 @@ void Session::rate(const fsrs::Rating rating) {
   // New and forgotten cards go through the learning (or relearning) steps before a day interval.
   const bool relearn = fromLearning ? learnt.relearn : (!isNew && rating == fsrs::Rating::Again);
   const bool stepping = fromLearning || isNew || rating == fsrs::Rating::Again;
-  if (rating == fsrs::Rating::Again && !isNew && !fromLearning) s->lapses++;
+  if (rating == fsrs::Rating::Again && !isNew && !fromLearning) {
+    if (s->lapses < 255) s->lapses++;
+    // Anki's rule: a leech at the threshold, and again every half threshold after it.
+    const uint8_t t = leechThreshold;
+    if (t > 0 && s->lapses >= t && (s->lapses - t) % std::max(1, t / 2) == 0) markLeech(item, *s);
+  }
+  if (item.note != 0 && (buryNew || buryReviews) &&
+      !std::binary_search(notesDone.begin(), notesDone.end(), item.note)) {
+    notesDone.insert(std::upper_bound(notesDone.begin(), notesDone.end(), item.note), item.note);
+  }
   const int current = fromLearning ? learnt.step : 0;
   const uint8_t count = relearn ? relearnCount : learnCount;
   const int next = stepping ? nextStep(rating, current, count) : -1;
@@ -631,7 +794,7 @@ void Session::rate(const fsrs::Rating rating) {
       }
     }
   } else {
-    s->due = static_cast<uint16_t>(day + fsrs::intervalDays(after.stability, params));
+    s->due = static_cast<uint16_t>(day + easyDay(fsrs::intervalDays(after.stability, params)));
   }
   // Logged for Anki only with a real clock: a review's time is its identity there.
   const time_t now = time(nullptr);

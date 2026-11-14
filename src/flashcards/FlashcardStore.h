@@ -143,7 +143,8 @@ class Session {
  private:
   struct QueueItem {
     uint64_t id;
-    uint32_t offset;  // byte offset of the card's CSV row; an Anki card's index flags
+    uint32_t offset;    // byte offset of the card's CSV row; an Anki card's index flags
+    uint64_t note = 0;  // an Anki card's note, for burying its siblings
   };
 
   // A card between learning steps, shown again this session once its step has passed.
@@ -185,6 +186,17 @@ class Session {
   uint8_t relearnCount = 0;
   std::vector<Learning> learning;
   int activeLearn = -1;  // the card shown comes from `learning` at this index, else from the queue
+  // From the Anki deck's preset (see ankideck::DeckInfo); off for the device's own decks.
+  bool buryNew = false;
+  bool buryReviews = false;
+  uint8_t easyDays[7] = {100, 100, 100, 100, 100, 100, 100};
+  uint8_t leechThreshold = 0;
+  bool leechSuspend = true;
+  std::vector<uint64_t> notesDone;  // notes reviewed today, sorted: their other cards wait (burying)
+  bool buried(const QueueItem& item) const;
+  uint16_t easyDay(uint16_t interval) const;
+  void markLeech(const QueueItem& item, const CardState& s);
+  std::vector<uint64_t> leeches;  // suspended leeches not yet sent to Anki, sorted: not queued
   uint8_t unsaved = 0;
   std::vector<ReviewLogEntry> pendingLog;  // ratings not yet appended to the review log
 };

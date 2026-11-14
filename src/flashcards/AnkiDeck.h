@@ -40,6 +40,19 @@ struct DeckInfo {
   uint8_t learnCount = 0xFF;
   uint16_t relearnSteps[MAX_STEPS] = {};
   uint8_t relearnCount = 0xFF;
+  // Order and burying, from the preset; 0 is the device's own behaviour.
+  enum ReviewOrder : uint8_t { REVIEW_DUE = 0, REVIEW_RANDOM, REVIEW_INTERVAL_ASC, REVIEW_INTERVAL_DESC };
+  enum NewMix : uint8_t { NEW_AFTER = 0, NEW_BEFORE, NEW_MIXED };
+  uint8_t reviewOrder = REVIEW_DUE;
+  bool newRandom = false;
+  uint8_t newMix = NEW_AFTER;
+  bool buryNew = false;
+  bool buryReviews = false;
+  // Easy Days: how much of a normal day's reviews each weekday takes, Monday first, in percent.
+  uint8_t easyDays[7] = {100, 100, 100, 100, 100, 100, 100};
+  // A card failing this many times is a leech (0: never); suspended in Anki or only tagged.
+  uint8_t leechThreshold = 0;
+  bool leechSuspend = true;
   uint8_t fetchVersion = 0;  // how its cards were last fetched; see FETCH_VERSION in AnkiSync.cpp
   // Style blocks already in style.css: FNV-1a of a note type's CSS as the reply carried it
   // (JsonValueSkipper::hash), or of a template's own <style> text.
@@ -112,6 +125,8 @@ void list(std::vector<DeckInfo>& out);
 std::string frontPath(const std::string& deckId, uint64_t cardId);
 std::string backPath(const std::string& deckId, uint64_t cardId);
 std::string cssPath(const std::string& deckId);
+// Leeches found on the device, for the next sync to suspend or tag in Anki: 16 bytes each.
+std::string leechPath(const std::string& deckId);
 
 // Cards buried in Anki (until its next day), as the last sync saw them: `day` is the device day
 // of that sync (flashcards::today()), so a later day reads as none buried.
