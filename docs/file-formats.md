@@ -608,6 +608,11 @@ if (parsedSize != fileSize) {
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
 
+### Version 161
+
+No format change. A column that starts with an opening bracket and is squeezed to pull one more
+character in keeps the characters after the bracket clear of it. Cached chapters are laid out again.
+
 ### Version 160
 
 The header gains a `u32` after the right margin: the publisher-font signature, as in `section.bin`

@@ -96,6 +96,22 @@ TEST(VerticalPageBreak, OpeningBracketNeverEndsAColumn) {
   }
 }
 
+TEST(VerticalPageBreak, LineHeadBracketGivesNothingToASqueeze) {
+  // 「 is set flush to the column head, its leading half em already taken. The 」 after the ninth
+  // character does not fit, and the squeeze that would pull it in has nothing left to take from 「:
+  // taking that half em again printed あ over the bracket.
+  const auto pages = layout({"「あいうえおかきくけ」さ"});
+  ASSERT_FALSE(pages.empty());
+  const VerticalGlyph* bracket = firstGlyphOf(pages[0], U'「');
+  const VerticalGlyph* next = firstGlyphOf(pages[0], U'あ');
+  ASSERT_NE(bracket, nullptr);
+  ASSERT_NE(next, nullptr);
+  ASSERT_EQ(bracket->lineHeadFlush, 1u);
+  ASSERT_EQ(next->column, bracket->column);
+  constexpr int EM = 20;
+  EXPECT_GE(next->y, bracket->y + EM / 2);
+}
+
 TEST(VerticalPageBreak, OpeningBracketMovesWithRubyGroupThatBreaksColumn) {
   // 「 lands on row 7; the ruby group after it needs three rows, so it moves to the next column and
   // must take the bracket with it (device photo: 「 left at the foot before 養父母).
