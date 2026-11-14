@@ -26,12 +26,13 @@ constexpr StrId menuNames[TranslationSettingsActivity::MENU_ITEMS] = {StrId::STR
                                                                       StrId::STR_GEMINI_MODEL, StrId::STR_TRANSLATE_TO};
 
 // The listed languages, then Custom (gemini::TARGET_CUSTOM).
-constexpr auto targetLabels = [] {
+constexpr std::array<StrId, gemini::TARGET_LANGUAGE_COUNT + 1> makeTargetLabels() {
   std::array<StrId, gemini::TARGET_LANGUAGE_COUNT + 1> labels{};
   for (size_t i = 0; i < gemini::TARGET_LANGUAGE_COUNT; i++) labels[i] = gemini::TARGET_LANGUAGES[i].label;
   labels[gemini::TARGET_CUSTOM] = StrId::STR_GEMINI_MODEL_CUSTOM;
   return labels;
-}();
+}
+constexpr auto targetLabels = makeTargetLabels();
 
 // Indexed by gemini::ModelChoice.
 constexpr int MODEL_ITEMS = 3;

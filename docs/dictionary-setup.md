@@ -25,9 +25,9 @@ Word lookup needs at least a vocabulary dictionary for each language you read. A
 ```
 dictionaries/
   jp/                          # Japanese
-    vocab.idx    vocab.dat    vocab.spx      # vocabulary (required)
-    names.idx    names.dat    names.spx      # names (recommended)
-    grammar.idx  grammar.dat  grammar.spx    # grammar reference (optional)
+    vocab.idx    vocab.dat    vocab.spx    vocab.title    # vocabulary (required)
+    names.idx    names.dat    names.spx    names.title    # names (recommended)
+    grammar.idx  grammar.dat  grammar.spx  grammar.title  # grammar reference (optional)
   zh/                          # Mandarin, simplified and traditional books alike
     vocab.idx    vocab.dat    vocab.spx    vocab.title    # vocabulary (required)
     names.idx    names.dat    names.spx    names.title    # proper nouns (optional)
@@ -51,6 +51,8 @@ python3 tools/dict_convert/convert_jmdict.py \
 ```
 
 Add `--furigana auto` to attach the reading over each kanji from [JmdictFurigana](https://github.com/Doublevil/JmdictFurigana) (downloaded once into `--output-dir`, about 5 MB), or `--furigana JmdictFurigana.json` for a copy you already have. Saved words then get a Furigana column, and flashcards place each reading beside its kanji. A book's own furigana is used first when the word has it.
+
+The `.title` file holds the name shown in the lookup panel. The converter takes it from the Yomitan dictionary's own title (or `--title`); without one the panel shows a default name such as JMdict.
 
 To add furigana to a Japanese book that has none, annotate the EPUB once before copying it to the card. Readings depend on context, so this always goes through Gemini (the book's text is sent to it under your own key):
 

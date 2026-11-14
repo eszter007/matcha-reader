@@ -314,6 +314,32 @@ class Furigana(unittest.TestCase):
                          "【きょう】｛今日[きょう]｝\n\ntoday")
         self.assertEqual(conv.format_definition_yomitan("今日", "きょう", ["today"]), "【きょう】\n\ntoday")
 
+class YomitanMonolingual(unittest.TestCase):
+    # Shaped like 大辞林: a 見出部 heading, a part of speech, then one 語義G block per sense.
+    DEFS = [{"type": "structured-content", "content": [
+        {"tag": "span", "data": {"name": "見出部"}, "content": ["あい", "【愛】"]},
+        {"tag": "div", "data": {"name": "解説部"}, "content": [
+            {"tag": "span", "data": {"name": "品詞G"}, "content": "（名）"},
+            {"tag": "div", "data": {"name": "語義G"}, "content": [
+                {"tag": "span", "data": {"name": "語義Gnum"}, "content": "①"},
+                {"tag": "span", "data": {"name": "語釈"}, "content": "大切に思う心。"},
+                {"tag": "div", "data": {"name": "用例"}, "content": [
+                    "「", {"tag": "span", "data": {"name": "見出相当部"}, "content": "━"}, "を注ぐ」"]},
+                {"tag": "div", "data": {"name": "副義"}, "content": [
+                    {"tag": "span", "data": {"name": "副義num"}, "content": "㋐"},
+                    {"tag": "span", "data": {"name": "語釈"}, "content": "恋。→【恋】"}]},
+            ]},
+        ]},
+    ]}]
+
+    def test_parts_map_to_device_layout(self):
+        text = conv.format_definition_yomitan("愛", "あい", self.DEFS)
+        self.assertEqual(text, "【あい】\n\n[名]\n• 大切に思う心。\n「〜を注ぐ」\n• ㋐ 恋。→〖恋〗")
+
+    def test_only_reading_line_keeps_lenticular_brackets(self):
+        text = conv.format_definition_yomitan("愛", "あい", ["あい【愛】心"])
+        self.assertEqual(text, "【あい】\n\nあい〖愛〗心")
+
 
 if __name__ == "__main__":
     unittest.main()
