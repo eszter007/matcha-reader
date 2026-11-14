@@ -14,7 +14,7 @@ Supported input formats:
 Emits (basename set by --name, default "vocab"):
   vocab.idx   -- sorted array of 40-byte records (headword + offset + length + priority)
   vocab.dat   -- variable-length definition text blob
-  vocab.title -- the dictionary's display name (Chinese, or when --title is given)
+  vocab.title -- the dictionary's display name (the input's title, or --title)
 
 Usage:
 #JMdict(default — downloads if no-- input given)
@@ -320,6 +320,14 @@ def flatten_structured_content(content) -> str:
 
         if tag == "br":
             return "\n"
+        # Monolingual dictionaries (大辞林) label parts with data.name: 見出部 repeats the headword
+        # and reading the panel already shows, and each named block (sense, example, note) is a line.
+        dn = data.get("name", "")
+        dn = dn if isinstance(dn, str) else ""
+        if dn == "見出部":
+            return ""
+        if dn and tag == "div":
+            return text + "\n"
         if tag == "rt":
             return ""
         if tag == "ruby":
@@ -421,7 +429,9 @@ def format_definition_yomitan(headword: str, reading: str, definitions) -> str:
                 text = flatten_list_defn(defn)
             else:
                 text = str(defn)
-            text = text.strip()
+            # The device reads a line holding 【】 as the reading and drops it, which in monolingual
+            # dictionaries (あい【愛】…) deletes the definition. Only the reading line above keeps them.
+            text = text.strip().replace("【", "〖").replace("】", "〗")
             if text:
                 non_empty.append(text)
 #Drop pure - duplicate entries(redirect variant repeating the first gloss)
@@ -1455,7 +1465,7 @@ def main():
         name_records = apply_frequency(name_records, priorities, twins, shares)
 
     title = args.title or ""
-    if not title and chinese and titles:
+    if not title and titles:
         joined = " + ".join(dict.fromkeys(titles))
         title = joined if len(joined.encode("utf-8")) <= 36 else titles[0]
     write_binary(records, args.output_dir, args.name, title)

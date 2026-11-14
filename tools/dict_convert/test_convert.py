@@ -271,5 +271,23 @@ class ThirdPass(unittest.TestCase):
         self.assertTrue(texts[1].startswith("【hào ㄏㄠˋ】"))
 
 
+
+class YomitanMonolingual(unittest.TestCase):
+    # Shaped like 大辞林: a 見出部 heading, then one 語義G block per sense.
+    DEFS = [{"type": "structured-content", "content": [
+        {"tag": "span", "data": {"name": "見出部"}, "content": ["あい", "【愛】"]},
+        {"tag": "div", "data": {"name": "語義G"}, "content": "①大切に思う心。"},
+        {"tag": "div", "data": {"name": "語義G"}, "content": "②→【恋】"},
+    ]}]
+
+    def test_heading_dropped_and_senses_split(self):
+        text = conv.format_definition_yomitan("愛", "あい", self.DEFS)
+        self.assertEqual(text, "【あい】\n\n①大切に思う心。\n②→〖恋〗")
+
+    def test_only_reading_line_keeps_lenticular_brackets(self):
+        text = conv.format_definition_yomitan("愛", "あい", ["あい【愛】心"])
+        self.assertEqual(text, "【あい】\n\nあい〖愛〗心")
+
+
 if __name__ == "__main__":
     unittest.main()
