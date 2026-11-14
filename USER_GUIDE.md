@@ -1823,10 +1823,37 @@ Anki decks are listed in the overview next to your own decks. Each card is drawn
 
 There are two ways to get a deck onto the device:
 
-- **Import, without sync:** convert an exported `.apkg` on a computer with `tools/anki_import/apkg_to_flashcards.py`, and copy the result to the SD card. Progress then stays on the device.
+- **Import, without sync:** open an exported `.apkg` in the [Anki Converter](https://eszter007.github.io/matcha-reader-tools/anki.html) of Matcha Reader Tools, in your browser, and copy the result to the SD card (or use `tools/anki_import/apkg_to_flashcards.py` on a computer with Python). Progress then stays on the device and does not go back to Anki. To keep Anki up to date, use sync instead (see [Offline reviews, synced with Anki on your computer](#offline-reviews-synced-with-anki-on-your-computer)).
 - **Sync:** set up [Anki Sync](#368-connectivity), then choose **Sync with Anki** at the bottom of the overview. It turns Wi-Fi on, downloads the chosen decks, and sends reviews both ways. Later syncs download only new and changed cards. To stop a sync, press **Back** (on a touch device, tap the back arrow or swipe from the left edge); it stops after the current card and keeps the cards synced so far. If a sync stops partway, the next one continues near where it stopped. A card too large for the device is downloaded again only after it is changed in Anki. Images are downloaded with their cards. The companion server shrinks large images to screen size first. An image still over 1 MB (4 MB with PSRAM) is not kept; an image that fails for another reason is tried again at the next sync. A type-in answer shows no typing box. With the companion server, the back shows the expected answer; with Anki desktop, the box is left out. If a card does not fit in the memory left during a sync, it is left for the next sync. When a card template or a style changes in Anki, the next sync downloads the deck's cards again. After a deck has synced once, renaming it in Anki is fine: the device finds it again and shows the new name in **Anki Decks**. If a deck in **Anki Decks** is not in Anki, the sync still syncs the other decks, then shows an error with the name of the first missing deck.
 
 A deck holds up to 2,000 cards on the device (10,000 on the X4 Pro and other devices with PSRAM, which also fit larger cards); a larger deck is cut there. Cards suspended in Anki are left off the device, and come back with their progress when you unsuspend them. Cards buried in Anki are not shown on the day of the sync. A card you forget many times (a "leech": as many times as the deck's leech threshold in Anki) is tagged "leech" in Anki at the next sync. If the deck's preset says to suspend leeches, the device stops showing it at once and the sync suspends it in Anki.
+
+##### Offline reviews, synced with Anki on your computer
+
+You do not need AnkiWeb or any cloud service. The device can sync directly with Anki on your computer over your home Wi-Fi. You review offline on the device, wherever you are, and sync when you are back home. Nothing leaves your network.
+
+**Once, on the computer:**
+
+1. Install Anki desktop 26.08 or later.
+2. In Anki, install the AnkiConnect add-on (**Tools → Add-ons → Get Add-ons**, code `2055492159`), then restart Anki.
+3. Open the add-on's settings (**Tools → Add-ons → AnkiConnect → Config**). Set `webBindAddress` to `0.0.0.0`, so the device can reach Anki on your Wi-Fi. We recommend also setting an `apiKey`: any password you choose. Restart Anki.
+4. Find your computer's address on the Wi-Fi network, for example `192.168.1.20`.
+
+**Once, on the device** (easier on the web settings page in **File Transfer**):
+
+1. **Settings → Connectivity → Anki Sync → Anki Address:** `http://` + your computer's address + `:8765`, for example `http://192.168.1.20:8765`.
+2. **Anki Key:** the `apiKey` you chose, or empty if you set none.
+3. **Anki Decks:** the decks to review, separated by commas, as Anki shows them (a subdeck is `Parent::Child`).
+4. **Sync AnkiWeb Too:** **Off**, if you do not use AnkiWeb.
+5. **Test Connection** checks the address, the key and the Anki version.
+
+**Each time:**
+
+1. Open Anki on your computer. The device is on the same Wi-Fi.
+2. On the device, choose **Flashcards → Sync with Anki**. New and changed cards come to the device. Your reviews from the device go to Anki, with their real time, the next due date and the card's memory. Reviews you did in Anki come to the device.
+3. Review offline on the device. Your ratings are kept on the device until the next sync, however long that takes.
+
+If you review the same card in Anki and on the device between two syncs, both reviews are kept in the card's history.
 
 The commands and the server setup are in [docs/anki](docs/anki/README.md#anki-decks-on-the-reader).
 

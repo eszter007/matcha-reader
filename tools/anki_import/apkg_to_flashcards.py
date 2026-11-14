@@ -17,6 +17,7 @@ Usage:
     python3 tools/anki_import/apkg_to_flashcards.py deck.apkg --out ./decks --deck "HSK 1"
 """
 import argparse
+import html as html_lib
 import io
 import json
 import os
@@ -33,8 +34,30 @@ MAX_SIDE_BYTES = 40 * 1024  # one side, as stored (the sync's limit)
 MAX_CSS = 32 * 1024
 TOO_LARGE = 1               # cards.bin flag: shown as "too large" on the reader
 DRAWABLE = (".jpg", ".jpeg", ".png", ".gif", ".bmp")
+# Left out with their content: what an e-ink card cannot run, play or press.
 DROP_TAGS = {"script", "noscript", "audio", "video", "iframe", "object", "embed", "template", "svg", "style",
-             "canvas", "math"}
+             "canvas", "math", "button", "input", "select", "textarea", "label", "dialog"}
+ICON_CLASSES = {"material-icons", "material-icons-outlined", "material-symbols-outlined", "fa", "fas", "far",
+                "glyphicon"}
+HIDDEN = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
+TYPE_IN = re.compile(r"\[\[type:([^\]]*)\]\]")
+
+
+def type_in(html: str, note, answer: bool) -> str:
+    """The reader has no typing box: the front leaves it out, the back shows the expected answer."""
+    def expected(m: re.Match) -> str:
+        name = m.group(1).strip()
+        return f'<code id="typeans">{note[name]}</code>' if answer and ":" not in name and name in note else ""
+    return TYPE_IN.sub(expected, html)
+
+
+def dropped(el) -> bool:
+    if el.tag in DROP_TAGS or "hidden" in el.attrib or HIDDEN.search(el.get("style") or ""):
+        return True
+    if ICON_CLASSES & set((el.get("class") or "").split()) or "material-symbols" in (el.get("class") or ""):
+        return True
+    # A link with no target only runs a script (Anki's hint link, template menus).
+    return el.tag == "a" and (el.get("href") or "#").strip() == "#" and "onclick" in el.attrib
 
 
 def clean_side(html: str) -> str:
@@ -45,13 +68,16 @@ def clean_side(html: str) -> str:
     html = re.sub(r"\[anki:play:[qa]:\d+\]|\[sound:[^\]]*\]", "", html)
     root = lxml.html.fragment_fromstring(html or "", create_parent="div")
     for el in list(root.iter()):
+        if el is root:
+            continue
+        # drop_tree keeps the text after the element, which remove() would lose.
         if not isinstance(el.tag, str):  # comments, processing instructions
             if el.getparent() is not None:
-                el.getparent().remove(el)
+                el.drop_tree()
             continue
-        cls = (el.get("class") or "").lower()
-        if el.tag in DROP_TAGS or "material-icons" in cls or "material-symbols" in cls:
-            el.getparent().remove(el)
+        if dropped(el):
+            if el.getparent() is not None:
+                el.drop_tree()
             continue
         for attr in list(el.attrib):
             if attr.lower().startswith("on") or ":" in attr:
@@ -80,14 +106,15 @@ def document(fragment: str) -> str:
 
 def copy_image(media_dir: str, name: str, out_dir: str) -> None:
     """Copies a drawable image; WebP becomes a grayscale PNG sized for an e-ink screen."""
-    if "/" in name or ".." in name or name.startswith("."):
+    if "/" in name or "\\" in name or ".." in name or name.startswith("."):
         return
-    original = name[:-4] if name.endswith(".webp.png") else name
+    webp = name.lower().endswith(".webp.png")
+    original = name[:-4] if webp else name
     src = os.path.join(media_dir, original)
     dst = os.path.join(out_dir, name)
     if not os.path.isfile(src) or os.path.exists(dst):
         return
-    if name.endswith(".webp.png"):
+    if webp:
         try:
             from PIL import Image
 
@@ -117,11 +144,11 @@ def export_deck(col: Collection, deck_id: int, deck_name: str, out_root: str) ->
         if css and css not in css_parts:
             css_parts.append(css)
         sides = []
-        for html in (card.question(reload=True), card.answer()):
+        for answer, html in ((False, card.question(reload=True)), (True, card.answer())):
             for style in styles_in(html):
                 if style not in css_parts:
                     css_parts.append(style)
-            sides.append(document(clean_side(html)))
+            sides.append(document(clean_side(type_in(html, note, answer))))
         if any(len(side.encode()) > MAX_SIDE_BYTES for side in sides):
             flags |= TOO_LARGE
             too_large += 1
@@ -130,7 +157,7 @@ def export_deck(col: Collection, deck_id: int, deck_name: str, out_root: str) ->
                 with open(os.path.join(out_dir, f"{card_id}{suffix}.xhtml"), "w", encoding="utf-8") as f:
                     f.write(side)
                 for name in re.findall(r'src="([^"]+)"', side):
-                    copy_image(col.media.dir(), name, out_dir)
+                    copy_image(col.media.dir(), html_lib.unescape(name), out_dir)
         records.append(struct.pack("<QQII", card_id, note.id, int(note.mod), flags))
     with open(os.path.join(out_dir, "cards.bin"), "wb") as f:
         f.write(b"".join(records))
