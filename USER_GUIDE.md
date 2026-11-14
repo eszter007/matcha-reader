@@ -1862,6 +1862,8 @@ It also prepares cards for the reader: large images are shrunk to grayscale, and
 
 Over the internet, use HTTPS so the key is not sent in the clear. HTTPS needs more memory on the reader: the X4 may not have enough during a sync, so on an X4 a server on your home network is the safer choice.
 
+The companion server is free for non-commercial use under the [CC BY-NC-SA 4.0](https://github.com/eszter007/matcha-anki-server/blob/main/LICENSE) licence: you may use, change and share it with credit, and changed versions must be shared under the same licence. For commercial use, ask first. The Anki library it uses keeps its own licence (AGPL-3.0).
+
 ##### Offline reviews, synced with Anki on your computer
 
 You do not need AnkiWeb or any cloud service. The device can sync directly with Anki on your computer over your home Wi-Fi. You review offline on the device, wherever you are, and sync when you are back home. Nothing leaves your network.
