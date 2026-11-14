@@ -1,5 +1,7 @@
 #include "SettingsList.h"
 
+#include <AnkiSyncStore.h>
+
 #include "util/GeminiConfig.h"
 
 void forEachBaseSetting(const SettingVisitor visit, void* context) {
@@ -70,6 +72,23 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   emit(SettingInfo::Enum(StrId::STR_INSIGHTS_DATA, &CrossPointSettings::insightsAllDevices,
                          {StrId::STR_INSIGHTS_THIS_DEVICE, StrId::STR_INSIGHTS_ALL_DEVICES}, "insightsAllDevices",
                          StrId::STR_STATS));
+  // The Flashcards section: review of the sentence-mining export (FlashcardStore.h).
+  emit(SettingInfo::Toggle(StrId::STR_FLASH_SHOW_TAB, &CrossPointSettings::flashcardsTab, "flashcardsTab",
+                           StrId::STR_FLASHCARDS));
+  emit(SettingInfo::Enum(
+      StrId::STR_FLASH_RETENTION, &CrossPointSettings::flashcardRetention,
+      {StrId::STR_FLASH_PCT_80, StrId::STR_FLASH_PCT_85, StrId::STR_FLASH_PCT_90, StrId::STR_FLASH_PCT_95},
+      "flashcardRetention", StrId::STR_FLASHCARDS));
+  emit(SettingInfo::Enum(StrId::STR_FLASH_NEW_PER_DAY, &CrossPointSettings::flashcardNewPerDay,
+                         {StrId::STR_FLASH_N_5, StrId::STR_FLASH_N_10, StrId::STR_FLASH_N_20, StrId::STR_FLASH_N_30,
+                          StrId::STR_FLASH_N_50},
+                         "flashcardNewPerDay", StrId::STR_FLASHCARDS));
+  emit(SettingInfo::Enum(
+      StrId::STR_FLASH_MAX_INTERVAL, &CrossPointSettings::flashcardMaxInterval,
+      {StrId::STR_FLASH_1_MONTH, StrId::STR_FLASH_6_MONTHS, StrId::STR_FLASH_1_YEAR, StrId::STR_FLASH_NO_LIMIT},
+      "flashcardMaxInterval", StrId::STR_FLASHCARDS));
+  emit(SettingInfo::Toggle(StrId::STR_FLASH_VACATION, &CrossPointSettings::flashcardVacation, "flashcardVacation",
+                           StrId::STR_FLASHCARDS));
 
   // --- Reader ---
   // Built-in font-family entry. Replaced per-call with a registry-aware
@@ -331,6 +350,44 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
       StrId::STR_XLAT_CUSTOM_LANGUAGE, [] { return gemini::readCustomLanguage(); },
       [](const std::string& v) { gemini::writeCustomLanguage(v); }, "translationCustomLanguage",
       StrId::STR_TRANSLATION_SETTINGS));
+
+  // --- Anki Sync (AnkiSyncStore); also on its own page under Connectivity ---
+  emit(SettingInfo::DynamicString(
+      StrId::STR_ANKI_ADDRESS, [] { return ANKI_STORE.getUrl(); },
+      [](const std::string& v) {
+        ANKI_STORE.setUrl(v);
+        ANKI_STORE.saveToFile();
+      },
+      "ankiUrl", StrId::STR_ANKI_SYNC));
+  emit(SettingInfo::DynamicString(
+           StrId::STR_ANKI_KEY, [] { return ANKI_STORE.getKey(); },
+           [](const std::string& v) {
+             ANKI_STORE.setKey(v);
+             ANKI_STORE.saveToFile();
+           },
+           "ankiKey", StrId::STR_ANKI_SYNC)
+           .withObfuscated());
+  emit(SettingInfo::DynamicString(
+      StrId::STR_ANKI_DECKS, [] { return ankisync::joinDeckNames(ANKI_STORE.getSyncedDecks()); },
+      [](const std::string& v) {
+        ANKI_STORE.setSyncedDecks(ankisync::splitDeckNames(v));
+        ANKI_STORE.saveToFile();
+      },
+      "ankiDecks", StrId::STR_ANKI_SYNC));
+  emit(SettingInfo::DynamicEnum(
+      StrId::STR_ANKI_SYNC_ANKIWEB, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
+      [] { return static_cast<uint8_t>(ANKI_STORE.getSyncAnkiWeb() ? 1 : 0); },
+      [](const uint8_t v) {
+        ANKI_STORE.setSyncAnkiWeb(v != 0);
+        ANKI_STORE.saveToFile();
+      },
+      "ankiSyncAnkiWeb", StrId::STR_ANKI_SYNC));
+  {
+    SettingInfo test = SettingInfo::Action(StrId::STR_ANKI_TEST, SettingAction::AnkiTest);
+    test.category = StrId::STR_ANKI_SYNC;
+    test.webHidden = true;  // needs the device's own Wi-Fi
+    emit(std::move(test));
+  }
 
   // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
   emit(SettingInfo::DynamicString(

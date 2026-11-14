@@ -367,7 +367,7 @@ void CoverGridHomeUi::drawTabs() {
   // Home is the tab we are in. A button board's cursor lands in the band as selected >= books,
   // and that slot gets the focus wash; on touch boards selected never leaves the covers.
   const int focused = selected - static_cast<int>(books->size());
-  HomeTabBar::draw(renderer, HomeTab::Home, focused >= 0 && focused < HomeTabBar::COUNT ? focused : -1);
+  HomeTabBar::draw(renderer, HomeTab::Home, focused >= 0 && focused < HomeTabBar::count() ? focused : -1);
 }
 
 bool CoverGridHomeUi::paintFramedCover(fui::DrawTarget& target, fui::Rect rect, size_t index) {

@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,7 @@ class MangaWordLookupActivity final : public Activity {
   std::string resultHeadword;
   std::string resultDefinition;
   std::string resultReading;
+  std::string resultFurigana;  // the dictionary's per-kanji reading (Anki syntax), if any
   std::string resultGrammar;
   int resultMatchLen = 0;
 

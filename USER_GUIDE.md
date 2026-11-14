@@ -73,6 +73,7 @@ This guide covers the **CrossPoint** firmware as shipped in Matcha Reader: the b
     - [6.5 Books in Other Languages](#65-books-in-other-languages)
     - [6.6 Manga, Manhua and Comics](#66-manga-manhua-and-comics)
     - [6.7 Dictionary Files and Language Selection](#67-dictionary-files-and-language-selection)
+    - [6.8 Flashcards](#68-flashcards)
   - [7. Reading Insights](#7-reading-insights)
     - [7.1 Insights](#71-insights)
     - [7.2 Per-book Insights](#72-per-book-insights)
@@ -161,6 +162,7 @@ Home is where you start. From here you can open:
 * **Plugins** when the plugin system is on, otherwise **OPDS Browser** (online book catalogs) once a server is saved
 * **[File Transfer](#35-file-transfer-screen)**
 * **Insights** (your [reading insights](#7-reading-insights))
+* **[Flashcards](#68-flashcards)**, when **Enable Flashcards** is on in **Settings → Flashcards**
 * **[Settings](#36-settings)**
 
 In the **Cover Grid** theme, Home shows book covers instead of a menu. The book you are reading sits in a large card at the top, and the others follow below. The first time the device sees a book, it makes the cover in the background. Until a cover is ready, you see the book's title in its place. Pressing a button pauses this work. If a cover fails, the device tries again the next time you open Home.
@@ -173,7 +175,7 @@ In the **Cover Grid** theme, Home shows book covers instead of a menu. The book 
 
 #### 3.1.1 Tabs and Button Navigation (Cover Grid theme)
 
-In the Cover Grid theme, a row of tabs runs along the bottom of Home, Library, File Transfer, Insights and Settings. It stays in place as you move between them. The tab you are on has a filled icon.
+In the Cover Grid theme, a row of tabs runs along the bottom of Home, Library, File Transfer, Insights and Settings, plus Flashcards when **Enable Flashcards** is on in **Settings → Flashcards**. It stays in place as you move between them. The tab you are on has a filled icon.
 
 On a touch device, tap a tab.
 
@@ -181,7 +183,7 @@ On a device with buttons only, the cursor moves in one loop through the whole sc
 
 * **Up / Side Up** and **Down / Side Down** move the cursor around the loop.
 * **Confirm** on a top tab moves to the next one, e.g. **Books**, **Shelves**, **OPDS** and **Files** in the Library, or the languages in Insights. After the last top tab, the cursor moves to the bottom tabs.
-* **Left** and **Right** on a top tab move to the previous or next one. In the bottom tabs, they move between Home, Library, File Transfer, Insights and Settings.
+* **Left** and **Right** on a top tab move to the previous or next one. In the bottom tabs, they move between Home, Library, File Transfer, Insights, Flashcards (when shown) and Settings.
 * **Confirm** on a bottom tab opens that screen. **Confirm** on the tab you are already on sends the cursor back to the first top tab.
 * **Back** leaves the screen. Hold **Back** to go to Home.
 
@@ -692,7 +694,21 @@ The rows are grouped by the control they change. Each one is described further d
 
 - **CrossPoint Sync**: Sync your reading position with the CrossPoint sync server or any KOReader-compatible sync server. See [KOReader Sync Quick Setup](#3611-koreader-sync-quick-setup) below.
 
+- **Anki Sync**: Sync Anki decks and their review progress with Anki desktop (with AnkiConnect) or a self-hosted [companion server](#the-companion-server). Sync is optional. The page has **Anki Address**, **Anki Key**, **Anki Decks** (deck names separated by commas, as Anki shows them), **Sync AnkiWeb Too** and **Test Connection**. These rows are also on the web settings page, except **Test Connection**. See [Anki decks](#anki-decks).
+
 - **OPDS Servers**: Save online book catalogs (OPDS libraries) so you can browse them and download books straight to the device. See [OPDS Servers (Multiple Libraries)](#369-opds-servers-multiple-libraries) below. ([What is OPDS?](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System))
+
+#### Flashcards settings
+
+**Settings → Flashcards** sets how [Flashcards](#68-flashcards) schedules your cards:
+
+- **Enable Flashcards** (off by default): adds Flashcards to Home and to the bottom tabs. **Open Flashcards**, just below it, opens it from here either way.
+- **Desired Retention**: how sure you want to be to still know a card when it comes back: **80%**, **85%**, **90%** (default) or **95%**. Higher means shorter gaps and more reviews.
+- **New Cards per Day**: **5**, **10**, **20**, **30** or **50** new cards per deck each day.
+- **Maximum Interval**: the longest gap before a card comes back: **1 month**, **6 months**, **1 year** or **No limit**.
+- **Vacation Mode**: pauses reviews. While it is on, nothing comes due, no new cards are added and the overview says **On vacation**. When you turn it off, every due date moves forward by the days you were away, so the reviews do not pile up. The device needs the clock to be set to count those days; until then it waits.
+
+An Anki deck uses its own preset in Anki for **New Cards per Day**, **Desired Retention** and **Maximum Interval**, and also its daily review limit, its learning and relearning steps, the order of new cards and reviews (by due date, random or by interval; new cards before, after or mixed with the reviews), burying of sibling cards, Easy Days and its leech rule, once a sync has read them. If the preset uses an order the device does not have, the device uses its own: most overdue first, and new cards in the order they were added. Easy Days moves a card to a lighter weekday within a few days of its date; unlike Anki, it does not look at how many cards are already due on each day. The settings above are used for your own decks, and for an Anki deck when the sync cannot read its preset. **Vacation Mode** applies to all decks.
 
 #### 3.6.9 OPDS Servers (Multiple Libraries)
 
@@ -1338,12 +1354,25 @@ into its own Anki deck. Each card holds:
 | Book, Author | Where it came from |
 | Date | The day you saved it |
 | Dictionary | Which dictionary answered |
+| Furigana | Japanese only: the reading over each kanji in Anki's furigana format, e.g. `木[こ]漏[も]れ 日[び]`. It comes from the book's own furigana when the word has it, otherwise from the dictionary when it was converted with furigana (see [Dictionary setup](docs/dictionary-setup.md#japanese)). Empty when neither knows |
 | Tags | `matcha` and the book title |
 
 A sentence cut off at the bottom of the page is completed from the next page. In manga, the sentence is the text of
 the speech bubble the word is in.
 
-**Importing into Anki**
+**Sending to Anki with sync**
+
+If you sync with Anki (see [Anki decks](#anki-decks)), **Sync with Anki** sends your mined words to Anki for you:
+
+- Words not yet in Anki become notes of the **Matcha sentence** note type, in one deck per language: **Matcha::日本語**, **Matcha::Deutsch** and so on. The note type and the decks are made in Anki when they are missing, and the decks are added to **Anki Decks**.
+- Each word leaves the device's own deck and comes back as a card of that Anki deck, with its review history. Its progress goes with it, so Anki shows the same next review as the device.
+- A word already in Anki as a **Matcha sentence** note with the same word and sentence (for example from an earlier import by hand) is reused, not added again. Its schedule in Anki is kept.
+- Words you mine later stay in the device's own deck until the next sync.
+- You can rename the deck in Anki: the device follows it.
+
+A word that Anki does not take (for example one too large to send) stays on the device and is tried again at the next sync. It never stops your other decks from syncing.
+
+**Importing into Anki by hand**
 
 1. Copy the CSV file to your computer.
 2. In Anki, choose **File → Import** and pick the file.
@@ -1351,6 +1380,14 @@ the speech bubble the word is in.
 The file tells Anki how it is laid out, so you do not need to set up columns. The file keeps growing as you save
 more words. You can import the same file again later: Anki updates the cards it already has and adds only the new
 ones.
+
+To show the Furigana column as ruby in Anki, add a Furigana field to your note type and put `{{furigana:Furigana}}`
+on the card template. A ready-made note type that looks like the device's flashcards is in
+[docs/anki](docs/anki/README.md).
+
+Files saved before the Furigana column existed are updated the next time you save a word or open the deck under
+Flashcards: an empty Furigana field is added to every row and the header is rewritten. Import the updated file
+into Anki as usual, and map the new column to your Furigana field (or ignore it).
 
 The file is plain CSV, so a spreadsheet or another flashcard app can open it too.
 
@@ -1775,6 +1812,86 @@ the copy in `.dictionaries/` wins.
 Older setups still work. A dictionary folder placed directly under `dictionaries/`, outside a language folder, can
 still be chosen as the fallback dictionary. Japanese files in the old `dict/` folder are still found.
 
+
+### 6.8 Flashcards
+
+Flashcards turns the words you save with [sentence mining](#sentence-mining) into cards you can review on the device. Each language's `sentences-<lang>.csv` is one deck. Reviews are scheduled with FSRS, the scheduler Anki uses, so a card comes back just before you would forget it. Your progress is kept in the device's system folder; the CSV files are not changed by reviewing.
+
+**Opening it:** turn on **Enable Flashcards** in [Settings → Flashcards](#flashcards-settings). Flashcards then appears on Home and in the bottom tabs.
+
+**The overview** shows how many cards are waiting today, then one row per deck with its count. Decks are named in their own language (日本語, 中文, Deutsch…). Korean and Cantonese use the name in your device language, because the menu font has no Hangul and no 粵. Choose a deck to start. A deck with nothing due cannot be opened. When nothing is due anywhere, the overview says **Nothing due today** (or **On vacation**).
+
+**A card:**
+
+- **Front:** the word on the card's spine and the sentence you saved it from, with the word in bold, and the book's title at the bottom. Japanese cards are set vertically, in columns from right to left, with the spine on the right.
+- **Turn** (**Confirm**, a side button, or **Tap to turn**) shows the back: the reading, the definition and the sentence again. On a Japanese card the reading stands beside each kanji on the spine, like furigana. It uses the card's Furigana column when there is one; otherwise it is placed from the word's kana.
+- **Rate** with **Again**, **Hard**, **Good** or **Easy**. Each box shows when the card would come back. **Left** and **Right** choose a box and **Confirm** rates; on a touch device, tap a box. A side button turns the card back to the front. A new card, or one you rated **Again**, goes through short learning steps: 10 minutes on your own decks, the deck's own steps on an Anki deck (a deck without steps gives a day interval at once). It comes back in the same session once its step has passed, ahead of the cards you have not seen yet. When only such cards are left, the next one is shown straight away. If you leave the deck, a card between steps keeps its step and its time, and comes back first once that time has passed.
+
+When the deck is done, the screen says **All caught up** with the number of cards reviewed; **Confirm** or a tap closes it. **Back** leaves at any time; your progress is saved.
+
+#### Anki decks
+
+Anki decks are listed in the overview next to your own decks. Each card is drawn with its deck's own template and style, and is rated the same way. A long side is paged with the side buttons before the card turns. A very long side is cut off after a number of pages; review the rest in Anki. A card whose content is too large for the device says so; review that card in Anki.
+
+There are two ways to get a deck onto the device:
+
+- **Import, without sync:** open an exported `.apkg` in the [Anki Converter](https://eszter007.github.io/matcha-reader-tools/anki.html) of Matcha Reader Tools, in your browser, and copy the result to the SD card (or use `tools/anki_import/apkg_to_flashcards.py` on a computer with Python). Progress then stays on the device and does not go back to Anki. To keep Anki up to date, use sync instead (see [Offline reviews, synced with Anki on your computer](#offline-reviews-synced-with-anki-on-your-computer)).
+- **Sync:** set up [Anki Sync](#368-connectivity), then choose **Sync with Anki** at the bottom of the overview. It turns Wi-Fi on, downloads the chosen decks, and sends reviews both ways. Later syncs download only new and changed cards. To stop a sync, press **Back** (on a touch device, tap the back arrow or swipe from the left edge); it stops after the current card and keeps the cards synced so far. If a sync stops partway, the next one continues near where it stopped. A card too large for the device is downloaded again only after it is changed in Anki. Images are downloaded with their cards. The companion server shrinks large images to screen size first. An image still over 1 MB (4 MB with PSRAM) is not kept; an image that fails for another reason is tried again at the next sync. A type-in answer shows no typing box. With the companion server, the back shows the expected answer; with Anki desktop, the box is left out. If a card does not fit in the memory left during a sync, it is left for the next sync. When a card template or a style changes in Anki, the next sync downloads the deck's cards again. After a deck has synced once, renaming it in Anki is fine: the device finds it again and shows the new name in **Anki Decks**. If a deck in **Anki Decks** is not in Anki, the sync still syncs the other decks, then shows an error with the name of the first missing deck.
+
+A deck holds up to 2,000 cards on the device (10,000 on the X4 Pro and other devices with PSRAM, which also fit larger cards); a larger deck is cut there. Cards suspended in Anki are left off the device, and come back with their progress when you unsuspend them. Cards buried in Anki are not shown on the day of the sync. A card you forget many times (a "leech": as many times as the deck's leech threshold in Anki) is tagged "leech" in Anki at the next sync. If the deck's preset says to suspend leeches, the device stops showing it at once and the sync suspends it in Anki.
+
+##### The companion server
+
+Anki desktop must be open on your computer for a sync. If you would rather sync at any time, run the companion server, [matcha-anki-server](https://github.com/eszter007/matcha-anki-server), on a computer that is always on: a NAS, a Raspberry Pi, a home server, or a small cloud server. It keeps your Anki collection, syncs it with AnkiWeb, and answers the reader the way Anki desktop does.
+
+It also prepares cards for the reader: large images are shrunk to grayscale, and buttons, scripts and hidden menus are left out, so cards are smaller and sync faster. Type-in cards show the expected answer on the back.
+
+**Set it up** (full steps in the server's README):
+
+1. Install Docker on the computer that will run it.
+2. Download the server from GitHub and make a `.env` file with a key of your choice (`MATCHA_TOKEN`, at least 16 random characters) and, if you want your AnkiWeb collection, your AnkiWeb login.
+3. Start it with `docker compose up -d`. It listens on port 8080.
+
+**Google Cloud:** the README also explains how to run it on a free-tier Google Cloud server with HTTPS, step by step with the `gcloud` command line tool. The key and your AnkiWeb login are kept in Google's Secret Manager there, not in a file.
+
+**On the reader** (Settings → Connectivity → Anki Sync, or the web settings page):
+
+- **Anki Address:** `http://<the computer's address>:8080` at home, or the `https://` address of a cloud server.
+- **Anki Key:** the key from step 2.
+- **Sync AnkiWeb Too:** **On**, so each sync also brings the server and AnkiWeb up to date.
+
+Over the internet, use HTTPS so the key is not sent in the clear. HTTPS needs more memory on the reader: the X4 may not have enough during a sync, so on an X4 a server on your home network is the safer choice.
+
+The companion server is free for non-commercial use under the [CC BY-NC-SA 4.0](https://github.com/eszter007/matcha-anki-server/blob/main/LICENSE) licence: you may use, change and share it with credit, and changed versions must be shared under the same licence. For commercial use, ask first. The Anki library it uses keeps its own licence (AGPL-3.0).
+
+##### Offline reviews, synced with Anki on your computer
+
+You do not need AnkiWeb or any cloud service. The device can sync directly with Anki on your computer over your home Wi-Fi. You review offline on the device, wherever you are, and sync when you are back home. Nothing leaves your network.
+
+**Once, on the computer:**
+
+1. Install Anki desktop 26.08 or later.
+2. In Anki, install the AnkiConnect add-on (**Tools → Add-ons → Get Add-ons**, code `2055492159`), then restart Anki.
+3. Open the add-on's settings (**Tools → Add-ons → AnkiConnect → Config**). Set `webBindAddress` to `0.0.0.0`, so the device can reach Anki on your Wi-Fi. We recommend also setting an `apiKey`: any password you choose. Restart Anki.
+4. Find your computer's address on the Wi-Fi network, for example `192.168.1.20`.
+
+**Once, on the device** (easier on the web settings page in **File Transfer**):
+
+1. **Settings → Connectivity → Anki Sync → Anki Address:** `http://` + your computer's address + `:8765`, for example `http://192.168.1.20:8765`.
+2. **Anki Key:** the `apiKey` you chose, or empty if you set none.
+3. **Anki Decks:** the decks to review, separated by commas, as Anki shows them (a subdeck is `Parent::Child`).
+4. **Sync AnkiWeb Too:** **Off**, if you do not use AnkiWeb.
+5. **Test Connection** checks the address, the key and the Anki version.
+
+**Each time:**
+
+1. Open Anki on your computer. The device is on the same Wi-Fi.
+2. On the device, choose **Flashcards → Sync with Anki**. New and changed cards come to the device. Your reviews from the device go to Anki, with their real time, the next due date and the card's memory. Reviews you did in Anki come to the device.
+3. Review offline on the device. Your ratings are kept on the device until the next sync, however long that takes.
+
+If you review the same card in Anki and on the device between two syncs, both reviews are kept in the card's history.
+
+The commands and the server setup are in [docs/anki](docs/anki/README.md#anki-decks-on-the-reader).
 
 ## 7. Reading Insights
 

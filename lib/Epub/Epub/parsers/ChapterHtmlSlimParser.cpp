@@ -641,6 +641,21 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   partWordBufferIndex = 0;
   nextWordContinues = false;
   listItemBulletOnly = false;
+
+  // A long run without spaces (CJK: a word per character) arrives in one callback; without a
+  // check here its whole block would be laid out at once, which allocates per word.
+  softFlushIfLong("run");
+}
+
+void ChapterHtmlSlimParser::softFlushIfLong(const char* reason) {
+  // Keep token growth bounded: CSS-heavy spans can fragment text into many tiny
+  // words, so flush earlier when embedded CSS is active. We still keep the
+  // "exclude last line" behavior to preserve paragraph flow across chunks.
+  if (!currentTextBlock || inRuby) return;
+  const size_t words = currentTextBlock->size();
+  if (words <= (embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS)) return;
+  LOG_DBG("EHP", "Text %s soft flush (%u words)", reason, static_cast<unsigned>(words));
+  makePages(/*includeLastLine=*/false);
 }
 
 // start a new text block if needed
@@ -1901,11 +1916,43 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               // ImageBlock's lazy extractor). This is what keeps first-open of an
               // image-heavy chapter from stalling for seconds per image.
               ImageDimensions dims = {0, 0};
-              ImageDimsProbe headerProbe;
-              self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
-              bool gotDimensions = headerProbe.getDimensions(dims);
+              bool gotDimensions = false;
+              // A standalone page (a flashcard face) has no book: its images are plain files next to
+              // it, used in place, never extracted or removed.
+              const bool standalone = self->epub == nullptr;
+              if (standalone) {
+                cachedImagePath = resolvedPath;
+                // From the header: a PNG decoder needs a 43 KB block just to read the size.
+                bool opened = false;
+                // normalisePath() drops the leading slash of an absolute card path.
+                const std::string filePath = resolvedPath[0] == '/' ? resolvedPath : "/" + resolvedPath;
+                {
+                  HalFile file;
+                  opened = Storage.openFileForRead("EHP", filePath, file);
+                  if (opened) {
+                    ImageDimsProbe probe;
+                    uint8_t chunk[128];
+                    size_t total = 0;
+                    int n;
+                    while (total < 64 * 1024 && !probe.getDimensions(dims) &&
+                           (n = file.read(chunk, sizeof(chunk))) > 0) {
+                      probe.write(chunk, static_cast<size_t>(n));
+                      total += static_cast<size_t>(n);
+                    }
+                    gotDimensions = probe.getDimensions(dims);
+                  }
+                }
+                if (opened && !gotDimensions) {  // a format the header probe does not read (BMP)
+                  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(filePath);
+                  gotDimensions = decoder && decoder->getDimensions(filePath, dims);
+                }
+              } else {
+                ImageDimsProbe headerProbe;
+                self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
+                gotDimensions = headerProbe.getDimensions(dims);
+              }
 
-              if (!gotDimensions) {
+              if (!gotDimensions && !standalone) {
                 // Retry with framebuffer scratch when the heap cannot fit the inflate window.
                 GfxRenderer::FrameBufferLoan probeLoan(self->renderer);
                 ImageDimsProbe retryProbe;
@@ -1913,7 +1960,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 gotDimensions = retryProbe.getDimensions(dims);
               }
 
-              if (!gotDimensions) {
+              if (!gotDimensions && !standalone) {
                 // No header within the stream (rare) — fall back to extracting the
                 // whole image and probing the file. That can take seconds, so
                 // surface the indexing popup first (single-shot per parser).
@@ -1976,7 +2023,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               // the reserved box. Costs a too-generous reservation on the failure path, which is
               // strictly better than losing the image. Falls through to the old behaviour when
               // there is no href to recover from, which is the only genuinely unrecoverable case.
-              if (!gotDimensions && !resolvedPath.empty()) {
+              if (!gotDimensions && !resolvedPath.empty() && !standalone) {
                 // Never leave a partial behind: render() skips lazy extraction when the file
                 // already exists, and would then decode a truncated image.
                 Storage.remove(cachedImagePath.c_str());
@@ -2210,7 +2257,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 // again, check render()'s rotated branch before touching this one.
                 const bool viewportIsPortrait = self->viewportHeight > self->viewportWidth;
                 const bool imageIsLandscape = dims.width > dims.height;
-                const bool rotateImage = dims.width > 0 && dims.height > 0 && (viewportIsPortrait == imageIsLandscape);
+                // A flashcard face (no book) keeps its pictures upright: its viewport is a box on
+                // the screen, so the rotated frame's margin would shrink them to a stamp.
+                const bool rotateImage = self->epub != nullptr && dims.width > 0 && dims.height > 0 &&
+                                         (viewportIsPortrait == imageIsLandscape);
 
                 // Apply top margin from container block. Clamp it so the image never
                 // overflows the page bottom: a full-viewport-height image leaves no room
@@ -3052,16 +3102,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     return;
   }
 
-  // Keep token growth bounded: CSS-heavy spans can fragment text into many tiny
-  // words, so flush earlier when embedded CSS is active. We still keep the
-  // "exclude last line" behavior to preserve paragraph flow across chunks.
-  const size_t blockWordCount = self->currentTextBlock->size();
-  const size_t softFlushThreshold =
-      self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
-  if (blockWordCount > softFlushThreshold && !self->inRuby) {
-    LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
-    self->makePages(/*includeLastLine=*/false);
-  }
+  self->softFlushIfLong("block");
 }
 
 void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const XML_Char* s, const int len) {

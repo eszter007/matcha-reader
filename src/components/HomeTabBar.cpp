@@ -3,6 +3,9 @@
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
 
+#include <algorithm>
+
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "UITheme.h"
 #include "activities/Activity.h"
@@ -18,8 +21,12 @@ struct TabIcons {
 
 // Index order must match HomeTab.
 constexpr TabIcons ICONS[HomeTabBar::COUNT] = {
-    {HomeIcon, HomeFilledIcon},   {LibraryTabIcon, LibraryTabFilledIcon},   {TransferTabIcon, TransferTabFilledIcon},
-    {StatsIcon, StatsFilledIcon}, {SettingsTabIcon, SettingsTabFilledIcon},
+    {HomeIcon, HomeFilledIcon},
+    {LibraryTabIcon, LibraryTabFilledIcon},
+    {TransferTabIcon, TransferTabFilledIcon},
+    {StatsIcon, StatsFilledIcon},
+    {SettingsTabIcon, SettingsTabFilledIcon},
+    {FlashcardsTabIcon, FlashcardsTabFilledIcon},
 };
 
 // Horizontal band the slots divide up: the theme's side padding, so the outer icons line up with
@@ -28,10 +35,28 @@ int barLeft() { return UITheme::getInstance().getMetrics().headerSidePadding; }
 
 int barWidth(const GfxRenderer& renderer) { return renderer.getScreenWidth() - 2 * barLeft(); }
 
-int slotStep(const GfxRenderer& renderer) { return barWidth(renderer) / HomeTabBar::COUNT; }
+int slotStep(const GfxRenderer& renderer) { return barWidth(renderer) / HomeTabBar::count(); }
+
+bool showsFlashcards() { return SETTINGS.flashcardsTab != 0; }
 }  // namespace
 
 bool HomeTabBar::enabled() { return UITheme::hasCoverGridHome(); }
+
+int HomeTabBar::count() { return showsFlashcards() ? COUNT : COUNT - 1; }
+
+// Flashcards sits before Settings, which stays rightmost.
+HomeTab HomeTabBar::tabAt(const int slot) {
+  if (slot < 0 || slot >= count()) return HomeTab::Count;
+  if (slot < static_cast<int>(HomeTab::Settings)) return static_cast<HomeTab>(slot);
+  if (showsFlashcards() && slot == static_cast<int>(HomeTab::Settings)) return HomeTab::Flashcards;
+  return HomeTab::Settings;
+}
+
+int HomeTabBar::slotOf(const HomeTab tab) {
+  if (tab == HomeTab::Flashcards) return showsFlashcards() ? static_cast<int>(HomeTab::Settings) : -1;
+  if (tab == HomeTab::Settings) return count() - 1;
+  return tab < HomeTab::Count ? static_cast<int>(tab) : -1;
+}
 
 int HomeTabBar::height() { return UITheme::getInstance().getMetrics().coverGridTabBarHeight; }
 
@@ -59,13 +84,14 @@ void HomeTabBar::draw(const GfxRenderer& renderer, const HomeTab active, const i
   // without those keys, so `focused` is simply -1 there. On a touch board it shows only while
   // buttons are in use; the filled icon marks the tab you are in.
   const int cursor = MappedInputManager::buttonCursorShown() ? focused : -1;
-  for (int i = 0; i < COUNT; ++i) {
+  for (int i = 0; i < count(); ++i) {
     const int slotX = barLeft() + i * step;
-    const bool isActive = i == static_cast<int>(active);
+    const HomeTab tab = tabAt(i);
+    const auto& icons = ICONS[static_cast<int>(tab)];
     if (i == cursor) {
       UITheme::drawFocusRing(renderer, Rect{slotX, bandTop, step, height()});
     }
-    renderer.drawIcon(isActive ? ICONS[i].filled : ICONS[i].outline, slotX + (step - ICON_SIZE) / 2, iconY, ICON_SIZE);
+    renderer.drawIcon(tab == active ? icons.filled : icons.outline, slotX + (step - ICON_SIZE) / 2, iconY, ICON_SIZE);
   }
 }
 
@@ -74,7 +100,7 @@ int HomeTabBar::hitTest(const MappedInputManager& input, const GfxRenderer& rend
   const int step = slotStep(renderer);
   if (step <= 0) return -1;
   int col = 0;
-  const auto hit = input.colTouch(col, barLeft(), step, COUNT, top(renderer), renderer.getScreenHeight());
+  const auto hit = input.colTouch(col, barLeft(), step, count(), top(renderer), renderer.getScreenHeight());
   if (hit == MappedInputManager::RowTouch::None) return -1;
   tapped = hit == MappedInputManager::RowTouch::Tap;
   return col;
@@ -87,7 +113,7 @@ HomeTabBar::Input HomeTabBar::route(const MappedInputManager& input, const GfxRe
   bool tapped = false;
   const int hit = hitTest(input, renderer, tapped);
   if (hit >= 0) {
-    if (tapped) activate(static_cast<HomeTab>(hit), current);
+    if (tapped) activate(tabAt(hit), current);
     return Input::Consumed;
   }
 
@@ -97,18 +123,19 @@ HomeTabBar::Input HomeTabBar::route(const MappedInputManager& input, const GfxRe
   // user already is rather than jumping to an end. Taken on the press: Left/Right are also
   // NavPrevious/NavNext, which the lists act on at the press, so a release here would come after
   // the list had already moved the cursor out of the band.
-  const int from = focus >= 0 ? focus : static_cast<int>(current);
+  const int n = count();
+  const int from = focus >= 0 ? focus : std::max(slotOf(current), 0);
   if (input.wasPressed(MappedInputManager::Button::Left)) {
-    focus = (from + COUNT - 1) % COUNT;
+    focus = (from + n - 1) % n;
     return Input::FocusMoved;
   }
   if (input.wasPressed(MappedInputManager::Button::Right)) {
-    focus = (from + 1) % COUNT;
+    focus = (from + 1) % n;
     return Input::FocusMoved;
   }
   if (focus >= 0 && input.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (focus == static_cast<int>(current)) return Input::Exited;
-    activate(static_cast<HomeTab>(focus), current);
+    if (focus == slotOf(current)) return Input::Exited;
+    activate(tabAt(focus), current);
     return Input::Consumed;
   }
   return Input::None;
@@ -131,6 +158,9 @@ void HomeTabBar::activate(const HomeTab tab, const HomeTab current) {
       break;
     case HomeTab::Settings:
       activityManager.goToSettings();
+      break;
+    case HomeTab::Flashcards:
+      activityManager.goToFlashcards();
       break;
     default:
       break;

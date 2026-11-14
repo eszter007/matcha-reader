@@ -852,7 +852,7 @@ TabRing::Focus CoverLibraryActivity::ringFocus() const {
 }
 
 void CoverLibraryActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) {
-  tabFocus = focus == TabRing::Focus::BottomBar ? static_cast<int>(HomeTab::Library) : -1;
+  tabFocus = focus == TabRing::Focus::BottomBar ? HomeTabBar::slotOf(HomeTab::Library) : -1;
   selectorVisible = true;
   if (focus == TabRing::Focus::BottomBar) return;
   if (openShelfIndex >= 0) {

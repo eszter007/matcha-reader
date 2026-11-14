@@ -51,6 +51,11 @@ enum class SaveResult : uint8_t { Saved, AlreadySaved, Failed };
 // per language, so each imports into its own deck. A file is only ever extended.
 SaveResult saveOnce(const Card& card, std::string_view language);
 
+// Brings a sentence file written before the Furigana column to the current layout, in place.
+// True when the file is current (or absent); false when a legacy file could not be rewritten,
+// in which case it is left as it was.
+bool upgradeExport(const std::string& path);
+
 // Today's date as YYYY-MM-DD, or empty when the device has no idea what day it is.
 std::string today();
 

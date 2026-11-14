@@ -1,3 +1,4 @@
+#include <Furigana.h>
 #include <gtest/gtest.h>
 
 #include "SentenceMiningCsv.h"
@@ -100,12 +101,12 @@ TEST(SentenceMiningCsv, HeaderTellsAnkiTheLayout) {
   EXPECT_NE(h.find("#separator:comma\n"), std::string::npos);
   EXPECT_NE(h.find("#html:true\n"), std::string::npos);
   EXPECT_NE(h.find("#guid column:1\n"), std::string::npos);
-  EXPECT_NE(h.find("#tags column:10\n"), std::string::npos);
-  EXPECT_NE(h.find("#columns:GUID,Word,Reading,Sentence,Definition,Book,Author,Date,Dictionary,Tags\n"),
+  EXPECT_NE(h.find("#tags column:11\n"), std::string::npos);
+  EXPECT_NE(h.find("#columns:GUID,Word,Reading,Sentence,Definition,Book,Author,Date,Dictionary,Furigana,Tags\n"),
             std::string::npos);
 }
 
-TEST(SentenceMiningCsv, RowHasTenFieldsInOrder) {
+TEST(SentenceMiningCsv, RowHasElevenFieldsInOrder) {
   Card c;
   c.word = "漏らす";
   c.reading = "もらす";
@@ -119,7 +120,7 @@ TEST(SentenceMiningCsv, RowHasTenFieldsInOrder) {
   const std::string guid = makeGuid(c.word, c.sentence);
   EXPECT_EQ(row, guid +
                      ",漏らす,もらす,秘密を<b>漏らし</b>た。,\"1. to let leak, to let out<br>2. to divulge\","
-                     "銀河鉄道の夜,宮沢賢治,2026-09-29,JMdict,matcha 銀河鉄道の夜\n");
+                     "銀河鉄道の夜,宮沢賢治,2026-09-29,JMdict,,matcha 銀河鉄道の夜\n");
 }
 
 TEST(SentenceMiningCsv, LongDefinitionIsCapped) {
@@ -189,4 +190,70 @@ TEST(SentenceMiningCsv, ParagraphIndentIsNotPartOfTheSentence) {
 TEST(SentenceMiningFiles, DefinitionDropsThePanelsExampleBars) {
   EXPECT_EQ(definitionHtml("1. to content oneself with\n  │ 運命に甘んじる。\n  │ To accept one's fate."),
             "1. to content oneself with<br>運命に甘んじる。<br>To accept one's fate.");
+}
+
+TEST(SentenceMiningCsv, LegacyHeaderDetected) {
+  EXPECT_TRUE(isLegacyHeader("#separator:comma\n#html:true\n#guid column:1\n#tags column:10\n"));
+  EXPECT_FALSE(isLegacyHeader(headerLines()));
+}
+
+TEST(SentenceMiningCsv, LegacyRowsGainEmptyFurigana) {
+  const std::string legacy =
+      "#separator:comma\n#tags column:10\n"
+      "m1,w,r,\"a, \"\"b\"\"\nc\",d,bk,au,2026-01-01,JMdict,matcha bk\n"
+      "m2,x,y,s,d,b,a,,J,matcha\n";
+  // Fed in small chunks so quote and comma state crosses chunk edges.
+  LegacyRowMigrator m;
+  std::string out;
+  for (size_t i = 0; i < legacy.size(); i += 3) m.feed(std::string_view(legacy).substr(i, 3), out);
+  EXPECT_EQ(out,
+            "m1,w,r,\"a, \"\"b\"\"\nc\",d,bk,au,2026-01-01,JMdict,,matcha bk\n"
+            "m2,x,y,s,d,b,a,,J,,matcha\n");
+}
+
+TEST(SentenceMiningCsv, RowCarriesFurigana) {
+  Card c;
+  c.word = "x";
+  c.furigana = "木[こ]";
+  c.book = "b";
+  const std::string row = formatRow(c);
+  EXPECT_NE(row.find(",木[こ],matcha"), std::string::npos);
+}
+
+TEST(Furigana, AppendRubySpacesAfterPlainText) {
+  std::string s;
+  furigana::appendRuby(s, "木", "こ");
+  furigana::appendRuby(s, "漏", "も");
+  s += "れ";
+  furigana::appendRuby(s, "日", "び");
+  EXPECT_EQ(s, "木[こ]漏[も]れ 日[び]");
+}
+
+TEST(Furigana, KanaOf) {
+  EXPECT_EQ(furigana::kanaOf("木[こ]漏[も]れ 日[び]"), "こもれび");
+  EXPECT_EQ(furigana::kanaOf("お 茶[チャ]"), "おちゃ");
+  EXPECT_EQ(furigana::kanaOf("今日[きょう]"), "きょう");
+}
+
+TEST(Furigana, MatchesAnyReading) {
+  EXPECT_TRUE(furigana::matchesReading("今日[こんにち]", "きょう、こんにち"));
+  EXPECT_FALSE(furigana::matchesReading("今日[きょう]", "こんにち"));
+  EXPECT_FALSE(furigana::matchesReading("", "きょう"));
+}
+
+TEST(Furigana, AdaptToHeadword) {
+  EXPECT_EQ(furigana::adaptToHeadword("止[や]めて", "止める"), "止[や]める");
+  EXPECT_EQ(furigana::adaptToHeadword("木[こ]漏[も]れ 日[び]", "木漏れ日"), "木[こ]漏[も]れ 日[び]");
+  EXPECT_EQ(furigana::adaptToHeadword("お 茶[ちゃ]", "お茶"), "お 茶[ちゃ]");
+  EXPECT_EQ(furigana::adaptToHeadword("見[み]た", "見る"), "見[み]る");
+  // Different kanji, or a kanji left without a reading: nothing.
+  EXPECT_EQ(furigana::adaptToHeadword("止[や]めて", "辞める"), "");
+  EXPECT_EQ(furigana::adaptToHeadword("木[き]", "木漏れ日"), "");
+  EXPECT_EQ(furigana::adaptToHeadword("", "木"), "");
+}
+
+TEST(Furigana, CutOffCharacterIsSafe) {
+  // A headword ending inside a multi-byte character must not step past its end.
+  const std::string cut = std::string("止める").substr(0, 7);
+  EXPECT_EQ(furigana::adaptToHeadword("止[や]めて", cut), "");
 }

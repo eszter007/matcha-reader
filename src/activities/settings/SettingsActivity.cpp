@@ -36,12 +36,14 @@
 #include "StatusBarSettingsActivity.h"
 #include "TextProfileMenuActivity.h"
 #include "TranslationSettingsActivity.h"
+#include "activities/flashcards/AnkiSyncActivity.h"
 #include "activities/home/StatsSyncActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
+#include "flashcards/FlashcardStore.h"
 #include "fontIds.h"
 #include "util/PluginEvents.h"
 
@@ -95,6 +97,7 @@ SettingsSection sectionFor(const SettingInfo& setting) {
   if (setting.category == StrId::STR_CAT_LIBRARY) return SettingsSection::Library;
   if (setting.category == StrId::STR_CAT_SLEEP) return SettingsSection::Sleep;
   if (setting.category == StrId::STR_STATS) return SettingsSection::Insights;
+  if (setting.category == StrId::STR_FLASHCARDS) return SettingsSection::Flashcards;
   if (setting.category == StrId::STR_CAT_SHORTCUTS) return SettingsSection::Controls;
   return SettingsSection::End;
 }
@@ -173,6 +176,9 @@ void SettingsActivity::rebuildSettings() {
   auto all = getSettingsList(&sdFontSystem.registry(), &dictionaries, category);
 
   const auto belongsHere = [this, dictionaryPage](const SettingInfo& setting) {
+    // Anki Sync's rows are kept off the Connectivity list (sectionFor() has no section for them)
+    // and shown on their own page.
+    if (subCategory == StrId::STR_ANKI_SYNC) return setting.category == StrId::STR_ANKI_SYNC;
     if (!showOnDevice(setting)) return false;
     if (dictionaryPage) return dictionaryRowOrder(setting) >= 0;
     if (subCategory != StrId::STR_NONE_OPT) return setting.category == subCategory;
@@ -274,12 +280,22 @@ void SettingsActivity::rebuildSettings() {
   }
 
   addAction(SettingsSection::Insights, StrId::STR_SYNC_STATS, SettingAction::SyncStats);
+  // Right under Enable Flashcards: works in every theme, with or without the tab.
+  if (section == SettingsSection::Flashcards) {
+    SettingInfo open = SettingInfo::Action(StrId::STR_FLASH_OPEN, SettingAction::OpenFlashcards);
+    if (settings.empty()) {
+      settings.push_back(std::move(open));
+    } else {
+      settings.insert(settings.begin() + 1, std::move(open));
+    }
+  }
   addAction(SettingsSection::Connectivity, StrId::STR_WIFI_NETWORKS, SettingAction::Network);
   if (bleturner::status().compiledIn) {
     addAction(SettingsSection::Connectivity, StrId::STR_BT_PAGE_TURNER, SettingAction::Bluetooth);
   }
   addAction(SettingsSection::Connectivity, StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync);
   addAction(SettingsSection::Connectivity, StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser);
+  addAction(SettingsSection::Connectivity, StrId::STR_ANKI_SYNC, SettingAction::AnkiSync);
   rebuildRowItems();
 }
 
@@ -376,6 +392,9 @@ void SettingsActivity::toggleSelectedSetting() {
   const auto& setting = settings[selectedSetting];
   if (setting.type != SettingType::ACTION) {
     if (editor.editValue(setting) == SettingRowEditor::EditResult::Changed) {
+      if (setting.key && std::strcmp(setting.key, "flashcardVacation") == 0) {
+        flashcards::syncVacation();
+      }
       // Rows can appear/disappear with a change (e.g. the footnote-back toggle).
       nav.selected = std::min(selectedSetting, static_cast<int>(settings.size()) - 1);
     }
@@ -435,6 +454,28 @@ void SettingsActivity::toggleSelectedSetting() {
       startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
       return;
     }
+    case SettingAction::AnkiSync: {
+      auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, SettingsSection::Connectivity,
+                                                          StrId::STR_ANKI_SYNC);
+      if (!activity) {
+        LOG_ERR("SET", "OOM: Anki settings");
+        return;
+      }
+      startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
+      return;
+    }
+    case SettingAction::AnkiTest: {
+      auto test = makeUniqueNoThrow<AnkiSyncActivity>(renderer, mappedInput, AnkiSyncActivity::Mode::Test);
+      if (!test) {
+        LOG_ERR("SET", "OOM: Anki connection test");
+        return;
+      }
+      startActivityForResult(std::move(test), [this](const ActivityResult&) { requestUpdate(); });
+      return;
+    }
+    case SettingAction::OpenFlashcards:
+      activityManager.goToFlashcards();
+      return;
     case SettingAction::SyncStats:
       startActivityForResult(
           std::make_unique<StatsSyncActivity>(renderer, mappedInput, StatsSyncActivity::Origin::Settings),

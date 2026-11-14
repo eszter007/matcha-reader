@@ -6,6 +6,7 @@
 #include <Epub/RubyGlossary.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
+#include <Furigana.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -1530,6 +1531,7 @@ bool EpubReaderWordLookupActivity::promotePageReading(const size_t start, const 
   // みなも for 水面. Kana outside any annotation is okurigana and joins the reading; kana under
   // one is already in it. A kanji with no furigana means the page does not annotate this word.
   PageReading reading;
+  pageFurigana.clear();
   size_t readingEnd = 0;
   size_t lastAnnotated = start;
   bool annotated = false;
@@ -1539,16 +1541,30 @@ bool EpubReaderWordLookupActivity::promotePageReading(const size_t start, const 
     const uint16_t ruby = scan.allGlyphs[i].ruby;
     if (const std::string* text = scan.rubyAt(i)) {
       reading.append(std::string_view(*text));
+      // The ruby's base: this glyph and the glyphs it covers.
+      std::string base;
+      WordSelectionScan::encodeUtf8(cp, base);
+      for (size_t j = i + 1; j < end && scan.allGlyphs[j].ruby == WordSelectionScan::kRubyCovered; j++) {
+        WordSelectionScan::encodeUtf8(scan.allGlyphs[j].codepoint, base);
+      }
+      furigana::appendRuby(pageFurigana, base, *text);
     } else if (ruby != WordSelectionScan::kRubyCovered) {  // covered glyphs are in the reading already
-      if (WordSelectionScan::isCJK(cp)) return false;
+      if (WordSelectionScan::isCJK(cp)) {
+        pageFurigana.clear();
+        return false;
+      }
       reading.append(cp);  // okurigana between annotated kanji
+      WordSelectionScan::encodeUtf8(cp, pageFurigana);
       continue;
     }
     annotated = true;
     readingEnd = reading.size;
     lastAnnotated = i;
   }
-  if (!annotated || reading.overflow) return false;
+  if (!annotated || reading.overflow) {
+    pageFurigana.clear();
+    return false;
+  }
   reading.size = readingEnd;
   // Okurigana inside the annotation (止めて/やめて) is inflected; the dictionary lists the stem's
   // reading before its own ending, so drop the kana the annotation shares with the page text.
@@ -1633,6 +1649,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   resultHeadword.clear();
   resultDefinition.clear();
   resultReading.clear();
+  resultFurigana.clear();
+  pageFurigana.clear();
   resultGrammar.clear();
   resultSource = nullptr;
   resultDict = 0;
@@ -1640,6 +1658,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   sectionText.clear();
   sectionLabel.clear();
   sectionReading.clear();
+  sectionFurigana.clear();
   sectionGrammar.clear();
   sectionKind.clear();
   sectionHead.clear();
@@ -1799,6 +1818,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     DefinitionText::EntryMetadata metadata;
     DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
     resultReading = std::move(metadata.reading);
+    resultFurigana = std::move(metadata.furigana);
     resultGrammar = std::move(metadata.grammar);
     resultDict = result.entry.sourceDict;
     resultSource = dictsource::name(resultDict);
@@ -1854,6 +1874,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
           DefinitionText::EntryMetadata grammarMetadata;
           DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, grammarMetadata);
           resultReading = std::move(grammarMetadata.reading);
+          resultFurigana = std::move(grammarMetadata.furigana);
           resultGrammar = std::move(grammarMetadata.grammar);
           resultDictionaryLabel = std::move(grammarMetadata.source);
           resultDict = DictIndex::DICT_GRAMMAR;
@@ -1880,6 +1901,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       hasResult = true;
       resultHeadword = digitPrefix + text.substr(0, counterBytes);
       resultReading = std::move(reading);
+      resultFurigana.clear();
       resultMatchLen = sourceSpan;
     }
   }
@@ -1922,6 +1944,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       resultHeadword = std::move(base);
       resultDefinition = std::move(definition);
       resultReading = std::move(readings);
+      resultFurigana.clear();
       resultGrammar.clear();
     }
   }
@@ -2150,6 +2173,7 @@ void EpubReaderWordLookupActivity::appendSelectionEntry(DictEntry&& entry, const
     sectionText.resize(before);
     sectionLabel.resize(before);
     sectionReading.resize(before);
+    sectionFurigana.resize(before);
     sectionGrammar.resize(before);
     sectionKind.resize(before);
     sectionHead.resize(before);
@@ -2265,6 +2289,7 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections(const uint8_t app
     sectionText.clear();
     sectionLabel.clear();
     sectionReading.clear();
+    sectionFurigana.clear();
     sectionGrammar.clear();
     sectionKind.clear();
     sectionHead.clear();
@@ -2290,6 +2315,7 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections(const uint8_t app
   sectionText.reserve(pieceCount);
   sectionLabel.reserve(pieceCount);
   sectionReading.reserve(pieceCount);
+  sectionFurigana.reserve(pieceCount);
   sectionGrammar.reserve(pieceCount);
   sectionKind.reserve(pieceCount);
   sectionHead.reserve(pieceCount);
@@ -2393,6 +2419,7 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections(const uint8_t app
       if (!metadata.source.empty()) label = std::move(metadata.source);
       if (sectionText.size() == firstSection && appendDict == 0) {
         if (metadata.reading.empty()) metadata.reading = resultReading;
+        if (metadata.furigana.empty()) metadata.furigana = resultFurigana;
         if (metadata.grammar.empty()) metadata.grammar = resultGrammar;
       }
       DefinitionText::formatEntryBody(piece, kind == StrId::STR_DICT_KIND_GRAMMAR ? head : std::string(),
@@ -2419,11 +2446,13 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections(const uint8_t app
       if (replaceAt < sectionText.size()) {
         if (label.empty()) label = std::move(sectionLabel[replaceAt]);
         if (metadata.reading.empty()) metadata.reading = std::move(sectionReading[replaceAt]);
+        if (metadata.furigana.empty()) metadata.furigana = std::move(sectionFurigana[replaceAt]);
         if (metadata.grammar.empty()) metadata.grammar = std::move(sectionGrammar[replaceAt]);
         if (head.empty()) head = std::move(sectionHead[replaceAt]);
         sectionText[replaceAt] = std::move(piece);
         sectionLabel[replaceAt] = std::move(label);
         sectionReading[replaceAt] = std::move(metadata.reading);
+        sectionFurigana[replaceAt] = std::move(metadata.furigana);
         sectionGrammar[replaceAt] = std::move(metadata.grammar);
         sectionKind[replaceAt] = kind;
         sectionHead[replaceAt] = std::move(head);
@@ -2431,6 +2460,7 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections(const uint8_t app
         sectionText.push_back(std::move(piece));
         sectionLabel.push_back(std::move(label));
         sectionReading.push_back(std::move(metadata.reading));
+        sectionFurigana.push_back(std::move(metadata.furigana));
         sectionGrammar.push_back(std::move(metadata.grammar));
         sectionKind.push_back(kind);
         sectionHead.push_back(std::move(head));
@@ -2523,7 +2553,8 @@ void EpubReaderWordLookupActivity::appendEntries(const size_t first,
   std::string language = sentencemining::languageForDictionary("", mining_.bookLanguage);
   if (language.empty()) language = sentencemining::JAPANESE;
   const auto add = [&](std::string headword, std::string definition, std::string reading, std::string grammar,
-                       const StrId kind, const std::string_view label, std::string sentence) {
+                       const StrId kind, const std::string_view label, std::string sentence,
+                       const std::string& dictFurigana) {
     DictionaryDefinitionActivity::Entry entry;
     entry.definitionText = true;
     entry.kind = kind;
@@ -2531,6 +2562,13 @@ void EpubReaderWordLookupActivity::appendEntries(const size_t first,
     auto& card = entry.draft.card;
     card.word = headword;
     card.reading = reading;
+    // The page's own furigana first, then the dictionary's; either must read as the card's reading.
+    std::string fromPage = furigana::adaptToHeadword(pageFurigana, headword);
+    if (furigana::matchesReading(fromPage, reading)) {
+      card.furigana = std::move(fromPage);
+    } else if (furigana::matchesReading(dictFurigana, reading)) {
+      card.furigana = dictFurigana;
+    }
     card.sentence = sentence.empty() ? miningSentence() : std::move(sentence);
     card.book = mining_.bookTitle;
     card.author = mining_.bookAuthor;
@@ -2548,14 +2586,14 @@ void EpubReaderWordLookupActivity::appendEntries(const size_t first,
     if (first > 0 || !hasResult) return;
     // One scrolling text: the opened word without per-source pages.
     add(resultHeadword, std::move(resultDefinition), resultReading, resultGrammar,
-        resultSource ? dictsource::kind(resultDict) : StrId::STR_NONE_OPT, resultLabel, std::string());
+        resultSource ? dictsource::kind(resultDict) : StrId::STR_NONE_OPT, resultLabel, std::string(), resultFurigana);
     return;
   }
   out.reserve(out.size() + (sectionText.size() - std::min(first, sectionText.size())));
   for (size_t i = first; i < sectionText.size(); i++) {
     const std::string_view label = !sectionLabel[i].empty() ? std::string_view(sectionLabel[i]) : resultLabel;
     add(!sectionHead[i].empty() ? sectionHead[i] : resultHeadword, std::move(sectionText[i]), sectionReading[i],
-        sectionGrammar[i], sectionKind[i], label, selectionMiningSentence(i));
+        sectionGrammar[i], sectionKind[i], label, selectionMiningSentence(i), sectionFurigana[i]);
   }
 }
 

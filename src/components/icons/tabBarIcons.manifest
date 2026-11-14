@@ -30,3 +30,5 @@ StatsIcon = chart-area-line
 StatsFilledIcon = chart-area-line-filled
 SettingsTabIcon = adjustments-horizontal
 SettingsTabFilledIcon = adjustments-horizontal-filled
+FlashcardsTabIcon = cards
+FlashcardsTabFilledIcon = cards-filled

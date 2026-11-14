@@ -2,6 +2,7 @@
 #include <I18n.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <span>
 #include <string>
@@ -43,6 +44,9 @@ enum class SettingAction {
   DictionarySettings,
   TranslationSettings,
   About,
+  OpenFlashcards,
+  AnkiSync,
+  AnkiTest,
 };
 
 struct SettingInfo {

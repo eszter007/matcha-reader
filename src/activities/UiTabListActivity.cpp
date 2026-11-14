@@ -67,7 +67,7 @@ TabRing::Focus UiTabListActivity::ringFocus() const {
 }
 
 void UiTabListActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) {
-  tabFocus = focus == TabRing::Focus::BottomBar ? static_cast<int>(tabBarTab()) : -1;
+  tabFocus = focus == TabRing::Focus::BottomBar ? HomeTabBar::slotOf(tabBarTab()) : -1;
   if (focus == TabRing::Focus::TopTabs) moveRingTo(0);
   if (focus == TabRing::Focus::Content) moveRingTo(atEnd ? listCount() : 1);
 }
