@@ -694,7 +694,7 @@ The rows are grouped by the control they change. Each one is described further d
 
 - **CrossPoint Sync**: Sync your reading position with the CrossPoint sync server or any KOReader-compatible sync server. See [KOReader Sync Quick Setup](#3611-koreader-sync-quick-setup) below.
 
-- **Anki Sync**: Sync Anki decks and their review progress with Anki desktop (with AnkiConnect) or a self-hosted companion server. Sync is optional. The page has **Anki Address**, **Anki Key**, **Anki Decks** (deck names separated by commas, as Anki shows them), **Sync AnkiWeb Too** and **Test Connection**. These rows are also on the web settings page, except **Test Connection**. See [Anki decks](#anki-decks).
+- **Anki Sync**: Sync Anki decks and their review progress with Anki desktop (with AnkiConnect) or a self-hosted [companion server](#the-companion-server). Sync is optional. The page has **Anki Address**, **Anki Key**, **Anki Decks** (deck names separated by commas, as Anki shows them), **Sync AnkiWeb Too** and **Test Connection**. These rows are also on the web settings page, except **Test Connection**. See [Anki decks](#anki-decks).
 
 - **OPDS Servers**: Save online book catalogs (OPDS libraries) so you can browse them and download books straight to the device. See [OPDS Servers (Multiple Libraries)](#369-opds-servers-multiple-libraries) below. ([What is OPDS?](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System))
 
@@ -1839,6 +1839,28 @@ There are two ways to get a deck onto the device:
 - **Sync:** set up [Anki Sync](#368-connectivity), then choose **Sync with Anki** at the bottom of the overview. It turns Wi-Fi on, downloads the chosen decks, and sends reviews both ways. Later syncs download only new and changed cards. To stop a sync, press **Back** (on a touch device, tap the back arrow or swipe from the left edge); it stops after the current card and keeps the cards synced so far. If a sync stops partway, the next one continues near where it stopped. A card too large for the device is downloaded again only after it is changed in Anki. Images are downloaded with their cards. The companion server shrinks large images to screen size first. An image still over 1 MB (4 MB with PSRAM) is not kept; an image that fails for another reason is tried again at the next sync. A type-in answer shows no typing box. With the companion server, the back shows the expected answer; with Anki desktop, the box is left out. If a card does not fit in the memory left during a sync, it is left for the next sync. When a card template or a style changes in Anki, the next sync downloads the deck's cards again. After a deck has synced once, renaming it in Anki is fine: the device finds it again and shows the new name in **Anki Decks**. If a deck in **Anki Decks** is not in Anki, the sync still syncs the other decks, then shows an error with the name of the first missing deck.
 
 A deck holds up to 2,000 cards on the device (10,000 on the X4 Pro and other devices with PSRAM, which also fit larger cards); a larger deck is cut there. Cards suspended in Anki are left off the device, and come back with their progress when you unsuspend them. Cards buried in Anki are not shown on the day of the sync. A card you forget many times (a "leech": as many times as the deck's leech threshold in Anki) is tagged "leech" in Anki at the next sync. If the deck's preset says to suspend leeches, the device stops showing it at once and the sync suspends it in Anki.
+
+##### The companion server
+
+Anki desktop must be open on your computer for a sync. If you would rather sync at any time, run the companion server, [matcha-anki-server](https://github.com/eszter007/matcha-anki-server), on a computer that is always on: a NAS, a Raspberry Pi, a home server, or a small cloud server. It keeps your Anki collection, syncs it with AnkiWeb, and answers the reader the way Anki desktop does.
+
+It also prepares cards for the reader: large images are shrunk to grayscale, and buttons, scripts and hidden menus are left out, so cards are smaller and sync faster. Type-in cards show the expected answer on the back.
+
+**Set it up** (full steps in the server's README):
+
+1. Install Docker on the computer that will run it.
+2. Download the server from GitHub and make a `.env` file with a key of your choice (`MATCHA_TOKEN`, at least 16 random characters) and, if you want your AnkiWeb collection, your AnkiWeb login.
+3. Start it with `docker compose up -d`. It listens on port 8080.
+
+**Google Cloud:** the README also explains how to run it on a free-tier Google Cloud server with HTTPS, step by step with the `gcloud` command line tool. The key and your AnkiWeb login are kept in Google's Secret Manager there, not in a file.
+
+**On the reader** (Settings → Connectivity → Anki Sync, or the web settings page):
+
+- **Anki Address:** `http://<the computer's address>:8080` at home, or the `https://` address of a cloud server.
+- **Anki Key:** the key from step 2.
+- **Sync AnkiWeb Too:** **On**, so each sync also brings the server and AnkiWeb up to date.
+
+Over the internet, use HTTPS so the key is not sent in the clear. HTTPS needs more memory on the reader: the X4 may not have enough during a sync, so on an X4 a server on your home network is the safer choice.
 
 ##### Offline reviews, synced with Anki on your computer
 

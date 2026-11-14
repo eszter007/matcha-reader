@@ -34,6 +34,6 @@ python3 tools/anki_import/apkg_to_flashcards.py deck.apkg --out ./decks --deck "
 Under **Settings → Connectivity → Anki Sync**, enter the address and key of one of these:
 
 - Anki desktop 26.08 or later, with AnkiConnect
-- the companion server, `matcha-anki-server`, which you run yourself with Docker
+- the companion server, [matcha-anki-server](https://github.com/eszter007/matcha-anki-server), which you run yourself with Docker
 
 Then enter the decks to sync under **Anki Decks**, separated by commas. Use the deck names Anki shows; a subdeck is written as `Parent::Child`. After the first sync the device also knows each deck's id, so renaming a deck in Anki does not break the sync; **Anki Decks** then shows the new name. If Anki has no deck with a listed name, the sync still syncs the other decks, then shows an error with the name of the first missing deck. The same settings are also on the web settings page, except **Test Connection**. **Flashcards → Sync with Anki** downloads the cards and sends reviews in both directions. Suspended cards are not downloaded, cards buried in Anki are skipped for that day, and each deck takes new cards per day, the review limit, desired retention, maximum interval, learning steps, card order, sibling burying, Easy Days and leech rule from its preset in Anki once a sync has read them (until then, and when the sync cannot read the preset, the device's Flashcards settings are used).
