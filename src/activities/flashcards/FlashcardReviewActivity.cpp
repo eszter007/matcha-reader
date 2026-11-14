@@ -863,6 +863,26 @@ void FlashcardReviewActivity::layoutHtmlSide() {
   }
 }
 
+void FlashcardReviewActivity::warmCardImages() {
+  // A PNG whose decoder does not fit the heap is decoded into its pixel cache with the decoder in
+  // the lent framebuffer. The screen is cleared and drawn in full right after, so its old
+  // contents need not be kept.
+  for (const auto& page : htmlPages) {
+    for (const auto& element : page->elements) {
+      if (element->getTag() != TAG_PageImage) continue;
+      const ImageBlock& block = static_cast<const PageImage&>(*element).getImageBlock();
+      // One attempt per image: a picture that cannot be decoded keeps its placeholder.
+      if (block.getImagePath() == imageFailedPath || !block.needsFramebufferLoanToDecode()) continue;
+      GfxRenderer::FrameBufferLoan loan(renderer);
+      if (block.warmCache(renderer, nullptr, nullptr, /*decoderInLentFramebuffer=*/true) ==
+          ImageBlock::WarmResult::Failed) {
+        LOG_ERR("FLASH", "Card image not decoded: %s", block.getImagePath().c_str());
+        imageFailedPath = block.getImagePath();
+      }
+    }
+  }
+}
+
 void FlashcardReviewActivity::drawHtmlCard(const Rect4& inner) const {
   const Rect area{inner.x, inner.y, inner.w, inner.h};
   if (!cardOk || card.tooLarge || htmlPages.empty()) {
@@ -954,6 +974,8 @@ void FlashcardReviewActivity::drawDone(const Rect4& a) const {
 }
 
 void FlashcardReviewActivity::render(RenderLock&&) {
+  ImageBlock::clearRenderFailures();
+  warmCardImages();
   renderer.clearScreen();
   const Rect a = UITheme::getInstance().getScreenSafeArea(renderer, !mappedInput.hasTouch());
   const bool done = !opened || session.finished();
@@ -982,6 +1004,8 @@ void FlashcardReviewActivity::render(RenderLock&&) {
   }
   renderer.displayBuffer();
   if (!done && SETTINGS.textAntiAliasing) drawGrayPass();
+  // An image's pixels stay in RAM across the passes of one draw; nothing stays for the next card.
+  ImageBlock::releaseRenderCache();
 }
 
 // The card's text again into the two gray planes, as the reader does for a page. Only the card:

@@ -38,6 +38,7 @@ class FlashcardReviewActivity final : public Activity {
   void drawRatings(const Rect4& band) const;
   // An Anki deck's card: its current side laid out as HTML pages for the card's inner area.
   bool isHtmlCard() const { return !card.frontPath.empty(); }
+  void warmCardImages();
   void layoutHtmlSide();
   void drawHtmlCard(const Rect4& inner) const;
   Rect4 htmlBodyRect() const;
@@ -57,5 +58,6 @@ class FlashcardReviewActivity final : public Activity {
   flashcards::Interval intervals[4];
   CjkScript script = CjkScript::None;            // the deck's script; read from an Anki deck's first card
   std::vector<std::unique_ptr<Page>> htmlPages;  // the side shown, while it is an Anki card
+  std::string imageFailedPath;                   // a card image whose decode failed; not tried again
   size_t htmlPage = 0;
 };

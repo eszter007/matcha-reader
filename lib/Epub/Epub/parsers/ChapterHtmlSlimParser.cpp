@@ -1922,8 +1922,30 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               const bool standalone = self->epub == nullptr;
               if (standalone) {
                 cachedImagePath = resolvedPath;
-                ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(resolvedPath);
-                gotDimensions = decoder && decoder->getDimensions(resolvedPath, dims);
+                // From the header: a PNG decoder needs a 43 KB block just to read the size.
+                bool opened = false;
+                // normalisePath() drops the leading slash of an absolute card path.
+                const std::string filePath = resolvedPath[0] == '/' ? resolvedPath : "/" + resolvedPath;
+                {
+                  HalFile file;
+                  opened = Storage.openFileForRead("EHP", filePath, file);
+                  if (opened) {
+                    ImageDimsProbe probe;
+                    uint8_t chunk[128];
+                    size_t total = 0;
+                    int n;
+                    while (total < 64 * 1024 && !probe.getDimensions(dims) &&
+                           (n = file.read(chunk, sizeof(chunk))) > 0) {
+                      probe.write(chunk, static_cast<size_t>(n));
+                      total += static_cast<size_t>(n);
+                    }
+                    gotDimensions = probe.getDimensions(dims);
+                  }
+                }
+                if (opened && !gotDimensions) {  // a format the header probe does not read (BMP)
+                  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(filePath);
+                  gotDimensions = decoder && decoder->getDimensions(filePath, dims);
+                }
               } else {
                 ImageDimsProbe headerProbe;
                 self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
@@ -2235,7 +2257,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 // again, check render()'s rotated branch before touching this one.
                 const bool viewportIsPortrait = self->viewportHeight > self->viewportWidth;
                 const bool imageIsLandscape = dims.width > dims.height;
-                const bool rotateImage = dims.width > 0 && dims.height > 0 && (viewportIsPortrait == imageIsLandscape);
+                // A flashcard face (no book) keeps its pictures upright: its viewport is a box on
+                // the screen, so the rotated frame's margin would shrink them to a stamp.
+                const bool rotateImage = self->epub != nullptr && dims.width > 0 && dims.height > 0 &&
+                                         (viewportIsPortrait == imageIsLandscape);
 
                 // Apply top margin from container block. Clamp it so the image never
                 // overflows the page bottom: a full-viewport-height image leaves no room
