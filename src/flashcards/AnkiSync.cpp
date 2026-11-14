@@ -938,10 +938,14 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
 bool DeckSync::pullReviews(ankideck::DeckInfo& info) {
   // Applied and remembered a page at a time: a sync cut off later neither applies a page twice
   // nor holds a long history in RAM.
-  constexpr size_t PAGE = 200;
+  // Pages as large as the heap allows, from 20 to 200 reviews: a fragmented heap only means more pages.
+  constexpr size_t MIN_PAGE = 20, MAX_PAGE = 200;
+  const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  const size_t fits = largest > HEAP_HEADROOM ? (largest - HEAP_HEADROOM) / sizeof(flashcards::PulledReview) : 0;
+  if (fits < MIN_PAGE && !roomFor(MIN_PAGE * sizeof(flashcards::PulledReview), "reviews")) return false;
+  const size_t pageSize = std::max(MIN_PAGE, std::min(MAX_PAGE, fits));
   std::vector<flashcards::PulledReview> pulled;
-  if (!roomFor(PAGE * sizeof(flashcards::PulledReview), "reviews")) return false;
-  pulled.reserve(PAGE);
+  pulled.reserve(pageSize);
   const std::string key = ankideck::keyFor(info.id);
   // Ratings made here and not yet sent: an Anki review of the same card from before one of them
   // is already outdated on this device.
@@ -958,7 +962,7 @@ bool DeckSync::pullReviews(ankideck::DeckInfo& info) {
     JsonDocument params, page;
     params["deck"]["id"] = info.id;
     params["includeManual"] = false;
-    params["limit"] = PAGE;
+    params["limit"] = pageSize;
     if (!cursor.empty()) {
       params["cursor"] = cursor;
     } else if (info.lastReviewId != 0) {
@@ -973,7 +977,7 @@ bool DeckSync::pullReviews(ankideck::DeckInfo& info) {
     pulled.clear();
     uint64_t newest = info.lastReviewId;
     for (JsonVariantConst r : page["items"].as<JsonArrayConst>()) {
-      if (pulled.size() >= PAGE) break;  // the server sent more than asked: the rest come next sync
+      if (pulled.size() >= pageSize) break;  // the server sent more than asked: the rest come next sync
       const uint64_t id = toId(r["id"]);
       newest = std::max(newest, id);
       const char* rating = r["rating"] | "";
@@ -1013,14 +1017,22 @@ bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
   // History first, in batches. A review already in Anki (a sync cut off after its import) is a
   // conflict for the whole batch, so a failed batch is retried one review at a time.
   // Each review's time once: a batch refused for a conflict is sent again a review at a time.
+  // Schedule-only entries (no rating: a mined card's progress from before reviews were logged)
+  // send no history.
+  std::vector<uint16_t> history;
   std::vector<int64_t> stamps;
-  stamps.reserve(log.size());  // at most MAX_LOG_ENTRIES
-  for (const auto& e : log) stamps.push_back(stampOf(e));
-  const auto importBatch = [this, &log, &stamps](const size_t from, const size_t count) {
+  history.reserve(log.size());  // at most MAX_LOG_ENTRIES
+  stamps.reserve(log.size());
+  for (size_t i = 0; i < log.size(); i++) {
+    if (log[i].rating == 0) continue;
+    history.push_back(static_cast<uint16_t>(i));
+    stamps.push_back(stampOf(log[i]));
+  }
+  const auto importBatch = [this, &log, &history, &stamps](const size_t from, const size_t count) {
     JsonDocument params, done;
     JsonArray reviews = params["reviews"].to<JsonArray>();
     for (size_t i = 0; i < count; i++) {
-      const auto& e = log[from + i];
+      const auto& e = log[history[from + i]];
       JsonObject r = reviews.add<JsonObject>();
       r["id"] = std::to_string(stamps[from + i]);
       r["cardId"] = std::to_string(e.id);
@@ -1039,8 +1051,8 @@ bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
     }
     return client.callOperation("advanced.reviews.import", params, done, OPERATION_TIMEOUT);
   };
-  for (size_t at = 0; at < log.size(); at += BATCH) {
-    const size_t count = std::min(BATCH, log.size() - at);
+  for (size_t at = 0; at < history.size(); at += BATCH) {
+    const size_t count = std::min(BATCH, history.size() - at);
     if (importBatch(at, count)) continue;
     if (client.error().type != "conflict") return false;
     for (size_t i = 0; i < count; i++) {
@@ -1070,7 +1082,7 @@ bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
     // Decks on the old SM-2 scheduler refuse an FSRS memory; their due date is set already.
     if (!client.call("advanced.cards.update", memory, card, &none)) LOG_INF("ANKI", "No FSRS memory for %llu", s.id);
   }
-  result.reviewsPushed += static_cast<uint32_t>(log.size());
+  result.reviewsPushed += static_cast<uint32_t>(history.size());
   // Past these reviews before they leave the log, so the next pull does not take them for Anki's.
   for (const int64_t t : stamps) info.lastReviewId = std::max(info.lastReviewId, static_cast<uint64_t>(t));
   if (!ankideck::writeInfo(info)) return false;
@@ -1140,6 +1152,267 @@ bool testConnection(AnkiClient& client, std::string& ankiVersion) {
   return true;
 }
 
+// ---- Mined words: handed over to Anki as notes, one deck per language
+
+constexpr const char* MINED_NOTE_TYPE = "Matcha sentence";
+constexpr size_t MINED_BATCH = 5;  // notes per request: a mined row holds a whole definition
+// Fields in CSV column order (WORD .. FURIGANA); TAGS become the note's tags.
+constexpr const char* MINED_FIELDS[] = {"Word",   "Reading", "Sentence",   "Definition", "Book",
+                                        "Author", "Date",    "Dictionary", "Furigana"};
+// The note type of docs/anki, made in Anki when it is missing (kept in step with docs/anki).
+constexpr const char* MINED_FRONT = "<div class=\"sentence\">{{Sentence}}</div>\n<div class=\"book\">{{Book}}</div>";
+constexpr const char* MINED_BACK =
+    "<div class=\"word\">{{#Furigana}}{{furigana:Furigana}}{{/Furigana}}{{^Furigana}}{{Word}}{{/Furigana}}</div>\n"
+    "<div class=\"reading\">{{Reading}}</div>\n<hr>\n<div class=\"def\">{{Definition}}</div>\n<hr>\n"
+    "<div class=\"sentence small\">{{Sentence}}</div>\n<div class=\"book\">{{Book}}</div>";
+constexpr const char* MINED_CSS =
+    ".card {\n  font-family: \"Hiragino Mincho ProN\", \"Noto Serif JP\", \"Noto Serif SC\", serif;\n"
+    "  font-size: 22px;\n  line-height: 1.6;\n  color: #111;\n  background: #fff;\n  padding: 28px 32px;\n"
+    "  text-align: left;\n}\n"
+    ".word { font-size: 64px; font-weight: 700; text-align: center; line-height: 1.9; }\n"
+    ".word rt { font-size: 0.38em; font-weight: 400; color: #333; }\n"
+    ".reading { text-align: center; color: #555; font-size: 18px; margin-top: -6px; }\n"
+    ".sentence b { border-bottom: 2px solid #111; }\n.small { font-size: 19px; }\n"
+    ".book {\n  font-style: italic;\n  color: #666;\n  font-size: 15px;\n  margin-top: 10px;\n"
+    "  border-top: 1px solid #111;\n  padding-top: 8px;\n  display: inline-block;\n  max-width: 100%;\n}\n"
+    ".def { font-size: 18px; }\nhr { border: none; border-top: 1px solid #111; margin: 16px 0; }\n"
+    ".card.nightMode { color: #e8e8e8; background: #1f1f1f; }\n.nightMode .word rt { color: #ccc; }\n"
+    ".nightMode .reading { color: #aaa; }\n.nightMode .book { color: #aaa; border-top-color: #e8e8e8; }\n"
+    ".nightMode .sentence b { border-bottom-color: #e8e8e8; }\n.nightMode hr { border-top-color: #e8e8e8; }\n";
+
+// A mined field without control characters other than tab and newline: ArduinoJson writes the
+// rest as they are, which is not valid JSON (dictionary text can hold a 0x1F separator).
+std::string minedField(const std::string& value) {
+  std::string out;
+  out.reserve(value.size());
+  for (const char c : value) {
+    if (static_cast<unsigned char>(c) >= 0x20 || c == '\n' || c == '\t') out.push_back(c);
+  }
+  return out;
+}
+
+// A value inside a quoted field search ("Word:..."): Anki's wildcards * and _ taken literally.
+std::string fieldQuoted(const std::string& value) {
+  std::string out;
+  out.reserve(value.size() + 4);
+  for (const char c : value) {
+    if (c == '"' || c == '\\' || c == '*' || c == '_') out.push_back('\\');
+    out.push_back(c);
+  }
+  return out;
+}
+
+bool ensureMinedNoteType(AnkiClient& client) {
+  JsonDocument types;
+  if (!client.call("noteTypes.list", types)) return false;
+  for (JsonVariantConst t : types.as<JsonArrayConst>()) {
+    if (strcmp(t["name"] | "", MINED_NOTE_TYPE) == 0) return true;
+  }
+  JsonDocument params, created;
+  params["name"] = MINED_NOTE_TYPE;
+  JsonArray fields = params["fields"].to<JsonArray>();
+  for (const char* f : MINED_FIELDS) fields.add<JsonObject>()["name"] = f;
+  JsonObject t = params["templates"].to<JsonArray>().add<JsonObject>();
+  t["name"] = "Card 1";
+  t["questionHtml"] = MINED_FRONT;
+  t["answerHtml"] = MINED_BACK;
+  params["css"] = MINED_CSS;
+  JsonDocument filter;
+  filter["name"] = true;
+  return client.call("noteTypes.create", params, created, &filter);
+}
+
+// The deck's id: the one used before when Anki still has it (renamed or not), else the deck of
+// that name, made in Anki when it is not there yet. Empty on failure.
+std::string ensureDeck(AnkiClient& client, const JsonDocument& decks, const std::string& knownId,
+                       const std::string& name) {
+  for (JsonVariantConst d : decks.as<JsonArrayConst>()) {
+    if (!knownId.empty() && knownId == (d["id"] | "")) return knownId;
+  }
+  for (JsonVariantConst d : decks.as<JsonArrayConst>()) {
+    if (name == (d["name"] | "")) return d["id"] | "";
+  }
+  JsonDocument params, deck, filter;
+  params["name"] = name;
+  filter["id"] = true;
+  if (!client.call("decks.create", params, deck, &filter)) return {};
+  return deck["id"] | "";
+}
+
+enum class Adopt : uint8_t { Found, FoundNew, None, Failed };
+
+// A note already in Anki for this row: the same word and sentence (a sync cut off after adding
+// it, or a CSV imported by hand). Its first card moves to `deckId`.
+Adopt adoptMinedNote(AnkiClient& client, const flashcards::MinedRow& row, const std::string& deckId, uint64_t& cardId) {
+  JsonDocument params, page;
+  params["query"] = std::string("\"note:") + quoted(MINED_NOTE_TYPE) +
+                    "\" \"Word:" + fieldQuoted(minedField(row.fields[flashcards::WORD])) + "\"";
+  params["limit"] = 20;
+  if (!client.call("notes.search", params, page)) return Adopt::Failed;
+  if (page["ids"].as<JsonArrayConst>().size() == 0) return Adopt::None;
+  JsonDocument ids, notes, filter;
+  for (JsonVariantConst id : page["ids"].as<JsonArrayConst>()) ids["ids"].add(id.as<const char*>());
+  filter["items"][0]["result"]["fields"]["Sentence"] = true;
+  filter["items"][0]["result"]["cardIds"] = true;
+  if (!client.call("notes.getMany", ids, notes, &filter)) return Adopt::Failed;
+  for (JsonVariantConst item : notes["items"].as<JsonArrayConst>()) {
+    JsonVariantConst note = item["result"];
+    if (minedField(row.fields[flashcards::SENTENCE]) != (note["fields"]["Sentence"] | "")) continue;
+    const char* card = note["cardIds"][0] | "";
+    if (!*card) continue;
+    JsonDocument move, moved;
+    move["ids"][0] = card;
+    move["deck"]["id"] = deckId;
+    if (!client.call("cards.move", move, moved)) return Adopt::Failed;
+    cardId = strtoull(card, nullptr, 10);
+    // Reviewed in Anki: its schedule there stays. Still new (made by a sync cut off before its
+    // hand-over): the device's progress goes to it as for a note just added.
+    JsonDocument cardIds, cards, cardFilter;
+    cardIds["ids"][0] = card;
+    cardFilter["items"][0]["result"]["scheduling"]["type"] = true;
+    if (!client.call("cards.getMany", cardIds, cards, &cardFilter)) return Adopt::Failed;
+    const char* type = cards["items"][0]["result"]["scheduling"]["type"] | "new";
+    return strcmp(type, "new") == 0 ? Adopt::FoundNew : Adopt::Found;
+  }
+  return Adopt::None;
+}
+
+void addMinedNote(JsonArray notes, const flashcards::MinedRow& row, const std::string& deckId) {
+  JsonObject n = notes.add<JsonObject>();
+  n["noteType"]["name"] = MINED_NOTE_TYPE;
+  n["deck"]["id"] = deckId;
+  for (size_t f = 0; f < std::size(MINED_FIELDS); f++) {
+    n["fields"][MINED_FIELDS[f]] = minedField(row.fields[flashcards::WORD + f]);
+  }
+  JsonArray tags = n["tags"].to<JsonArray>();
+  tags.add("matcha");
+  const std::string extra = minedField(row.fields[flashcards::TAGS]);
+  for (size_t at = 0; at < extra.size();) {
+    size_t end = extra.find_first_of(" \t\n", at);
+    if (end == std::string::npos) end = extra.size();
+    if (end > at) tags.add(extra.substr(at, end - at));
+    at = end + 1;
+  }
+}
+
+size_t minedRowBytes(const flashcards::MinedRow& row) {
+  size_t bytes = 256;  // names, ids, quoting
+  for (const auto& f : row.fields) bytes += f.size();
+  return bytes;
+}
+
+// Mined words not in Anki yet become "Matcha sentence" notes in Matcha::<language>, with their
+// history (sent by that deck's sync, which follows). The deck joins the synced decks. A failure
+// here is logged and leaves the words for the next sync: it never keeps the decks from syncing.
+void handOverMined(AnkiClient& client, const ProgressFn& progress, Result& result) {
+  std::vector<std::string> languages;
+  flashcards::miningLanguages(languages);
+  if (languages.empty()) return;
+  bool typeReady = false;
+  JsonDocument decks;
+  if (!client.call("decks.list", decks)) return;
+  for (const auto& language : languages) {
+    std::vector<flashcards::MinedRow> rows;
+    std::vector<uint64_t> skipped;  // rows Anki did not take this time; tried again next sync
+    if (flashcards::newMinedRows(language, skipped, MINED_BATCH, rows) == 0) continue;
+    if (!typeReady && !ensureMinedNoteType(client)) return;
+    typeReady = true;
+    const char* own = flashcards::autonym(language);
+    std::string deckName = "Matcha::";
+    if (own) {
+      deckName += own;
+    } else {
+      for (const char c : language) deckName.push_back(static_cast<char>(toupper(static_cast<unsigned char>(c))));
+    }
+    const std::string deckId = ensureDeck(client, decks, flashcards::minedDeckId(language), deckName);
+    if (deckId.empty() || !flashcards::setMinedDeckId(language, deckId)) return;
+    // Synced from now on, so the handed-over words come back as an Anki deck.
+    std::vector<SyncedDeck> wanted = ANKI_STORE.getSyncedDecks();
+    const bool listed = std::any_of(wanted.begin(), wanted.end(),
+                                    [&](const SyncedDeck& w) { return w.id == deckId || w.name == deckName; });
+    if (!listed) {
+      SyncedDeck d;
+      d.name = deckName;
+      d.id = deckId;
+      wanted.push_back(std::move(d));
+      ANKI_STORE.setSyncedDecks(std::move(wanted));
+      ANKI_STORE.saveToFile();
+    }
+    const std::string key = ankideck::keyFor(deckId);
+    uint32_t handed = 0;
+    bool stop = false;
+    do {
+      if (progress.cancelled()) return;
+      // As many rows as the heap holds twice over (the document and its serialized body).
+      const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+      const size_t budget = largest > HEAP_HEADROOM ? (largest - HEAP_HEADROOM) / 3 : 0;
+      size_t take = 0, bytes = 0;
+      while (take < rows.size() && bytes + minedRowBytes(rows[take]) <= budget) bytes += minedRowBytes(rows[take++]);
+      if (take == 0) {
+        if (budget < 2 * 1024) {  // the heap, not the row: the rest wait for the next sync
+          LOG_ERR("ANKI", "Mined words of %s left for the next sync: %u bytes free", language.c_str(),
+                  static_cast<unsigned>(largest));
+          break;
+        }
+        LOG_ERR("ANKI", "Mined word %s too large to send now", rows[0].fields[flashcards::WORD].c_str());
+        skipped.push_back(rows[0].id);
+        continue;
+      }
+      rows.resize(take);
+      JsonDocument params, created;
+      JsonArray notes = params["notes"].to<JsonArray>();
+      for (const auto& row : rows) addMinedNote(notes, row, deckId);
+      if (!client.call("notes.createMany", params, created)) return;
+      std::vector<flashcards::HandedCard> cards;
+      cards.reserve(rows.size());
+      std::vector<bool> done(rows.size(), false);
+      for (JsonVariantConst item : created["items"].as<JsonArrayConst>()) {
+        if (!item["index"].is<size_t>()) continue;
+        const size_t index = item["index"].as<size_t>();
+        if (index >= rows.size() || done[index]) continue;
+        flashcards::HandedCard card{rows[index].id, strtoull(item["result"]["cardIds"][0] | "0", nullptr, 10), false};
+        if (card.cardId == 0) {
+          // Refused (a duplicate word): the same note may be there already; otherwise it is added
+          // anyway. A failed lookup adds nothing: it would make a duplicate after a passing error.
+          const Adopt adopt = adoptMinedNote(client, rows[index], deckId, card.cardId);
+          if (adopt == Adopt::Failed) {
+            stop = true;
+            break;
+          }
+          card.adopted = adopt == Adopt::Found;  // a reviewed card keeps Anki's schedule
+          if (adopt == Adopt::None) {
+            JsonDocument again, made;
+            addMinedNote(again["notes"].to<JsonArray>(), rows[index], deckId);
+            again["notes"][0]["duplicates"]["allow"] = true;
+            if (client.call("notes.createMany", again, made)) {
+              card.cardId = strtoull(made["items"][0]["result"]["cardIds"][0] | "0", nullptr, 10);
+            }
+          }
+        }
+        if (card.cardId == 0) continue;
+        done[index] = true;
+        cards.push_back(card);
+      }
+      // Anything not confirmed waits for the next sync rather than being asked for again now.
+      for (size_t r = 0; r < rows.size(); r++) {
+        if (!done[r]) {
+          LOG_ERR("ANKI", "Mined word %s not added", rows[r].fields[flashcards::WORD].c_str());
+          skipped.push_back(rows[r].id);
+        }
+      }
+      if (!flashcards::handOver(language, key, cards)) return;
+      handed += static_cast<uint32_t>(cards.size());
+    } while (!stop && flashcards::newMinedRows(language, skipped, MINED_BATCH, rows) > 0);
+    if (handed > 0) {
+      LOG_INF("ANKI", "%u mined words of %s handed to %s", static_cast<unsigned>(handed), language.c_str(),
+              deckName.c_str());
+    }
+    result.cardsAdded += handed;
+
+    if (stop) return;
+  }
+}
+
 Result syncAll(AnkiClient& client, const ProgressFn& progress, const int64_t nowMs) {
   Result result;
   int64_t nextPastMs = nowMs - 60000;
@@ -1160,6 +1433,7 @@ Result syncAll(AnkiClient& client, const ProgressFn& progress, const int64_t now
       return fail("AnkiWeb");
     }
   }
+  handOverMined(client, progress, result);
   JsonDocument decks;
   if (!client.call("decks.list", decks)) return fail({});
   // A copy: the loop renames entries, and the store is saved once after it.

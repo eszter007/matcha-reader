@@ -1360,7 +1360,19 @@ into its own Anki deck. Each card holds:
 A sentence cut off at the bottom of the page is completed from the next page. In manga, the sentence is the text of
 the speech bubble the word is in.
 
-**Importing into Anki**
+**Sending to Anki with sync**
+
+If you sync with Anki (see [Anki decks](#anki-decks)), **Sync with Anki** sends your mined words to Anki for you:
+
+- Words not yet in Anki become notes of the **Matcha sentence** note type, in one deck per language: **Matcha::日本語**, **Matcha::Deutsch** and so on. The note type and the decks are made in Anki when they are missing, and the decks are added to **Anki Decks**.
+- Each word leaves the device's own deck and comes back as a card of that Anki deck, with its review history. Its progress goes with it, so Anki shows the same next review as the device.
+- A word already in Anki as a **Matcha sentence** note with the same word and sentence (for example from an earlier import by hand) is reused, not added again. Its schedule in Anki is kept.
+- Words you mine later stay in the device's own deck until the next sync.
+- You can rename the deck in Anki: the device follows it.
+
+A word that Anki does not take (for example one too large to send) stays on the device and is tried again at the next sync. It never stops your other decks from syncing.
+
+**Importing into Anki by hand**
 
 1. Copy the CSV file to your computer.
 2. In Anki, choose **File → Import** and pick the file.

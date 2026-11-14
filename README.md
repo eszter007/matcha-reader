@@ -31,7 +31,7 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
   <img src="docs/images/screenshots/word-lookup-chinese.png" width="260" alt="Word lookup panel over a page of 紅樓夢: 繁華 with pinyin and zhuyin, both scripts and two senses">
 </p>
 
-**Sentence mining.** Save a word with its sentence to a CSV per language that Anki imports as is. Japanese words also get their furigana per kanji, from the book or the dictionary. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
+**Sentence mining.** Save a word with its sentence to a CSV per language that Anki imports as is. With Anki sync set up, **Sync with Anki** sends new words to Anki as notes, one deck per language, with their review progress. Japanese words also get their furigana per kanji, from the book or the dictionary. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
 
 **Flashcards.** Review the words you saved right on the device, one deck per language, scheduled with FSRS. Each card shows the word on a spine and the sentence you found it in. Japanese cards read vertically, with the reading beside each kanji on the back. Turn it on in Settings → Flashcards. See [Guide §6.8](USER_GUIDE.md#68-flashcards).
 

@@ -32,18 +32,6 @@ constexpr int SEL_PAD = 8;          // as the theme pads a selected list row
 constexpr int SEL_RADIUS = 6;
 constexpr int TOP_GAP_MAX = 24;  // largest gap above the numeral box (its glyphs sit low in it)
 
-// Each deck is named in its own language, like a contents page. Korean and Cantonese are left
-// out: the UI font has no Hangul and no 粵, so they fall back to the UI-language name.
-struct Autonym {
-  const char* code;
-  const char* name;
-};
-constexpr Autonym AUTONYMS[] = {
-    {"ja", "日本語"},  {"zh", "中文"},     {"en", "English"},    {"de", "Deutsch"},    {"fr", "Français"},
-    {"es", "Español"}, {"it", "Italiano"}, {"pt", "Português"},  {"nl", "Nederlands"}, {"hu", "Magyar"},
-    {"pl", "Polski"},  {"ru", "Русский"},  {"uk", "Українська"},
-};
-
 struct LanguageLabel {
   const char* code;
   StrId name;
@@ -61,9 +49,7 @@ FlashcardsActivity::FlashcardsActivity(GfxRenderer& renderer, MappedInputManager
     : UiListActivity("Flashcards", renderer, mappedInput) {}
 
 std::string FlashcardsActivity::deckLabel(const std::string& code) {
-  for (const auto& a : AUTONYMS) {
-    if (code == a.code) return a.name;
-  }
+  if (const char* name = flashcards::autonym(code)) return name;
   return languageName(code);
 }
 

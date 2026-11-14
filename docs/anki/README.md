@@ -1,6 +1,6 @@
 # Anki card template for sentence mining
 
-A note type for the CSV files that [sentence mining](../../USER_GUIDE.md#sentence-mining) saves. Its cards look like the device's own flashcards: the sentence on the front, and on the back the word large, with its reading over each kanji, then the definition and the sentence again. It has a night mode.
+A note type for the CSV files that [sentence mining](../../USER_GUIDE.md#sentence-mining) saves. With Anki sync, the device makes this note type in Anki itself and sends the mined words there, so the import below is only needed without sync. Its cards look like the device's own flashcards: the sentence on the front, and on the back the word large, with its reading over each kanji, then the definition and the sentence again. It has a night mode.
 
 ## Import
 

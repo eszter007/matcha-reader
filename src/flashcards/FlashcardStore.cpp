@@ -181,6 +181,31 @@ bool appendLog(const std::string& deck, const std::vector<ReviewLogEntry>& entri
   return true;
 }
 
+// Mined cards handed over to Anki: their CSV ids, 8 bytes each, sorted.
+std::string handedPath(const std::string& language) {
+  return sdsystem::path(("flashcards-" + language + ".anki").c_str());
+}
+
+bool loadHanded(const std::string& language, std::vector<uint64_t>& out) {
+  out.clear();
+  const std::string path = handedPath(language);
+  if (!Storage.exists(path.c_str())) return true;
+  HalFile file;
+  if (!Storage.openFileForRead("FLASH", path, file)) return false;
+  const size_t count = file.fileSize() / sizeof(uint64_t);
+  if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < count * sizeof(uint64_t) + 8 * 1024) {
+    LOG_ERR("FLASH", "OOM: %u handed-over ids for %s", static_cast<unsigned>(count), language.c_str());
+    return false;
+  }
+  out.resize(count);
+  if (count > 0 && file.read(reinterpret_cast<uint8_t*>(out.data()), count * sizeof(uint64_t)) !=
+                       static_cast<int>(count * sizeof(uint64_t))) {
+    out.clear();
+    return false;
+  }
+  return true;
+}
+
 bool writeStates(const std::string& language, const std::vector<CardState>& states, const uint16_t day,
                  const uint16_t newToday) {
   const std::string path = statePath(language);
@@ -325,10 +350,12 @@ void listDecks(std::vector<DeckSummary>& out) {
     if (now != day) newToday = 0;
     const uint16_t perDay = newCardsPerDay();
     uint16_t fresh = 0;
+    std::vector<uint64_t> handed;
+    loadHanded(language, handed);  // unreadable: every card counts, as before a hand-over
     CsvRecordParser parser(1u << GUID, 32);
     scanCsv(deckPath(language), parser, [&](const CsvRecordParser& row) {
       const uint64_t id = guidToId(row.field(GUID));
-      if (id == 0) return true;
+      if (id == 0 || std::binary_search(handed.begin(), handed.end(), id)) return true;
       deck.total++;
       if (const CardState* s = findIn(states, id)) {
         if (s->due <= now) deck.due++;
@@ -530,10 +557,13 @@ bool Session::open(const std::string& language) {
     }
     std::sort(notesDone.begin(), notesDone.end());
   } else {
+    // Cards handed over to Anki are reviewed in its deck now.
+    std::vector<uint64_t> handed;
+    loadHanded(lang, handed);
     CsvRecordParser parser(1u << GUID, 32);
     const bool found = scanCsv(csvPath, parser, [&](const CsvRecordParser& row) {
       const uint64_t id = guidToId(row.field(GUID));
-      if (id != 0) consider(id, row.recordStart());
+      if (id != 0 && !std::binary_search(handed.begin(), handed.end(), id)) consider(id, row.recordStart());
       return true;
     });
     if (!found) return false;
@@ -943,10 +973,14 @@ bool readReviewLog(const std::string& deck, std::vector<ReviewLogEntry>& out) {
   if (!Storage.exists(path.c_str())) return true;
   HalFile file;
   if (!Storage.openFileForRead("FLASH", path, file)) return false;
-  const size_t count = std::min<size_t>(file.fileSize() / LOG_BYTES, MAX_LOG_ENTRIES);
-  const size_t bytes = count * sizeof(ReviewLogEntry);
-  if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < bytes + 8 * 1024) {
-    LOG_ERR("FLASH", "OOM: %u bytes for %s", static_cast<unsigned>(bytes), path.c_str());
+  // As many as the heap holds, down to a few: the caller sends them and asks again for the rest.
+  constexpr size_t HEADROOM = 8 * 1024;
+  constexpr size_t MIN_ENTRIES = 8;
+  const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  const size_t fits = largest > HEADROOM ? (largest - HEADROOM) / sizeof(ReviewLogEntry) : 0;
+  const size_t count = std::min({file.fileSize() / LOG_BYTES, MAX_LOG_ENTRIES, fits});
+  if (count < std::min<size_t>(MIN_ENTRIES, file.fileSize() / LOG_BYTES)) {
+    LOG_ERR("FLASH", "OOM: %u bytes free for %s", static_cast<unsigned>(largest), path.c_str());
     return false;
   }
   out.reserve(count);
@@ -984,6 +1018,162 @@ bool dropReviewLog(const std::string& deck, const size_t count) {
     while (in.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec))) {
       if (out.write(rec, sizeof(rec)) != sizeof(rec)) return false;
     }
+  }
+  return Storage.replaceFile(tmp.c_str(), path.c_str());
+}
+
+const char* autonym(const std::string& code) {
+  // Korean and Cantonese are left out: the UI font has no Hangul and no 粵.
+  struct Autonym {
+    const char* code;
+    const char* name;
+  };
+  static constexpr Autonym AUTONYMS[] = {
+      {"ja", "日本語"},  {"zh", "中文"},     {"en", "English"},    {"de", "Deutsch"},    {"fr", "Français"},
+      {"es", "Español"}, {"it", "Italiano"}, {"pt", "Português"},  {"nl", "Nederlands"}, {"hu", "Magyar"},
+      {"pl", "Polski"},  {"ru", "Русский"},  {"uk", "Українська"},
+  };
+  for (const auto& a : AUTONYMS) {
+    if (code == a.code) return a.name;
+  }
+  return nullptr;
+}
+
+void miningLanguages(std::vector<std::string>& out) { deckLanguages(out); }
+
+size_t newMinedRows(const std::string& language, const std::vector<uint64_t>& skip, const size_t max,
+                    std::vector<MinedRow>& out) {
+  out.clear();
+  out.reserve(max);
+  std::vector<uint64_t> handed;
+  if (!loadHanded(language, handed)) return 0;
+  const std::string path = deckPath(language);
+  sentencemining::upgradeExport(path);
+  CsvRecordParser parser(static_cast<uint16_t>((1u << COLUMNS) - 1));
+  scanCsv(path, parser, [&](const CsvRecordParser& row) {
+    const uint64_t id = guidToId(row.field(GUID));
+    if (id == 0 || std::binary_search(handed.begin(), handed.end(), id) ||
+        std::find(skip.begin(), skip.end(), id) != skip.end()) {
+      return true;
+    }
+    out.emplace_back();  // filled in place: a MinedRow on the stack would pass 256 bytes
+    out.back().id = id;
+    for (uint8_t c = WORD; c < COLUMNS; c++) out.back().fields[c] = row.field(static_cast<Column>(c));
+    return out.size() < max;
+  });
+  return out.size();
+}
+
+// The Anki deck a language's mined words go to: its id, as text (flashcards-<lang>.deck).
+std::string minedDeckId(const std::string& language) {
+  const std::string path = sdsystem::path(("flashcards-" + language + ".deck").c_str());
+  if (!Storage.exists(path.c_str())) return {};
+  HalFile file;
+  if (!Storage.openFileForRead("FLASH", path, file)) return {};
+  char id[24] = {};
+  const int n = file.read(reinterpret_cast<uint8_t*>(id), sizeof(id) - 1);
+  return n > 0 ? std::string(id, static_cast<size_t>(n)) : std::string();
+}
+
+bool setMinedDeckId(const std::string& language, const std::string& deckId) {
+  if (minedDeckId(language) == deckId) return true;
+  const std::string path = sdsystem::path(("flashcards-" + language + ".deck").c_str());
+  const std::string tmp = path + ".tmp";
+  {
+    HalFile file;
+    if (!Storage.openFileForWrite("FLASH", tmp, file) ||
+        file.write(reinterpret_cast<const uint8_t*>(deckId.data()), deckId.size()) != deckId.size()) {
+      return false;
+    }
+  }
+  return Storage.replaceFile(tmp.c_str(), path.c_str());
+}
+
+bool handOver(const std::string& language, const std::string& ankiKey, const std::vector<HandedCard>& cards) {
+  if (cards.empty()) return true;
+  // 1. Each card's progress, under its Anki card id in the Anki deck's state table.
+  std::vector<CardState> from, to;
+  uint16_t fromDay = 0, fromNew = 0, toDay = 0, toNew = 0;
+  if (!loadStates(language, from, fromDay, fromNew) || !loadStates(ankiKey, to, toDay, toNew, cards.size())) {
+    return false;
+  }
+  std::vector<uint64_t> withProgress;  // Anki card ids whose schedule must reach Anki
+  withProgress.reserve(cards.size());
+  for (const auto& c : cards) {
+    const CardState* s = c.adopted ? nullptr : findIn(from, c.csvId);
+    if (!s) continue;  // never reviewed (a new card in Anki too), or Anki's schedule is kept
+    withProgress.push_back(c.cardId);
+    CardState moved = *s;
+    moved.id = c.cardId;
+    const auto it = std::lower_bound(to.begin(), to.end(), c.cardId,
+                                     [](const CardState& a, const uint64_t key) { return a.id < key; });
+    if (it != to.end() && it->id == c.cardId) {
+      *it = moved;
+    } else {
+      to.insert(it, moved);
+    }
+  }
+  if (!writeStates(ankiKey, to, todayOr(toDay), toNew)) return false;
+  std::vector<CardState>().swap(from);
+  std::vector<CardState>().swap(to);
+
+  // 2. Their review history, into the Anki deck's log: the deck's sync sends it to Anki. A
+  // repeat after an interruption sends a review twice, which Anki refuses as a conflict.
+  const std::string fromLog = logPath(language);
+  if (Storage.exists(fromLog.c_str())) {
+    HalFile file;
+    if (!Storage.openFileForRead("FLASH", fromLog, file)) return false;
+    std::vector<ReviewLogEntry> batch;
+    batch.reserve(32);
+    uint8_t rec[LOG_BYTES];
+    while (file.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec))) {
+      const uint8_t* p = rec;
+      ReviewLogEntry e;
+      e.id = take<uint64_t>(p);
+      e.timeMs = take<int64_t>(p);
+      e.interval = take<uint16_t>(p);
+      e.previous = take<uint16_t>(p);
+      e.rating = take<uint8_t>(p);
+      e.kind = take<uint8_t>(p);
+      const auto c = std::find_if(cards.begin(), cards.end(), [&e](const HandedCard& h) { return h.csvId == e.id; });
+      if (c == cards.end()) continue;
+      e.id = c->cardId;
+      batch.push_back(e);
+      if (batch.size() == 32) {
+        if (!appendLog(ankiKey, batch)) return false;
+        batch.clear();
+      }
+    }
+    if (!appendLog(ankiKey, batch)) return false;
+  }
+  // A card reviewed before ratings were logged has progress but no history: its schedule still
+  // goes to Anki, through an entry without a rating.
+  {
+    std::vector<ReviewLogEntry> scheduleOnly;
+    scheduleOnly.reserve(withProgress.size());
+    for (const uint64_t id : withProgress) {
+      ReviewLogEntry e;
+      e.id = id;
+      e.timeMs = static_cast<int64_t>(time(nullptr)) * 1000;
+      scheduleOnly.push_back(e);
+    }
+    if (!appendLog(ankiKey, scheduleOnly)) return false;
+  }
+
+  // 3. Last: from now on the local deck leaves these cards out.
+  std::vector<uint64_t> handed;
+  if (!loadHanded(language, handed)) return false;
+  handed.reserve(handed.size() + cards.size());
+  for (const auto& c : cards) handed.push_back(c.csvId);
+  std::sort(handed.begin(), handed.end());
+  handed.erase(std::unique(handed.begin(), handed.end()), handed.end());
+  const std::string path = handedPath(language);
+  const std::string tmp = path + ".tmp";
+  {
+    HalFile file;
+    if (!Storage.openFileForWrite("FLASH", tmp, file)) return false;
+    const size_t bytes = handed.size() * sizeof(uint64_t);
+    if (file.write(reinterpret_cast<const uint8_t*>(handed.data()), bytes) != bytes) return false;
   }
   return Storage.replaceFile(tmp.c_str(), path.c_str());
 }

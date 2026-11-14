@@ -1,5 +1,6 @@
 #pragma once
 
+#include <FlashcardCsv.h>
 #include <Fsrs.h>
 
 #include <cstdint>
@@ -39,7 +40,7 @@ struct ReviewLogEntry {
   int64_t timeMs = 0;                       // when, ms since 1970; becomes the review's id in Anki
   uint16_t interval = 0;                    // days until it is due again; minutes for a step with MINUTES set
   uint16_t previous = 0;                    // the interval before this review
-  uint8_t rating = 0;                       // 1 = Again .. 4 = Easy
+  uint8_t rating = 0;                       // 1 = Again .. 4 = Easy; 0: send the schedule only
   uint8_t kind = 0;                         // 0 learning, 1 review, 2 relearning (Anki's revlog types), | MINUTES
   static constexpr uint8_t MINUTES = 0x80;  // `interval` is a learning step in minutes
 };
@@ -64,6 +65,32 @@ bool applyPulledReviews(const std::string& deck, const std::vector<PulledReview>
 // The progress of the given cards, for handing back to Anki. Missing cards are left out.
 bool readStates(const std::string& deck, const std::vector<uint64_t>& ids, std::vector<CardState>& out,
                 uint16_t& today);
+
+// The language's own name ("日本語"), or nullptr when it has none here. Also names its Anki deck.
+const char* autonym(const std::string& code);
+// The languages with a mining file, sorted.
+void miningLanguages(std::vector<std::string>& out);
+
+// A mined card not yet handed over to Anki: its CSV id and fields (WORD .. TAGS).
+struct MinedRow {
+  uint64_t id = 0;
+  std::string fields[COLUMNS];
+};
+// Up to `max` such rows, leaving out the ids in `skip`. Returns how many.
+size_t newMinedRows(const std::string& language, const std::vector<uint64_t>& skip, size_t max,
+                    std::vector<MinedRow>& out);
+// The Anki deck a language's mined words go to, by id: it follows the deck through renames.
+// Empty before the first hand-over.
+std::string minedDeckId(const std::string& language);
+bool setMinedDeckId(const std::string& language, const std::string& deckId);
+struct HandedCard {
+  uint64_t csvId = 0;
+  uint64_t cardId = 0;   // its card in Anki
+  bool adopted = false;  // the note was in Anki already: its schedule there is kept
+};
+// Moves mined cards to an Anki deck: their review history, and the progress of new notes, go to
+// the deck's own (sent to Anki by its sync), and the local deck leaves them out from then on.
+bool handOver(const std::string& language, const std::string& ankiKey, const std::vector<HandedCard>& cards);
 
 struct DeckSummary {
   std::string language;  // the deck key: a mining file's language code ("ja"), or "anki-<id>" for an Anki deck
