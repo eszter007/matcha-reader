@@ -4,14 +4,18 @@
 #include <cstdint>
 #include <string>
 
-// Takes one string member out of a JSON reply while it streams in, e.g. the "css" of
-// cards.render, which repeats the note type's whole style sheet in every card: the reply keeps
-// `"css":""`, and the value's raw (still escaped) bytes are hashed and, when asked, kept apart.
-// The value is assumed to be a string; any member with that name, at any depth, is taken.
+// Takes string members out of a JSON reply while it streams in, e.g. the "css" of cards.render,
+// which repeats the note type's whole style sheet in every card: the reply keeps `"css":""`, and
+// the values' raw (still escaped) bytes are hashed and, when asked, kept apart. Values are
+// assumed to be strings; any member with a listed name, at any depth, is taken.
 class JsonValueSkipper {
  public:
   // `key` is the member name without quotes, at most 15 bytes.
   explicit JsonValueSkipper(const char* key);
+  // Several names: a null-terminated list of at most MAX_KEYS, each at most 15 bytes. Only the
+  // first name's value is hashed and passed to decodeTo(); the others are only left out.
+  static constexpr size_t MAX_KEYS = 6;
+  explicit JsonValueSkipper(const char* const* keys);
 
   // Copies `in` to `out` without the value's bytes. False when `out` would pass `outCap`.
   bool feed(const char* in, size_t len, char* out, size_t& outLen, size_t outCap);
@@ -33,10 +37,11 @@ class JsonValueSkipper {
   enum class State : uint8_t { Out, Str, StrEsc, AfterKey, AfterColon, Value, ValueEsc };
   void take(char c);
 
-  char key_[16];
-  uint8_t keyLen_;
-  uint8_t matched_ = 0;
-  bool keyMatches_ = false;
+  const char* keys_[MAX_KEYS + 1] = {};  // the names, null-terminated; owned by the caller (literals)
+  char name_[16];                        // the member name being read
+  uint8_t nameLen_ = 0;
+  uint8_t key_ = 0;  // which name's value is being skipped
+  bool nameFits_ = true;
   State state_ = State::Out;
   uint32_t hash_ = 2166136261u;
   size_t valueBytes_ = 0;

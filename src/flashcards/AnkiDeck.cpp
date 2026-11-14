@@ -10,10 +10,12 @@
 #include <algorithm>
 #include <cstring>
 
+#include "FlashcardStore.h"
+
 namespace ankideck {
 namespace {
 constexpr size_t RECORD_BYTES = INDEX_RECORD_BYTES;
-constexpr size_t MAX_CARDS = 2000;  // as many as the flashcard store keeps progress for
+constexpr size_t MAX_CARDS = flashcards::Session::MAX_CARDS;  // as many as progress is kept for
 
 template <typename T>
 void put(uint8_t*& p, const T v) {
@@ -82,6 +84,9 @@ bool readInfo(const std::string& deckId, DeckInfo& out) {
   out.leechThreshold = doc["leechThreshold"] | static_cast<uint8_t>(0);
   out.leechSuspend = doc["leechSuspend"] | true;
   out.fetchVersion = doc["fetchVersion"] | static_cast<uint8_t>(0);
+  out.typesMod = doc["typesMod"] | static_cast<uint32_t>(0);
+  out.refetchAll = doc["refetchAll"] | false;
+  out.refetchedUpTo = doc["refetchedUpTo"] | static_cast<uint64_t>(0);
   out.cssHashes.clear();
   for (JsonVariantConst h : doc["cssHashes"].as<JsonArrayConst>()) {
     if (out.cssHashes.size() < MAX_CSS_HASHES) out.cssHashes.push_back(h.as<uint32_t>());
@@ -119,6 +124,11 @@ bool writeInfo(const DeckInfo& info) {
     doc["leechSuspend"] = info.leechSuspend;
   }
   if (info.fetchVersion > 0) doc["fetchVersion"] = info.fetchVersion;
+  if (info.typesMod > 0) doc["typesMod"] = info.typesMod;
+  if (info.refetchAll) {
+    doc["refetchAll"] = true;
+    if (info.refetchedUpTo > 0) doc["refetchedUpTo"] = info.refetchedUpTo;
+  }
   if (!info.cssHashes.empty()) {
     JsonArray hashes = doc["cssHashes"].to<JsonArray>();
     for (const uint32_t h : info.cssHashes) hashes.add(h);

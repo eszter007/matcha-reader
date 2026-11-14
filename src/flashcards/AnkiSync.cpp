@@ -21,11 +21,19 @@
 
 namespace ankisync {
 namespace {
-constexpr size_t BATCH = 50;                  // ids per request: no request grows with the deck
-constexpr size_t CHECKPOINT_BATCHES = 2;      // index saved every 100 cards: a cut-off sync resumes
+constexpr size_t BATCH = 50;              // ids per request: no request grows with the deck
+constexpr size_t CHECKPOINT_BATCHES = 2;  // index saved every 100 cards: a cut-off sync resumes
+#ifdef BOARD_HAS_PSRAM
+constexpr size_t MAX_CARD_XHTML = 160 * 1024;  // one side as stored
+#else
 constexpr size_t MAX_CARD_XHTML = 40 * 1024;  // one side as stored
-constexpr size_t MAX_CSS = 32 * 1024;         // a deck's styling
-constexpr size_t NOTE_GROUP = 10;             // notes looked up per request
+#endif
+#ifdef BOARD_HAS_PSRAM
+constexpr size_t MAX_CSS = 128 * 1024;  // a deck's styling
+#else
+constexpr size_t MAX_CSS = 32 * 1024;  // a deck's styling
+#endif
+constexpr size_t NOTE_GROUP = 10;  // notes looked up per request
 // Raised when cards that were too large may fit now: those are fetched once more.
 // 1: each card's reply leaves out the note type's CSS.
 // 2: images stream to the card, so large ones that failed before are looked for again (cards
@@ -102,6 +110,17 @@ class CssAppend {
   bool failed = false;
 };
 
+// A deck or note type name inside a quoted Anki search term: quotes and backslashes escaped.
+std::string quoted(const std::string& name) {
+  std::string out;
+  out.reserve(name.size() + 2);
+  for (const char c : name) {
+    if (c == '"' || c == '\\') out.push_back('\\');
+    out.push_back(c);
+  }
+  return out;
+}
+
 uint32_t fnv1a(const char* text) {
   uint32_t hash = 2166136261u;
   for (; *text; ++text) hash = (hash ^ static_cast<uint8_t>(*text)) * 16777619u;
@@ -129,6 +148,16 @@ bool writeSide(const std::string& path, const char* html, const size_t limit, st
   // WebP is drawn from a PNG copy (see fetchMedia).
   for (size_t at = 0; (at = scratch.find(".webp\"", at)) != std::string::npos; at += 9) {
     scratch.insert(at + 5, ".png");
+  }
+  // Anki desktop leaves a type-in answer's box as "[[type:Field]]": the reader has no box for it.
+  for (size_t at = 0; (at = scratch.find("[[type:", at)) != std::string::npos;) {
+    const size_t end = scratch.find("]]", at);
+    // Only a whole placeholder: a field name holds no markup, brackets or line break.
+    if (end == std::string::npos || scratch.find_first_of("<[\n", at + 7) < end) {
+      at += 7;
+      continue;
+    }
+    scratch.erase(at, end + 2 - at);
   }
   {
     std::string styles;
@@ -183,7 +212,11 @@ void mediaNames(const std::string& xhtml, std::vector<std::string>& out) {
 // can be far larger than the reply buffer.
 class Base64File {
  public:
-  static constexpr size_t MAX_BYTES = 1024 * 1024;  // larger images are not kept
+#ifdef BOARD_HAS_PSRAM
+  static constexpr size_t MAX_BYTES = 4 * 1024 * 1024;  // larger images are not kept
+#else
+  static constexpr size_t MAX_BYTES = 1024 * 1024;  // the decoder's budget without PSRAM
+#endif
 
   bool open(const std::string& path) { return Storage.openFileForWrite("ANKI", path, file); }
   static void put(void* ctx, const char c) {
@@ -286,6 +319,7 @@ class DeckSync {
  private:
   bool retryTooLarge = false;          // cards marked too large under an older FETCH_VERSION are tried again
   ankideck::DeckInfo* info = nullptr;  // the deck being synced, saved at the end of run()
+  uint32_t typesModSeen = 0;           // newest note type change seen; saved with a complete refresh
   // Asks the screen whether the user cancelled; once true, stays true for this sync.
   bool cancelRequested() {
     if (result.error.kind != AnkiClient::Error::Kind::Cancelled && progress.cancelled()) {
@@ -320,6 +354,16 @@ class DeckSync {
   // edited: cards whose notes may have changed, sorted; nullptr when any may have.
   bool refreshCards(const std::string& name, const std::string& deckId, const std::vector<uint64_t>& ids,
                     const std::vector<uint64_t>* edited);
+  // Sets info->refetchAll when a note type this deck uses changed (template or style) since the
+  // last complete refresh, by Anki's own change times.
+  void checkNoteTypes(const std::string& name);
+  // A saved index holds the cards fetched again up to `id`: a stopped refetch resumes after it.
+  void noteRefetched(uint64_t id) {
+    if (!info->refetchAll) return;
+    info->refetchedUpTo = id;
+    if (!ankideck::writeInfo(*info)) LOG_ERR("ANKI", "Refetch progress not saved");
+  }
+  bool deckUses(const std::string& name, const char* noteType);
   bool pullReviews(ankideck::DeckInfo& info);
   bool pushReviews(ankideck::DeckInfo& info);
   // Sends one read of the log (history, then each card's schedule) and drops it from the log.
@@ -397,7 +441,7 @@ bool DeckSync::editedSince(const std::string& name, const ankideck::DeckInfo& in
   constexpr int64_t DAY_MS = 24LL * 60 * 60 * 1000;
   const int64_t days = (nowMs - info.cardsSyncedMs) / DAY_MS + 2;
   bool cut = false;
-  if (searchCards("\"deck:" + name + "\" edited:" + std::to_string(days), edited, &cut) && !cut &&
+  if (searchCards("\"deck:" + quoted(name) + "\" edited:" + std::to_string(days), edited, &cut) && !cut &&
       edited.size() <= deckSize / 2) {
     return true;
   }
@@ -514,6 +558,57 @@ bool DeckSync::pushLeeches(const std::string& deckId, const bool suspend) {
   return true;
 }
 
+bool DeckSync::deckUses(const std::string& name, const char* noteType) {
+  JsonDocument params, page, filter;
+  params["query"] = "\"deck:" + quoted(name) + "\" \"note:" + quoted(noteType) + "\"";
+  params["limit"] = 1;
+  filter["ids"] = true;
+  if (!client.call("cards.search", params, page, &filter)) return false;
+  return page["ids"].size() > 0;
+}
+
+void DeckSync::checkNoteTypes(const std::string& name) {
+  JsonDocument none, types;
+  none.to<JsonObject>();
+  if (!client.call("noteTypes.list", none, types)) {
+    result.error = AnkiClient::Error{};
+    return;  // checked again at the next sync: typesMod does not move
+  }
+  // Anki's own times only, so the two clocks never meet. Before a first check nothing counts as
+  // changed: the newest time is only noted.
+  const uint32_t since = info->typesMod;
+  uint32_t newest = since;
+  bool complete = true;
+  static constexpr const char* const BIG[] = {"css",         "questionHtml", "answerHtml",
+                                              "latexHeader", "latexFooter",  nullptr};
+  for (JsonVariantConst t : types.as<JsonArrayConst>()) {
+    if (cancelRequested()) return;
+    JsonDocument params, type, filter;
+    params["noteType"]["id"] = t["id"].as<const char*>();
+    filter["modifiedAt"] = true;
+    JsonValueSkipper skip(BIG);
+    if (!client.call("noteTypes.get", params, type, &filter, &skip)) {
+      complete = false;
+      continue;
+    }
+    const uint32_t mod = parseStamp(type["modifiedAt"] | "");
+    newest = std::max(newest, mod);
+    if (since == 0 || mod <= since || info->refetchAll) continue;
+    const bool uses = deckUses(name, t["name"] | "");
+    if (client.error().kind != AnkiClient::Error::Kind::None && !uses) {
+      complete = false;
+      continue;
+    }
+    if (!uses) continue;
+    LOG_INF("ANKI", "Note type %s changed: every card again", t["name"] | "");
+    info->refetchAll = true;
+    if (!ankideck::writeInfo(*info)) LOG_ERR("ANKI", "Refetch not noted");
+  }
+  result.error = AnkiClient::Error{};
+  // A type not read this time keeps the old mark, so its change is still found next sync.
+  typesModSeen = complete ? newest : since;
+}
+
 // The deck's options in Anki: new cards a day, desired retention, maximum interval. Without an
 // answer (an older Anki, a filtered deck) the deck keeps what it had, or the device settings.
 void DeckSync::readPreset(const char* presetId, ankideck::DeckInfo& info) {
@@ -586,7 +681,7 @@ void DeckSync::saveBuried(const std::string& name, const std::string& deckId) {
   const int32_t day = flashcards::today();
   if (nowMs <= 0 || day < 0) return;
   std::vector<uint64_t> buried;
-  if (!searchCards("\"deck:" + name + "\" is:buried", buried)) {
+  if (!searchCards("\"deck:" + quoted(name) + "\" is:buried", buried)) {
     result.error = AnkiClient::Error{};
     return;
   }
@@ -729,7 +824,9 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
       const bool wasHere = (had & (1ULL << (i - at))) != 0;
       // A card too large stays so until its note changes, or until a newer way of fetching may fit it.
       const bool tooLarge = (old.flags & ankideck::TOO_LARGE) != 0;
-      const bool current = wasHere && old.noteMod == r.noteMod &&
+      // While refetching, only the cards the saved index has not fetched again yet.
+      const bool refetch = info->refetchAll && r.cardId > info->refetchedUpTo;
+      const bool current = wasHere && old.noteMod == r.noteMod && !refetch &&
                            (tooLarge ? !retryTooLarge : Storage.exists(ankideck::frontPath(deckId, r.cardId).c_str()));
       if (current) {
         kept++;
@@ -794,7 +891,7 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
               static_cast<unsigned>(ids.size()));
       if (changed) {
         dropRemoved(deckId, known, ids, checkedUpTo, ids[end - 1]);
-        fresh.checkpoint(known, ids[end - 1], checkedUpTo);
+        if (fresh.checkpoint(known, ids[end - 1], checkedUpTo)) noteRefetched(ids[end - 1]);
       }
       return false;
     }
@@ -803,6 +900,7 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
     if (changed && end < ids.size() && (at / BATCH + 1) % CHECKPOINT_BATCHES == 0) {
       dropRemoved(deckId, known, ids, checkedUpTo, ids[end - 1]);
       if (!fresh.checkpoint(known, ids[end - 1], checkedUpTo)) return false;
+      noteRefetched(ids[end - 1]);
       checkpoints++;
       changed = false;
     }
@@ -973,15 +1071,26 @@ bool DeckSync::run(const std::string& name, const std::string& deckId, const cha
   this->info = &info;
   std::vector<uint64_t> ids;
   // Suspended cards leave the device; their progress stays, for when they are unsuspended.
-  if (!searchCards("\"deck:" + name + "\" -is:suspended", ids)) return false;
+  if (!searchCards("\"deck:" + quoted(name) + "\" -is:suspended", ids)) return false;
   {
     std::vector<uint64_t> edited;
-    const bool known = editedSince(name, info, ids.size(), edited);
+    checkNoteTypes(name);
+    if (cancelRequested()) return false;
+    if (info.refetchAll && info.refetchedUpTo == 0) {
+      // Every card again: their templates and styles (note type CSS and template <style>) come
+      // back with them, so style.css starts over (once: a stopped refetch keeps what it rebuilt).
+      Storage.remove(ankideck::cssPath(deckId).c_str());
+      info.cssHashes.clear();
+    }
+    const bool known = !info.refetchAll && editedSince(name, info, ids.size(), edited);
     if (!refreshCards(name, deckId, ids, known ? &edited : nullptr)) return false;
   }
   saveBuried(name, deckId);
   // Only a complete refresh moves this on: the next sync asks for the notes edited since.
   if (nowMs > 0) info.cardsSyncedMs = nowMs;
+  if (typesModSeen > info.typesMod) info.typesMod = typesModSeen;
+  info.refetchAll = false;
+  info.refetchedUpTo = 0;
   info.fetchVersion = FETCH_VERSION;
   // Pull before push: Anki's reviews land first, then the device's own go out on top.
   if (!pullReviews(info) || !pushReviews(info)) return false;

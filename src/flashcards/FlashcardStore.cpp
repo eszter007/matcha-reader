@@ -148,6 +148,12 @@ uint16_t todayOr(const uint16_t stored) {
 
 std::string logPath(const std::string& deck) { return sdsystem::path(("flashcards-" + deck + ".log").c_str()); }
 
+// When each card between learning steps is due, by the wall clock: 16 bytes per card (id, due
+// seconds since 1970). Written with the progress; a card without an entry is due at once.
+std::string stepsPath(const std::string& deck) { return sdsystem::path(("flashcards-" + deck + ".steps").c_str()); }
+
+bool clockValid(const time_t now) { return now > 1577836800; }  // 2020-01-01
+
 constexpr size_t LOG_BYTES = 24;
 
 // Appends the ratings since the last save. Only a successful save drops them from RAM.
@@ -463,6 +469,33 @@ bool Session::open(const std::string& language) {
   pendingLog.reserve(8);  // ratings between two saves
   fresh.reserve(std::min<size_t>(newLimit, MAX_QUEUE));
   learning.reserve(32);  // cards between steps: at most 64, 24 bytes each
+  // When the saved steps fall due, by the wall clock (see stepsPath).
+  std::vector<std::pair<uint64_t, int64_t>> stepDue;
+  {
+    HalFile file;
+    if (Storage.exists(stepsPath(language).c_str()) && Storage.openFileForRead("FLASH", stepsPath(language), file)) {
+      stepDue.reserve(64);
+      uint8_t rec[16];
+      while (stepDue.size() < 64 && file.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec))) {
+        uint64_t id = 0;
+        int64_t due = 0;
+        memcpy(&id, rec, 8);
+        memcpy(&due, rec + 8, 8);
+        stepDue.emplace_back(id, due);
+      }
+    }
+  }
+  const time_t wallNow = time(nullptr);
+  const auto stepDueMs = [&](const uint64_t id) {
+    const uint32_t ms = millis();
+    if (!clockValid(wallNow)) return ms;
+    for (const auto& d : stepDue) {
+      if (d.first != id) continue;
+      const int64_t wait = d.second - static_cast<int64_t>(wallNow);
+      return wait > 0 ? static_cast<uint32_t>(ms + std::min<int64_t>(wait, 86400) * 1000) : ms;
+    }
+    return ms;
+  };
   const auto consider = [&](const uint64_t id, const uint32_t offset, const uint64_t note = 0) {
     // A leech the next sync suspends in Anki is not shown meanwhile.
     if (std::binary_search(leeches.begin(), leeches.end(), id)) return;
@@ -474,7 +507,7 @@ bool Session::open(const std::string& language) {
       const uint8_t count = relearn ? relearnCount : learnCount;  // the preset may have changed since
       if (saved > 0 && count > 0 && s->due <= day && learning.size() < 64) {
         const uint8_t step = std::min<uint8_t>(saved - 1, count - 1);
-        learning.push_back({{id, offset, note}, static_cast<uint32_t>(millis()), step, relearn});
+        learning.push_back({{id, offset, note}, stepDueMs(id), step, relearn});
         return;
       }
       if (s->due <= day && queue.size() < MAX_QUEUE) queue.push_back({id, offset, note});
@@ -820,6 +853,7 @@ void Session::rate(const fsrs::Rating rating) {
 bool Session::save() {
   if (unsaved == 0) return true;
   if (!writeStates(lang, states, day, newToday)) return false;
+  saveStepTimes();
   // After the states: a rating logged without its new state would be sent to Anki twice over.
   if (appendLog(lang, pendingLog)) {
     pendingLog.clear();
@@ -828,6 +862,30 @@ bool Session::save() {
   }
   unsaved = 0;
   return true;
+}
+
+void Session::saveStepTimes() const {
+  const std::string path = stepsPath(lang);
+  const time_t now = time(nullptr);
+  if (!clockValid(now)) return;  // the saved times stay until a clock can replace them
+  if (learning.empty()) {
+    if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
+    return;
+  }
+  HalFile file;
+  if (!Storage.openFileForWrite("FLASH", path, file)) return;
+  const uint32_t ms = millis();
+  for (const auto& l : learning) {
+    // Signed difference: a step already passed is due now.
+    const int64_t due = static_cast<int64_t>(now) + std::max<int32_t>(0, static_cast<int32_t>(l.dueMs - ms)) / 1000;
+    uint8_t rec[16];
+    memcpy(rec, &l.item.id, 8);
+    memcpy(rec + 8, &due, 8);
+    if (file.write(rec, sizeof(rec)) != sizeof(rec)) {
+      LOG_ERR("FLASH", "Step times not saved");
+      return;
+    }
+  }
 }
 
 bool applyPulledReviews(const std::string& deck, const std::vector<PulledReview>& reviews) {

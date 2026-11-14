@@ -2,13 +2,14 @@
 
 #include <cstring>
 
-JsonValueSkipper::JsonValueSkipper(const char* key) {
-  keyLen_ = static_cast<uint8_t>(strnlen(key, sizeof(key_) - 1));
-  memcpy(key_, key, keyLen_);
-  key_[keyLen_] = '\0';
+JsonValueSkipper::JsonValueSkipper(const char* key) { keys_[0] = key; }
+
+JsonValueSkipper::JsonValueSkipper(const char* const* keys) {
+  for (size_t i = 0; i < MAX_KEYS && keys[i]; i++) keys_[i] = keys[i];
 }
 
 void JsonValueSkipper::take(const char c) {
+  if (key_ != 0) return;
   hash_ = (hash_ ^ static_cast<uint8_t>(c)) * 16777619u;
   valueBytes_++;
   if (sink_) decode(c);
@@ -38,14 +39,23 @@ bool JsonValueSkipper::feed(const char* in, const size_t len, char* out, size_t&
         break;
       case State::Str:
         if (c == '\\') {
-          keyMatches_ = false;
+          nameFits_ = false;  // an escaped name is never one of ours
           state_ = State::StrEsc;
         } else if (c == '"') {
-          state_ = keyMatches_ && matched_ == keyLen_ ? State::AfterKey : State::Out;
-        } else if (keyMatches_ && matched_ < keyLen_ && c == key_[matched_]) {
-          matched_++;
+          state_ = State::Out;
+          if (nameFits_) {
+            name_[nameLen_] = '\0';
+            for (size_t k = 0; k < MAX_KEYS && keys_[k]; k++) {
+              if (strcmp(name_, keys_[k]) == 0) {
+                state_ = State::AfterKey;
+                key_ = static_cast<uint8_t>(k);
+              }
+            }
+          }
+        } else if (nameLen_ + 1 < sizeof(name_)) {
+          name_[nameLen_++] = c;
         } else {
-          keyMatches_ = false;
+          nameFits_ = false;
         }
         break;
       case State::StrEsc:
@@ -62,16 +72,16 @@ bool JsonValueSkipper::feed(const char* in, const size_t len, char* out, size_t&
           state_ = State::Out;
           if (c == '"') {
             state_ = State::Str;
-            matched_ = 0;
-            keyMatches_ = true;
+            nameLen_ = 0;
+            nameFits_ = true;
           }
         }
         break;
       case State::Out:
         if (c == '"') {
           state_ = State::Str;
-          matched_ = 0;
-          keyMatches_ = true;
+          nameLen_ = 0;
+          nameFits_ = true;
         }
         break;
     }

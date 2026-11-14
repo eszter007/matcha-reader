@@ -16,7 +16,11 @@ class AnkiClient {
  public:
   // The largest response kept. Bigger ones (a card full of scripts and inline images) fail with
   // Error::Kind::TooLarge instead of taking the heap.
+#ifdef BOARD_HAS_PSRAM
+  static constexpr size_t MAX_RESPONSE = 256 * 1024;  // in PSRAM: almost no card is too large
+#else
   static constexpr size_t MAX_RESPONSE = 48 * 1024;
+#endif
   // With Wi-Fi up the largest free block can be smaller: begin() settles for down to this.
   static constexpr size_t MIN_RESPONSE = 16 * 1024;
 

@@ -57,6 +57,13 @@ struct DeckInfo {
   // Style blocks already in style.css: FNV-1a of a note type's CSS as the reply carried it
   // (JsonValueSkipper::hash), or of a template's own <style> text.
   std::vector<uint32_t> cssHashes;
+  // Newest change time (Anki's clock, seconds) of any note type at the last complete refresh; a
+  // note type changed later has its cards in this deck fetched again. 0 until first checked.
+  uint32_t typesMod = 0;
+  // A note type used here changed: every card is fetched again (templates and styles with them),
+  // until a refresh completes. Kept across failed or cancelled syncs.
+  bool refetchAll = false;
+  uint64_t refetchedUpTo = 0;  // cards up to this id were fetched again already (index saved)
 };
 constexpr size_t MAX_CSS_HASHES = 16;
 

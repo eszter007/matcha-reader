@@ -118,7 +118,11 @@ struct Interval {
 class Session {
  public:
   // Most cards a deck may hold: the state table is 24 bytes per card in RAM.
+#ifdef BOARD_HAS_PSRAM
+  static constexpr size_t MAX_CARDS = 10000;  // the table goes to PSRAM (allocations over 4 KB do)
+#else
   static constexpr size_t MAX_CARDS = 2000;
+#endif
   static constexpr size_t MAX_QUEUE = 300;
 
   // Loads the deck's progress and queues today's cards: due reviews first, then new ones.
@@ -161,6 +165,7 @@ class Session {
   static uint16_t stepMinutes(const uint16_t* steps, uint8_t count, fsrs::Rating rating, int current, int next);
   const QueueItem& active() const { return activeLearn >= 0 ? learning[activeLearn].item : queue[position]; }
   void pickNext();
+  void saveStepTimes() const;
 
   CardState* find(uint64_t id);
   const CardState* find(uint64_t id) const;
