@@ -370,6 +370,8 @@ class ChapterHtmlSlimParser {
 
   void flushPendingAnchor();
   void flushPartWordBuffer();
+  // Lays out all but the last line of a block grown past its word limit (`reason` is logged).
+  void softFlushIfLong(const char* reason);
   void fallbackTableRowToStacked();
   void closeTableCell();
   void finishTableRow();

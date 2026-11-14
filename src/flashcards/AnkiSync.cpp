@@ -38,8 +38,9 @@ constexpr size_t NOTE_GROUP = 10;  // notes looked up per request
 // 1: each card's reply leaves out the note type's CSS.
 // 2: images stream to the card, so large ones that failed before are looked for again (cards
 //    still too large are also tried once more, as with any raise).
+// 3: a reply too large for both sides is fetched again one side at a time.
 constexpr uint8_t MEDIA_STREAM_VERSION = 2;
-constexpr uint8_t FETCH_VERSION = MEDIA_STREAM_VERSION;
+constexpr uint8_t FETCH_VERSION = 3;
 constexpr uint32_t OPERATION_TIMEOUT = 120000;  // AnkiWeb syncs and imports
 constexpr const char* RATING_NAMES[] = {"again", "hard", "good", "easy"};
 constexpr size_t HEAP_HEADROOM = 8 * 1024;  // left for Wi-Fi and SD after a sync's own table
@@ -338,10 +339,10 @@ class DeckSync {
   bool fetchAllMedia(const std::string& dir, const std::vector<std::string>& media,
                      std::vector<std::string>& failedMedia);
   // For a card kept as it is: looks for its images again when one failed before, or once after
-  // FETCH_VERSION 2. True when the record's MEDIA_MISSING flag changed.
+  // MEDIA_STREAM_VERSION. True when the record's MEDIA_MISSING flag changed.
   bool recheckMedia(const std::string& deckId, const std::string& dir, ankideck::CardRecord& r, std::string& scratch,
                     size_t limit, std::vector<std::string>& failedMedia);
-  bool checkAllMedia = false;             // set for the first sync after FETCH_VERSION 2
+  bool checkAllMedia = false;             // set for the first sync after MEDIA_STREAM_VERSION
   std::vector<std::string> presentMedia;  // images with nothing left to do this sync: on the card, or not kept
   void saveBuried(const std::string& name, const std::string& deckId);
   bool fetchCss(const JsonDocument& renderParams, const std::string& cssPath, uint32_t hash);
@@ -839,47 +840,67 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
       renderParams["id"] = std::to_string(r.cardId);
       cardOnly["cardId"] = true;  // the sides are decoded in the reply buffer itself, not copied
       // Each reply repeats the note type's whole CSS: it is left out here and fetched once below.
-      JsonValueSkipper skipCss("css");
-      if (!client.call("cards.render", renderParams, rendered, &cardOnly, &skipCss)) {
-        if (client.error().kind != AnkiClient::Error::Kind::TooLarge) return false;
-        r.flags |= ankideck::TOO_LARGE;  // shown as a notice, tried again when the note changes
-        changed = true;
-        if (!fresh.add(r)) return false;
-        continue;
+      // A reply too large for both sides is asked for again once per side, the other left out.
+      static constexpr const char* const BOTH[] = {"css", nullptr};
+      static constexpr const char* const FRONT_ONLY[] = {"css", "answerHtml", nullptr};
+      static constexpr const char* const BACK_ONLY[] = {"css", "questionHtml", nullptr};
+      static constexpr const char* const SIDES[] = {"questionHtml", "answerHtml"};
+      const std::string paths[2] = {ankideck::frontPath(deckId, r.cardId), ankideck::backPath(deckId, r.cardId)};
+      std::vector<std::string> media;
+      uint32_t cssHash = 0;
+      size_t cssBytes = 0;
+      enum class Fetch : uint8_t { Ok, ReplyTooLarge, SideTooLarge, NoRoom, Failed };
+      // One cards.render request; writes the sides in `sides` (bit 0 front, bit 1 back).
+      const auto fetchSides = [&](const char* const* skipKeys, const unsigned sides) {
+        JsonValueSkipper skip(skipKeys);
+        if (!client.call("cards.render", renderParams, rendered, &cardOnly, &skip)) {
+          return client.error().kind == AnkiClient::Error::Kind::TooLarge ? Fetch::ReplyTooLarge : Fetch::Failed;
+        }
+        cssHash = skip.hash();
+        cssBytes = skip.valueBytes();
+        char* side[2];
+        takeJsonStrings(client.replyText(), client.replyLength(), SIDES, side, 2);
+        // Room for the cleaned side, about as long as the side itself.
+        const size_t sideBytes = std::max(side[0] ? strlen(side[0]) : 0, side[1] ? strlen(side[1]) : 0);
+        if (!roomFor(std::min(sideBytes + 1024, sideLimit), "a card")) return Fetch::NoRoom;
+        for (unsigned k = 0; k < 2; k++) {
+          if ((sides & (1U << k)) == 0) continue;
+          const bool written = writeSide(paths[k], side[k] ? side[k] : "", sideLimit, scratch, cssPath, *info);
+          if (written) mediaNames(scratch, media);
+          // Given back before the next request, which needs that room while a reply arrives.
+          std::string().swap(scratch);
+          if (!written) return Fetch::SideTooLarge;
+        }
+        return Fetch::Ok;
+      };
+      Fetch fetched = fetchSides(BOTH, 3);
+      if (fetched == Fetch::ReplyTooLarge) {
+        fetched = fetchSides(FRONT_ONLY, 1);
+        if (fetched == Fetch::Ok) {
+          fetched = fetchSides(BACK_ONLY, 2);
+          // No half card: the front is dropped with the back that did not fit.
+          if (fetched == Fetch::ReplyTooLarge) Storage.remove(paths[0].c_str());
+        }
       }
-      static constexpr const char* SIDES[] = {"questionHtml", "answerHtml"};
-      char* side[2];
-      takeJsonStrings(client.replyText(), client.replyLength(), SIDES, side, 2);
-      const char* front = side[0] ? side[0] : "";
-      const char* back = side[1] ? side[1] : "";
-      // Room for the cleaned side, about as long as the side itself. Without it the card is left
-      // out of the index, so the next sync fetches it again rather than calling it too large.
-      const size_t sideBytes = std::max(strlen(front), strlen(back));
-      if (!roomFor(std::min(sideBytes + 1024, sideLimit), "a card")) {
+      if (fetched == Fetch::Failed) return false;
+      if (fetched == Fetch::NoRoom) {
+        // Left out of the index, so the next sync fetches it again rather than calling it too large.
         result.error = AnkiClient::Error{};
         skipped++;
         changed = true;
         continue;
       }
-      std::vector<std::string> media;
-      if (!writeSide(ankideck::frontPath(deckId, r.cardId), front, sideLimit, scratch, cssPath, *info)) {
-        r.flags |= ankideck::TOO_LARGE;
-      } else {
-        mediaNames(scratch, media);
-        if (!writeSide(ankideck::backPath(deckId, r.cardId), back, sideLimit, scratch, cssPath, *info)) {
-          r.flags |= ankideck::TOO_LARGE;
-        } else {
-          mediaNames(scratch, media);
-        }
+      if (fetched == Fetch::ReplyTooLarge) {
+        r.flags |= ankideck::TOO_LARGE;  // shown as a notice, tried again when the note changes
+        changed = true;
+        if (!fresh.add(r)) return false;
+        continue;
       }
-      // The converted sides are written: their buffer is given back before the next requests,
-      // which need that room while a reply arrives.
-      std::string().swap(scratch);
+      if (fetched == Fetch::SideTooLarge) r.flags |= ankideck::TOO_LARGE;
       if (!fetchAllMedia(dir, media, failedMedia)) r.flags |= ankideck::MEDIA_MISSING;
       // A note type's CSS the deck does not have yet; this reuses the reply buffer.
-      const uint32_t cssHash = skipCss.hash();
       auto& hashes = info->cssHashes;
-      if (skipCss.valueBytes() > 0 && std::find(hashes.begin(), hashes.end(), cssHash) == hashes.end()) {
+      if (cssBytes > 0 && std::find(hashes.begin(), hashes.end(), cssHash) == hashes.end()) {
         if (!fetchCss(renderParams, cssPath, cssHash)) return false;
       }
       if (!wasHere) result.cardsAdded++;

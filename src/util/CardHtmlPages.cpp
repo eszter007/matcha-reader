@@ -56,8 +56,8 @@ bool buildCardHtmlPages(GfxRenderer& renderer, const std::string& xhtmlPath, con
         [&pagesOut, &limitHit, &elements](std::unique_ptr<Page> page, uint16_t, uint16_t, uint32_t) {
           if (limitHit) return;
           const size_t count = page->elements.size();
-          if (pagesOut.size() >= MAX_PAGES || count > MAX_ELEMENTS - elements ||
-              ESP.getFreeHeap() < MIN_RETAIN_HEAP || ESP.getMaxAllocHeap() < MIN_RETAIN_ALLOC) {
+          if (pagesOut.size() >= MAX_PAGES || count > MAX_ELEMENTS - elements || ESP.getFreeHeap() < MIN_RETAIN_HEAP ||
+              ESP.getMaxAllocHeap() < MIN_RETAIN_ALLOC) {
             // Keep what fits: the start of a long card beats no card.
             LOG_ERR("CARD", "Card cut at %u pages (free=%u)", static_cast<unsigned>(pagesOut.size()),
                     ESP.getFreeHeap());
@@ -74,7 +74,20 @@ bool buildCardHtmlPages(GfxRenderer& renderer, const std::string& xhtmlPath, con
     } else {
       parser->setTextSpacing(SETTINGS.getCharacterSpacing(), SETTINGS.wordSpacing);
       parser->setParagraphIndentSpaces(0);
-      ok = parser->parseAndBuildPages();
+      // Stepped so a cut card stops here: laying out the rest would only spend the heap.
+      if (parser->beginParse()) {
+        for (;;) {
+          const auto status = parser->parseStep();
+          if (status == ChapterHtmlSlimParser::ParseStatus::Error || limitHit) {
+            parser->abortParse();
+            break;
+          }
+          if (status == ChapterHtmlSlimParser::ParseStatus::Done) {
+            ok = parser->finishParse();
+            break;
+          }
+        }
+      }
     }
   }
   css.releasePools();

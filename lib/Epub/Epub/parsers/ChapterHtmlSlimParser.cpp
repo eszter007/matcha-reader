@@ -641,6 +641,21 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   partWordBufferIndex = 0;
   nextWordContinues = false;
   listItemBulletOnly = false;
+
+  // A long run without spaces (CJK: a word per character) arrives in one callback; without a
+  // check here its whole block would be laid out at once, which allocates per word.
+  softFlushIfLong("run");
+}
+
+void ChapterHtmlSlimParser::softFlushIfLong(const char* reason) {
+  // Keep token growth bounded: CSS-heavy spans can fragment text into many tiny
+  // words, so flush earlier when embedded CSS is active. We still keep the
+  // "exclude last line" behavior to preserve paragraph flow across chunks.
+  if (!currentTextBlock || inRuby) return;
+  const size_t words = currentTextBlock->size();
+  if (words <= (embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS)) return;
+  LOG_DBG("EHP", "Text %s soft flush (%u words)", reason, static_cast<unsigned>(words));
+  makePages(/*includeLastLine=*/false);
 }
 
 // start a new text block if needed
@@ -3062,16 +3077,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     return;
   }
 
-  // Keep token growth bounded: CSS-heavy spans can fragment text into many tiny
-  // words, so flush earlier when embedded CSS is active. We still keep the
-  // "exclude last line" behavior to preserve paragraph flow across chunks.
-  const size_t blockWordCount = self->currentTextBlock->size();
-  const size_t softFlushThreshold =
-      self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
-  if (blockWordCount > softFlushThreshold && !self->inRuby) {
-    LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
-    self->makePages(/*includeLastLine=*/false);
-  }
+  self->softFlushIfLong("block");
 }
 
 void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const XML_Char* s, const int len) {
