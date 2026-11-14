@@ -21,7 +21,8 @@ struct CardRecord {
   uint32_t noteMod = 0;  // the note's last change, seconds since 1970: re-rendered when it moves
   uint32_t flags = 0;    // TOO_LARGE and friends
 };
-constexpr uint32_t TOO_LARGE = 1;  // Anki's rendering did not fit the device; shown as a notice
+constexpr uint32_t TOO_LARGE = 1;      // Anki's rendering did not fit the device; shown as a notice
+constexpr uint32_t MEDIA_MISSING = 2;  // an image of the card failed; tried again at each sync
 
 struct DeckInfo {
   std::string id;             // Anki deck id
@@ -32,6 +33,13 @@ struct DeckInfo {
   int32_t newPerDay = -1;
   float retention = 0;
   uint16_t maxInterval = 0;
+  int32_t reviewsPerDay = -1;
+  // Learning and relearning steps in minutes; count 0xFF while unknown.
+  static constexpr uint8_t MAX_STEPS = 4;
+  uint16_t learnSteps[MAX_STEPS] = {};
+  uint8_t learnCount = 0xFF;
+  uint16_t relearnSteps[MAX_STEPS] = {};
+  uint8_t relearnCount = 0xFF;
   uint8_t fetchVersion = 0;  // how its cards were last fetched; see FETCH_VERSION in AnkiSync.cpp
   // Style blocks already in style.css: FNV-1a of a note type's CSS as the reply carried it
   // (JsonValueSkipper::hash), or of a template's own <style> text.

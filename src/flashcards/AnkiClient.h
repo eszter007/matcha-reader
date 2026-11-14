@@ -82,6 +82,7 @@ class AnkiClient {
   size_t capacity_ = 0;
   size_t length = 0;
   bool overflow = false;
+  size_t drained = 0;  // bytes of a too-large reply read past capacity() and dropped
   uint32_t nextId = 1;
   void (*poll)(void* ctx) = nullptr;
   void* pollCtx = nullptr;

@@ -25,9 +25,13 @@ constexpr size_t BATCH = 50;                  // ids per request: no request gro
 constexpr size_t CHECKPOINT_BATCHES = 2;      // index saved every 100 cards: a cut-off sync resumes
 constexpr size_t MAX_CARD_XHTML = 40 * 1024;  // one side as stored
 constexpr size_t MAX_CSS = 32 * 1024;         // a deck's styling
+constexpr size_t NOTE_GROUP = 10;             // notes looked up per request
 // Raised when cards that were too large may fit now: those are fetched once more.
 // 1: each card's reply leaves out the note type's CSS.
-constexpr uint8_t FETCH_VERSION = 1;
+// 2: images stream to the card, so large ones that failed before are looked for again (cards
+//    still too large are also tried once more, as with any raise).
+constexpr uint8_t MEDIA_STREAM_VERSION = 2;
+constexpr uint8_t FETCH_VERSION = MEDIA_STREAM_VERSION;
 constexpr uint32_t OPERATION_TIMEOUT = 120000;  // AnkiWeb syncs and imports
 constexpr const char* RATING_NAMES[] = {"again", "hard", "good", "easy"};
 constexpr size_t HEAP_HEADROOM = 8 * 1024;  // left for Wi-Fi and SD after a sync's own table
@@ -175,6 +179,67 @@ void mediaNames(const std::string& xhtml, std::vector<std::string>& out) {
   }
 }
 
+// Decodes base64 as it streams in and writes the bytes to a file through a small buffer: an image
+// can be far larger than the reply buffer.
+class Base64File {
+ public:
+  static constexpr size_t MAX_BYTES = 1024 * 1024;  // larger images are not kept
+
+  bool open(const std::string& path) { return Storage.openFileForWrite("ANKI", path, file); }
+  static void put(void* ctx, const char c) {
+    auto* self = static_cast<Base64File*>(ctx);
+    const bool b64 =
+        (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+' || c == '/' || c == '=';
+    if (!b64 || self->failed || self->tooLarge) return;
+    self->quad[self->quadLen++] = static_cast<unsigned char>(c);
+    if (self->quadLen < 4) return;
+    self->quadLen = 0;
+    size_t n = 0;
+    if (mbedtls_base64_decode(self->buf + self->len, sizeof(self->buf) - self->len, &n, self->quad, 4) != 0) {
+      self->failed = true;
+      return;
+    }
+    for (size_t i = 0; i < n && self->headLen < sizeof(self->head); i++)
+      self->head[self->headLen++] = self->buf[self->len + i];
+    self->len += n;
+    if (self->len + 3 > sizeof(self->buf)) self->flush();
+  }
+  // True when every byte reached the file.
+  bool close() {
+    flush();
+    file.close();
+    return !failed && !tooLarge && quadLen == 0;
+  }
+  bool overCap() const { return tooLarge; }
+  bool isPng() const {
+    static constexpr uint8_t PNG_MAGIC[4] = {0x89, 'P', 'N', 'G'};
+    return headLen == sizeof(head) && memcmp(head, PNG_MAGIC, sizeof(head)) == 0;
+  }
+
+ private:
+  void flush() {
+    if (len == 0 || failed) return;
+    if (written + len > MAX_BYTES) {
+      tooLarge = true;  // the rest of the reply is still read, not written
+      len = 0;
+      return;
+    }
+    if (file.write(buf, len) != len) failed = true;
+    written += len;
+    len = 0;
+  }
+  HalFile file;
+  uint8_t buf[96];
+  size_t len = 0;
+  size_t written = 0;
+  unsigned char quad[4];
+  uint8_t quadLen = 0;
+  uint8_t head[4];
+  uint8_t headLen = 0;
+  bool failed = false;
+  bool tooLarge = false;
+};
+
 bool fetchMedia(AnkiClient& client, const std::string& dir, const std::string& name) {
   const std::string path = dir + name;
   if (Storage.exists(path.c_str())) return true;
@@ -183,27 +248,32 @@ bool fetchMedia(AnkiClient& client, const std::string& dir, const std::string& n
   const bool webp = name.size() > 9 && name.compare(name.size() - 9, 9, ".webp.png") == 0;
   if (!webp && !ImageDecoderFactory::isFormatSupported(name)) return true;
   const std::string request = webp ? name.substr(0, name.size() - 4) : name;
-  JsonDocument params, result;
+  // Written beside the final name and renamed when whole: a cut-off image is never kept.
+  const std::string part = path + ".part";
+  Base64File out;
+  if (!out.open(part)) return false;
+  JsonValueSkipper data("data");
+  data.decodeTo(Base64File::put, &out);
+  JsonDocument params, result, filter;
   params["filename"] = request;
-  if (!client.call("media.get", params, result)) return false;
-  const char* data = result["data"] | "";
-  const size_t len = strlen(data);
-  const size_t capacity = len / 4 * 3 + 3;
-  auto bytes = makeUniqueNoThrow<uint8_t[]>(capacity);
-  if (!bytes) {
-    LOG_ERR("ANKI", "OOM: image %s", name.c_str());
+  filter["filename"] = true;
+  const bool ok = client.call("media.get", params, result, &filter, &data);
+  data.finish();
+  const bool whole = out.close() && ok && data.valueBytes() > 0;
+  if (!whole || (webp && !out.isPng())) {
+    Storage.remove(part.c_str());
+    // Over the size cap, empty, or still WebP (not drawable): it never will be, so not tried again.
+    if (ok && (out.overCap() || data.valueBytes() == 0 || whole)) {
+      LOG_INF("ANKI", "Image %s not kept", name.c_str());
+      return true;
+    }
     return false;
   }
-  size_t size = 0;
-  if (mbedtls_base64_decode(bytes.get(), capacity, &size, reinterpret_cast<const unsigned char*>(data), len) != 0) {
-    LOG_ERR("ANKI", "Image %s: bad base64", name.c_str());
+  if (!Storage.rename(part.c_str(), path.c_str())) {
+    Storage.remove(part.c_str());
     return false;
   }
-  static constexpr uint8_t PNG_MAGIC[4] = {0x89, 'P', 'N', 'G'};
-  if (webp && (size < 4 || memcmp(bytes.get(), PNG_MAGIC, 4) != 0)) return true;  // still WebP: not drawable
-  HalFile file;
-  if (!Storage.openFileForWrite("ANKI", path, file)) return false;
-  return file.write(bytes.get(), size) == size;
+  return true;
 }
 
 class DeckSync {
@@ -229,6 +299,15 @@ class DeckSync {
   // Cards whose notes changed since the deck's last full refresh. False when that is unknown, the
   // list is incomplete or would save little, and every card's note is then checked.
   void readPreset(const char* presetId, ankideck::DeckInfo& info);
+  // Fetches the images not on the card yet; false when one could not be fetched.
+  bool fetchAllMedia(const std::string& dir, const std::vector<std::string>& media,
+                     std::vector<std::string>& failedMedia);
+  // For a card kept as it is: looks for its images again when one failed before, or once after
+  // FETCH_VERSION 2. True when the record's MEDIA_MISSING flag changed.
+  bool recheckMedia(const std::string& deckId, const std::string& dir, ankideck::CardRecord& r, std::string& scratch,
+                    size_t limit, std::vector<std::string>& failedMedia);
+  bool checkAllMedia = false;             // set for the first sync after FETCH_VERSION 2
+  std::vector<std::string> presentMedia;  // images with nothing left to do this sync: on the card, or not kept
   void saveBuried(const std::string& name, const std::string& deckId);
   bool fetchCss(const JsonDocument& renderParams, const std::string& cssPath, uint32_t hash);
   bool editedSince(const std::string& name, const ankideck::DeckInfo& info, size_t deckSize,
@@ -349,6 +428,50 @@ bool DeckSync::fetchCss(const JsonDocument& renderParams, const std::string& css
   return ok;
 }
 
+bool DeckSync::fetchAllMedia(const std::string& dir, const std::vector<std::string>& media,
+                             std::vector<std::string>& failedMedia) {
+  bool all = true;
+  for (const auto& file : media) {
+    // Images a deck shares (a template's logos) are checked once a sync: an existence check in a
+    // folder of thousands of card files is a slow scan.
+    if (std::find(presentMedia.begin(), presentMedia.end(), file) != presentMedia.end()) continue;
+    if (std::find(failedMedia.begin(), failedMedia.end(), file) != failedMedia.end()) {
+      all = false;
+      continue;
+    }
+    if (fetchMedia(client, dir, file)) {
+      if (presentMedia.size() < 32) presentMedia.push_back(file);
+    } else {
+      LOG_ERR("ANKI", "Image %s not fetched", file.c_str());
+      if (failedMedia.size() < 16) failedMedia.push_back(file);
+      all = false;
+    }
+  }
+  return all;
+}
+
+bool DeckSync::recheckMedia(const std::string& deckId, const std::string& dir, ankideck::CardRecord& r,
+                            std::string& scratch, const size_t limit, std::vector<std::string>& failedMedia) {
+  if ((r.flags & ankideck::TOO_LARGE) != 0) return false;
+  if (!checkAllMedia && (r.flags & ankideck::MEDIA_MISSING) == 0) return false;
+  std::vector<std::string> media;
+  for (const std::string& path : {ankideck::frontPath(deckId, r.cardId), ankideck::backPath(deckId, r.cardId)}) {
+    HalFile f;
+    if (!Storage.openFileForRead("ANKI", path, f)) continue;
+    scratch.resize(std::min<size_t>(f.fileSize(), limit));
+    scratch.resize(std::max(0, f.read(scratch.data(), scratch.size())));
+    mediaNames(scratch, media);
+  }
+  std::string().swap(scratch);  // given back before the image requests
+  const uint32_t before = r.flags;
+  if (fetchAllMedia(dir, media, failedMedia)) {
+    r.flags &= ~ankideck::MEDIA_MISSING;
+  } else {
+    r.flags |= ankideck::MEDIA_MISSING;
+  }
+  return r.flags != before;
+}
+
 // The deck's options in Anki: new cards a day, desired retention, maximum interval. Without an
 // answer (an older Anki, a filtered deck) the deck keeps what it had, or the device settings.
 void DeckSync::readPreset(const char* presetId, ankideck::DeckInfo& info) {
@@ -358,6 +481,9 @@ void DeckSync::readPreset(const char* presetId, ankideck::DeckInfo& info) {
   filter["settings"]["newPerDay"] = true;
   filter["settings"]["desiredRetention"] = true;
   filter["settings"]["maximumIntervalDays"] = true;
+  filter["settings"]["reviewsPerDay"] = true;
+  filter["settings"]["learnStepsMinutes"] = true;
+  filter["settings"]["relearnStepsMinutes"] = true;
   if (!client.call("deckPresets.get", params, preset, &filter)) {
     result.error = AnkiClient::Error{};
     return;
@@ -365,6 +491,19 @@ void DeckSync::readPreset(const char* presetId, ankideck::DeckInfo& info) {
   JsonVariantConst s = preset["settings"];
   if (s["newPerDay"].is<int32_t>()) info.newPerDay = s["newPerDay"].as<int32_t>();
   if (s["desiredRetention"].is<float>()) info.retention = s["desiredRetention"].as<float>();
+  if (s["reviewsPerDay"].is<int32_t>()) info.reviewsPerDay = s["reviewsPerDay"].as<int32_t>();
+  // Steps under a minute count as one; Anki allows fractions such as 0.5.
+  const auto steps = [](JsonVariantConst list, uint16_t* out, uint8_t& count) {
+    if (!list.is<JsonArrayConst>()) return;
+    count = 0;
+    for (JsonVariantConst m : list.as<JsonArrayConst>()) {
+      if (count >= ankideck::DeckInfo::MAX_STEPS) break;
+      const float minutes = m.as<float>();
+      out[count++] = static_cast<uint16_t>(std::clamp(minutes + 0.5f, 1.0f, 60000.0f));
+    }
+  };
+  steps(s["learnStepsMinutes"], info.learnSteps, info.learnCount);
+  steps(s["relearnStepsMinutes"], info.relearnSteps, info.relearnCount);
   if (s["maximumIntervalDays"].is<uint32_t>()) {
     info.maxInterval = static_cast<uint16_t>(std::min<uint32_t>(s["maximumIntervalDays"].as<uint32_t>(), 36500));
   }
@@ -445,6 +584,7 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
   // Images that failed this sync (e.g. too large): one a whole deck shares is asked for once.
   std::vector<std::string> failedMedia;
   failedMedia.reserve(4);
+  presentMedia.reserve(32);
 
   // Per batch, reserved once.
   std::vector<uint64_t> need, noteIds;
@@ -486,7 +626,11 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
     // The other notes, for their last change; noteIds and noteMods follow need's order.
     noteIds.clear();
     noteMods.clear();
-    if (!fetchNoteMods(need, 0, need.size(), noteIds, noteMods)) return false;
+    // In groups of NOTE_GROUP: a note comes with all its fields, and a reply of 50 notes takes
+    // the heap down to a few KB while it arrives, though only the change time is kept.
+    for (size_t from = 0; from < need.size(); from += NOTE_GROUP) {
+      if (!fetchNoteMods(need, from, std::min(need.size(), from + NOTE_GROUP), noteIds, noteMods)) return false;
+    }
     size_t next = 0;
     bool stopped = false;
     for (size_t i = at; i < end; i++) {
@@ -500,7 +644,9 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
       }
       const ankideck::CardRecord& old = olds[i - at];
       if (keep & (1ULL << (i - at))) {
-        if (!fresh.add(old)) return false;
+        ankideck::CardRecord kept1 = old;
+        if (recheckMedia(deckId, dir, kept1, scratch, sideLimit, failedMedia)) changed = true;
+        if (!fresh.add(kept1)) return false;
         kept++;
         continue;
       }
@@ -516,7 +662,9 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
                            (tooLarge ? !retryTooLarge : Storage.exists(ankideck::frontPath(deckId, r.cardId).c_str()));
       if (current) {
         kept++;
-        if (!fresh.add(old)) return false;
+        ankideck::CardRecord kept1 = old;
+        if (recheckMedia(deckId, dir, kept1, scratch, sideLimit, failedMedia)) changed = true;
+        if (!fresh.add(kept1)) return false;
         continue;
       }
       JsonDocument renderParams, rendered, cardOnly;
@@ -556,13 +704,10 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
           mediaNames(scratch, media);
         }
       }
-      for (const auto& file : media) {
-        if (std::find(failedMedia.begin(), failedMedia.end(), file) != failedMedia.end()) continue;
-        if (!fetchMedia(client, dir, file)) {
-          LOG_ERR("ANKI", "Image %s not fetched", file.c_str());
-          if (failedMedia.size() < 16) failedMedia.push_back(file);
-        }
-      }
+      // The converted sides are written: their buffer is given back before the next requests,
+      // which need that room while a reply arrives.
+      std::string().swap(scratch);
+      if (!fetchAllMedia(dir, media, failedMedia)) r.flags |= ankideck::MEDIA_MISSING;
       // A note type's CSS the deck does not have yet; this reuses the reply buffer.
       const uint32_t cssHash = skipCss.hash();
       auto& hashes = info->cssHashes;
@@ -690,14 +835,17 @@ bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
       r["id"] = std::to_string(stamps[from + i]);
       r["cardId"] = std::to_string(e.id);
       r["rating"] = RATING_NAMES[std::clamp<int>(e.rating, 1, 4) - 1];
-      r["interval"]["value"] = e.interval;
-      r["interval"]["unit"] = "days";
+      // A learning step is logged in minutes and reaches Anki in seconds, as its own log keeps it.
+      const bool minutes = (e.kind & flashcards::ReviewLogEntry::MINUTES) != 0;
+      r["interval"]["value"] = minutes ? static_cast<uint32_t>(e.interval) * 60 : e.interval;
+      r["interval"]["unit"] = minutes ? "seconds" : "days";
       r["previousInterval"]["value"] = e.previous;
       r["previousInterval"]["unit"] = "days";
       r["factor"]["encoding"] = "unknown";
       r["factor"]["value"] = 0;
       r["elapsedMs"] = 0;
-      r["kind"] = e.kind == 0 ? "learning" : (e.kind == 2 ? "relearning" : "review");
+      const uint8_t kind = e.kind & ~flashcards::ReviewLogEntry::MINUTES;
+      r["kind"] = kind == 0 ? "learning" : (kind == 2 ? "relearning" : "review");
     }
     return client.callOperation("advanced.reviews.import", params, done, OPERATION_TIMEOUT);
   };
@@ -749,6 +897,7 @@ bool DeckSync::run(const std::string& name, const std::string& deckId, const cha
   info.name = name;
   readPreset(presetId, info);
   retryTooLarge = info.fetchVersion < FETCH_VERSION;
+  checkAllMedia = info.fetchVersion < MEDIA_STREAM_VERSION;
   this->info = &info;
   std::vector<uint64_t> ids;
   // Suspended cards leave the device; their progress stays, for when they are unsuspended.

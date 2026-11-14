@@ -26,17 +26,22 @@ struct CardState {
   uint16_t lastReview = 0;
   uint16_t reps = 0;
   uint8_t lapses = 0;
-  uint8_t flags = 0;
+  uint8_t flags = 0;  // LEARN_STEP and LEARN_RELEARN while the card is between learning steps
+
+  // The step the card waits for, plus one (0: not in steps); its time of day is not kept.
+  static constexpr uint8_t LEARN_STEP = 0x07;
+  static constexpr uint8_t LEARN_RELEARN = 0x08;
 };
 
 // One rating, kept until a sync hands it to Anki (flashcards-<deck>.log, 24 bytes each).
 struct ReviewLogEntry {
-  uint64_t id = 0;        // the card
-  int64_t timeMs = 0;     // when, ms since 1970; becomes the review's id in Anki
-  uint16_t interval = 0;  // days until it is due again
-  uint16_t previous = 0;  // the interval before this review
-  uint8_t rating = 0;     // 1 = Again .. 4 = Easy
-  uint8_t kind = 0;       // 0 learning, 1 review, 2 relearning (Anki's revlog types)
+  uint64_t id = 0;                          // the card
+  int64_t timeMs = 0;                       // when, ms since 1970; becomes the review's id in Anki
+  uint16_t interval = 0;                    // days until it is due again; minutes for a step with MINUTES set
+  uint16_t previous = 0;                    // the interval before this review
+  uint8_t rating = 0;                       // 1 = Again .. 4 = Easy
+  uint8_t kind = 0;                         // 0 learning, 1 review, 2 relearning (Anki's revlog types), | MINUTES
+  static constexpr uint8_t MINUTES = 0x80;  // `interval` is a learning step in minutes
 };
 
 // The oldest logged reviews of a deck, at most MAX_LOG_ENTRIES; dropReviewLog() removes them once
@@ -104,6 +109,12 @@ bool onVacation();
 // Flashcards opens a deck or lists them.
 void syncVacation();
 
+// What a rating button shows: minutes for a learning step, days otherwise.
+struct Interval {
+  uint16_t value = 0;
+  bool minutes = false;
+};
+
 class Session {
  public:
   // Most cards a deck may hold: the state table is 24 bytes per card in RAM.
@@ -115,8 +126,8 @@ class Session {
   // Writes progress if anything changed since the last save.
   bool save();
 
-  bool finished() const { return position >= queue.size(); }
-  size_t remaining() const { return finished() ? 0 : queue.size() - position; }
+  bool finished() const { return position >= queue.size() && learning.empty(); }
+  size_t remaining() const { return (position < queue.size() ? queue.size() - position : 0) + learning.size(); }
   size_t reviewed() const { return reviewedCount; }
   size_t total() const { return queue.size(); }
   const std::string& language() const { return lang; }
@@ -124,8 +135,8 @@ class Session {
   // The card at the front of the queue; false when its row could not be read.
   bool current(CardText& out) const;
   bool currentIsNew() const;
-  // Interval each rating would give (days; Again = 0, shown again this session).
-  void previews(uint16_t out[4]) const;
+  // What each rating would give: a learning step in minutes, or an interval in days.
+  void previews(Interval out[4]) const;
   void rate(fsrs::Rating rating);
   uint16_t ratingCount(fsrs::Rating rating) const { return ratingCounts[static_cast<int>(rating) - 1]; }
 
@@ -134,6 +145,21 @@ class Session {
     uint64_t id;
     uint32_t offset;  // byte offset of the card's CSV row; an Anki card's index flags
   };
+
+  // A card between learning steps, shown again this session once its step has passed.
+  struct Learning {
+    QueueItem item;
+    uint32_t dueMs;
+    uint8_t step;
+    bool relearn;
+  };
+  // The step after `rating` from step `current` (a new or just-forgotten card is at step 0); -1
+  // graduates to a day interval. stepMinutes gives its delay: Hard on the first step waits between
+  // the first two steps, as Anki does.
+  static int nextStep(fsrs::Rating rating, int current, uint8_t count);
+  static uint16_t stepMinutes(const uint16_t* steps, uint8_t count, fsrs::Rating rating, int current, int next);
+  const QueueItem& active() const { return activeLearn >= 0 ? learning[activeLearn].item : queue[position]; }
+  void pickNext();
 
   CardState* find(uint64_t id);
   const CardState* find(uint64_t id) const;
@@ -153,6 +179,12 @@ class Session {
   uint16_t newToday = 0;
   fsrs::Params params;  // this deck's scheduling, set by open()
   uint16_t perDay = 0;
+  uint16_t learnSteps[4] = {};
+  uint8_t learnCount = 0;
+  uint16_t relearnSteps[4] = {};
+  uint8_t relearnCount = 0;
+  std::vector<Learning> learning;
+  int activeLearn = -1;  // the card shown comes from `learning` at this index, else from the queue
   uint8_t unsaved = 0;
   std::vector<ReviewLogEntry> pendingLog;  // ratings not yet appended to the review log
 };

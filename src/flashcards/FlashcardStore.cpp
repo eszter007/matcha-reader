@@ -12,6 +12,9 @@
 #include <ctime>
 
 #include "AnkiDeck.h"
+
+static_assert(ankideck::DeckInfo::MAX_STEPS < flashcards::CardState::LEARN_STEP,
+              "a step index plus one must fit in CardState::LEARN_STEP");
 #include "CrossPointSettings.h"
 #include "util/SentenceMining.h"
 
@@ -256,6 +259,25 @@ int32_t today() {
   return lastKnownDay;
 }
 
+namespace {
+// Reviews of known cards done today: cards last rated today, less those first learned today.
+uint16_t reviewsDoneToday(const std::vector<CardState>& states, const uint16_t day, const uint16_t newToday) {
+  uint16_t rated = 0;
+  for (const auto& c : states) {
+    if (c.reps > 0 && c.lastReview == day) rated++;
+  }
+  return rated > newToday ? rated - newToday : 0;
+}
+
+uint16_t reviewsLeft(const ankideck::DeckInfo* deck, const std::vector<CardState>& states, const uint16_t day,
+                     const uint16_t newToday) {
+  if (!deck || deck->reviewsPerDay < 0) return UINT16_MAX;
+  const uint16_t done = reviewsDoneToday(states, day, newToday);
+  return deck->reviewsPerDay > done ? static_cast<uint16_t>(std::min<int32_t>(deck->reviewsPerDay - done, UINT16_MAX))
+                                    : 0;
+}
+}  // namespace
+
 void listDecks(std::vector<DeckSummary>& out) {
   out.clear();
   syncVacation();
@@ -313,18 +335,25 @@ void listDecks(std::vector<DeckSummary>& out) {
     if (now != day) newToday = 0;
     const uint16_t perDay = newCardsPerDay(&info);
     uint16_t fresh = 0;
+    uint16_t stepping = 0;  // between learning steps: outside the review limit, as in a session
     std::vector<uint64_t> buried;
     ankideck::readBuried(info.id, now, buried);
     for (const auto& c : cards) {
       deck.total++;
       if (std::binary_search(buried.begin(), buried.end(), c.cardId)) continue;
       if (const CardState* s = findIn(states, c.cardId)) {
-        if (s->due <= now) deck.due++;
+        if (s->due > now) continue;
+        if ((s->flags & CardState::LEARN_STEP) != 0) {
+          stepping++;
+        } else {
+          deck.due++;
+        }
       } else {
         fresh++;
       }
     }
     deck.fresh = std::min<uint16_t>(fresh, perDay > newToday ? perDay - newToday : 0);
+    deck.due = std::min(deck.due, reviewsLeft(&info, states, now, newToday)) + stepping;
     if (paused) deck.due = deck.fresh = 0;
     out.push_back(std::move(deck));
   }
@@ -341,6 +370,8 @@ bool Session::open(const std::string& language) {
   // Record offsets are taken after this, so they point into the upgraded file.
   upgraded = !anki && sentencemining::upgradeExport(csvPath);
   queue.clear();
+  learning.clear();
+  activeLearn = -1;
   position = 0;
   reviewedCount = 0;
   std::fill(std::begin(ratingCounts), std::end(ratingCounts), 0);
@@ -349,6 +380,17 @@ bool Session::open(const std::string& language) {
   const bool preset = anki && ankideck::readInfo(ankideck::idOf(language), info);
   params = schedulingParams(preset ? &info : nullptr);
   perDay = newCardsPerDay(preset ? &info : nullptr);
+  // Anki's steps where the deck's preset gave them; a single ten-minute step otherwise.
+  learnCount = relearnCount = 1;
+  learnSteps[0] = relearnSteps[0] = 10;
+  if (preset && info.learnCount != 0xFF) {
+    learnCount = info.learnCount;
+    std::copy(info.learnSteps, info.learnSteps + learnCount, learnSteps);
+  }
+  if (preset && info.relearnCount != 0xFF) {
+    relearnCount = info.relearnCount;
+    std::copy(info.relearnSteps, info.relearnSteps + relearnCount, relearnSteps);
+  }
   if (!loadStates(language, states, day, newToday, MAX_QUEUE)) return false;
   const uint16_t now = todayOr(day);
   if (now != day) newToday = 0;
@@ -360,8 +402,19 @@ bool Session::open(const std::string& language) {
   queue.reserve(64);
   pendingLog.reserve(8);  // ratings between two saves
   fresh.reserve(std::min<size_t>(newLimit, MAX_QUEUE));
+  learning.reserve(32);  // cards between steps: at most 64, 24 bytes each
   const auto consider = [&](const uint64_t id, const uint32_t offset) {
     if (const CardState* s = find(id)) {
+      // Between learning steps when the last session ended: it goes on from its saved step, due
+      // now (the time of day is not kept), outside the review limit.
+      const uint8_t saved = s->flags & CardState::LEARN_STEP;
+      const bool relearn = (s->flags & CardState::LEARN_RELEARN) != 0;
+      const uint8_t count = relearn ? relearnCount : learnCount;  // the preset may have changed since
+      if (saved > 0 && count > 0 && s->due <= day && learning.size() < 64) {
+        const uint8_t step = std::min<uint8_t>(saved - 1, count - 1);
+        learning.push_back({{id, offset}, static_cast<uint32_t>(millis()), step, relearn});
+        return;
+      }
       if (s->due <= day && queue.size() < MAX_QUEUE) queue.push_back({id, offset});
     } else if (fresh.size() < newLimit && fresh.size() < MAX_QUEUE) {
       fresh.push_back({id, offset});
@@ -388,20 +441,64 @@ bool Session::open(const std::string& language) {
   // Most overdue first, then new cards in the order they were saved.
   std::stable_sort(queue.begin(), queue.end(),
                    [this](const QueueItem& a, const QueueItem& b) { return find(a.id)->due < find(b.id)->due; });
+  // Anki's daily review limit keeps the most overdue.
+  const uint16_t allowed = reviewsLeft(preset ? &info : nullptr, states, day, newToday);
+  if (queue.size() > allowed) queue.resize(allowed);
   for (const auto& item : fresh) {
     if (queue.size() >= MAX_QUEUE) break;
     queue.push_back(item);
   }
+  pickNext();
   LOG_INF("FLASH", "Deck %s: %u queued, %u states", language.c_str(), static_cast<unsigned>(queue.size()),
           static_cast<unsigned>(states.size()));
   return true;
+}
+
+// A learning card whose step has passed comes first. When nothing else is left, the next one is
+// shown early rather than leaving the session waiting.
+void Session::pickNext() {
+  activeLearn = -1;
+  if (learning.empty()) return;
+  int earliest = 0;
+  for (size_t i = 1; i < learning.size(); i++) {
+    if (static_cast<int32_t>(learning[i].dueMs - learning[earliest].dueMs) < 0) earliest = static_cast<int>(i);
+  }
+  const bool due = static_cast<int32_t>(millis() - learning[earliest].dueMs) >= 0;
+  if (due || position >= queue.size()) activeLearn = earliest;
+}
+
+int Session::nextStep(const fsrs::Rating rating, const int current, const uint8_t count) {
+  int next = -1;
+  switch (rating) {
+    case fsrs::Rating::Again:
+      next = 0;
+      break;
+    case fsrs::Rating::Hard:
+      next = current;
+      break;
+    case fsrs::Rating::Good:
+      next = current + 1;
+      break;
+    case fsrs::Rating::Easy:
+      return -1;
+  }
+  return next < static_cast<int>(count) ? next : -1;
+}
+
+uint16_t Session::stepMinutes(const uint16_t* steps, const uint8_t count, const fsrs::Rating rating, const int current,
+                              const int next) {
+  if (rating == fsrs::Rating::Hard && current == 0) {
+    if (count >= 2) return static_cast<uint16_t>((steps[0] + steps[1]) / 2);
+    return static_cast<uint16_t>(std::min<uint32_t>(steps[0] * 3u / 2u, steps[0] + 1440u));
+  }
+  return steps[next];
 }
 
 bool Session::current(CardText& out) const {
   if (finished()) return false;
   if (anki) {
     const std::string deckId = ankideck::idOf(lang);
-    const QueueItem& item = queue[position];
+    const QueueItem& item = active();
     out = CardText{};
     out.frontPath = ankideck::frontPath(deckId, item.id);
     out.backPath = ankideck::backPath(deckId, item.id);
@@ -416,7 +513,7 @@ bool Session::current(CardText& out) const {
     return false;
   }
   HalFile file;
-  if (!Storage.openFileForRead("FLASH", csvPath, file) || !file.seekSet(queue[position].offset)) return false;
+  if (!Storage.openFileForRead("FLASH", csvPath, file) || !file.seekSet(active().offset)) return false;
   CsvRecordParser parser(
       (1u << WORD) | (1u << READING) | (1u << SENTENCE) | (1u << DEFINITION) | (1u << BOOK) | (1u << FURIGANA), 2048);
   char buf[256];
@@ -437,18 +534,52 @@ bool Session::current(CardText& out) const {
   return true;
 }
 
-bool Session::currentIsNew() const { return !finished() && find(queue[position].id) == nullptr; }
+bool Session::currentIsNew() const { return !finished() && find(active().id) == nullptr; }
 
-void Session::previews(uint16_t out[4]) const {
-  const CardState* s = finished() ? nullptr : find(queue[position].id);
+void Session::previews(Interval out[4]) const {
+  for (int i = 0; i < 4; i++) out[i] = Interval{};
+  if (finished()) return;
+  const CardState* s = find(active().id);
   const fsrs::Memory memory = s ? fsrs::Memory{s->stability, s->difficulty} : fsrs::Memory{};
   const float elapsed = s ? static_cast<float>(day - s->lastReview) : 0;
-  fsrs::previewIntervals(memory, s == nullptr, elapsed, params, out);
+  uint16_t days[4];
+  fsrs::previewIntervals(memory, s == nullptr, elapsed, params, days);
+  const bool inLearning = activeLearn >= 0;
+  const bool relearn = inLearning && learning[activeLearn].relearn;
+  const int current = inLearning ? learning[activeLearn].step : 0;
+  for (int i = 0; i < 4; i++) {
+    const auto rating = static_cast<fsrs::Rating>(i + 1);
+    out[i].value = days[i];
+    // A review card only enters steps when it is forgotten.
+    const bool steps = s == nullptr || inLearning || rating == fsrs::Rating::Again;
+    if (!steps) continue;
+    const bool re = inLearning ? relearn : s != nullptr;
+    const uint8_t count = re ? relearnCount : learnCount;
+    const int next = nextStep(rating, current, count);
+    if (next < 0) {
+      if (rating == fsrs::Rating::Again) {
+        const fsrs::Memory m = s ? fsrs::next(memory, elapsed, rating) : fsrs::initial(rating);
+        out[i].value = fsrs::intervalDays(m.stability, params);
+      }
+      continue;
+    }
+    const uint16_t minutes = stepMinutes(re ? relearnSteps : learnSteps, count, rating, current, next);
+    out[i] = minutes >= 1440 ? Interval{static_cast<uint16_t>(minutes / 1440), false} : Interval{minutes, true};
+  }
 }
 
 void Session::rate(const fsrs::Rating rating) {
   if (finished()) return;
-  const QueueItem item = queue[position++];
+  const bool fromLearning = activeLearn >= 0;
+  Learning learnt{};
+  if (fromLearning) {
+    learnt = learning[activeLearn];
+    learning.erase(learning.begin() + activeLearn);
+    activeLearn = -1;
+  } else {
+    position++;
+  }
+  const QueueItem item = fromLearning ? learnt.item : queue[position - 1];
   CardState* s = find(item.id);
   if (!s) {
     // Room for this session's new cards was reserved at open: never grow the table here.
@@ -472,12 +603,33 @@ void Session::rate(const fsrs::Rating rating) {
   s->difficulty = after.difficulty;
   s->lastReview = day;
   s->reps++;
-  if (rating == fsrs::Rating::Again) {
-    if (!isNew) s->lapses++;
-    s->due = day;
-    // Seen again a few cards later this session.
-    const size_t at = std::min(queue.size(), position + 4);
-    if (queue.size() < MAX_QUEUE + 50) queue.insert(queue.begin() + static_cast<long>(at), item);
+  // New and forgotten cards go through the learning (or relearning) steps before a day interval.
+  const bool relearn = fromLearning ? learnt.relearn : (!isNew && rating == fsrs::Rating::Again);
+  const bool stepping = fromLearning || isNew || rating == fsrs::Rating::Again;
+  if (rating == fsrs::Rating::Again && !isNew && !fromLearning) s->lapses++;
+  const int current = fromLearning ? learnt.step : 0;
+  const uint8_t count = relearn ? relearnCount : learnCount;
+  const int next = stepping ? nextStep(rating, current, count) : -1;
+  uint16_t stepMinutesLogged = 0;  // set while the card stays in a minute step
+  s->flags &= static_cast<uint8_t>(~(CardState::LEARN_STEP | CardState::LEARN_RELEARN));
+  if (next >= 0) {
+    const uint16_t minutes = stepMinutes(relearn ? relearnSteps : learnSteps, count, rating, current, next);
+    if (minutes < 1440) {
+      s->flags |= static_cast<uint8_t>((next + 1) & CardState::LEARN_STEP);
+      if (relearn) s->flags |= CardState::LEARN_RELEARN;
+    }
+    if (minutes >= 1440) {
+      s->due = static_cast<uint16_t>(day + minutes / 1440);  // a step of days ends this session for the card
+    } else {
+      s->due = day;
+      stepMinutesLogged = minutes;
+      if (learning.size() < 64) {
+        learning.push_back(
+            {item, static_cast<uint32_t>(millis() + minutes * 60000UL), static_cast<uint8_t>(next), relearn});
+      } else if (queue.size() < MAX_QUEUE + 50) {
+        queue.insert(queue.begin() + static_cast<long>(std::min(queue.size(), position + 4)), item);
+      }
+    }
   } else {
     s->due = static_cast<uint16_t>(day + fsrs::intervalDays(after.stability, params));
   }
@@ -487,10 +639,11 @@ void Session::rate(const fsrs::Rating rating) {
     ReviewLogEntry e;
     e.id = item.id;
     e.timeMs = static_cast<int64_t>(now) * 1000 + static_cast<int64_t>(millis() % 1000);
-    e.interval = static_cast<uint16_t>(s->due - day);
+    e.interval = stepMinutesLogged > 0 ? stepMinutesLogged : static_cast<uint16_t>(s->due - day);
     e.previous = previous;
     e.rating = static_cast<uint8_t>(rating);
-    e.kind = isNew ? 0 : (rating == fsrs::Rating::Again ? 2 : 1);
+    e.kind = relearn ? 2 : (stepping ? 0 : 1);
+    if (stepMinutesLogged > 0) e.kind |= ReviewLogEntry::MINUTES;
     pendingLog.push_back(e);
   }
   ratingCounts[static_cast<int>(rating) - 1]++;
@@ -498,6 +651,7 @@ void Session::rate(const fsrs::Rating rating) {
   // Saved every few ratings rather than each one: an SD write per card would be the slowest
   // part of reviewing. The session saves again when it ends.
   if (++unsaved >= 5) save();
+  pickNext();
 }
 
 bool Session::save() {
@@ -541,6 +695,7 @@ bool applyPulledReviews(const std::string& deck, const std::vector<PulledReview>
     s.difficulty = after.difficulty;
     s.lastReview = static_cast<uint16_t>(reviewDay);
     s.due = static_cast<uint16_t>(reviewDay + r.interval);
+    s.flags &= static_cast<uint8_t>(~(CardState::LEARN_STEP | CardState::LEARN_RELEARN));
     if (rating == fsrs::Rating::Again && s.reps > 0) s.lapses++;
     s.reps++;
   }

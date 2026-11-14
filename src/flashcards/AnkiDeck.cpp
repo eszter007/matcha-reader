@@ -59,6 +59,16 @@ bool readInfo(const std::string& deckId, DeckInfo& out) {
   out.newPerDay = doc["newPerDay"] | -1;
   out.retention = doc["retention"] | 0.0f;
   out.maxInterval = doc["maxInterval"] | static_cast<uint16_t>(0);
+  out.reviewsPerDay = doc["reviewsPerDay"] | -1;
+  const auto readSteps = [](JsonVariantConst list, uint16_t* steps, uint8_t& count) {
+    if (!list.is<JsonArrayConst>()) return;
+    count = 0;
+    for (JsonVariantConst m : list.as<JsonArrayConst>()) {
+      if (count < DeckInfo::MAX_STEPS) steps[count++] = m.as<uint16_t>();
+    }
+  };
+  readSteps(doc["learnSteps"], out.learnSteps, out.learnCount);
+  readSteps(doc["relearnSteps"], out.relearnSteps, out.relearnCount);
   out.fetchVersion = doc["fetchVersion"] | static_cast<uint8_t>(0);
   out.cssHashes.clear();
   for (JsonVariantConst h : doc["cssHashes"].as<JsonArrayConst>()) {
@@ -75,6 +85,14 @@ bool writeInfo(const DeckInfo& info) {
   if (info.newPerDay >= 0) doc["newPerDay"] = info.newPerDay;
   if (info.retention > 0) doc["retention"] = info.retention;
   if (info.maxInterval > 0) doc["maxInterval"] = info.maxInterval;
+  if (info.reviewsPerDay >= 0) doc["reviewsPerDay"] = info.reviewsPerDay;
+  const auto writeSteps = [&doc](const char* key, const uint16_t* steps, const uint8_t count) {
+    if (count == 0xFF) return;
+    JsonArray list = doc[key].to<JsonArray>();
+    for (uint8_t i = 0; i < count; i++) list.add(steps[i]);
+  };
+  writeSteps("learnSteps", info.learnSteps, info.learnCount);
+  writeSteps("relearnSteps", info.relearnSteps, info.relearnCount);
   if (info.fetchVersion > 0) doc["fetchVersion"] = info.fetchVersion;
   if (!info.cssHashes.empty()) {
     JsonArray hashes = doc["cssHashes"].to<JsonArray>();

@@ -188,9 +188,16 @@ int drawVertical(const GfxRenderer& r, const int font, const uint16_t scale, con
 bool isCjk(const uint32_t cp) { return cp >= 0x2E80; }
 
 // Interval under a rating button, Anki style.
-void formatInterval(const uint16_t days, char* out, const size_t size) {
-  if (days == 0) {
-    snprintf(out, size, "<10m");
+void formatInterval(const flashcards::Interval interval, char* out, const size_t size) {
+  const uint16_t days = interval.value;
+  if (interval.minutes) {
+    if (days < 60) {
+      snprintf(out, size, "%um", days);
+    } else {
+      snprintf(out, size, "%uh", (days + 30) / 60);
+    }
+  } else if (days == 0) {
+    snprintf(out, size, "<1d");
   } else if (days < 30) {
     snprintf(out, size, "%ud", days);
   } else if (days < 365) {

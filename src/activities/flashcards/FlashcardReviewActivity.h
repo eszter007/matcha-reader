@@ -54,7 +54,7 @@ class FlashcardReviewActivity final : public Activity {
   bool opened = false;
   bool showBack = false;
   int selected = 2;  // Good
-  uint16_t intervals[4] = {0, 0, 0, 0};
+  flashcards::Interval intervals[4];
   CjkScript script = CjkScript::None;            // the deck's script; read from an Anki deck's first card
   std::vector<std::unique_ptr<Page>> htmlPages;  // the side shown, while it is an Anki card
   size_t htmlPage = 0;

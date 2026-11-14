@@ -61,17 +61,26 @@ bool AnkiClient::call(const char* method, const JsonDocument& params, JsonDocume
   if (!auth.empty()) http.addHeader("Authorization", auth);
   length = 0;
   overflow = false;
+  drained = 0;
+  // A reply too large to keep is still read to its end and dropped: cutting the connection
+  // mid-reply leaves its unread data and socket state in RAM for a while, and a run of
+  // too-large cards then drains the heap. Past MAX_DRAIN it is cut anyway.
+  static constexpr size_t MAX_DRAIN = 128 * 1024;
   const int status = http.sendRequest("POST", reinterpret_cast<const uint8_t*>(body.data()), body.size(),
                                       [this, skip](const uint8_t* data, const size_t len) {
                                         if (poll) poll(pollCtx);
+                                        if (overflow) {
+                                          drained += len;
+                                          return drained < MAX_DRAIN;
+                                        }
                                         if (skip) {
                                           overflow = !skip->feed(reinterpret_cast<const char*>(data), len, buffer.get(),
                                                                  length, capacity_);
-                                          return !overflow;
+                                          return true;
                                         }
                                         if (length + len > capacity_) {
                                           overflow = true;
-                                          return false;
+                                          return true;
                                         }
                                         memcpy(buffer.get() + length, data, len);
                                         length += len;
