@@ -1,9 +1,9 @@
-#include "AnkiHtml.h"
-
 #include <expat.h>
 #include <gtest/gtest.h>
 
 #include <string>
+
+#include "AnkiHtml.h"
 
 namespace {
 
@@ -38,17 +38,13 @@ TEST(AnkiHtml, VoidElementsSelfClosed) {
   EXPECT_EQ(convChecked("x</br>"), "x<br/>");
 }
 
-TEST(AnkiHtml, UnclosedClosedAtEnd) {
-  EXPECT_EQ(convChecked("<div><b>bold<i>it"), "<div><b>bold<i>it</i></b></div>");
-}
+TEST(AnkiHtml, UnclosedClosedAtEnd) { EXPECT_EQ(convChecked("<div><b>bold<i>it"), "<div><b>bold<i>it</i></b></div>"); }
 
 TEST(AnkiHtml, EndTagClosesElementsAbove) {
   EXPECT_EQ(convChecked("<div><b><i>x</div>y"), "<div><b><i>x</i></b></div>y");
 }
 
-TEST(AnkiHtml, UnmatchedEndTagDropped) {
-  EXPECT_EQ(convChecked("a</span>b</p></custom>"), "ab");
-}
+TEST(AnkiHtml, UnmatchedEndTagDropped) { EXPECT_EQ(convChecked("a</span>b</p></custom>"), "ab"); }
 
 TEST(AnkiHtml, ImplicitCloses) {
   EXPECT_EQ(convChecked("<ul><li>a<li>b</ul>"), "<ul><li>a</li><li>b</li></ul>");
@@ -62,8 +58,7 @@ TEST(AnkiHtml, ImplicitCloses) {
   EXPECT_EQ(convChecked("<select><option>a<option>b</select>"),
             "<select><option>a</option><option>b</option></select>");
   // Nested lists: the inner <li> does not close the outer one.
-  EXPECT_EQ(convChecked("<ul><li>a<ul><li>b</ul><li>c</ul>"),
-            "<ul><li>a<ul><li>b</li></ul></li><li>c</li></ul>");
+  EXPECT_EQ(convChecked("<ul><li>a<ul><li>b</ul><li>c</ul>"), "<ul><li>a<ul><li>b</li></ul></li><li>c</li></ul>");
   // <p> inside a <div> is not closed by a block outside that div.
   EXPECT_EQ(convChecked("<p>a<b>b<div>c"), "<p>a<b>b</b></p><div>c</div>");
 }
@@ -73,8 +68,7 @@ TEST(AnkiHtml, AttributeNormalisation) {
   EXPECT_EQ(convChecked("<span title='say \"hi\"'>x</span>"), "<span title=\"say &quot;hi&quot;\">x</span>");
   EXPECT_EQ(convChecked("<input checked disabled>"), "<input checked=\"checked\" disabled=\"disabled\"/>");
   EXPECT_EQ(convChecked("<span id=a id=b ID=c>x</span>"), "<span id=\"a\">x</span>");
-  EXPECT_EQ(convChecked("<a href=\"x?a=1&b=2\" onclick=\"go()\" ONLOAD=x>l</a>"),
-            "<a href=\"x?a=1&amp;b=2\">l</a>");
+  EXPECT_EQ(convChecked("<a href=\"x?a=1&b=2\" onclick=\"go()\" ONLOAD=x>l</a>"), "<a href=\"x?a=1&amp;b=2\">l</a>");
   EXPECT_EQ(convChecked("<span a<b=1 xml:lang=en 1x=2 @x=3 style=\"color:red\">x</span>"),
             "<span style=\"color:red\">x</span>");
   EXPECT_EQ(convChecked("<span title=\"a<b>c\">x</span>"), "<span title=\"a&lt;b&gt;c\">x</span>");
@@ -85,11 +79,15 @@ TEST(AnkiHtml, TextEscaping) {
   EXPECT_EQ(convChecked("a < b"), "a &lt; b");
   EXPECT_EQ(convChecked("a&b;c"), "a&amp;b;c");
   EXPECT_EQ(convChecked("]]>"), "]]&gt;");
-  EXPECT_EQ(convChecked("a\x01" "b"), "ab");
+  EXPECT_EQ(convChecked("a\x01"
+                        "b"),
+            "ab");
 }
 
 TEST(AnkiHtml, NamedEntities) {
-  EXPECT_EQ(convChecked("a&nbsp;b"), "a\xC2\xA0" "b");
+  EXPECT_EQ(convChecked("a&nbsp;b"),
+            "a\xC2\xA0"
+            "b");
   EXPECT_EQ(convChecked("&mdash;&hellip;&eacute;&szlig;&uuml;&euro;&frac12;&copy;"), "—…éßü€½©");
   EXPECT_EQ(convChecked("&amp;&lt;&gt;&quot;&apos;"), "&amp;&lt;&gt;&quot;&apos;");
   EXPECT_EQ(convChecked("&nosuchentity;"), "&amp;nosuchentity;");
@@ -99,7 +97,8 @@ TEST(AnkiHtml, NamedEntities) {
 TEST(AnkiHtml, NumericEntities) {
   EXPECT_EQ(convChecked("&#26408;&#x6728;&#X6728;"), "木木木");
   EXPECT_EQ(convChecked("&#65;&#x26;&#60;"), "A&amp;&lt;");
-  EXPECT_EQ(convChecked("&#0;&#x110000;&#xD800;&#;&#x;&#12"), "&amp;#0;&amp;#x110000;&amp;#xD800;&amp;#;&amp;#x;&amp;#12");
+  EXPECT_EQ(convChecked("&#0;&#x110000;&#xD800;&#;&#x;&#12"),
+            "&amp;#0;&amp;#x110000;&amp;#xD800;&amp;#;&amp;#x;&amp;#12");
   EXPECT_EQ(convChecked("&#x1F600;"), "\xF0\x9F\x98\x80");
 }
 
@@ -177,7 +176,10 @@ TEST(AnkiHtml, OverflowReturnsFalse) {
 }
 
 TEST(AnkiHtml, InvalidUtf8PassedThrough) {
-  EXPECT_EQ(conv("a\xFF" "b"), "a\xFF" "b");
+  EXPECT_EQ(conv("a\xFF"
+                 "b"),
+            "a\xFF"
+            "b");
 }
 
 TEST(AnkiHtml, RealWorldCard) {
@@ -199,9 +201,26 @@ TEST(AnkiHtml, RealWorldCard) {
 
 TEST(AnkiHtml, GarbageAlwaysWellFormed) {
   const char* inputs[] = {
-      "<", "<<>>", "</", "<a", "<a href", "<a href=", "<a href='x", "<p<p>", "<div =x>", "&", "&#", "&#x",
-      "<table><td>x</tr></table></td>", "<ul><li><p>a<li>b", "</div></div><div>", "<b><i></b></i>", "<p/>x",
-      "<span class=material-icons><svg><script>x</span>", "<br/ >", "<img src=\"a\"b=c>",
+      "<",
+      "<<>>",
+      "</",
+      "<a",
+      "<a href",
+      "<a href=",
+      "<a href='x",
+      "<p<p>",
+      "<div =x>",
+      "&",
+      "&#",
+      "&#x",
+      "<table><td>x</tr></table></td>",
+      "<ul><li><p>a<li>b",
+      "</div></div><div>",
+      "<b><i></b></i>",
+      "<p/>x",
+      "<span class=material-icons><svg><script>x</span>",
+      "<br/ >",
+      "<img src=\"a\"b=c>",
   };
   for (const char* in : inputs) {
     SCOPED_TRACE(in);

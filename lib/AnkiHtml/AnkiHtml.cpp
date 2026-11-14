@@ -24,35 +24,120 @@ struct TagInfo {
 
 // Sorted by name for binary search. Tags not listed are stripped (content kept).
 constexpr TagInfo TAGS[] = {
-    {"a", 0},          {"abbr", 0},          {"address", 0},      {"area", VOID},
-    {"article", 0},    {"aside", 0},         {"audio", DROP},     {"b", 0},
-    {"base", VOID},    {"bdi", 0},           {"bdo", 0},          {"big", 0},
-    {"blockquote", 0}, {"body", STRIP},      {"br", VOID},        {"button", 0},
-    {"canvas", DROP},  {"caption", 0},       {"center", 0},       {"cite", 0},
-    {"code", 0},       {"col", VOID},        {"colgroup", 0},     {"data", 0},
-    {"dd", 0},         {"del", 0},           {"details", 0},      {"dfn", 0},
-    {"dialog", 0},     {"div", 0},           {"dl", 0},           {"dt", 0},
-    {"em", 0},         {"embed", VOID | DROP}, {"fieldset", 0},   {"figcaption", 0},
-    {"figure", 0},     {"font", 0},          {"footer", 0},       {"form", 0},
-    {"h1", 0},         {"h2", 0},            {"h3", 0},           {"h4", 0},
-    {"h5", 0},         {"h6", 0},            {"head", DROP},      {"header", 0},
-    {"hr", VOID},      {"html", STRIP},      {"i", 0},            {"iframe", DROP | RAW},
-    {"img", VOID},     {"input", VOID},      {"ins", 0},          {"kbd", 0},
-    {"label", 0},      {"legend", 0},        {"li", 0},           {"link", VOID},
-    {"main", 0},       {"map", 0},           {"mark", 0},         {"math", DROP},
-    {"meta", VOID},    {"nav", 0},           {"noscript", DROP | RAW}, {"object", DROP},
-    {"ol", 0},         {"optgroup", 0},      {"option", 0},       {"p", 0},
-    {"param", VOID},   {"picture", 0},       {"pre", 0},          {"q", 0},
-    {"rb", 0},         {"rp", 0},            {"rt", 0},           {"rtc", 0},
-    {"ruby", 0},       {"s", 0},             {"samp", 0},         {"script", DROP | RAW},
-    {"section", 0},    {"select", 0},        {"small", 0},        {"source", VOID},
-    {"span", 0},       {"strike", 0},        {"strong", 0},       {"style", DROP | RAW},
-    {"sub", 0},        {"summary", 0},       {"sup", 0},          {"svg", DROP},
-    {"table", 0},      {"tbody", 0},         {"td", 0},           {"template", DROP},
-    {"textarea", DROP | RAW}, {"tfoot", 0},  {"th", 0},           {"thead", 0},
-    {"time", 0},       {"title", DROP | RAW}, {"tr", 0},          {"track", VOID},
-    {"tt", 0},         {"u", 0},             {"ul", 0},           {"var", 0},
-    {"video", DROP},   {"wbr", VOID},
+    {"a", 0},
+    {"abbr", 0},
+    {"address", 0},
+    {"area", VOID},
+    {"article", 0},
+    {"aside", 0},
+    {"audio", DROP},
+    {"b", 0},
+    {"base", VOID},
+    {"bdi", 0},
+    {"bdo", 0},
+    {"big", 0},
+    {"blockquote", 0},
+    {"body", STRIP},
+    {"br", VOID},
+    {"button", 0},
+    {"canvas", DROP},
+    {"caption", 0},
+    {"center", 0},
+    {"cite", 0},
+    {"code", 0},
+    {"col", VOID},
+    {"colgroup", 0},
+    {"data", 0},
+    {"dd", 0},
+    {"del", 0},
+    {"details", 0},
+    {"dfn", 0},
+    {"dialog", 0},
+    {"div", 0},
+    {"dl", 0},
+    {"dt", 0},
+    {"em", 0},
+    {"embed", VOID | DROP},
+    {"fieldset", 0},
+    {"figcaption", 0},
+    {"figure", 0},
+    {"font", 0},
+    {"footer", 0},
+    {"form", 0},
+    {"h1", 0},
+    {"h2", 0},
+    {"h3", 0},
+    {"h4", 0},
+    {"h5", 0},
+    {"h6", 0},
+    {"head", DROP},
+    {"header", 0},
+    {"hr", VOID},
+    {"html", STRIP},
+    {"i", 0},
+    {"iframe", DROP | RAW},
+    {"img", VOID},
+    {"input", VOID},
+    {"ins", 0},
+    {"kbd", 0},
+    {"label", 0},
+    {"legend", 0},
+    {"li", 0},
+    {"link", VOID},
+    {"main", 0},
+    {"map", 0},
+    {"mark", 0},
+    {"math", DROP},
+    {"meta", VOID},
+    {"nav", 0},
+    {"noscript", DROP | RAW},
+    {"object", DROP},
+    {"ol", 0},
+    {"optgroup", 0},
+    {"option", 0},
+    {"p", 0},
+    {"param", VOID},
+    {"picture", 0},
+    {"pre", 0},
+    {"q", 0},
+    {"rb", 0},
+    {"rp", 0},
+    {"rt", 0},
+    {"rtc", 0},
+    {"ruby", 0},
+    {"s", 0},
+    {"samp", 0},
+    {"script", DROP | RAW},
+    {"section", 0},
+    {"select", 0},
+    {"small", 0},
+    {"source", VOID},
+    {"span", 0},
+    {"strike", 0},
+    {"strong", 0},
+    {"style", DROP | RAW},
+    {"sub", 0},
+    {"summary", 0},
+    {"sup", 0},
+    {"svg", DROP},
+    {"table", 0},
+    {"tbody", 0},
+    {"td", 0},
+    {"template", DROP},
+    {"textarea", DROP | RAW},
+    {"tfoot", 0},
+    {"th", 0},
+    {"thead", 0},
+    {"time", 0},
+    {"title", DROP | RAW},
+    {"tr", 0},
+    {"track", VOID},
+    {"tt", 0},
+    {"u", 0},
+    {"ul", 0},
+    {"var", 0},
+    {"video", DROP},
+    {"wbr", VOID},
 };
 constexpr int TAG_COUNT = static_cast<int>(std::size(TAGS));
 constexpr int NO_TAG = -1;
@@ -85,21 +170,19 @@ constexpr uint8_t tagId(std::string_view name) { return static_cast<uint8_t>(fin
 
 // Start tags that close an open <p>.
 constexpr uint8_t P_CLOSERS[] = {
-    tagId("address"), tagId("article"), tagId("aside"),   tagId("blockquote"), tagId("center"),
-    tagId("details"), tagId("dialog"),  tagId("div"),     tagId("dl"),         tagId("fieldset"),
-    tagId("figcaption"), tagId("figure"), tagId("footer"), tagId("form"),      tagId("h1"),
-    tagId("h2"),      tagId("h3"),      tagId("h4"),      tagId("h5"),         tagId("h6"),
-    tagId("header"),  tagId("hr"),      tagId("main"),    tagId("nav"),        tagId("ol"),
-    tagId("p"),       tagId("pre"),     tagId("section"), tagId("table"),      tagId("ul"),
+    tagId("address"), tagId("article"), tagId("aside"),  tagId("blockquote"), tagId("center"),     tagId("details"),
+    tagId("dialog"),  tagId("div"),     tagId("dl"),     tagId("fieldset"),   tagId("figcaption"), tagId("figure"),
+    tagId("footer"),  tagId("form"),    tagId("h1"),     tagId("h2"),         tagId("h3"),         tagId("h4"),
+    tagId("h5"),      tagId("h6"),      tagId("header"), tagId("hr"),         tagId("main"),       tagId("nav"),
+    tagId("ol"),      tagId("p"),       tagId("pre"),    tagId("section"),    tagId("table"),      tagId("ul"),
     tagId("li"),      tagId("dd"),      tagId("dt"),
 };
 // Elements an implied </p> does not reach past.
 constexpr uint8_t P_BARRIERS[] = {
-    tagId("td"),      tagId("th"),     tagId("table"),   tagId("li"),     tagId("dd"),
-    tagId("dt"),      tagId("ul"),     tagId("ol"),      tagId("dl"),     tagId("div"),
-    tagId("blockquote"), tagId("section"), tagId("article"), tagId("aside"), tagId("header"),
-    tagId("footer"),  tagId("nav"),    tagId("main"),    tagId("figure"), tagId("details"),
-    tagId("button"),  tagId("ruby"),   tagId("caption"),
+    tagId("td"),      tagId("th"),      tagId("table"),  tagId("li"),     tagId("dd"),         tagId("dt"),
+    tagId("ul"),      tagId("ol"),      tagId("dl"),     tagId("div"),    tagId("blockquote"), tagId("section"),
+    tagId("article"), tagId("aside"),   tagId("header"), tagId("footer"), tagId("nav"),        tagId("main"),
+    tagId("figure"),  tagId("details"), tagId("button"), tagId("ruby"),   tagId("caption"),
 };
 constexpr uint8_t HEADINGS[] = {tagId("h1"), tagId("h2"), tagId("h3"), tagId("h4"), tagId("h5"), tagId("h6")};
 constexpr uint8_t P_ONLY[] = {tagId("p")};
@@ -287,11 +370,16 @@ class Converter {
       if (cp < 0x80) {
         numBuf[0] = static_cast<char>(cp);
         numBuf[1] = '\0';
-        if (cp == '&') repl = "&amp;";
-        else if (cp == '<') repl = "&lt;";
-        else if (cp == '>') repl = "&gt;";
-        else if (cp == '"') repl = "&quot;";
-        else repl = numBuf;
+        if (cp == '&')
+          repl = "&amp;";
+        else if (cp == '<')
+          repl = "&lt;";
+        else if (cp == '>')
+          repl = "&gt;";
+        else if (cp == '"')
+          repl = "&quot;";
+        else
+          repl = numBuf;
       } else {
         size_t n = 0;
         if (cp < 0x800) {
@@ -313,11 +401,16 @@ class Converter {
     while (i < s.size() && i <= MAX_ENTITY_NAME && (isAlpha(s[i]) || isDigit(s[i]))) ++i;
     if (i == 1 || i >= s.size() || s[i] != ';') return 1;
     const std::string_view name = s.substr(1, i - 1);
-    if (name == "amp") repl = "&amp;";
-    else if (name == "lt") repl = "&lt;";
-    else if (name == "gt") repl = "&gt;";
-    else if (name == "quot") repl = "&quot;";
-    else if (name == "apos") repl = "&apos;";
+    if (name == "amp")
+      repl = "&amp;";
+    else if (name == "lt")
+      repl = "&lt;";
+    else if (name == "gt")
+      repl = "&gt;";
+    else if (name == "quot")
+      repl = "&quot;";
+    else if (name == "apos")
+      repl = "&apos;";
     else {
       const char* v = lookupHtmlEntity(s.data(), i + 1);
       if (v == nullptr) return 1;
