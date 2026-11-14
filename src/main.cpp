@@ -146,11 +146,12 @@ constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_JOIN_NETWORK;
 // Bit in silentRebootPayload, which is a separate word from the target above -- the two
 // never share bits.
 constexpr uint32_t SILENT_REBOOT_LIGHT_ON = 1U << 0;
-// Tab destination for SILENT_REBOOT_TARGET_TAB: a HomeTab value, or a LibraryTabs value plus
-// SILENT_REBOOT_LIBRARY_TAB_BASE.
+// Tab destination for SILENT_REBOOT_TARGET_TAB: a HomeTab value, a LibraryTabs value plus
+// SILENT_REBOOT_LIBRARY_TAB_BASE, or SILENT_REBOOT_OPDS_SERVERS.
 constexpr uint32_t SILENT_REBOOT_TAB_SHIFT = 8;
 constexpr uint32_t SILENT_REBOOT_TAB_MASK = 0xFFU << SILENT_REBOOT_TAB_SHIFT;
 constexpr uint32_t SILENT_REBOOT_LIBRARY_TAB_BASE = 16;
+constexpr uint32_t SILENT_REBOOT_OPDS_SERVERS = 64;
 
 // How the device is coming back to life, resolved once at boot. Both resume
 // flows suppress the splash and leave the panel holding its pre-boot frame; a
@@ -270,6 +271,10 @@ void silentRestartToHomeTab(const int homeTab) {
 void silentRestartToLibraryTab(const int libraryTab) {
   silentRestartTo(SILENT_REBOOT_TARGET_TAB, "library tab",
                   SILENT_REBOOT_LIBRARY_TAB_BASE + static_cast<uint32_t>(libraryTab));
+}
+
+void silentRestartToOpdsServers() {
+  silentRestartTo(SILENT_REBOOT_TARGET_TAB, "opds servers", SILENT_REBOOT_OPDS_SERVERS);
 }
 
 void silentRestartToTranslation() {
@@ -936,8 +941,10 @@ void setup() {
     activityManager.goToReader(APP_STATE.openEpubPath);
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_TAB) {
     // Left a Wi-Fi screen for another tab: land on that tab, not Home.
-    if (silentRebootTab >= SILENT_REBOOT_LIBRARY_TAB_BASE &&
-        silentRebootTab < SILENT_REBOOT_LIBRARY_TAB_BASE + static_cast<uint32_t>(LibraryTabs::count())) {
+    if (silentRebootTab == SILENT_REBOOT_OPDS_SERVERS) {
+      activityManager.goToOpdsServers();
+    } else if (silentRebootTab >= SILENT_REBOOT_LIBRARY_TAB_BASE &&
+               silentRebootTab < SILENT_REBOOT_LIBRARY_TAB_BASE + static_cast<uint32_t>(LibraryTabs::count())) {
       LibraryTabs::activate(static_cast<int>(silentRebootTab - SILENT_REBOOT_LIBRARY_TAB_BASE));
     } else if (silentRebootTab < static_cast<uint32_t>(HomeTab::Count) &&
                silentRebootTab != static_cast<uint32_t>(HomeTab::Home)) {

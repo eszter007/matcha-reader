@@ -278,19 +278,9 @@ void OpdsBookBrowserActivity::buildBrowsingScreen(UiScreen& screen) {
   screen.list(props);
 }
 
-void OpdsBookBrowserActivity::buildTopBand(UiScreen& screen) {
-  LibraryTabs::buildBand(screen, renderer, LibraryTabs::Opds, topBandFocused, mappedInput.hasTouch(), ACTION_TAB);
-}
-
-void OpdsBookBrowserActivity::onTabAction(const int index) {
-  if (state == State::DOWNLOADING) return;
-  app.clearTapFlash();
-  goToLibraryTab(index);
-}
-
 void OpdsBookBrowserActivity::restartAfterWifi() {
-  if (exitTarget >= LIBRARY_TAB_BASE) {
-    silentRestartToLibraryTab(exitTarget - LIBRARY_TAB_BASE);
+  if (exitTarget == EXIT_TO_OPDS_SERVERS) {
+    silentRestartToOpdsServers();
   } else if (exitTarget >= 0) {
     silentRestartToHomeTab(exitTarget);
   } else {
@@ -299,30 +289,29 @@ void OpdsBookBrowserActivity::restartAfterWifi() {
 }
 
 void OpdsBookBrowserActivity::leaveBrowser() {
-  // In the Cover Grid theme the browser is entered from the Library's OPDS tab, so it returns there.
-  if (hasTabBar()) {
-    goToLibraryTab(LibraryTabs::Opds);
+  if (!hasTabBar()) {
+    onGoHome();
     return;
   }
-  onGoHome();
-}
-
-void OpdsBookBrowserActivity::goToLibraryTab(const int tab) {
-  exitTarget = LIBRARY_TAB_BASE + tab;
-  LibraryTabs::activate(tab);
+  // File Transfer skips the server list when there is exactly one server (goToBrowser), so Back
+  // from that catalog returns to File Transfer rather than to a list it never showed.
+  if (OPDS_STORE.getServers().size() == 1) {
+    goToHomeTab(static_cast<int>(HomeTab::Transfer));
+    return;
+  }
+  exitTarget = EXIT_TO_OPDS_SERVERS;
+  activityManager.goToOpdsServers();
 }
 
 void OpdsBookBrowserActivity::goToHomeTab(const int tab) {
   exitTarget = tab;
-  if (tab == static_cast<int>(HomeTab::Library)) {
-    goToLibraryTab(LibraryTabs::Books);
-    return;
-  }
-  HomeTabBar::activate(static_cast<HomeTab>(tab), HomeTab::Library);
+  // HomeTab::Count as the current tab: the catalog's own tab (Transfer) is a destination too,
+  // File Transfer's first screen.
+  HomeTabBar::activate(static_cast<HomeTab>(tab), HomeTab::Count);
 }
 
 void OpdsBookBrowserActivity::drawFooter() {
-  // As the Library's OPDS tab the bottom bar takes the place of the button hints.
+  // Under File Transfer the bottom bar takes the place of the button hints.
   if (hasTabBar()) {
     UiListActivity::drawFooter();
     return;

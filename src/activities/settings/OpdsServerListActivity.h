@@ -4,14 +4,13 @@
 
 #include "activities/UiListActivity.h"
 #include "components/HomeTabBar.h"
-#include "components/LibraryTabs.h"
 #include "components/OptionPopup.h"
 
 /**
  * Activity showing the list of configured OPDS servers.
  * Allows adding new servers and editing/deleting existing ones.
  * When pickerMode is true, selecting a server navigates to the OPDS browser
- * instead of opening the editor (used from File Transfer).
+ * instead of opening the editor (used from File Transfer and the Home menu).
  */
 class OpdsServerListActivity final : public UiListActivity {
  public:
@@ -30,13 +29,12 @@ class OpdsServerListActivity final : public UiListActivity {
   void onBackButton() override;
   const char* headerTitle() const override;
 
-  // The picker is the Library's OPDS tab in the Cover Grid theme: it draws the Library band and
-  // the bottom bar, the same way the file browser is its Files tab.
-  bool isLibraryTab() const { return pickerMode && HomeTabBar::enabled(); }
-  HomeTab tabBarTab() const override { return isLibraryTab() ? HomeTab::Library : HomeTab::Count; }
-  int ringTopTabCount() const override { return isLibraryTab() ? LibraryTabs::count() : 0; }
-  int ringActiveTopTab() const override { return LibraryTabs::Opds; }
-  void ringSelectTopTab(int index) override { LibraryTabs::activate(index); }
+  // The picker is part of File Transfer in the Cover Grid theme (its OPDS Browser row opens it),
+  // so it keeps the bottom bar with that tab marked.
+  bool inTransferTab() const { return pickerMode && HomeTabBar::enabled(); }
+  HomeTab tabBarTab() const override { return inTransferTab() ? HomeTab::Transfer : HomeTab::Count; }
+  // The marked tab is a destination from here too: File Transfer's first screen.
+  void ringActivateBottomTab(HomeTab tab) override { HomeTabBar::activate(tab, HomeTab::Count); }
 
   bool pickerMode = false;
   OptionPopup optionPopup;

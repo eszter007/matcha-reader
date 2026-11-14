@@ -10,7 +10,7 @@
 
 #include "OpdsServerStore.h"
 #include "activities/CatalogActivity.h"
-#include "components/LibraryTabs.h"
+#include "components/HomeTabBar.h"
 #include "network/OpdsHttpTransport.h"
 
 struct DetailsSpec;
@@ -135,29 +135,22 @@ class OpdsBookBrowserActivity final : public CatalogActivity {
   void releaseEntries();
   void navigateToEntry(const OpdsEntry& entry);
 
-  // Cover Grid theme: the catalog is drawn as the Library's OPDS tab, under the Library band and
-  // above the bottom bar, instead of full screen. Its top tabs are the Library's, and leaving for
-  // another tab goes through goToLibraryTab / goToHomeTab, which record where the restart lands.
-  HomeTab tabBarTab() const override { return HomeTab::Library; }
-  int ringTopTabCount() const override { return hasTabBar() ? LibraryTabs::count() : 0; }
-  int ringActiveTopTab() const override { return LibraryTabs::Opds; }
-  void ringSelectTopTab(int index) override { goToLibraryTab(index); }
+  // Cover Grid theme: the catalog belongs to File Transfer and is drawn above the bottom bar
+  // instead of full screen. Leaving for another tab goes through goToHomeTab, which records where
+  // the restart lands.
+  HomeTab tabBarTab() const override { return HomeTab::Transfer; }
   void ringActivateBottomTab(HomeTab tab) override { goToHomeTab(static_cast<int>(tab)); }
   bool ringHasContent() const override { return state == State::BROWSING && !entries.empty(); }
   // Left on the catalog opens search; Up/Down reach the bar.
   bool ringContentLeftRightToBar() const override { return false; }
-  void buildTopBand(UiScreen& screen) override;
-  // Every pill leaves the catalog, the OPDS one included (back to the server list). Ignored while
-  // a download runs: its progress callback routes touches too.
-  void onTabAction(int index) override;
   void restartAfterWifi() override;
-  // Out of the browser: to the Library's OPDS tab in the Cover Grid theme, Home elsewhere.
+  // Out of the browser: back to where File Transfer opened it from in the Cover Grid theme (the
+  // server list, or File Transfer itself when there is one server and the list was skipped),
+  // Home elsewhere.
   void leaveBrowser();
-  void goToLibraryTab(int tab);
   void goToHomeTab(int tab);
-  // Where onExit()'s heap-defrag restart lands: a HomeTab, LIBRARY_TAB_BASE plus a LibraryTabs
-  // value, or -1 for Home.
-  static constexpr int LIBRARY_TAB_BASE = 16;
+  // Where onExit()'s heap-defrag restart lands: a HomeTab, EXIT_TO_OPDS_SERVERS, or -1 for Home.
+  static constexpr int EXIT_TO_OPDS_SERVERS = 64;
   int exitTarget = -1;
   // Free heap under which a feed fetch first drops the SD-font caches: 38 KB failed the TLS
   // handshake, 66 KB succeeded.

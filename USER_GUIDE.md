@@ -182,7 +182,7 @@ On a touch device, tap a tab.
 On a device with buttons only, the cursor moves in one loop through the whole screen: the screen's own tabs at the top (if it has any), then its list or covers, then the bottom tabs, and back to the top.
 
 * **Up / Side Up** and **Down / Side Down** move the cursor around the loop.
-* **Confirm** on a top tab moves to the next one, e.g. **Books**, **Shelves**, **OPDS** and **Files** in the Library, or the languages in Insights. After the last top tab, the cursor moves to the bottom tabs.
+* **Confirm** on a top tab moves to the next one, e.g. **Books**, **Shelves** and **Files** in the Library, or the languages in Insights. After the last top tab, the cursor moves to the bottom tabs.
 * **Left** and **Right** on a top tab move to the previous or next one. In the bottom tabs, they move between Home, Library, File Transfer, Insights, Flashcards (when shown) and Settings.
 * **Confirm** on a bottom tab opens that screen. **Confirm** on the tab you are already on sends the cursor back to the first top tab.
 * **Back** leaves the screen. Hold **Back** to go to Home.
@@ -204,7 +204,7 @@ Files and folders whose names start with a dot are hidden. To show them, turn on
 * **Go back:** Press **Back** to go up one folder. Hold **Back** to jump to the top of the card.
 * **Delete or rename:** Hold **Confirm** on a file or folder for one second. A menu offers **Open**, **Delete** and **Rename**. The device asks before it deletes anything. Deleting a folder deletes everything in it.
 
-In the **Cover Grid** theme, Browse Files is the **Files** tab of the Library, not a separate Home entry. It keeps the **Books / Shelves / OPDS / Files** tabs at the top and the tab row at the bottom. The back arrow in the header only appears inside a folder. At the top of the card, use the tabs to leave, or press **Back** to return to **Books**. All other themes keep **Browse Files** as its own entry on Home.
+In the **Cover Grid** theme, Browse Files is the **Files** tab of the Library, not a separate Home entry. It keeps the **Books / Shelves / Files** tabs at the top and the tab row at the bottom. The back arrow in the header only appears inside a folder. At the top of the card, use the tabs to leave, or press **Back** to return to **Books**. All other themes keep **Browse Files** as its own entry on Home.
 
 ### 3.4 Library Screen
 
@@ -239,7 +239,7 @@ Use File Transfer to put books on the device and manage its files over Wi-Fi. Wh
 * **Join a Network**: connect to your Wi-Fi.
 * **Calibre Wireless**: receive books from Calibre (see [3.5.1](#351-calibre-wireless-transfers)).
 * **Create Hotspot**: the device makes its own Wi-Fi network for your computer or phone to join.
-* **OPDS Browser**: browse your OPDS catalogs, or add a server when none is saved (see [OPDS Servers](#369-opds-servers-multiple-libraries)). While plugins are off and a server is saved, it is on the Home screen instead.
+* **OPDS Browser**: browse your OPDS catalogs, or add a server when none is saved (see [OPDS Servers](#369-opds-servers-multiple-libraries)). In themes with a home menu it moves to the Home screen while plugins are off and a server is saved; in the Cover Grid theme it is always listed here.
 * **USB Drive**: manage the SD card from your computer over a USB cable. Only boards that support it show this option, e.g. the X4 Pro and Paper Mono.
 
 For the Wi-Fi modes, the device starts a small web server and shows an address. Open that address in a browser on your computer or phone. The [web server docs](./docs/webserver.md) explain how to connect and upload files.
@@ -718,13 +718,13 @@ You can save up to 8 catalogs (for example your Calibre library at home and a pu
 
 **Where to find your catalogs**
 
-- **Cover Grid** theme: open the Library's **OPDS** tab (next to **Books**, **Shelves** and **Files**). It lists your saved servers and an **Add Server** row. Choose a server to open its catalog. Wi-Fi only connects at that moment, never just because you moved across the tabs. Press **Back** at the top level of a catalog to return to the tab.
-- Other themes: open the catalogs from the home menu.
+- **Cover Grid** theme: open the **File Transfer** tab and choose **OPDS Browser**. It lists your saved servers and an **Add Server** row; with only one server saved it opens that catalog directly. Choose a server to open its catalog. Wi-Fi only connects at that moment.
+- Other themes: open the catalogs from the home menu, or from **File Transfer → OPDS Browser** while the home menu does not show them.
 
-In the Cover Grid theme the catalog stays inside the Library screen, with the tabs above it and the bottom bar below. Only the Wi-Fi picker takes the full screen. On a device without a touch screen:
-- **Up** from the first entry jumps to the tabs. There, **Left** and **Right** switch tabs.
-- **Down** past the last entry jumps to the bottom bar.
-- On an error screen or an empty catalog, **Up** and **Down** go straight to the tabs and the bar.
+In the Cover Grid theme the server list and the catalog keep the bottom bar, with **File Transfer** marked. Only the Wi-Fi picker takes the full screen. Press **Back** at the top level of a catalog to return to the server list (or to File Transfer when the list was skipped), and **Back** on the server list to return to File Transfer. On a device without a touch screen:
+
+- **Down** past the last entry jumps to the bottom bar, and **Up** from the first entry wraps to it.
+- On an error screen or an empty catalog, **Up** and **Down** go straight to the bar.
 
 **Add or edit a server**
 

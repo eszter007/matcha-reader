@@ -12,7 +12,8 @@ enum class NetworkMode { JOIN_NETWORK, CONNECT_CALIBRE, CREATE_HOTSPOT, USB_DRIV
  * - "Calibre Wireless" - Use Calibre wireless device transfers
  * - "Create Hotspot" - Create an Access Point that others can connect to (AP mode)
  * - "OPDS Browser" - Browse OPDS catalogs, or add a server when none is configured.
- *   Hidden while Home shows it (plugins off and a server configured).
+ *   Hidden while the Home menu shows it (plugins off and a server configured); always listed in
+ *   the Cover Grid theme, which has no Home menu.
  * - "USB Drive" - Expose the SD card over USB (boards with USB mass storage)
  *
  * The onModeSelected callback is called with the user's choice.

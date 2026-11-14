@@ -134,7 +134,7 @@ A cover grid of every book on the card, with a **Shelves** tab for folders and a
 
 <p align="center">
   <img src="docs/images/screenshots/tab-home.png" width="150" alt="Home tab: the cover grid">
-  <img src="docs/images/screenshots/library.png" width="150" alt="Library tab, with Books, Shelves, OPDS and Files">
+  <img src="docs/images/screenshots/library.png" width="150" alt="Library tab, with Books, Shelves and Files">
   <img src="docs/images/screenshots/tab-transfer.png" width="150" alt="File Transfer tab">
   <img src="docs/images/screenshots/insights.png" width="150" alt="Insights tab, with a tab per language">
   <img src="docs/images/screenshots/tab-settings.png" width="150" alt="Settings tab">
