@@ -14,7 +14,6 @@
 #include "activities/ActivityManager.h"
 #include "activities/browser/OpdsBookBrowserActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
-#include "components/LibraryTabs.h"
 #include "components/UITheme.h"
 #include "util/OpdsFilename.h"
 
@@ -58,8 +57,6 @@ OpdsServerListActivity::OpdsServerListActivity(GfxRenderer& renderer, MappedInpu
     : UiListActivity("OpdsServerList", renderer, mappedInput), pickerMode(pickerMode) {}
 
 void OpdsServerListActivity::onEnter() {
-  // Entered as a Library tab: the cursor carries on from the band the previous screen left it on.
-  topBandFocused = isLibraryTab();
   UiListActivity::onEnter();
 
   // Reload from disk in case servers were added/removed by a subactivity or the web UI
@@ -112,8 +109,8 @@ bool OpdsServerListActivity::handleCustomInput() {
 }
 
 void OpdsServerListActivity::onBackButton() {
-  if (isLibraryTab()) {
-    LibraryTabs::activate(LibraryTabs::Books);
+  if (inTransferTab()) {
+    activityManager.goToFileTransfer();
   } else if (pickerMode) {
     activityManager.goHome(HomeMenuItem::OPDS_BROWSER);
   } else {
@@ -208,11 +205,11 @@ void OpdsServerListActivity::buildScreen(UiScreen& screen) {
   // Content below the GUI.drawHeader band, above the button hints; derived
   // from the safe area so board bezel insets apply (same as LanguageSelect).
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  if (isLibraryTab()) {
-    // Below the Library band, above the bottom bar that replaces the button hints.
+  if (inTransferTab()) {
+    // Above the bottom bar that replaces the button hints.
     screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
                                                   static_cast<int16_t>(HomeTabBar::bottomInset()), 0});
-    LibraryTabs::buildBand(screen, renderer, LibraryTabs::Opds, topBandFocused, mappedInput.hasTouch(), ACTION_TAB);
+    screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   } else {
     screen.setContentMarginFromScreen(fui::Insets{
         static_cast<int16_t>(safe.y + metrics.topPadding + metrics.headerHeight),

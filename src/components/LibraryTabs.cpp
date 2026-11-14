@@ -9,11 +9,10 @@
 
 namespace LibraryTabs {
 
-int count() { return HomeTabBar::enabled() ? 4 : 2; }
+int count() { return HomeTabBar::enabled() ? MAX_TABS : 2; }
 
 int bandItems(freeink::ui::TabItem* tabs, const int active) {
-  static constexpr StrId LABELS[MAX_TABS] = {StrId::STR_TAB_BOOKS, StrId::STR_TAB_SHELVES, StrId::STR_TAB_OPDS,
-                                             StrId::STR_TAB_FILES};
+  static constexpr StrId LABELS[MAX_TABS] = {StrId::STR_TAB_BOOKS, StrId::STR_TAB_SHELVES, StrId::STR_TAB_FILES};
   const int n = count();
   for (int i = 0; i < n; i++) {
     tabs[i].label = I18n::getInstance().get(LABELS[i]);
@@ -41,10 +40,6 @@ void buildBand(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, const i
 }
 
 void activate(const int tab) {
-  if (tab == Opds) {
-    activityManager.goToOpdsServers();
-    return;
-  }
   if (tab == Files) {
     // Explicitly the card root: the default argument is an empty path, which lists nothing and
     // also fails showsLibraryTabs(), so the browser came up blank and without the band.
