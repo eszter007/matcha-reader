@@ -636,7 +636,8 @@ struct VerticalParsedText::LayoutCursor {
       } else if (i > first) {
         gap = cellTopOf(page.glyphs[i]) - cellTopOf(page.glyphs[i - 1]);
       }
-      const int a = std::clamp(gap - keep, 0, maxPerMark);
+      // A bracket set flush to the line head has already given up its leading half em.
+      const int a = page.glyphs[i].lineHeadFlush ? 0 : std::clamp(gap - keep, 0, maxPerMark);
       avail[marks++] = static_cast<int16_t>(a);
       total += a;
     }
