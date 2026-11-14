@@ -195,7 +195,7 @@ See [Reading Mode](#4-reading-mode) below.
 
 ### 3.3 Browse Files Screen
 
-Browse Files shows the folders and files on the SD card. The name of the current folder is shown at the top (**SD Card** at the top level). Every file is listed with its extension, including files the device cannot open. In themes without file icons, folders are shown in brackets, e.g. `[folder-name]`.
+Browse Files shows the folders and files on the SD card. The name of the current folder is shown at the top (**SD Card** at the top level). Every file is listed with its extension, including files the device cannot open. Turn off **Settings → Display → Show File Extensions** to give names the full row; files that differ only by extension, such as `book.epub` and `book.xtc`, then look alike. In themes without file icons, folders are shown in brackets, e.g. `[folder-name]`.
 
 Files and folders whose names start with a dot are hidden. To show them, turn on **Settings → Display → Show Hidden Files**. You need this to delete the hidden folders a Mac leaves on the card, e.g. `.Spotlight-V100` or `.Trashes`. `System Volume Information` is always hidden.
 
@@ -365,6 +365,8 @@ any profile of **Settings → Reader → Text Settings**.
 
 - **Show Hidden Files** (off by default): Shows files and folders whose names start with a dot (`.`) in the file
   browser.
+- **Show File Extensions** (on by default): Shows each file's extension in Browse Files. Turn it off to give
+  names the full row.
 
 #### 3.6.3 Sleep
 

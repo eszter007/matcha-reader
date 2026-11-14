@@ -99,6 +99,7 @@ class UITheme {
   static UIIcon getFileIcon(const std::string& filename);
   static int getStatusBarHeight();
   static int getProgressBarHeight();
+  static int getReaderStatusBarHeight();
 
  private:
   BaseTheme fallbackTheme;

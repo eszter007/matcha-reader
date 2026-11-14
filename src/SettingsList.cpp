@@ -277,6 +277,8 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   // --- System ---
   emit(SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
                            StrId::STR_CAT_DISPLAY));
+  emit(SettingInfo::Toggle(StrId::STR_SHOW_FILE_EXTENSIONS, &CrossPointSettings::showFileExtensions,
+                           "showFileExtensions", StrId::STR_CAT_DISPLAY));
   // STR_CAT_LIBRARY is not one of the four sections: these rows are reached through the
   // Library row in Display, which opens SettingsActivity on this category alone. Listed
   // in the order they appear there, with the Rebuild action injected after the first.
