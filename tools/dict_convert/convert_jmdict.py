@@ -320,14 +320,26 @@ def flatten_structured_content(content) -> str:
 
         if tag == "br":
             return "\n"
-        # Monolingual dictionaries (大辞林) label parts with data.name: 見出部 repeats the headword
-        # and reading the panel already shows, and each named block (sense, example, note) is a line.
+        # Monolingual dictionaries (大辞林) label parts with data.name. Map them to the layout the
+        # device formats: "• " gloss lines, "[pos]" tag lines, and plain lines for examples. 見出部
+        # and 語義Gnum repeat what the panel already shows; ━ stands for the headword and draws badly.
         dn = data.get("name", "")
         dn = dn if isinstance(dn, str) else ""
-        if dn == "見出部":
+        if dn in ("見出部", "語義Gnum"):
             return ""
+        if dn == "品詞G":
+            return "\n[" + re.sub(r"[（）()]", "", text).strip() + "]\n"
+        if dn == "語釈":
+            return "\n• " + text + "\n"
+        if dn == "見出相当部":
+            return text.replace("━", "〜")
         if dn and tag == "div":
-            return text + "\n"
+            # A short label line (㋐) joins the gloss after it: "• ㋐ すっかり。".
+            body = re.sub(r"\n+", "\n", text)
+            body = body[1:] if body.startswith("\n") else body
+            body = body[:-1] if body.endswith("\n") else body
+            body = re.sub(r"^([^\n•\[]{1,3})\n• ", r"• \1 ", body, count=1)
+            return "\n" + body + "\n"
         if tag == "rt":
             return ""
         if tag == "ruby":
