@@ -17,6 +17,10 @@ class HomeTabBar {
   static inline bool hitTapped = false;
   static inline int activated = -1;
 
+  // Every tab shown, in enum order: slot i is tab i.
+  static int count() { return COUNT; }
+  static HomeTab tabAt(const int slot) { return static_cast<HomeTab>(slot); }
+  static int slotOf(const HomeTab tab) { return static_cast<int>(tab); }
   static bool enabled() { return enabledValue; }
   static int hitTest(const MappedInputManager&, const GfxRenderer&, bool& tapped) {
     tapped = hitTapped;
