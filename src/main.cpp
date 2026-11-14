@@ -175,8 +175,8 @@ static unsigned long lastInputTime = 0;
 static void idleDisplayWhileAwake() {
   constexpr unsigned long kIdleAfterMs = 30000;
   if (!activityManager.preventAutoSleep() || millis() - lastInputTime < kIdleAfterMs) return;
-  RenderLock lock(RenderLock::Mode::Try);
-  if (lock.ownsLock()) display.controllerIdle();
+  RenderLock lock{RenderLock::Try{}};
+  if (lock.held()) display.controllerIdle();
 }
 
 // False on boards that end a Wi-Fi session in place instead of rebooting (silentRestartTo).
