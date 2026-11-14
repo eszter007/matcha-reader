@@ -3,6 +3,7 @@
 #include <BoardConfig.h>
 
 #include <atomic>
+#include <cstdint>
 
 #include "activities/Activity.h"
 #include "components/HomeTabBar.h"

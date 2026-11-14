@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cstdint>
+
 #include "GfxRenderer.h"
 #include "HapticFeedback.h"
 #include "MappedInputManager.h"

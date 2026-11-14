@@ -5,6 +5,8 @@
 #include <I18n.h>
 #include <freertos/FreeRTOS.h>
 
+#include <cstdint>
+
 struct Rect;
 class Page;
 

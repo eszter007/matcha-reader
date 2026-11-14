@@ -2,6 +2,7 @@
 #include <I18n.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <span>
 #include <string>

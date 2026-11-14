@@ -5,6 +5,7 @@
 
 #include <array>
 #include <climits>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
