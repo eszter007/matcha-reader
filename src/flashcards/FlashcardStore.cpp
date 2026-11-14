@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstring>
 #include <ctime>
+#include <iterator>
 #include <random>
 
 #include "AnkiDeck.h"
@@ -313,10 +314,8 @@ void readLeeches(const std::string& deckId, std::vector<uint64_t>& out) {
 
 // Reviews of known cards done today: cards last rated today, less those first learned today.
 uint16_t reviewsDoneToday(const std::vector<CardState>& states, const uint16_t day, const uint16_t newToday) {
-  uint16_t rated = 0;
-  for (const auto& c : states) {
-    if (c.reps > 0 && c.lastReview == day) rated++;
-  }
+  const auto rated = static_cast<uint16_t>(std::count_if(
+      states.begin(), states.end(), [day](const CardState& c) { return c.reps > 0 && c.lastReview == day; }));
   return rated > newToday ? rated - newToday : 0;
 }
 
@@ -392,12 +391,12 @@ void listDecks(std::vector<DeckSummary>& out) {
     std::vector<uint64_t> buried, leeches, notesDone;
     ankideck::readBuried(info.id, now, buried);
     if (info.leechThreshold > 0 && info.leechSuspend) readLeeches(info.id, leeches);
-    size_t today = 0;
-    for (const auto& c : states) today += c.reps > 0 && c.lastReview == now ? 1 : 0;
+    const auto reviewedToday = static_cast<size_t>(std::count_if(
+        states.begin(), states.end(), [now](const CardState& c) { return c.reps > 0 && c.lastReview == now; }));
     const bool bury = (info.buryNew || info.buryReviews) &&
-                      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= today * sizeof(uint64_t) + 8 * 1024;
+                      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= reviewedToday * sizeof(uint64_t) + 8 * 1024;
     if (bury) {
-      notesDone.reserve(today);
+      notesDone.reserve(reviewedToday);
       for (const auto& c : cards) {
         const CardState* s = findIn(states, c.cardId);
         if (s && s->reps > 0 && s->lastReview == now) notesDone.push_back(c.noteId);
@@ -480,11 +479,11 @@ bool Session::open(const std::string& language) {
   if (onVacation()) return true;  // progress loaded, nothing queued
   {
     // Notes of the cards reviewed today, and room for this session's.
-    size_t today = 0;
-    for (const auto& c : states) today += c.reps > 0 && c.lastReview == day ? 1 : 0;
+    const auto reviewedToday = static_cast<size_t>(std::count_if(
+        states.begin(), states.end(), [this](const CardState& c) { return c.reps > 0 && c.lastReview == day; }));
     // std::vector reserves with throwing new: without room, burying is skipped this session.
-    if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= (today + 64) * sizeof(uint64_t) + 8 * 1024) {
-      notesDone.reserve(today + 64);
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= (reviewedToday + 64) * sizeof(uint64_t) + 8 * 1024) {
+      notesDone.reserve(reviewedToday + 64);
     } else {
       buryNew = buryReviews = false;
     }
@@ -546,10 +545,10 @@ bool Session::open(const std::string& language) {
     // An Anki deck's cards come from its index, in Anki's order; offset holds the record's flags.
     std::vector<ankideck::CardRecord> cards;
     if (!ankideck::readIndex(ankideck::idOf(language), cards)) return false;
-    std::vector<uint64_t> buried;
-    ankideck::readBuried(ankideck::idOf(language), day, buried);
+    std::vector<uint64_t> buriedIds;
+    ankideck::readBuried(ankideck::idOf(language), day, buriedIds);
     for (const auto& c : cards) {
-      if (std::binary_search(buried.begin(), buried.end(), c.cardId)) continue;
+      if (std::binary_search(buriedIds.begin(), buriedIds.end(), c.cardId)) continue;
       // Notes already reviewed today bury their siblings for the rest of the day.
       const CardState* s = find(c.cardId);
       if ((buryNew || buryReviews) && s && s->reps > 0 && s->lastReview == day) notesDone.push_back(c.noteId);
@@ -763,7 +762,7 @@ void Session::previews(Interval out[4]) const {
   fsrs::previewIntervals(memory, s == nullptr, elapsed, params, days);
   const bool inLearning = activeLearn >= 0;
   const bool relearn = inLearning && learning[activeLearn].relearn;
-  const int current = inLearning ? learning[activeLearn].step : 0;
+  const int currentStep = inLearning ? learning[activeLearn].step : 0;
   for (int i = 0; i < 4; i++) {
     const auto rating = static_cast<fsrs::Rating>(i + 1);
     out[i].value = easyDay(days[i]);
@@ -772,7 +771,7 @@ void Session::previews(Interval out[4]) const {
     if (!steps) continue;
     const bool re = inLearning ? relearn : s != nullptr;
     const uint8_t count = re ? relearnCount : learnCount;
-    const int next = nextStep(rating, current, count);
+    const int next = nextStep(rating, currentStep, count);
     if (next < 0) {
       if (rating == fsrs::Rating::Again) {
         const fsrs::Memory m = s ? fsrs::next(memory, elapsed, rating) : fsrs::initial(rating);
@@ -780,7 +779,7 @@ void Session::previews(Interval out[4]) const {
       }
       continue;
     }
-    const uint16_t minutes = stepMinutes(re ? relearnSteps : learnSteps, count, rating, current, next);
+    const uint16_t minutes = stepMinutes(re ? relearnSteps : learnSteps, count, rating, currentStep, next);
     out[i] = minutes >= 1440 ? Interval{static_cast<uint16_t>(minutes / 1440), false} : Interval{minutes, true};
   }
 }
@@ -833,13 +832,13 @@ void Session::rate(const fsrs::Rating rating) {
       !std::binary_search(notesDone.begin(), notesDone.end(), item.note)) {
     notesDone.insert(std::upper_bound(notesDone.begin(), notesDone.end(), item.note), item.note);
   }
-  const int current = fromLearning ? learnt.step : 0;
+  const int currentStep = fromLearning ? learnt.step : 0;
   const uint8_t count = relearn ? relearnCount : learnCount;
-  const int next = stepping ? nextStep(rating, current, count) : -1;
+  const int next = stepping ? nextStep(rating, currentStep, count) : -1;
   uint16_t stepMinutesLogged = 0;  // set while the card stays in a minute step
   s->flags &= static_cast<uint8_t>(~(CardState::LEARN_STEP | CardState::LEARN_RELEARN));
   if (next >= 0) {
-    const uint16_t minutes = stepMinutes(relearn ? relearnSteps : learnSteps, count, rating, current, next);
+    const uint16_t minutes = stepMinutes(relearn ? relearnSteps : learnSteps, count, rating, currentStep, next);
     if (minutes < 1440) {
       s->flags |= static_cast<uint8_t>((next + 1) & CardState::LEARN_STEP);
       if (relearn) s->flags |= CardState::LEARN_RELEARN;
@@ -1033,10 +1032,9 @@ const char* autonym(const std::string& code) {
       {"es", "Español"}, {"it", "Italiano"}, {"pt", "Português"},  {"nl", "Nederlands"}, {"hu", "Magyar"},
       {"pl", "Polski"},  {"ru", "Русский"},  {"uk", "Українська"},
   };
-  for (const auto& a : AUTONYMS) {
-    if (code == a.code) return a.name;
-  }
-  return nullptr;
+  const auto* const found =
+      std::find_if(std::begin(AUTONYMS), std::end(AUTONYMS), [&code](const Autonym& a) { return code == a.code; });
+  return found == std::end(AUTONYMS) ? nullptr : found->name;
 }
 
 void miningLanguages(std::vector<std::string>& out) { deckLanguages(out); }
@@ -1164,7 +1162,7 @@ bool handOver(const std::string& language, const std::string& ankiKey, const std
   std::vector<uint64_t> handed;
   if (!loadHanded(language, handed)) return false;
   handed.reserve(handed.size() + cards.size());
-  for (const auto& c : cards) handed.push_back(c.csvId);
+  std::transform(cards.begin(), cards.end(), std::back_inserter(handed), [](const HandedCard& c) { return c.csvId; });
   std::sort(handed.begin(), handed.end());
   handed.erase(std::unique(handed.begin(), handed.end()), handed.end());
   const std::string path = handedPath(language);
@@ -1217,11 +1215,12 @@ void syncVacation() {
     uint16_t day = 0, newToday = 0;
     // Every deck must load before any is written: a deck skipped now would never be shifted,
     // and a retry after a partial shift would move the others twice.
-    for (const auto& language : languages) {
-      if (!loadStates(language, states, day, newToday)) {
-        LOG_ERR("FLASH", "Vacation end postponed: %s progress could not be read", language.c_str());
-        return;
-      }
+    const auto unreadable = std::find_if(languages.begin(), languages.end(), [&](const std::string& language) {
+      return !loadStates(language, states, day, newToday);
+    });
+    if (unreadable != languages.end()) {
+      LOG_ERR("FLASH", "Vacation end postponed: %s progress could not be read", unreadable->c_str());
+      return;
     }
     for (const auto& language : languages) {
       if (!loadStates(language, states, day, newToday) || states.empty()) continue;

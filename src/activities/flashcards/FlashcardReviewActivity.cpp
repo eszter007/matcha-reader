@@ -192,18 +192,18 @@ void formatInterval(const flashcards::Interval interval, char* out, const size_t
   const uint16_t days = interval.value;
   if (interval.minutes) {
     if (days < 60) {
-      snprintf(out, size, "%um", days);
+      snprintf(out, size, "%um", static_cast<unsigned>(days));
     } else {
-      snprintf(out, size, "%uh", (days + 30) / 60);
+      snprintf(out, size, "%uh", static_cast<unsigned>((days + 30) / 60));
     }
   } else if (days == 0) {
     snprintf(out, size, "<1d");
   } else if (days < 30) {
-    snprintf(out, size, "%ud", days);
+    snprintf(out, size, "%ud", static_cast<unsigned>(days));
   } else if (days < 365) {
-    snprintf(out, size, "%umo", (days + 15) / 30);
+    snprintf(out, size, "%umo", static_cast<unsigned>((days + 15) / 30));
   } else {
-    snprintf(out, size, "%u.%uy", days / 365, (days % 365) * 10 / 365);
+    snprintf(out, size, "%u.%uy", static_cast<unsigned>(days / 365), static_cast<unsigned>((days % 365) * 10 / 365));
   }
 }
 

@@ -38,7 +38,7 @@ class JsonValueSkipper {
   void take(char c);
 
   const char* keys_[MAX_KEYS + 1] = {};  // the names, null-terminated; owned by the caller (literals)
-  char name_[16];                        // the member name being read
+  char name_[16] = {};                   // the member name being read
   uint8_t nameLen_ = 0;
   uint8_t key_ = 0;  // which name's value is being skipped
   bool nameFits_ = true;
@@ -47,7 +47,7 @@ class JsonValueSkipper {
   size_t valueBytes_ = 0;
   Sink sink_ = nullptr;
   void* sinkCtx_ = nullptr;
-  char escape_[12];  // a \uXXXX\uXXXX pair at most
+  char escape_[12] = {};  // a \uXXXX\uXXXX pair at most
   uint8_t escapeLen_ = 0;
   void decode(char c);
   void flushEscape();

@@ -242,7 +242,7 @@ void JsonValueSkipper::decode(const char c) {
   if ((escapeLen_ == 7 && c != '\\') || (escapeLen_ == 8 && c != 'u')) {
     // Not a pair after all: the high surrogate alone, then what followed it.
     const uint8_t rest = static_cast<uint8_t>(escapeLen_ - 6);
-    char tail[2] = {escape_[6], escape_[7]};
+    const char tail[2] = {escape_[6], escape_[7]};
     escapeLen_ = 6;
     flushEscape();
     for (uint8_t i = 0; i < rest; i++) decode(tail[i]);

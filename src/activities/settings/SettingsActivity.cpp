@@ -282,8 +282,12 @@ void SettingsActivity::rebuildSettings() {
   addAction(SettingsSection::Insights, StrId::STR_SYNC_STATS, SettingAction::SyncStats);
   // Right under Enable Flashcards: works in every theme, with or without the tab.
   if (section == SettingsSection::Flashcards) {
-    settings.insert(settings.begin() + (settings.empty() ? 0 : 1),
-                    SettingInfo::Action(StrId::STR_FLASH_OPEN, SettingAction::OpenFlashcards));
+    SettingInfo open = SettingInfo::Action(StrId::STR_FLASH_OPEN, SettingAction::OpenFlashcards);
+    if (settings.empty()) {
+      settings.push_back(std::move(open));
+    } else {
+      settings.insert(settings.begin() + 1, std::move(open));
+    }
   }
   addAction(SettingsSection::Connectivity, StrId::STR_WIFI_NETWORKS, SettingAction::Network);
   if (bleturner::status().compiledIn) {

@@ -106,7 +106,7 @@ class IndexReader {
   size_t next = 0;      // first record findNext has not passed
   size_t bufStart = 0;  // records [bufStart, bufStart + bufCount) are in buf
   size_t bufCount = 0;
-  uint8_t buf[BUFFERED * INDEX_RECORD_BYTES];
+  uint8_t buf[BUFFERED * INDEX_RECORD_BYTES] = {};
 };
 
 // The new index written a record at a time, in card id order; commit() replaces the old one.
