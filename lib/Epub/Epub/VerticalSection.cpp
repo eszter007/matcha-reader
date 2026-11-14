@@ -136,7 +136,9 @@ namespace {
 // (EBPAJ .block-align-center / -end) centre a block along the column or push it to the foot.
 // v159: each glyph records its CSS font-size (scale8). Columns are as wide as their largest text,
 // and characters advance down a column by their own size.
-constexpr uint8_t VSECTION_FILE_VERSION = 160;
+// v161: no format change. A column squeezed to pull a character in no longer takes the half em a
+// line-head opening bracket has already given up; the next characters printed over the bracket.
+constexpr uint8_t VSECTION_FILE_VERSION = 161;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
