@@ -18,6 +18,7 @@ enum class HomeButtonAction : uint8_t {
   CreateClipping,
   SyncStatsClock,
   SyncClock,
+  FileBrowser,
   Count
 };
 

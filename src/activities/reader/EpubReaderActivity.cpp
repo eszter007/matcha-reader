@@ -1346,6 +1346,7 @@ void EpubReaderActivity::readerLoop() {
   }
 
   switch (mappedInput.homeButtonAction()) {
+    case HomeButtonAction::FileBrowser:
     case HomeButtonAction::ReaderMenu:
     case HomeButtonAction::Bookmark:
     case HomeButtonAction::Sync:
@@ -2905,6 +2906,8 @@ bool EpubReaderActivity::backgroundBuildWanted() const {
 
 // TODO: Failure handling
 void EpubReaderActivity::render(RenderLock&& lock) {
+  // Here rather than in renderContents(), so vertical pages get the reading waveform too.
+  const ReaderUtils::ReaderRefreshScope readerRefresh;
   // Presses from here on are what the speculative tail gives way to (nextTurnAlreadyRequested,
   // the image warm). Sampled at the START: a menu press made while this page was still
   // refreshing came before the tail began, and the tail then warmed the next page for seconds
@@ -4580,9 +4583,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const bool underToolbar = overlay != Overlay::None && usesToolbarMenu() && xteinkClassPanel();
   const bool needsTextGrayscale = SETTINGS.textAntiAliasing && !underToolbar;
   const bool needsAnyGrayscale = needsTextGrayscale || (pageHasImages && !BoardConfig::isEegoA4() && !underToolbar);
-  const bool absoluteImageGrayscale = pageHasImages && !gpio.deviceIsX3() &&
-                                      display.getController() == HalDisplay::Controller::UC8279 &&
-                                      renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
+  const bool absoluteImageGrayscale =
+      pageHasImages && !gpio.deviceIsX3() &&
+      (display.getController() == HalDisplay::Controller::UC8279 || BoardConfig::isPicco()) &&
+      renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
   const auto grayscale = renderer.grayscaleCapabilities(absoluteImageGrayscale ? HalDisplay::GrayscaleMode::Absolute
                                                                                : HalDisplay::GrayscaleMode::Overlay);
   const bool tiledGrayscale = needsAnyGrayscale && grayscale.stripUploads;
@@ -4747,12 +4751,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       }
       const auto tGrayWrite = millis();
 
-      renderer.setRenderMode(GfxRenderer::BW);
       if (!cancelled && !shouldCancel()) {
         renderer.displayGrayBuffer();
       } else {
         cancelled = true;
       }
+      // After displayGrayBuffer, as in runGrayPass().
+      renderer.setRenderMode(GfxRenderer::BW);
       const auto tGrayDisplay = millis();
 
       // BW framebuffer is intact; re-sync controller RAM for the next
@@ -5101,7 +5106,11 @@ EpubReaderActivity::GrayPassResult EpubReaderActivity::runGrayPass(const GrayPas
   const auto skip = [&](const char* why) {
     LOG_ERR("ERS", "Grayscale pass skipped (%s); page stays B/W", why);
     // An absolute base whose planes will now never arrive is cancelled by the switch back to BW.
-    if (spec.absolute) renderer.setRenderMode(GfxRenderer::BW);
+    // It may not have shown the page, so the B/W page is pushed instead.
+    if (spec.absolute) {
+      renderer.setRenderMode(GfxRenderer::BW);
+      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    }
     if (spec.resyncIfSkipped) renderer.cleanupGrayscaleWithFrameBuffer();
     return GrayPassResult::Skipped;
   };
@@ -5328,6 +5337,7 @@ void EpubReaderActivity::earlyRenderVerticalPageThunk(void* ctx, const VerticalP
 }
 
 void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const int pageIndex) {
+  const ReaderUtils::ReaderRefreshScope readerRefresh;
   const auto start = millis();
   // Update the shown-page index BEFORE drawing (the render takes 0.7-3s): a button press
   // during the render should target the page AFTER this one, not re-request this one

@@ -307,7 +307,9 @@ namespace {
 // v113: upstream merge (their v74): TrueType glyph advances keep their fraction until pixel
 //       placement instead of being rounded twice, so lines set in a vector font move. The framing
 //       is unchanged.
-constexpr uint8_t SECTION_FILE_VERSION = 113;
+// v114: upstream merge (their v75): headings are not hyphenated, so a heading that used to break
+//       inside a word now wraps whole. The framing is unchanged.
+constexpr uint8_t SECTION_FILE_VERSION = 114;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

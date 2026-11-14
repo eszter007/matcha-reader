@@ -95,6 +95,12 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 114 (fork numbering)
+
+Upstream's version 75, merged. The binary layout is unchanged and completed and partial sections
+are rebuilt. Headings are no longer hyphenated, so a heading that broke inside a word now wraps
+whole. Book metadata and saved progress are kept.
+
 ### Version 113 (fork numbering)
 
 Upstream's version 74, merged. The binary layout is unchanged and completed and partial sections
