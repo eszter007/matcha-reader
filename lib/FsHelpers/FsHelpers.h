@@ -6,6 +6,8 @@
 #include <string_view>
 #include <vector>
 
+#include "DeviceTextFiles.h"
+
 namespace FsHelpers {
 
 // Public-storage check for generated artifacts. Keep this outside HalStorage so callers can
@@ -95,10 +97,6 @@ inline bool hasTxtExtension(const String& fileName) {
 bool hasMarkdownExtension(std::string_view fileName);
 
 bool hasReflowableBookExtension(std::string_view fileName);
-
-// The crash log HalSystem writes to the SD root. A .txt file, but not a book: only the file
-// browser lists it. Takes a path or a bare file name.
-bool isCrashReportFile(std::string_view path);
 
 // Check for .css extension (case-insensitive)
 bool hasCssExtension(std::string_view fileName);
