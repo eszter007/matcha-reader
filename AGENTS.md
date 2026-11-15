@@ -55,10 +55,17 @@ diffs, history, and recorded checks only. The main agent owns verification:
 reviewers may not write files (including temporary diagnostics), run tests/builds,
 commit, publish, deploy, or flash.
 
-The human must write PR descriptions; agents may give concise factual notes and test
-results, never ready-to-paste PR prose. Creating/amending local commits requires
-explicit human approval. Push only on an explicit human instruction to push;
-edit/commit approval does not authorize it. Never open or close a PR.
+Creating/amending local commits requires explicit human approval. After an approved
+commit whose handoff is complete, the agent may push the feature branch to the
+user's fork and open a PR against `develop` without a further instruction. The agent
+may write the PR description, following
+[the PR template](.github/PULL_REQUEST_TEMPLATE.md): concise and factual. Merging or
+closing a PR, and pushing to `develop` or `master`, need an explicit human
+instruction.
+
+Hardware testing must happen before a PR is opened. The agent may do it and own it on
+a connected device, or the human does. Whoever runs it reports what was run, what was
+seen, and what was not covered.
 
 Repository-facing prose: use plain English for non-native readers and standard
 technical terms when clearest. Code comments must be short and useful after merge; follow the
@@ -77,8 +84,7 @@ This concise handoff checklist is a hard requirement:
 - [ ] The main agent verified, deduplicated, and fixed findings, then reran affected reviews after material fixes.
 - [ ] The main agent explained the behavior and architecture in plain English to someone unfamiliar with the codebase.
 - [ ] The human was told to review the diff and explicitly confirmed understanding of the behavior and architecture and ownership of maintenance.
-- [ ] The agent gave a concrete hardware test plan and reminded the human that hardware testing is required before a PR can be opened.
-- [ ] The agent did not claim hardware verification and did not write a PR description.
+- [ ] Hardware testing was done before the PR was opened, by the agent on a connected device or by the human. The agent reported what it ran, what it saw, and what it did not cover, and gave a hardware test plan for anything left.
 
 1. Stack Safety: Limit local function variables to < 256 bytes. The ESP32-C3 default stack is small; use std::unique_ptr or static pools for larger buffers.
 2. Heap Fragmentation: Avoid repeated new/delete in loops. Allocate buffers once during onEnter() and reuse them.
@@ -755,8 +761,8 @@ upstream    https://github.com/crosspoint-reader/crosspoint-reader.git (fetch/pu
 ### Git Operation Rules
 
 1. Integration branches and PR comparisons target `develop`, not `master` or the remote's symbolic HEAD.
-2. Never push to any remote or open/close a PR without explicit user approval. Complete local work and any requested local commit, then stop.
-3. If the user explicitly approves a push, inspect remotes again and use `fork` for the feature branch unless the user specifies otherwise.
+2. After an approved local commit with a complete handoff, the agent may push the feature branch and open a PR against `develop`. Never merge or close a PR, or push to `develop` or `master`, without explicit user approval.
+3. Before pushing, inspect remotes again and push the feature branch to the user's fork (`fork`, or `origin` when that is the fork) unless the user specifies otherwise.
 4. Never add Claude, Codex, or assistant self-attribution as a commit co-author or generated-by trailer.
 5. When a change supersedes or adapts another person's PR, verify the original human author from Git/GitHub and add that person as `Co-Authored-By`; skip bot authors.
 
@@ -946,7 +952,7 @@ build_flags =
 4. ✅ **CI**: Fix GitHub Actions failures before review
 5. ✅ **Code review**: Ensure orientation-aware logic is correct in all 4 modes by inspecting switch/case coverage
 
-**Human tester scope** (flag these for the user):
+**Hardware scope** (the agent on a connected device, or the human; report what was not covered):
 6. 🔲 **Device**: Test on hardware
 7. 🔲 **Orientations**: Verify all 4 modes (Portrait/Inverted/Landscape CW/CCW)
 8. 🔲 **Heap**: `ESP.getFreeHeap()` > 50KB, no leaks

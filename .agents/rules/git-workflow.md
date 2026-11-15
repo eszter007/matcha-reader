@@ -36,5 +36,9 @@ experiments, failed builds, build warnings, or ignored outputs; inspect status
 and `.gitignore` before staging. Exclude unrelated user work. Ask if commit
 authorization is unclear.
 
-Hardware testing is required before a PR, not before an approved local commit.
-The human owns hardware results and PR prose/publication.
+Hardware testing is required before a PR, not before an approved local commit. The
+agent may run and own it on a connected device, or the human does. After an
+approved commit with a complete handoff, the agent may push the feature branch,
+write the PR description from
+[the PR template](../../.github/PULL_REQUEST_TEMPLATE.md), and open the PR; merging
+and closing stay with the human.

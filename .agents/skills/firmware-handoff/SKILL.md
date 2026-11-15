@@ -95,14 +95,18 @@ explicit acceptance already given for this logical change; record it once and
 reopen only after a material design change. Continuation or commit approval alone
 does not establish understanding and ownership.
 
-Give applicable hardware steps with expected results and likely failure signs,
-including orientations, resources, and caches when affected. Hardware testing is
-the human's responsibility and must happen before a PR is opened. Never claim
-hardware verification yourself. Publication follows the root guide's human
-ownership policy and the [Git rule](../../rules/git-workflow.md).
+Hardware testing must happen before a PR is opened. With a device connected, the
+agent may run and own it: report what was run, what was seen, and what was not
+covered, without claiming more than that. Give hardware steps, with expected
+results and likely failure signs, for anything not covered, including
+orientations, resources, and caches when affected. Publication follows the root
+guide's ownership policy and the [Git rule](../../rules/git-workflow.md): after an
+approved commit the agent may push, write the PR description from
+[the PR template](../../../.github/PULL_REQUEST_TEMPLATE.md), and open the PR.
 
 **Done when:** checks and independent reviews cover the final change, no verified
 finding remains, and explicit human acceptance covers the described behavior,
-architecture, and maintenance responsibility. The hardware test plan is provided.
+architecture, and maintenance responsibility. Hardware results are reported, with a
+test plan for anything not covered.
 If the human rejects the architecture, ask what must change and revise before
 calling it ready.
