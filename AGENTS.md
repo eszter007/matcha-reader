@@ -73,7 +73,7 @@ technical terms when clearest. Code comments must be short and useful after merg
 
 ## Mandatory firmware handoff
 
-For every logical change that can affect shipped firmware or its build—including C/C++, build configuration, partitions, code-generation sources, translations, and release scripts—the main agent must complete [firmware-handoff](.agents/skills/firmware-handoff/SKILL.md) before declaring the work ready or making an approved local commit. That skill owns the required checks, four independent reviews, bounded follow-up, and explicit human acceptance of behavior, architecture, and maintenance ownership.
+For every logical change that can affect shipped firmware or its build—including C/C++, build configuration, partitions, code-generation sources, translations, and release scripts—the main agent must complete [firmware-handoff](.agents/skills/firmware-handoff/SKILL.md) before declaring the work ready or making an approved local commit. That skill owns the required checks, four independent reviews, bounded follow-up, and the plain-English handoff.
 
 Pure tests, diagnostics, documentation, and host-only Python scripts use a lighter review unless they alter firmware output or its build.
 
@@ -83,8 +83,7 @@ This concise handoff checklist is a hard requirement:
 - [ ] Read-only reviews completed for correctness, architecture, embedded constraints, and i18n/user documentation.
 - [ ] The main agent verified, deduplicated, and fixed findings, then reran affected reviews after material fixes.
 - [ ] The main agent explained the behavior and architecture in plain English to someone unfamiliar with the codebase.
-- [ ] The human was told to review the diff and explicitly confirmed understanding of the behavior and architecture and ownership of maintenance.
-- [ ] Hardware testing was done before the PR was opened, by the agent on a connected device or by the human. The agent reported what it ran, what it saw, and what it did not cover, and gave a hardware test plan for anything left.
+- [ ] Hardware testing was done before the PR was opened, by the agent on a connected device or by the human. The agent reported what it ran, what it saw, and what it did not cover.
 
 1. Stack Safety: Limit local function variables to < 256 bytes. The ESP32-C3 default stack is small; use std::unique_ptr or static pools for larger buffers.
 2. Heap Fragmentation: Avoid repeated new/delete in loops. Allocate buffers once during onEnter() and reuse them.

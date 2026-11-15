@@ -26,7 +26,7 @@ never invoke or probe raw `clang-format`. Run `pio check` when relevant.
 ### Testing and Verification Workflow
 
 [firmware-handoff](../skills/firmware-handoff/SKILL.md) owns firmware review rounds,
-final build ordering, and human acceptance. The main agent owns tests, builds,
+final build ordering, and the handoff. The main agent owns tests, builds,
 and diagnostic code. Reviewers inspect source and recorded results only.
 
 Run the smallest meaningful regression checks for the changed contract. Reuse
