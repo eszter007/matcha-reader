@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <BufferedFile.h>
+#include <DeviceTextFiles.h>
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -1121,6 +1122,7 @@ bool isLibraryBookFile(const std::string_view path) {
     if (slash == std::string_view::npos) break;
     start = slash + 1;
   }
+  if (FsHelpers::isDeviceTextFile(path)) return false;
   return FsHelpers::checkFileExtension(path, ".epub") || FsHelpers::checkFileExtension(path, ".txt") ||
          FsHelpers::checkFileExtension(path, ".md") || FsHelpers::hasXtcExtension(path) ||
          FsHelpers::hasMatchaExtension(path);

@@ -71,6 +71,15 @@ TEST(LibraryBookFileTest, RejectsOtherFilesAndHiddenNames) {
   EXPECT_FALSE(isLibraryBookFile("._book.epub"));
 }
 
+TEST(LibraryBookFileTest, RejectsTheTextFilesTheDeviceWrites) {
+  EXPECT_FALSE(isLibraryBookFile("/crash_report.txt"));
+  EXPECT_FALSE(isLibraryBookFile("/My Clippings.txt"));
+  EXPECT_FALSE(isLibraryBookFile("My Clippings.txt"));
+  // Only those exact names: a book that merely mentions them stays a book.
+  EXPECT_TRUE(isLibraryBookFile("/Books/My Clippings from Kyoto.txt"));
+  EXPECT_TRUE(isLibraryBookFile("/Books/crash_report_novel.txt"));
+}
+
 TEST(LibraryBookFileTest, RejectsSystemFoldersWithoutHidingOrdinaryTextBooks) {
   EXPECT_FALSE(isLibraryBookFile("/XTCache/fontPos.txt"));
   EXPECT_FALSE(isLibraryBookFile("/Backup/XTCache/epub/book/language.txt"));

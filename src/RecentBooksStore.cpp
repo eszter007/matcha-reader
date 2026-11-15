@@ -83,7 +83,7 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc, const size_t maxBooks) {
     RecentBook book;
     book.path = obj["path"] | "";
     // Opened from the file browser before it was kept out of recents.
-    if (FsHelpers::isCrashReportFile(book.path)) continue;
+    if (FsHelpers::isDeviceTextFile(book.path)) continue;
     book.title = obj["title"] | "";
     book.author = obj["author"] | "";
     book.coverBmpPath = obj["coverBmpPath"] | "";
@@ -100,8 +100,9 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc, const size_t maxBooks) {
 
 void RecentBooksStore::addBook(const std::string& path, const std::string& title, const std::string& author,
                                const std::string& coverBmpPath) {
-  // The crash log opens in the text reader but is not a book: Home and the Library skip it.
-  if (FsHelpers::isCrashReportFile(path)) return;
+  // The crash log and the clippings export open in the text reader but are not books: Home and
+  // the Library skip them.
+  if (FsHelpers::isDeviceTextFile(path)) return;
   // Drop stale entries first so a new add can't evict a valid book in their stead.
   pruneMissing();
 

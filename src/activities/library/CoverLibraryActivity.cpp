@@ -599,7 +599,7 @@ void CoverLibraryActivity::scanDirectoryEntry() {
   if ((!FsHelpers::hasEpubExtension(filename) && !FsHelpers::hasXtcExtension(filename) &&
        !FsHelpers::hasTxtExtension(filename) && !FsHelpers::hasMarkdownExtension(filename) &&
        !FsHelpers::hasMatchaExtension(filename)) ||
-      FsHelpers::isCrashReportFile(name)) {
+      FsHelpers::isDeviceTextFile(name)) {
     return;
   }
 
