@@ -1181,7 +1181,8 @@ void SdCardFontSystem::unloadCompanionTtf(GfxRenderer& renderer) {
     companionTtfFontId_ = 0;
   }
   companionTtf_.reset();
-  companionTtfSource_.file.close();
+  // Only a streamed companion holds an open file; close() asserts on one that was never opened.
+  if (companionTtfSource_.file) companionTtfSource_.file.close();
   companionTtfSource_.bytes.clear();
   companionTtfSource_.present = false;
   companionTtfSource_.streamed = false;
