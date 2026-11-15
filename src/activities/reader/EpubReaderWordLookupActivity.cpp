@@ -2495,6 +2495,9 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
     }
     return;
   }
+  // The entry is found and loop() opens its panel on the next pass, which paints itself. A card
+  // drawn here in between read "No match found" for a word that had matched.
+  if (hasResult && !lookupInFlight && !panelFailed) return;
   // Until the definition panel opens: the page with its word, and a card saying the lookup runs.
   drawPageBehindPanel();
   const auto layout = DictionaryPanel::draw(renderer, "", nullptr, nullptr, nullptr, false, false);
