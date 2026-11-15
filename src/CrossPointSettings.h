@@ -9,8 +9,8 @@
 #include <cstdint>
 
 #include "util/HomeButtonInput.h"
-#include "util/SideButtonActions.h"
 #include "util/PowerButtonInput.h"
+#include "util/SideButtonActions.h"
 
 class CrossPointSettings : public PersistableStore<CrossPointSettings> {
  private:
