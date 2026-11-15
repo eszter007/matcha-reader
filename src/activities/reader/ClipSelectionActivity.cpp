@@ -263,7 +263,7 @@ void ClipSelectionActivity::prewarmVerticalPage() {
       [](const uint8_t m, const VerticalGlyph& g) { return static_cast<uint8_t>(m | (1u << (g.style & 0x03))); });
   if (styleMask == 0) styleMask = 1 << EpdFontFamily::REGULAR;
   const std::string pageText = PageTextExtractor::fromVerticalPage(*verticalPage);
-  fcm->prewarmCache(fontId, pageText.c_str(), styleMask);
+  fcm->prewarmCache(fontId, pageText.c_str(), styleMask, /*accumulate=*/false);
 }
 
 size_t ClipSelectionActivity::verticalCellBytes() { return MAX_SELECTABLE_CELLS * (sizeof(WordBox) + 5); }

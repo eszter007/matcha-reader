@@ -1142,38 +1142,55 @@ void EpubReaderActivity::readerLoop() {
   }
   stepLookupPrescan();
 
-  // Idle glyph prewarm for the likely next page (currentPage + 1). The scan
-  // pass draws nothing (FCM scan mode suppresses pixels), so the displayed
-  // framebuffer is untouched; endScanAndPrewarm loads only glyphs not already
-  // cached. Debounced past rapid page-flipping, one attempt per position, and
-  // deferred while a render/build owns the CPU or the heap is at the render
-  // floor. Cross-chapter prewarm is deliberately out of scope (next spine's
-  // section isn't loaded).
-  constexpr unsigned long IDLE_PREWARM_DEBOUNCE_MS = 400;
+  // Idle glyph prewarm for the pages after the current one. The scan pass draws nothing (FCM scan
+  // mode suppresses pixels), so the displayed framebuffer is untouched; endScanAndPrewarm loads
+  // only glyphs not already cached. Deferred while a render/build owns the CPU or the heap is at
+  // the render floor. Cross-chapter prewarm is deliberately out of scope (next spine's section
+  // isn't loaded). A TTF reader font accumulates several pages ahead at once; an SD-card font
+  // warms one page, debounced past rapid page-flipping to spare the SD bus.
   {
     RenderLock lock{RenderLock::Try{}};
-    if (lock.held() && section && !section->isBuilding() && renderer.hasFrameBuffer() && lastRenderCompleteMs != 0 &&
-        millis() - lastRenderCompleteMs > IDLE_PREWARM_DEBOUNCE_MS && ESP.getFreeHeap() > RENDER_MIN_FREE_HEAP &&
-        ESP.getMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
-        (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
-      idlePrewarmSpine = currentSpineIndex;
-      idlePrewarmPage = section->currentPage;
-      const int nextPage = section->currentPage + 1;
-      if (nextPage < static_cast<int>(section->pageCount)) {
-        if (const auto p = section->loadPage(nextPage)) {
-          if (auto* fcm = renderer.getFontCacheManager()) {
-            const auto t0 = millis();
-            auto scope = fcm->createPrewarmScope();
-            // MUST be the effective font, not the raw setting: render() recomputes and stores
-            // each line's word x-positions, so scanning with a different font rewrites the
-            // page's layout. With a CJK-only family selected (UDDigiKyokasho) every Latin
-            // glyph and the space measure zero, which collapsed all word gaps on the page.
-            // Same suppressRuby the real render will use: the point of this scan is to warm
-            // exactly the glyphs the next page turn draws, and with furigana off the annotation
-            // glyphs are never drawn -- scanning them spends SD reads and cache RAM on nothing.
-            p->render(renderer, effectiveReaderFontId(), 0, 0, !useFurigana());  // scan only, no pixels
-            scope.endScanAndPrewarm();
-            LOG_DBG("ERS", "Idle prewarm: page %d in %lums", nextPage, millis() - t0);
+    auto* fcm = renderer.getFontCacheManager();
+    // Never ahead of input: a press or release this frame, a held key, a latched turn or a held
+    // finger is handled first. Checked last, so idle frames with nothing to warm skip the reads.
+    const auto inputWaiting = [this] {
+      float touchX = 0.0f;
+      float touchY = 0.0f;
+      return mappedInput.wasAnyPressed() || mappedInput.wasAnyReleased() || pendingManualTurn != 0 ||
+             buttonContactClosed() || (gpio.hasTouch() && gpio.isTouchHeldAt(touchX, touchY));
+    };
+    if (lock.held() && fcm && section && !section->isBuilding() && renderer.hasFrameBuffer() &&
+        overlay == Overlay::None && lastRenderCompleteMs != 0 && ESP.getFreeHeap() > RENDER_MIN_FREE_HEAP &&
+        ESP.getMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC) {
+      if (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage) {
+        idlePrewarmSpine = currentSpineIndex;
+        idlePrewarmPage = section->currentPage;
+        idlePrewarmOffset = 0;
+      }
+      // MUST be the effective font, not the raw setting: render() recomputes and stores each
+      // line's word x-positions, so scanning with a different font rewrites the page's layout.
+      // With a CJK-only family selected (UDDigiKyokasho) every Latin glyph and the space measure
+      // zero, which collapsed all word gaps on the page.
+      const int fontId = effectiveReaderFontId();
+      const int maxLookahead = fcm->getIdleLookaheadPages(fontId);
+      const unsigned long debounceMs = maxLookahead > 1 ? 0UL : 400UL;
+      const int targetPage = section->currentPage + idlePrewarmOffset + 1;
+      if (idlePrewarmOffset < maxLookahead && millis() - lastRenderCompleteMs > debounceMs && !inputWaiting()) {
+        const auto p = targetPage < static_cast<int>(section->pageCount) ? section->loadPage(targetPage) : nullptr;
+        if (!p) {
+          idlePrewarmOffset = maxLookahead;
+        } else {
+          const auto t0 = millis();
+          // Accumulating only for a multi-page lookahead; one SD page keeps the warm-and-clear scope.
+          auto scope = fcm->createPrewarmScope(maxLookahead > 1);
+          // Same suppressRuby the real render will use: with furigana off the annotation glyphs
+          // are never drawn, so scanning them spends SD reads and cache RAM on nothing.
+          p->render(renderer, fontId, 0, 0, !useFurigana());  // scan only, no pixels
+          if (scope.endScanAndPrewarm()) {
+            LOG_DBG("ERS", "Idle prewarm: page %d in %lums", targetPage, millis() - t0);
+            ++idlePrewarmOffset;
+          } else {
+            idlePrewarmOffset = maxLookahead;  // the cache is full: stop until the next page turn
           }
         }
       }
@@ -1581,8 +1598,7 @@ void EpubReaderActivity::readerLoop() {
 
   if (handleBackNavigation()) return;
 
-  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::CREATE_CLIPPING &&
-      mappedInput.wasReleased(MappedInputManager::Button::Power) &&
+  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::CREATE_CLIPPING && mappedInput.wasPowerSingleClick() &&
       !mappedInput.wasReleased(MappedInputManager::Button::Down)) {
     startClipSelection();
     return;
@@ -1597,8 +1613,8 @@ void EpubReaderActivity::readerLoop() {
 
   // Handle short power button press for footnotes
   if ((!endOfBookMenuOpen && mappedInput.homeButtonAction() == HomeButtonAction::Footnotes) ||
-      (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FOOTNOTES &&
-       mappedInput.wasReleased(MappedInputManager::Button::Power) && !gpio.wasReleased(HalGPIO::BTN_DOWN)) ||
+      (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FOOTNOTES && mappedInput.wasPowerSingleClick() &&
+       !gpio.wasReleased(HalGPIO::BTN_DOWN)) ||
       (!endOfBookMenuOpen && mappedInput.sideActionFired(CrossPointSettings::SIDE_BTN_FOOTNOTES))) {
     // Inside a footnote the click is REPURPOSED: instead of opening the panel again it jumps back
     // to the reference it was read from. That repurposing is the whole of what
@@ -3502,6 +3518,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   }
 
   if (!section) {
+    idlePrewarmOffset = 0;
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;
     LOG_DBG("ERS", "Loading file: %s, index: %d", filepath.c_str(), currentSpineIndex);
     prewarmedHPage_ = -1;  // fresh section: any page warmed for the previous one is stale
@@ -4230,8 +4247,8 @@ void EpubReaderActivity::runPostRenderTail(const uint16_t viewportWidth, const u
                                                     warmTarget < section->pageCount) {
       if (auto np = section->loadPageAt(warmTarget)) {
         // createPrewarmScope() clears the cache in its constructor, freeing the MAX_PAGE_SLOTS
-        // page-buffer slots, so each warm REPLACES the previous page's glyphs -- slots do not
-        // accumulate across turns even though release() keeps the result. The scan pass draws
+        // page-buffer slots, so for SD and built-in fonts each warm REPLACES the previous page's
+        // glyphs even though release() keeps the result. A TTF font keeps its glyphs across scopes. The scan pass draws
         // nothing (GfxRenderer skips drawing while scanning), so the displayed framebuffer is
         // untouched and this is safe inside an async refresh window.
         auto scope = fcm->createPrewarmScope();
@@ -5066,7 +5083,7 @@ bool EpubReaderActivity::prewarmVerticalPageGlyphs(const VerticalPage& vpage) {
                       [](uint8_t m, const auto& g) { return static_cast<uint8_t>(m | (1u << (g.style & 0x03))); });
   if (styleMask == 0) styleMask = 1 << EpdFontFamily::REGULAR;
   const std::string pageText = PageTextExtractor::fromVerticalPage(vpage);
-  fcm->prewarmCache(effectiveReaderFontId(), pageText.c_str(), styleMask);
+  fcm->prewarmCache(effectiveReaderFontId(), pageText.c_str(), styleMask, /*accumulate=*/false);
   return true;
 }
 

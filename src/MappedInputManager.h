@@ -3,6 +3,7 @@
 #include <HalGPIO.h>
 
 #include "util/HomeButtonInput.h"
+#include "util/PowerButtonClickInput.h"
 #include "util/PowerButtonInput.h"
 #include "util/RemoteButtonInput.h"
 #include "util/SideButtonActions.h"
@@ -52,9 +53,11 @@ class MappedInputManager {
   // a button press shows it, a touch hides it again. Always true on boards without touch.
   static bool buttonCursorShown();
   bool powerSleepClick() const { return powerSleepFrame; }
-  bool wasPowerSingleClick() const { return powerSingleClickFrame || wasReleased(Button::Power); }
+  bool wasPowerSingleClick() const {
+    return powerSingleClickFrame || (wasReleased(Button::Power) && wasShortPowerReleased());
+  }
   void resetPowerButtonInput() const {
-    powerButtonInput.reset();
+    powerButtonClickInput.reset();
     powerSingleClickFrame = false;
     powerSleepFrame = false;
     deferredPowerSleepFrame = false;
@@ -62,6 +65,27 @@ class MappedInputManager {
   // A power click bound to this SHORT_PWRBTN action fired this frame: a single or double click on
   // the X4 Pro once its click window closes, a short release elsewhere (Down not also released).
   bool wasPowerAction(uint8_t action) const;
+  bool isPowerHeld() const {
+#ifdef SIMULATOR
+    return gpio.isPressed(HalGPIO::BTN_POWER);
+#else
+    return gpio.isPressed(HalGPIO::BTN_POWER) || gpio.isPowerButtonPhysicallyPressed();
+#endif
+  }
+  void beginPowerInput(bool suppressHold, bool held) {
+    powerButtonInput.begin(suppressHold, held);
+    resetPowerButtonInput();
+  }
+  bool wasShortPowerReleased() const {
+    return gpio.wasReleased(HalGPIO::BTN_POWER) && powerButtonInput.wasShortReleased();
+  }
+  bool powerSleepRequested() const { return powerButtonInput.shouldSleep(); }
+  bool wasPowerReleaseConsumed() const { return powerButtonInput.wasReleaseConsumed(); }
+  void consumePowerGesture() const {
+    powerButtonInput.consume();
+    resetPowerButtonInput();
+  }
+  bool suppressPowerAfterRestart() const { return isPowerHeld() && powerButtonInput.suppressesHold(); }
   bool injectRemoteClick(RemoteButton button);
   bool hasRemoteClick() const { return remoteInput.button != RemoteButton::None; }
   bool wasPressed(Button button) const;
@@ -219,6 +243,7 @@ class MappedInputManager {
   mutable RemoteButtonInput remoteInput;
   mutable HomeButtonInput homeButtonInput;
   mutable PowerButtonInput powerButtonInput;
+  mutable PowerButtonClickInput powerButtonClickInput;
   mutable bool powerSingleClickFrame = false;
   mutable bool powerSleepFrame = false;
   mutable bool deferredPowerSleepFrame = false;

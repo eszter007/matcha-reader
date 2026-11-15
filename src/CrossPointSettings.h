@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "util/HomeButtonInput.h"
+#include "util/PowerButtonInput.h"
 #include "util/SideButtonActions.h"
 
 class CrossPointSettings : public PersistableStore<CrossPointSettings> {
@@ -623,7 +624,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   void* sdFontResolverCtx = nullptr;
 
   uint16_t getPowerButtonDuration() const {
-    return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? 10 : 400;
+    return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? 10 : PowerButtonInput::LONG_PRESS_MS;
   }
   int getReaderFontId() const;
   /// Built-in Noto Serif at the current reader size, used when a selected CJK-only

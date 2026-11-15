@@ -33,10 +33,14 @@ class FontCacheManager {
   }
   void releaseAllFontMemory();
   // Release what rendering holds -- SD mini arenas (forced, see SdCardFont::releaseRenderCaches),
-  // per-scope TTF caches, the decompressor's cache and glyph slab -- but keep every measurement
-  // cache, so a section build in progress can keep laying out without rebuilding them.
+  // the decompressor's cache and glyph slab -- but keep every measurement cache, so a section build
+  // in progress can keep laying out without rebuilding them. TTF glyph caches are kept: they
+  // accumulate across scopes and live in PSRAM (TtfEpdFont::clearCache).
   void releaseRenderMemory();
-  void prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F, bool accumulate = true);
+  bool prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F, bool accumulate = true);
+  // Recommended lookahead depth for idle prewarming. TTF fonts on PSRAM
+  // accumulate glyphs across multiple pages; single-page SD fonts use 1.
+  int getIdleLookaheadPages(int fontId) const;
   // True if fontId is backed by an SD-card font (SdCardFont::prewarm(), one-open bulk-load path)
   // rather than a built-in compressed font (FontDecompressor's own group-cache prewarm, which has
   // a separate, much more limited concurrent-prewarm-buffer budget -- see prewarmCache() callers
@@ -61,14 +65,14 @@ class FontCacheManager {
   // RAII scope for two-pass prewarm pattern
   class PrewarmScope {
    public:
-    explicit PrewarmScope(FontCacheManager& manager);
+    explicit PrewarmScope(FontCacheManager& manager, bool accumulate = false);
     ~PrewarmScope();
-    void endScanAndPrewarm();
+    bool endScanAndPrewarm();
     // Keep the warmed glyphs resident after this scope ends instead of clearing them on
     // destruction. Call after endScanAndPrewarm() when the warm is meant to outlive the
     // scope -- e.g. the idle next-page prewarm, which warms a page the reader will only turn
     // to later. Ordinary single-render scopes do NOT release, so they clear (warm-for-one-
-    // render) and keep the cache honest for the next scan.
+    // render) and keep the cache honest for the next scan. TTF fonts keep their glyphs either way.
     //
     // Finalizes the scan first: calling release() before endScanAndPrewarm() would otherwise
     // strand the manager in scan mode (drawText would keep recording instead of drawing) and
@@ -85,8 +89,9 @@ class FontCacheManager {
    private:
     FontCacheManager* manager_;
     bool active_ = true;
+    bool accumulate_ = false;
   };
-  PrewarmScope createPrewarmScope();
+  PrewarmScope createPrewarmScope(bool accumulate = false);
 
  private:
   SdCardFont* fallbackSdFont_ = nullptr;

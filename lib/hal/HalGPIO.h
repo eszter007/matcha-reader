@@ -103,6 +103,13 @@ class HalGPIO {
   // so long-press and key-repeat handlers fire. Returns false (dropped) when the queue is full.
   bool injectPress(uint8_t buttonIndex, uint16_t holdMs = 0);
   bool isPressed(uint8_t buttonIndex) const;
+  bool isPowerButtonPhysicallyPressed() const {
+#if CROSSPOINT_EMULATED == 0
+    return inputMgr.isPowerButtonPhysicallyPressed();
+#else
+    return isPressed(BTN_POWER);
+#endif
+  }
   bool wasPressed(uint8_t buttonIndex) const;
   bool wasAnyPressed() const;
   // Live pin read, independent of update()/debounce state. Long background steps (cover

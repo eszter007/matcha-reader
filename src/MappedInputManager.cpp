@@ -18,6 +18,15 @@ namespace fui = freeink::ui;
 void MappedInputManager::update(const bool deferHomeButtonAction) const {
   remoteInput.reset();
   gpio.update();
+  const bool powerHeld = gpio.isPressed(HalGPIO::BTN_POWER);
+  const bool powerReleased = gpio.wasReleased(HalGPIO::BTN_POWER);
+  const bool sharedConfirmRelease =
+      BoardConfig::ACTIVE.inputStyle == BoardConfig::InputStyle::DigitalConfirmPowerHold &&
+      gpio.wasReleased(HalGPIO::BTN_CONFIRM);
+  // Shared keys are physically held before the SDK emits logical Power.
+  powerButtonInput.update(isPowerHeld(), powerReleased || sharedConfirmRelease,
+                          (powerHeld || powerReleased) ? gpio.getPowerButtonHeldTime() : 0,
+                          SETTINGS.getPowerButtonDuration());
   // Any front-button press, hold, or release restarts the ghost window that
   // sideReleaseAlone() enforces for custom side-button actions.
   if (gpio.isPressed(HalGPIO::BTN_BACK) || gpio.isPressed(HalGPIO::BTN_CONFIRM) || gpio.isPressed(HalGPIO::BTN_LEFT) ||
@@ -52,12 +61,13 @@ void MappedInputManager::update(const bool deferHomeButtonAction) const {
   powerSingleClickFrame = false;
   powerClickAction = CrossPointSettings::IGNORE;
   const bool classifyPower = BoardConfig::isX4Pro() && SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE;
-  if (classifyPower && !gpio.isPressed(HalGPIO::BTN_DOWN)) {
-    const auto click = powerButtonInput.update(millis(), gpio.isPressed(HalGPIO::BTN_POWER),
-                                               gpio.wasReleased(HalGPIO::BTN_POWER), gpio.getPowerButtonHeldTime());
-    powerSingleClickFrame = click == PowerButtonInput::Click::Single;
-    if (click != PowerButtonInput::Click::None) {
-      const auto action = click == PowerButtonInput::Click::Double ? SETTINGS.doublePwrBtn : SETTINGS.shortPwrBtn;
+  if (classifyPower && !gpio.isPressed(HalGPIO::BTN_DOWN) && !powerButtonInput.suppressesHold() &&
+      !wasPowerReleaseConsumed()) {
+    const auto click = powerButtonClickInput.update(millis(), gpio.isPressed(HalGPIO::BTN_POWER),
+                                                    wasShortPowerReleased(), gpio.getPowerButtonHeldTime());
+    powerSingleClickFrame = click == PowerButtonClickInput::Click::Single;
+    if (click != PowerButtonClickInput::Click::None) {
+      const auto action = click == PowerButtonClickInput::Click::Double ? SETTINGS.doublePwrBtn : SETTINGS.shortPwrBtn;
       powerClickAction = action;
       switch (action) {
         case CrossPointSettings::IGNORE:
@@ -103,11 +113,11 @@ void MappedInputManager::update(const bool deferHomeButtonAction) const {
       }
     }
   } else {
-    powerButtonInput.reset();
+    powerButtonClickInput.reset();
   }
   // A short power click can carry a home-button action (see SHORT_PWRBTN): the reader shortcuts
   // for touch boards without a Home key, and the syncs on every board.
-  if (!classifyPower && homeAction == HomeButtonAction::Ignore && mapButton(Button::Power, &HalGPIO::wasReleased)) {
+  if (!classifyPower && homeAction == HomeButtonAction::Ignore && wasShortPowerReleased()) {
     switch (SETTINGS.shortPwrBtn) {
       case CrossPointSettings::PWR_BOOKMARK:
         homeAction = HomeButtonAction::Bookmark;
@@ -528,7 +538,7 @@ bool MappedInputManager::wasLightPanelGesture() const { return wasTopEdgeDownSwi
 bool MappedInputManager::wasPowerConfirmClick() const {
   if (!gpio.hasTouch() || SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::PWR_CONFIRM) return false;
   if (BoardConfig::isX4Pro() && SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE) return false;
-  return gpio.wasReleased(HalGPIO::BTN_POWER) && gpio.getPowerButtonHeldTime() <= SETTINGS.getPowerButtonDuration();
+  return wasShortPowerReleased();
 }
 #endif
 
@@ -554,7 +564,7 @@ bool MappedInputManager::wasPressed(const Button button) const {
 
 bool MappedInputManager::wasPowerAction(const uint8_t action) const {
   if (BoardConfig::isX4Pro() && SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE) return powerClickAction == action;
-  return SETTINGS.shortPwrBtn == action && wasReleased(Button::Power) && !gpio.wasReleased(HalGPIO::BTN_DOWN);
+  return SETTINGS.shortPwrBtn == action && wasPowerSingleClick() && !gpio.wasReleased(HalGPIO::BTN_DOWN);
 }
 
 bool MappedInputManager::wasReleased(const Button button) const {
