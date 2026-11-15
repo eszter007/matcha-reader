@@ -35,7 +35,8 @@ documentation, and host-only changes use relevant lighter checks unless they
 alter firmware output/build. Check ignored outputs before staging, using the
 [generated-file rules](generated-files-cache.md#files-generated-by-build-scripts).
 
-Human device checks cover changed behavior, relevant orientations/remapping,
+Device checks (by the agent on a connected device, or the human) cover changed
+behavior, relevant orientations/remapping,
 and resource/cache effects. Changed input, display, or layout paths cover all
 four orientations: portrait, inverted, landscape CW, and landscape CCW.
 C3 baseline target: more than 50 KB free and no leaks;

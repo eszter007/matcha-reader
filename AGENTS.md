@@ -46,22 +46,19 @@ Use the table to find guidance for the decisions being changed. Read relevant se
 
 Repository-local skills live under `.agents/skills/`. Their descriptions identify specific procedures to use when needed; a keyword match alone does not require loading a skill.
 
-## Human ownership
+## Ownership
 
 A PR is a long-term maintenance commitment. Working code is not enough: prefer the simplest design that meets the real requirement, fits `SCOPE.md`, and can be understood and maintained by its human owner.
 
-Fully autonomous end-to-end agents are forbidden. Review subagents inspect code,
-diffs, history, and recorded checks only. The main agent owns verification:
-reviewers may not write files (including temporary diagnostics), run tests/builds,
-commit, publish, deploy, or flash.
+Review subagents inspect code, diffs, history, and recorded checks only. The main
+agent owns verification: reviewers may not write files (including temporary
+diagnostics), run tests/builds, commit, publish, deploy, or flash.
 
-Creating/amending local commits requires explicit human approval. After an approved
-commit whose handoff is complete, the agent may push the feature branch to the
-user's fork and open a PR against `develop` without a further instruction. The agent
-may write the PR description, following
-[the PR template](.github/PULL_REQUEST_TEMPLATE.md): concise and factual. Merging or
-closing a PR, and pushing to `develop` or `master`, need an explicit human
-instruction.
+The agent may commit, push the feature branch to the user's fork, open a PR against
+`develop`, and merge or close its own PRs. Firmware/build changes are committed only
+after a complete handoff. The PR description follows
+[the PR template](.github/PULL_REQUEST_TEMPLATE.md): concise and factual. Changes
+reach `develop` and `master` through PRs, not direct pushes.
 
 Hardware testing must happen before a PR is opened. The agent may do it and own it on
 a connected device, or the human does. Whoever runs it reports what was run, what was
@@ -73,7 +70,7 @@ technical terms when clearest. Code comments must be short and useful after merg
 
 ## Mandatory firmware handoff
 
-For every logical change that can affect shipped firmware or its build—including C/C++, build configuration, partitions, code-generation sources, translations, and release scripts—the main agent must complete [firmware-handoff](.agents/skills/firmware-handoff/SKILL.md) before declaring the work ready or making an approved local commit. That skill owns the required checks, four independent reviews, bounded follow-up, and the plain-English handoff.
+For every logical change that can affect shipped firmware or its build—including C/C++, build configuration, partitions, code-generation sources, translations, and release scripts—the main agent must complete [firmware-handoff](.agents/skills/firmware-handoff/SKILL.md) before declaring the work ready or committing. That skill owns the required checks, four independent reviews, bounded follow-up, and the plain-English handoff.
 
 Pure tests, diagnostics, documentation, and host-only Python scripts use a lighter review unless they alter firmware output or its build.
 
@@ -760,7 +757,7 @@ upstream    https://github.com/crosspoint-reader/crosspoint-reader.git (fetch/pu
 ### Git Operation Rules
 
 1. Integration branches and PR comparisons target `develop`, not `master` or the remote's symbolic HEAD.
-2. After an approved local commit with a complete handoff, the agent may push the feature branch and open a PR against `develop`. Never merge or close a PR, or push to `develop` or `master`, without explicit user approval.
+2. The agent may commit, push feature branches, and open, merge, or close its PRs against `develop`. Changes reach `develop` and `master` through PRs, not direct pushes.
 3. Before pushing, inspect remotes again and push the feature branch to the user's fork (`fork`, or `origin` when that is the fork) unless the user specifies otherwise.
 4. Never add Claude, Codex, or assistant self-attribution as a commit co-author or generated-by trailer.
 5. When a change supersedes or adapts another person's PR, verify the original human author from Git/GitHub and add that person as `Co-Authored-By`; skip bot authors.
@@ -809,21 +806,16 @@ Tested in all 4 orientations with 5MB+ files.
 
 **DO commit when**:
 
-- User explicitly requests: "commit these changes"
-- Feature is complete and tested on device
+- Feature is complete and its checks pass
 - Bug fix is verified working
 - Refactoring preserves all functionality
 - All tests pass (`pio run` succeeds)
 
 **DO NOT commit when**:
 
-- Changes are untested on actual hardware
 - Build fails or has warnings
 - Experimenting or debugging in progress
-- User hasn't explicitly requested commit
 - Files excluded by `.gitignore` would be included — always run `git status` and cross-check against `.gitignore` before staging (e.g., `*.generated.h`, `.pio/`, `compile_commands.json`, `platformio.local.ini`)
-
-**Rule**: **If uncertain, ASK before committing.**
 
 ---
 

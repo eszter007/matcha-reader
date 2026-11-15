@@ -6,7 +6,7 @@ description: Final checks and handoff for completed firmware/build changes. Use 
 # Firmware handoff
 
 Run after implementation and main-agent self-review, before calling a firmware
-change ready or making an approved local commit. The main agent owns the result;
+change ready or committing it. The main agent owns the result;
 reviewer output is evidence, not authority. This workflow has at most two review
 rounds per logical change, even when slot limits require dispatching in batches.
 
@@ -92,9 +92,9 @@ Hardware testing must happen before a PR is opened. With a device connected, the
 agent runs it and owns the results: report what was run, what was seen, and what
 was not covered. Only for what was not covered, list the steps still needed with
 the expected result. Publication follows the root guide's ownership policy and the
-[Git rule](../../rules/git-workflow.md): after an approved commit the agent may
-push, write the PR description from
-[the PR template](../../../.github/PULL_REQUEST_TEMPLATE.md), and open the PR.
+[Git rule](../../rules/git-workflow.md): the agent may commit, push, write the PR
+description from [the PR template](../../../.github/PULL_REQUEST_TEMPLATE.md), and
+open and merge the PR.
 
 **Done when:** checks and independent reviews cover the final change, no verified
 finding remains, the change is explained, and hardware results are reported.
