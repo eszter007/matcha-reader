@@ -283,13 +283,14 @@ class SdCardFontSystem {
   // text (book titles, list rows, menus, status bar) in scripts the built-in
   // fonts lack renders in the chosen TTF. Mirrors setupUiFallbacks for .cpfont.
   void setupTtfUiFallbacks(GfxRenderer& renderer);
-  // Open one style source file (resident if small, streamed if large) into
-  // ttfSources_[style]. Returns false on open/read failure.
+  // Open one style source file, streamed from SD, into ttfSources_[style]. Returns false on
+  // open/read failure.
   bool openTtfSource(uint8_t style, const std::string& path);
-  // Opens `path` into `source` (resident if small, streamed if large); openTtfSource() and the
-  // companion use it.
+  // Opens `path` into `source`; openTtfSource() and the companion use it.
   struct TtfSource;
-  bool openTtfSourceInto(TtfSource& source, const std::string& path);
+  // Streams the file from SD (its first 1 MB cached in PSRAM). keepResident instead reads a file of
+  // up to 6 MB whole into RAM when the heap allows: the CJK companion, whose glyphs every page faults.
+  bool openTtfSourceInto(TtfSource& source, const std::string& path, bool keepResident = false);
   // A vector CJK extension (NotoSerifJP.ttf) as the CJK companion: the .cpfont manager cannot
   // load it, so it goes through the FreeInkFont engine like the selected TTF does.
   bool loadCompanionTtf(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t pointSize);

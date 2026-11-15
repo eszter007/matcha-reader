@@ -203,7 +203,7 @@ inline PageTurnResult detectPageTurnImpl(const MappedInputManager& input, const 
                             input.wasPowerAction(CrossPointSettings::SHORT_PWRBTN::PWR_PREV_PAGE);
   const bool explicitNext = input.sideActionFired(CrossPointSettings::SIDE_BTN_NEXT_PAGE) ||
                             (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
-                             input.wasReleased(MappedInputManager::Button::Power));
+                             input.wasPowerSingleClick());
   const bool tilt = tiltPrev || tiltNext;
   if (reversed) return {next || explicitPrev, prev || explicitNext, tilt};
   return {prev || explicitPrev, next || explicitNext, tilt};
