@@ -182,6 +182,23 @@ int32_t fontScaleTagForScale(float scale) {
   return -scaled;
 }
 
+float cardBasePx(const CssStyle& cardStyle) {
+  if (!cardStyle.hasFontSize()) return CSS_INITIAL_PX;
+  const float px = lengthAsFontSizeMultiple(cardStyle.fontSize) * CSS_INITIAL_PX;
+  return px > 0.0f && px < 1000.0f ? px : CSS_INITIAL_PX;
+}
+
+CssLength cardFontSize(const CssLength& size, const float basePx) {
+  const CssUnit unit = size.unit;
+  const bool parentRelative = unit == CssUnit::Em || unit == CssUnit::Percent || unit == CssUnit::Number;
+  float multiple = lengthAsFontSizeMultiple(size);
+  // em and % stay relative to the parent, as the inline path compounds them; px, pt and rem become
+  // rem, a multiple of the card base, which the reader's size stands for.
+  if (!parentRelative) multiple = multiple * CSS_INITIAL_PX / basePx;
+  if (!(multiple > 0.0f)) multiple = 1.0f;  // also NaN
+  return CssLength{std::clamp(multiple, CARD_MIN_SCALE, CARD_MAX_SCALE), parentRelative ? CssUnit::Em : CssUnit::Rem};
+}
+
 int cssBlockFontId(const CssStyle& style, const int baseFontId) {
   return fontIdForScale(cssFontSizeScale(style), baseFontId);
 }

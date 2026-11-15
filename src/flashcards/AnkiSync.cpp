@@ -10,6 +10,7 @@
 #include <mbedtls/base64.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -315,9 +316,11 @@ class DeckSync {
   DeckSync(AnkiClient& client, const ProgressFn& progress, Result& result, const int64_t nowMs, int64_t& nextPastMs)
       : client(client), progress(progress), result(result), nowMs(nowMs), nextPastMs(nextPastMs) {}
 
-  bool run(const std::string& name, const std::string& deckId, const char* presetId);
+  // deckId names the deck on the device, serverDeckId on the service (see localDeckId()).
+  bool run(const std::string& name, const std::string& deckId, const std::string& serverDeckId, const char* presetId);
 
  private:
+  std::string serverDeckId;
   bool retryTooLarge = false;          // cards marked too large under an older FETCH_VERSION are tried again
   ankideck::DeckInfo* info = nullptr;  // the deck being synced, saved at the end of run()
   uint32_t typesModSeen = 0;           // newest note type change seen; saved with a complete refresh
@@ -944,8 +947,12 @@ bool DeckSync::pullReviews(ankideck::DeckInfo& info) {
   const size_t fits = largest > HEAP_HEADROOM ? (largest - HEAP_HEADROOM) / sizeof(flashcards::PulledReview) : 0;
   if (fits < MIN_PAGE && !roomFor(MIN_PAGE * sizeof(flashcards::PulledReview), "reviews")) return false;
   const size_t pageSize = std::max(MIN_PAGE, std::min(MAX_PAGE, fits));
+  // The reply arrives whole before it is filtered, so a page must also fit the reply buffer. A
+  // review item is about 330 bytes; a reply still too large halves the page.
+  constexpr size_t REVIEW_REPLY_BYTES = 400;
+  size_t limit = std::max<size_t>(1, std::min(pageSize, client.capacity() / REVIEW_REPLY_BYTES));
   std::vector<flashcards::PulledReview> pulled;
-  pulled.reserve(pageSize);
+  pulled.reserve(limit);
   const std::string key = ankideck::keyFor(info.id);
   // Ratings made here and not yet sent: an Anki review of the same card from before one of them
   // is already outdated on this device.
@@ -960,9 +967,9 @@ bool DeckSync::pullReviews(ankideck::DeckInfo& info) {
   std::string cursor;
   do {
     JsonDocument params, page;
-    params["deck"]["id"] = info.id;
+    params["deck"]["id"] = serverDeckId;
     params["includeManual"] = false;
-    params["limit"] = pageSize;
+    params["limit"] = limit;
     if (!cursor.empty()) {
       params["cursor"] = cursor;
     } else if (info.lastReviewId != 0) {
@@ -973,11 +980,17 @@ bool DeckSync::pullReviews(ankideck::DeckInfo& info) {
     f["id"] = f["cardId"] = f["rating"] = f["kind"] = true;
     f["interval"] = true;
     filter["nextCursor"] = true;
-    if (!client.call("reviews.list", params, page, &filter)) return false;
+    bool ok;
+    while (!(ok = client.call("reviews.list", params, page, &filter)) &&
+           client.error().kind == AnkiClient::Error::Kind::TooLarge && limit > 1) {
+      limit /= 2;
+      params["limit"] = limit;
+    }
+    if (!ok) return false;
     pulled.clear();
     uint64_t newest = info.lastReviewId;
     for (JsonVariantConst r : page["items"].as<JsonArrayConst>()) {
-      if (pulled.size() >= pageSize) break;  // the server sent more than asked: the rest come next sync
+      if (pulled.size() >= limit) break;  // the server sent more than asked: the rest come next sync
       const uint64_t id = toId(r["id"]);
       newest = std::max(newest, id);
       const char* rating = r["rating"] | "";
@@ -1089,7 +1102,9 @@ bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
   return flashcards::dropReviewLog(key, log.size());
 }
 
-bool DeckSync::run(const std::string& name, const std::string& deckId, const char* presetId) {
+bool DeckSync::run(const std::string& name, const std::string& deckId, const std::string& serverDeckId,
+                   const char* presetId) {
+  this->serverDeckId = serverDeckId;
   if (!Storage.ensureDirectoryExists(ankideck::dirFor(deckId).c_str())) return false;
   ankideck::DeckInfo info;
   if (!ankideck::readInfo(deckId, info)) {
@@ -1129,7 +1144,7 @@ bool DeckSync::run(const std::string& name, const std::string& deckId, const cha
   if (!pullReviews(info) || !pushReviews(info)) return false;
   // Past the schedule changes just made, so they are not pulled back as Anki's.
   JsonDocument latestParams, latest;
-  latestParams["deck"]["id"] = deckId;
+  latestParams["deck"]["id"] = serverDeckId;
   if (client.call("reviews.getLatestId", latestParams, latest) && !latest["id"].isNull()) {
     info.lastReviewId = std::max(info.lastReviewId, toId(latest["id"]));
   }
@@ -1200,6 +1215,18 @@ std::string fieldQuoted(const std::string& value) {
     out.push_back(c);
   }
   return out;
+}
+
+// A deck's id on the device: the service's id with the service's prefix, so decks of different
+// services never share a folder or a review state.
+std::string localDeckId(const Service& service, const std::string& serverId) { return service.localPrefix + serverId; }
+// The service's id for a device deck id; empty when the deck belongs to another service. Anki's ids
+// are digits only, so a prefixed id is never Anki's.
+std::string serverDeckId(const Service& service, const std::string& localId) {
+  const size_t n = strlen(service.localPrefix);
+  if (localId.size() <= n || localId.compare(0, n, service.localPrefix) != 0) return {};
+  if (!isdigit(static_cast<unsigned char>(localId[n]))) return {};
+  return localId.substr(n);
 }
 
 bool ensureMinedNoteType(AnkiClient& client) {
@@ -1304,7 +1331,8 @@ size_t minedRowBytes(const flashcards::MinedRow& row) {
 // Mined words not in Anki yet become "Matcha sentence" notes in Matcha::<language>, with their
 // history (sent by that deck's sync, which follows). The deck joins the synced decks. A failure
 // here is logged and leaves the words for the next sync: it never keeps the decks from syncing.
-void handOverMined(AnkiClient& client, const ProgressFn& progress, Result& result) {
+void handOverMined(AnkiClient& client, const Service& service, const ProgressFn& progress, Result& result) {
+  if (!service.takesMined) return;
   std::vector<std::string> languages;
   flashcards::miningLanguages(languages);
   if (languages.empty()) return;
@@ -1324,10 +1352,11 @@ void handOverMined(AnkiClient& client, const ProgressFn& progress, Result& resul
     } else {
       for (const char c : language) deckName.push_back(static_cast<char>(toupper(static_cast<unsigned char>(c))));
     }
-    const std::string deckId = ensureDeck(client, decks, flashcards::minedDeckId(language), deckName);
-    if (deckId.empty() || !flashcards::setMinedDeckId(language, deckId)) return;
-    // Synced from now on, so the handed-over words come back as an Anki deck.
-    std::vector<SyncedDeck> wanted = ANKI_STORE.getSyncedDecks();
+    const std::string deckId =
+        ensureDeck(client, decks, serverDeckId(service, flashcards::minedDeckId(language)), deckName);
+    if (deckId.empty() || !flashcards::setMinedDeckId(language, localDeckId(service, deckId))) return;
+    // Synced from now on, so the handed-over words come back as a deck of the service.
+    std::vector<SyncedDeck> wanted = service.store.getSyncedDecks();
     const bool listed = std::any_of(wanted.begin(), wanted.end(),
                                     [&](const SyncedDeck& w) { return w.id == deckId || w.name == deckName; });
     if (!listed) {
@@ -1335,10 +1364,10 @@ void handOverMined(AnkiClient& client, const ProgressFn& progress, Result& resul
       d.name = deckName;
       d.id = deckId;
       wanted.push_back(std::move(d));
-      ANKI_STORE.setSyncedDecks(std::move(wanted));
-      ANKI_STORE.saveToFile();
+      service.store.setSyncedDecks(std::move(wanted));
+      service.store.save();
     }
-    const std::string key = ankideck::keyFor(deckId);
+    const std::string key = ankideck::keyFor(localDeckId(service, deckId));
     uint32_t handed = 0;
     bool stop = false;
     do {
@@ -1413,7 +1442,51 @@ void handOverMined(AnkiClient& client, const ProgressFn& progress, Result& resul
   }
 }
 
-Result syncAll(AnkiClient& client, const ProgressFn& progress, const int64_t nowMs) {
+namespace {
+// Mined words go to Migaku when it is set up and either takes them or Anki is not set up.
+bool minedGoToMigaku() {
+  return MIGAKU_STORE.isConfigured() && (MIGAKU_STORE.getTakesMined() || !ANKI_STORE.isConfigured());
+}
+}  // namespace
+
+Service ankiService() {
+  return Service{.store = ANKI_STORE,
+                 .name = "Anki",
+                 .remoteName = "AnkiWeb",
+                 .localPrefix = "",
+                 .takesMined = !minedGoToMigaku(),
+                 .syncRemote = ANKI_STORE.getSyncAnkiWeb(),
+                 .requiresRemote = false,
+                 .unreachable = StrId::STR_ANKI_UNREACHABLE,
+                 .keyRefused = StrId::STR_ANKI_KEY_REFUSED,
+                 .notAllowed = StrId::STR_ANKI_NOT_ALLOWED,
+                 .deckMissing = StrId::STR_ANKI_DECK_MISSING,
+                 .replyError = StrId::STR_ANKI_REPLY_ERROR,
+                 .loginMissing = StrId::STR_ANKI_REPLY_ERROR,  // no AnkiWeb login is not an error
+                 .connected = StrId::STR_ANKI_CONNECTED,
+                 .noAddress = StrId::STR_ANKI_NO_ADDRESS};
+}
+
+// The bridge's own sync is the Migaku sync: it always runs.
+Service migakuService() {
+  return Service{.store = MIGAKU_STORE,
+                 .name = "Migaku",
+                 .remoteName = "Migaku",
+                 .localPrefix = ankideck::MIGAKU_PREFIX,
+                 .takesMined = minedGoToMigaku(),
+                 .syncRemote = true,
+                 .requiresRemote = true,
+                 .unreachable = StrId::STR_MIGAKU_UNREACHABLE,
+                 .keyRefused = StrId::STR_MIGAKU_KEY_REFUSED,
+                 .notAllowed = StrId::STR_MIGAKU_KEY_REFUSED,
+                 .deckMissing = StrId::STR_MIGAKU_DECK_MISSING,
+                 .replyError = StrId::STR_MIGAKU_REPLY_ERROR,
+                 .loginMissing = StrId::STR_MIGAKU_NOT_SET_UP,
+                 .connected = StrId::STR_MIGAKU_CONNECTED,
+                 .noAddress = StrId::STR_MIGAKU_NO_ADDRESS};
+}
+
+Result syncAll(AnkiClient& client, const Service& service, const ProgressFn& progress, const int64_t nowMs) {
   Result result;
   int64_t nextPastMs = nowMs - 60000;
   const auto fail = [&](const std::string& deck) {
@@ -1424,20 +1497,21 @@ Result syncAll(AnkiClient& client, const ProgressFn& progress, const int64_t now
     }
     return result;
   };
-  if (ANKI_STORE.getSyncAnkiWeb()) {
+  const char* remote = service.remoteName;
+  const auto syncRemote = [&] {
     JsonDocument params, done;
     params["includeMedia"] = false;
-    // Without an AnkiWeb account (a server set up without one) the sync goes on locally.
-    if (!client.callOperation("collection.sync", params, done, OPERATION_TIMEOUT) &&
-        client.error().type != "authenticationRequired") {
-      return fail("AnkiWeb");
-    }
-  }
-  handOverMined(client, progress, result);
+    if (client.callOperation("collection.sync", params, done, OPERATION_TIMEOUT)) return true;
+    // Without an AnkiWeb account (a server set up without one) the sync goes on locally. The
+    // Migaku bridge has nothing to sync without its Migaku login.
+    return !service.requiresRemote && client.error().type == "authenticationRequired";
+  };
+  if (service.syncRemote && !syncRemote()) return fail(remote);
+  handOverMined(client, service, progress, result);
   JsonDocument decks;
   if (!client.call("decks.list", decks)) return fail({});
   // A copy: the loop renames entries, and the store is saved once after it.
-  std::vector<SyncedDeck> wanted = ANKI_STORE.getSyncedDecks();
+  std::vector<SyncedDeck> wanted = service.store.getSyncedDecks();
   bool renamed = false;
   std::string missing;
   for (auto& w : wanted) {
@@ -1461,7 +1535,7 @@ Result syncAll(AnkiClient& client, const ProgressFn& progress, const int64_t now
       if (id) break;
     }
     if (!id || !*id) {
-      LOG_ERR("ANKI", "Deck %s is not in Anki", w.name.c_str());
+      LOG_ERR("ANKI", "Deck %s is not in %s", w.name.c_str(), service.name);
       if (missing.empty()) missing = w.name;
       continue;
     }
@@ -1477,20 +1551,13 @@ Result syncAll(AnkiClient& client, const ProgressFn& progress, const int64_t now
       return fail(w.name);
     }
     DeckSync deck(client, progress, result, nowMs, nextPastMs);
-    if (!deck.run(w.name, w.id, preset)) return fail(w.name);
+    if (!deck.run(w.name, localDeckId(service, w.id), w.id, preset)) return fail(w.name);
   }
   if (renamed) {
-    ANKI_STORE.setSyncedDecks(std::move(wanted));
-    ANKI_STORE.saveToFile();
+    service.store.setSyncedDecks(std::move(wanted));
+    service.store.save();
   }
-  if (ANKI_STORE.getSyncAnkiWeb()) {
-    JsonDocument params, done;
-    params["includeMedia"] = false;
-    if (!client.callOperation("collection.sync", params, done, OPERATION_TIMEOUT) &&
-        client.error().type != "authenticationRequired") {
-      return fail("AnkiWeb");
-    }
-  }
+  if (service.syncRemote && !syncRemote()) return fail(remote);
   // The other decks are synced; a missing one still fails the sync so it is not missed.
   if (!missing.empty()) {
     result.failedDeck = missing;

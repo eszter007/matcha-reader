@@ -40,6 +40,14 @@ inline std::string translateStashPath() { return sdsystem::path("translate_pendi
 // rails); the caller then proceeds without a reboot.
 void silentRestartToJoinNetwork();
 
+// Between the services of one flashcard sync (Anki, then Migaku): a Wi-Fi session leaves too little
+// contiguous heap for the second. Restarts into the sync screen (AnkiSyncActivity::
+// resumeAfterRestart), which syncs the rest and shows both results. Does nothing where
+// silentRestartAvailable() is false.
+void silentRestartToFlashcardSync();
+// False on a touch board (a soft reset would cycle its rails) and while sleep is starting.
+bool silentRestartAvailable();
+
 // Reboots immediately after an activity releases exclusive raw storage. The
 // RTC target ensures setup() lands on Home instead of resuming a reader.
 void restartToHomeAfterStorageHandoff();

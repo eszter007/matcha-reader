@@ -69,6 +69,9 @@ constexpr size_t MAX_CSS_HASHES = 16;
 
 constexpr const char* KEY_PREFIX = "anki-";
 inline bool isAnkiKey(const std::string& key) { return key.rfind(KEY_PREFIX, 0) == 0; }
+// Device deck ids of Migaku decks start with this; Anki's are its own ids, digits only.
+constexpr const char* MIGAKU_PREFIX = "m";
+inline bool isMigakuKey(const std::string& key) { return key.rfind(std::string(KEY_PREFIX) + MIGAKU_PREFIX, 0) == 0; }
 inline std::string keyFor(const std::string& deckId) { return KEY_PREFIX + deckId; }
 std::string dirFor(const std::string& deckId);  // with a trailing '/'
 std::string idOf(const std::string& key);

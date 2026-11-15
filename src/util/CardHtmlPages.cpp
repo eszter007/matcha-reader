@@ -1,6 +1,7 @@
 #include "CardHtmlPages.h"
 
 #include <Arduino.h>
+#include <Epub/ReaderFontScale.h>
 #include <Epub/css/CssParser.h>
 #include <Epub/parsers/ChapterHtmlSlimParser.h>
 #include <HalStorage.h>
@@ -68,12 +69,18 @@ bool buildCardHtmlPages(GfxRenderer& renderer, const std::string& xhtmlPath, con
           pagesOut.push_back(std::move(page));
         },
         /*embeddedStyle=*/true, base, imageBase, /*imageRendering=*/0, std::vector<std::string>{},
-        /*popupFn=*/nullptr, &css);
+        /*popupFn=*/nullptr, &css,
+        // A deck's left and right margins (an indented sentence) are part of its layout; the
+        // parser caps each at MAX_HORIZONTAL_INSET_EM.
+        /*honorBookInsets=*/true);
     if (!parser) {
       LOG_ERR("CARD", "OOM: ChapterHtmlSlimParser");
     } else {
       parser->setTextSpacing(SETTINGS.getCharacterSpacing(), SETTINGS.wordSpacing);
       parser->setParagraphIndentSpaces(0);
+      // The card's base text at the reader's size: deck CSS is sized for a desktop screen. The
+      // `card` class is the wrapper AnkiSync writes around each side.
+      parser->setCardFontBase(cardBasePx(css.resolveStyle("div", "card")));
       // Stepped so a cut card stops here: laying out the rest would only spend the heap.
       if (parser->beginParse()) {
         for (;;) {

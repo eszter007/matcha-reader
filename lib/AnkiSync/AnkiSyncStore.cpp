@@ -30,21 +30,21 @@ std::vector<SyncedDeck> splitDeckNames(const std::string& text) {
   }
   return out;
 }
+
 }  // namespace ankisync
 
 using namespace ankisync;
 
-std::string AnkiSyncStore::endpoint() const {
+std::string SyncServiceStore::endpoint() const {
   std::string base = url;
   while (!base.empty() && base.back() == '/') base.pop_back();
   if (base.find("://") == std::string::npos) base = "http://" + base;
-  return base + "/api/v1";
+  return base + apiPath;
 }
 
-void AnkiSyncStore::toJson(JsonDocument& doc) const {
+void SyncServiceStore::writeJson(JsonDocument& doc) const {
   doc["url"] = url;
   doc["key_obf"] = obfuscation::obfuscateToBase64(key);
-  doc["syncAnkiWeb"] = syncAnkiWeb;
   JsonArray syncedJson = doc["synced"].to<JsonArray>();
   for (const auto& d : synced) {
     JsonObject o = syncedJson.add<JsonObject>();
@@ -53,7 +53,8 @@ void AnkiSyncStore::toJson(JsonDocument& doc) const {
   }
 }
 
-bool AnkiSyncStore::fromJson(JsonVariantConst doc) {
+void SyncServiceStore::readJson(JsonVariantConst doc, bool& upgraded) {
+  upgraded = false;
   url = doc["url"] | "";
   bool ok = true;
   key = obfuscation::deobfuscateFromBase64(doc["key_obf"] | "", &ok);
@@ -62,19 +63,17 @@ bool AnkiSyncStore::fromJson(JsonVariantConst doc) {
   const char* plain = doc["key"] | "";
   if (key.empty() && *plain) {
     key = plain;
-    requestResave();
+    upgraded = true;
   }
-  syncAnkiWeb = doc["syncAnkiWeb"] | true;
   synced.clear();
   for (JsonVariantConst d : doc["synced"].as<JsonArrayConst>()) {
     if (synced.size() >= MAX_SYNCED) break;
     SyncedDeck s{d["name"] | "", d["id"] | ""};
     if (!s.name.empty()) synced.push_back(std::move(s));
   }
-  return true;
 }
 
-void AnkiSyncStore::setSyncedDecks(std::vector<SyncedDeck> decks) {
+void SyncServiceStore::setSyncedDecks(std::vector<SyncedDeck> decks) {
   if (decks.size() > MAX_SYNCED) decks.resize(MAX_SYNCED);
   for (auto& d : decks) {
     if (!d.id.empty()) continue;
@@ -83,4 +82,30 @@ void AnkiSyncStore::setSyncedDecks(std::vector<SyncedDeck> decks) {
     }
   }
   synced = std::move(decks);
+}
+
+void AnkiSyncStore::toJson(JsonDocument& doc) const {
+  writeJson(doc);
+  doc["syncAnkiWeb"] = syncAnkiWeb;
+}
+
+bool AnkiSyncStore::fromJson(JsonVariantConst doc) {
+  bool upgraded = false;
+  readJson(doc, upgraded);
+  syncAnkiWeb = doc["syncAnkiWeb"] | true;
+  if (upgraded) requestResave();
+  return true;
+}
+
+void MigakuSyncStore::toJson(JsonDocument& doc) const {
+  writeJson(doc);
+  doc["takesMined"] = takesMined;
+}
+
+bool MigakuSyncStore::fromJson(JsonVariantConst doc) {
+  bool upgraded = false;
+  readJson(doc, upgraded);
+  takesMined = doc["takesMined"] | false;
+  if (upgraded) requestResave();
+  return true;
 }

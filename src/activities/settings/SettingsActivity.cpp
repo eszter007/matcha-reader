@@ -174,7 +174,9 @@ void SettingsActivity::rebuildSettings() {
   const auto belongsHere = [this, dictionaryPage](const SettingInfo& setting) {
     // Anki Sync's rows are kept off the Connectivity list (sectionFor() has no section for them)
     // and shown on their own page.
-    if (subCategory == StrId::STR_ANKI_SYNC) return setting.category == StrId::STR_ANKI_SYNC;
+    if (isSyncServicePage(subCategory)) {
+      return setting.category == subCategory;
+    }
     if (!showOnDevice(setting)) return false;
     if (dictionaryPage) return dictionaryRowOrder(setting) >= 0;
     if (subCategory != StrId::STR_NONE_OPT) return setting.category == subCategory;
@@ -292,6 +294,7 @@ void SettingsActivity::rebuildSettings() {
   addAction(SettingsSection::Connectivity, StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync);
   addAction(SettingsSection::Connectivity, StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser);
   addAction(SettingsSection::Connectivity, StrId::STR_ANKI_SYNC, SettingAction::AnkiSync);
+  addAction(SettingsSection::Connectivity, StrId::STR_MIGAKU_SYNC, SettingAction::MigakuSync);
   rebuildRowItems();
 }
 
@@ -450,9 +453,11 @@ void SettingsActivity::toggleSelectedSetting() {
       startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
       return;
     }
-    case SettingAction::AnkiSync: {
-      auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, SettingsSection::Connectivity,
-                                                          StrId::STR_ANKI_SYNC);
+    case SettingAction::AnkiSync:
+    case SettingAction::MigakuSync: {
+      auto activity = makeUniqueNoThrow<SettingsActivity>(
+          renderer, mappedInput, SettingsSection::Connectivity,
+          setting.action == SettingAction::AnkiSync ? StrId::STR_ANKI_SYNC : StrId::STR_MIGAKU_SYNC);
       if (!activity) {
         LOG_ERR("SET", "OOM: Anki settings");
         return;
@@ -460,8 +465,12 @@ void SettingsActivity::toggleSelectedSetting() {
       startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
       return;
     }
-    case SettingAction::AnkiTest: {
-      auto test = makeUniqueNoThrow<AnkiSyncActivity>(renderer, mappedInput, AnkiSyncActivity::Mode::Test);
+    case SettingAction::AnkiTest:
+    case SettingAction::MigakuTest: {
+      auto test = makeUniqueNoThrow<AnkiSyncActivity>(renderer, mappedInput,
+                                                      setting.action == SettingAction::AnkiTest
+                                                          ? AnkiSyncActivity::Mode::TestAnki
+                                                          : AnkiSyncActivity::Mode::TestMigaku);
       if (!test) {
         LOG_ERR("SET", "OOM: Anki connection test");
         return;

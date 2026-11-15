@@ -17,6 +17,7 @@
 #include "components/StatsWidgets.h"
 #include "components/UITheme.h"
 #include "components/icons/stats_icons.h"
+#include "flashcards/AnkiDeck.h"
 #include "fontIds.h"
 
 namespace fui = freeink::ui;
@@ -95,10 +96,24 @@ void FlashcardsActivity::reload() {
     values_.push_back(std::to_string(d.due + d.fresh));
     dueTotal_ += d.due + d.fresh;
   }
-  // With Anki set up, the last row syncs.
-  syncRow_ = ANKI_STORE.isConfigured();
+  // A Migaku deck named like another deck (both services' "Matcha::Français") says which it is.
+  // Compared before any name changes, so two such decks both say so.
+  std::vector<size_t> migakuTwins;
+  migakuTwins.reserve(decks.size());
+  for (size_t i = 0; i < decks.size(); i++) {
+    if (!ankideck::isMigakuKey(decks[i].language)) continue;
+    for (size_t j = 0; j < decks.size(); j++) {
+      if (j != i && labels_[j] == labels_[i]) {
+        migakuTwins.push_back(i);
+        break;
+      }
+    }
+  }
+  for (const size_t i : migakuTwins) labels_[i] += " (Migaku)";
+  // With Anki or Migaku set up, the last row syncs.
+  syncRow_ = AnkiSyncActivity::syncLabel() != nullptr;
   if (syncRow_) {
-    labels_.emplace_back(tr(STR_ANKI_SYNC_NOW));
+    labels_.emplace_back(AnkiSyncActivity::syncLabel());
     values_.emplace_back();
   }
   // Pointers into labels_/values_ only once both are complete: no reallocation after this.
@@ -192,7 +207,7 @@ void FlashcardsActivity::drawFooter() {
         // Laid out like Insights' Refresh row: icon and small text, outlined only while focused.
         constexpr int ICON = 24;
         constexpr int GAP = 8;
-        const char* label = tr(STR_ANKI_SYNC_NOW);
+        const char* label = AnkiSyncActivity::syncLabel();
         const int rowW = ICON + GAP + renderer.getTextWidth(SMALL_FONT_ID, label);
         const int rx = (left + right - rowW) / 2;
         if (static_cast<int>(i) == selectedRow_) {

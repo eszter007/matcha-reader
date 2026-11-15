@@ -357,6 +357,7 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   emit(SettingInfo::DynamicString(
       StrId::STR_ANKI_ADDRESS, [] { return ANKI_STORE.getUrl(); },
       [](const std::string& v) {
+        if (v == ANKI_STORE.getUrl()) return;  // a web save sends every row
         ANKI_STORE.setUrl(v);
         ANKI_STORE.saveToFile();
       },
@@ -364,6 +365,7 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   emit(SettingInfo::DynamicString(
            StrId::STR_ANKI_KEY, [] { return ANKI_STORE.getKey(); },
            [](const std::string& v) {
+             if (v == ANKI_STORE.getKey()) return;
              ANKI_STORE.setKey(v);
              ANKI_STORE.saveToFile();
            },
@@ -372,7 +374,9 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   emit(SettingInfo::DynamicString(
       StrId::STR_ANKI_DECKS, [] { return ankisync::joinDeckNames(ANKI_STORE.getSyncedDecks()); },
       [](const std::string& v) {
-        ANKI_STORE.setSyncedDecks(ankisync::splitDeckNames(v));
+        auto decks = ankisync::splitDeckNames(v);
+        if (ankisync::joinDeckNames(decks) == ankisync::joinDeckNames(ANKI_STORE.getSyncedDecks())) return;
+        ANKI_STORE.setSyncedDecks(std::move(decks));
         ANKI_STORE.saveToFile();
       },
       "ankiDecks", StrId::STR_ANKI_SYNC));
@@ -380,6 +384,7 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
       StrId::STR_ANKI_SYNC_ANKIWEB, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
       [] { return static_cast<uint8_t>(ANKI_STORE.getSyncAnkiWeb() ? 1 : 0); },
       [](const uint8_t v) {
+        if ((v != 0) == ANKI_STORE.getSyncAnkiWeb()) return;
         ANKI_STORE.setSyncAnkiWeb(v != 0);
         ANKI_STORE.saveToFile();
       },
@@ -387,6 +392,49 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   {
     SettingInfo test = SettingInfo::Action(StrId::STR_ANKI_TEST, SettingAction::AnkiTest);
     test.category = StrId::STR_ANKI_SYNC;
+    test.webHidden = true;  // needs the device's own Wi-Fi
+    emit(std::move(test));
+  }
+
+  // --- Migaku Sync (MigakuSyncStore); also on its own page under Connectivity ---
+  emit(SettingInfo::DynamicString(
+      StrId::STR_MIGAKU_ADDRESS, [] { return MIGAKU_STORE.getUrl(); },
+      [](const std::string& v) {
+        if (v == MIGAKU_STORE.getUrl()) return;  // a web save sends every row
+        MIGAKU_STORE.setUrl(v);
+        MIGAKU_STORE.saveToFile();
+      },
+      "migakuUrl", StrId::STR_MIGAKU_SYNC));
+  emit(SettingInfo::DynamicString(
+           StrId::STR_MIGAKU_KEY, [] { return MIGAKU_STORE.getKey(); },
+           [](const std::string& v) {
+             if (v == MIGAKU_STORE.getKey()) return;
+             MIGAKU_STORE.setKey(v);
+             MIGAKU_STORE.saveToFile();
+           },
+           "migakuKey", StrId::STR_MIGAKU_SYNC)
+           .withObfuscated());
+  emit(SettingInfo::DynamicString(
+      StrId::STR_MIGAKU_DECKS, [] { return ankisync::joinDeckNames(MIGAKU_STORE.getSyncedDecks()); },
+      [](const std::string& v) {
+        auto decks = ankisync::splitDeckNames(v);
+        if (ankisync::joinDeckNames(decks) == ankisync::joinDeckNames(MIGAKU_STORE.getSyncedDecks())) return;
+        MIGAKU_STORE.setSyncedDecks(std::move(decks));
+        MIGAKU_STORE.saveToFile();
+      },
+      "migakuDecks", StrId::STR_MIGAKU_SYNC));
+  emit(SettingInfo::DynamicEnum(
+      StrId::STR_MIGAKU_TAKES_MINED, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
+      [] { return static_cast<uint8_t>(MIGAKU_STORE.getTakesMined() ? 1 : 0); },
+      [](const uint8_t v) {
+        if ((v != 0) == MIGAKU_STORE.getTakesMined()) return;
+        MIGAKU_STORE.setTakesMined(v != 0);
+        MIGAKU_STORE.saveToFile();
+      },
+      "migakuTakesMined", StrId::STR_MIGAKU_SYNC));
+  {
+    SettingInfo test = SettingInfo::Action(StrId::STR_ANKI_TEST, SettingAction::MigakuTest);
+    test.category = StrId::STR_MIGAKU_SYNC;
     test.webHidden = true;  // needs the device's own Wi-Fi
     emit(std::move(test));
   }

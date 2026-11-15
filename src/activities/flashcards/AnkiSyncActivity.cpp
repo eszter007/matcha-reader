@@ -3,9 +3,11 @@
 #include <AnkiSyncStore.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
+#include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <SdSystemDir.h>
 #include <WiFi.h>
 #include <sys/time.h>
 
@@ -25,27 +27,41 @@
 #include "network/WifiPowerSaveGuard.h"
 
 namespace {
-const char* errorText(const AnkiClient::Error& error) {
+// The outcome carried across the restart between services: three lines.
+std::string stashPath() { return sdsystem::path("flashcard_sync_pending.txt"); }
+
+const char* errorText(const AnkiClient::Error& error, const ankisync::Service& service) {
   using Kind = AnkiClient::Error::Kind;
+  const auto text = [](const StrId id) { return I18n::getInstance().get(id); };
   switch (error.kind) {
     case Kind::NoMemory:
       return tr(STR_LOW_MEMORY_RETRY);
     case Kind::Network:
     case Kind::Http:
-      return tr(STR_ANKI_UNREACHABLE);
+      return text(service.unreachable);
     case Kind::Unauthorized:
-      return tr(STR_ANKI_KEY_REFUSED);
+      return text(service.keyRefused);
     case Kind::Forbidden:
-      return tr(STR_ANKI_NOT_ALLOWED);
+      return text(service.notAllowed);
     case Kind::DeckMissing:
-      return tr(STR_ANKI_DECK_MISSING);
+      return text(service.deckMissing);
     case Kind::Cancelled:
       return tr(STR_ANKI_SYNC_CANCELLED);
     default:
-      return tr(STR_ANKI_REPLY_ERROR);
+      // The server has no login for the service's cloud, or the cloud refused it.
+      return text(error.type == "authenticationRequired" ? service.loginMissing : service.replyError);
   }
 }
 }  // namespace
+
+const char* AnkiSyncActivity::syncLabel() {
+  const bool anki = ANKI_STORE.isConfigured();
+  const bool migaku = MIGAKU_STORE.isConfigured();
+  if (anki && migaku) return tr(STR_SYNC_BOTH_NOW);
+  if (anki) return tr(STR_ANKI_SYNC_NOW);
+  if (migaku) return tr(STR_MIGAKU_SYNC_NOW);
+  return nullptr;
+}
 
 AnkiSyncActivity::AnkiSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const Mode mode)
     : Activity("AnkiSync", renderer, mappedInput), mode(mode) {}
@@ -61,9 +77,13 @@ void AnkiSyncActivity::setStatus(const State next, std::string text) {
 
 void AnkiSyncActivity::onEnter() {
   Activity::onEnter();
-  if (!ANKI_STORE.isConfigured()) {
+  const bool configured = mode == Mode::TestAnki     ? ANKI_STORE.isConfigured()
+                          : mode == Mode::TestMigaku ? MIGAKU_STORE.isConfigured()
+                                                     : syncLabel() != nullptr;
+  if (!configured) {
     state = State::Failed;
-    message = tr(STR_ANKI_NO_ADDRESS);
+    message = I18n::getInstance().get(mode == Mode::TestMigaku ? ankisync::migakuService().noAddress
+                                                               : ankisync::ankiService().noAddress);
     requestUpdate();
     return;
   }
@@ -80,9 +100,9 @@ void AnkiSyncActivity::onEnter() {
   auto wifi = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput);
   if (!wifi) {
     LOG_ERR("ANKI", "OOM: WifiSelectionActivity");
-    state = State::Failed;
-    message = tr(STR_LOW_MEMORY_RETRY);
-    requestUpdate();
+    Outcome outcome = carried;  // the first service's result still shows
+    if (outcome.failure.empty()) outcome.failure = tr(STR_LOW_MEMORY_RETRY);
+    showOutcome(outcome);
     return;
   }
   // The callback only records the outcome: loop() runs the sync, after this screen is drawn.
@@ -98,6 +118,7 @@ void AnkiSyncActivity::onExit() {
     // restart clears it and comes back to where the sync started.
     delay(30);
     if (mode == Mode::Sync) {
+      if (nextServicePending) silentRestartToFlashcardSync();  // the next service, on a fresh heap
       silentRestartToHomeTab(static_cast<int>(HomeTab::Flashcards));
     } else {
       silentRestartToSettings(static_cast<int>(SettingsSection::Connectivity));
@@ -106,13 +127,25 @@ void AnkiSyncActivity::onExit() {
 }
 
 void AnkiSyncActivity::onWifi(const bool connected) {
+  if (!connected && resumed) {
+    // After the restart: the first service's result still shows, with why the rest did not sync.
+    Outcome outcome = carried;
+    if (outcome.failure.empty()) {
+      outcome.failure = tr(STR_MIGAKU_NOT_SYNCED);
+      outcome.failedAt = ankisync::migakuService().name;
+    }
+    // The Back that left the Wi-Fi screen must not close the result on its release.
+    holdingBack = mappedInput.isPressed(MappedInputManager::Button::Back);
+    showOutcome(outcome);
+    return;
+  }
   if (!connected) {
     state = State::Cancelled;
     return;
   }
   // Modem sleep stalls requests for seconds at a time; the sync is short.
   WiFi.setSleep(false);
-  setStatus(State::Working, tr(STR_ANKI_SYNC_NOW));
+  setStatus(State::Working, mode == Mode::Sync ? syncLabel() : tr(STR_ANKI_TEST));
 }
 
 // Reads the buttons every 10 ms, as the main loop would: the debounce needs reads that close.
@@ -141,25 +174,31 @@ void AnkiSyncActivity::pollCancel(void* ctx) {
   self->requestUpdate(true);
 }
 
-void AnkiSyncActivity::run() {
+void AnkiSyncActivity::test(const ankisync::Service& service) {
   WifiPowerSaveGuard psGuard;
   AnkiClient client;
-  if (!client.begin(ANKI_STORE.endpoint(), ANKI_STORE.getKey())) {
-    setStatus(State::Failed, errorText(client.error()));
+  if (!client.begin(service.store.endpoint(), service.store.getKey())) {
+    setStatus(State::Failed, errorText(client.error(), service));
     return;
   }
-  if (mode == Mode::Test) {
-    std::string version;
-    if (ankisync::testConnection(client, version)) {
-      char text[96];
-      snprintf(text, sizeof(text), tr(STR_ANKI_CONNECTED), version.c_str());
-      setStatus(State::Done, text);
-    } else {
-      setStatus(State::Failed, errorText(client.error()));
-    }
-    client.end();
+  std::string version;
+  if (ankisync::testConnection(client, version)) {
+    char text[128];
+    snprintf(text, sizeof(text), I18n::getInstance().get(service.connected), version.c_str());
+    setStatus(State::Done, text);
+  } else {
+    setStatus(State::Failed, errorText(client.error(), service));
+  }
+  client.end();
+}
+
+void AnkiSyncActivity::run() {
+  if (mode != Mode::Sync) {
+    test(mode == Mode::TestMigaku ? ankisync::migakuService() : ankisync::ankiService());
     return;
   }
+  WifiPowerSaveGuard psGuard;
+  AnkiClient client;
   ankisync::ProgressFn progress;
   progress.ctx = this;
   progress.fn = [](void* ctx, const ankisync::Progress& p) {
@@ -179,7 +218,6 @@ void AnkiSyncActivity::run() {
     pollCancel(ctx);
     return static_cast<AnkiSyncActivity*>(ctx)->stopping;
   };
-  client.setPoll(pollCancel, this);
 
   // Reviews are identified by their time in Anki: the clock is set first.
   int64_t nowMs = 0;
@@ -193,24 +231,116 @@ void AnkiSyncActivity::run() {
   watchStop = false;
   watchRunning = xTaskCreate(&watchBack, "AnkiBack", 2048, this, 1, nullptr) == pdPASS;
   if (!watchRunning) LOG_ERR("ANKI", "No Back watcher: the sync cannot be cancelled");
-  const ankisync::Result result = ankisync::syncAll(client, progress, nowMs);
+  // Each service set up, one after the other: one that fails does not keep the next from syncing.
+  // The client's buffer is given back between them, so the next takes the largest block again.
+  const bool both = ANKI_STORE.isConfigured() && MIGAKU_STORE.isConfigured();
+  Outcome outcome = carried;
+  bool first = true;
+  bool skipped = false;  // a service left out because the sync was cancelled
+  for (const ankisync::Service& service : {ankisync::ankiService(), ankisync::migakuService()}) {
+    pollCancel(this);  // a Back seen after the last request of the service before
+    if (!service.store.isConfigured()) continue;
+    if (stopping) {
+      skipped = true;
+      continue;
+    }
+    if (resumed && &service.store == &ANKI_STORE) continue;  // synced before the restart
+    // The second service on a fresh heap: after one Wi-Fi session the largest block is too small.
+    if (!first && !resumed && silentRestartAvailable() && stashOutcome(outcome)) {
+      nextServicePending = true;
+      break;
+    }
+    first = false;
+    const char* name = service.name;
+    ankisync::Result result;
+    if (client.begin(service.store.endpoint(), service.store.getKey())) {
+      client.setPoll(pollCancel, this);
+      result = ankisync::syncAll(client, service, progress, nowMs);
+      client.end();
+    } else {
+      result.error = client.error();
+    }
+    if (result.ok) {
+      char text[128];
+      snprintf(text, sizeof(text), tr(STR_SYNC_SERVICE_DONE), name, static_cast<int>(result.cardsAdded),
+               static_cast<int>(result.reviewsPulled), static_cast<int>(result.reviewsPushed));
+      if (!outcome.summary.empty()) outcome.summary += "; ";
+      outcome.summary += text;
+    } else {
+      LOG_ERR("ANKI", "%s sync stopped at %s", name, result.failedDeck.c_str());
+      if (outcome.failure.empty()) {
+        outcome.failure = errorText(result.error, service);
+        outcome.failedAt =
+            both ? std::string(name) + (result.failedDeck.empty() ? "" : ": " + result.failedDeck) : result.failedDeck;
+      }
+    }
+  }
   watchStop = true;
   while (watchRunning) delay(5);
   // Back still held from the cancel: its release must not close the result straight away.
   gpio.update();
   holdingBack = stopping && mappedInput.isPressed(MappedInputManager::Button::Back);
-  client.end();
-  detail.clear();
-  if (result.ok) {
-    char text[128];
-    snprintf(text, sizeof(text), tr(STR_ANKI_SYNC_DONE), static_cast<int>(result.cardsAdded),
-             static_cast<int>(result.reviewsPulled), static_cast<int>(result.reviewsPushed));
-    setStatus(State::Done, text);
-  } else {
-    LOG_ERR("ANKI", "Sync stopped at %s", result.failedDeck.c_str());
-    detail = result.failedDeck;
-    setStatus(State::Failed, errorText(result.error));
+  if (skipped && outcome.failure.empty()) outcome.failure = tr(STR_ANKI_SYNC_CANCELLED);
+  if (nextServicePending) {
+    LOG_INF("ANKI", "Restarting before the next service");
+    finish();  // onExit restarts into it
+    return;
   }
+  showOutcome(outcome);
+}
+
+void AnkiSyncActivity::showOutcome(const Outcome& outcome) {
+  if (outcome.failure.empty()) {
+    detail.clear();
+    setStatus(State::Done, outcome.summary);
+  } else {
+    detail = outcome.failedAt;
+    setStatus(State::Failed, outcome.summary.empty() ? outcome.failure : outcome.summary + "; " + outcome.failure);
+  }
+}
+
+bool AnkiSyncActivity::stashOutcome(const Outcome& outcome) {
+  const std::string path = stashPath();
+  HalFile stash;
+  if (!Storage.openFileForWrite("ANKI", path.c_str(), stash)) {
+    LOG_ERR("ANKI", "Sync stash not written; the next service syncs without a restart");
+    return false;
+  }
+  const std::string text = outcome.summary + "\n" + outcome.failure + "\n" + outcome.failedAt + "\n";
+  const size_t written = stash.write(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+  if (!stash.close() || written != text.size()) {
+    Storage.remove(path.c_str());
+    LOG_ERR("ANKI", "Sync stash cut short; the next service syncs without a restart");
+    return false;
+  }
+  return true;
+}
+
+std::unique_ptr<AnkiSyncActivity> AnkiSyncActivity::resumeAfterRestart(GfxRenderer& renderer,
+                                                                       MappedInputManager& mappedInput) {
+  const std::string path = stashPath();
+  std::string text;
+  const bool read = Storage.readFileToString("ANKI", path, 1024, text);
+  Storage.remove(path.c_str());  // read once: a later restart must not replay it
+  if (!read) {
+    LOG_ERR("ANKI", "No sync stash after the restart; the next service is not synced");
+    return nullptr;
+  }
+  auto activity = makeUniqueNoThrow<AnkiSyncActivity>(renderer, mappedInput, Mode::Sync);
+  if (!activity) {
+    LOG_ERR("ANKI", "OOM: AnkiSyncActivity");
+    return nullptr;
+  }
+  Outcome& carried = activity->carried;
+  size_t at = 0;
+  for (std::string* part : {&carried.summary, &carried.failure, &carried.failedAt}) {
+    const size_t end = text.find('\n', at);
+    if (end == std::string::npos) break;
+    *part = text.substr(at, end - at);
+    at = end + 1;
+  }
+  activity->resumed = true;
+  return activity;
 }
 
 void AnkiSyncActivity::loop() {
@@ -240,7 +370,7 @@ void AnkiSyncActivity::render(RenderLock&&) {
   renderer.clearScreen();
   const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   GUI.drawHeader(renderer, UITheme::getInstance().getHeaderRect(renderer, true, false),
-                 mode == Mode::Test ? tr(STR_ANKI_TEST) : tr(STR_ANKI_SYNC_NOW));
+                 mode == Mode::Sync ? syncLabel() : tr(STR_ANKI_TEST));
   const int top = screen.y + screen.height / 2 - 40;
   if (state == State::Failed && mode == Mode::Sync) {
     UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID, top - 40, tr(STR_ANKI_SYNC_FAILED), true,

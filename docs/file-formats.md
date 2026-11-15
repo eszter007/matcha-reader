@@ -95,6 +95,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 115 (fork numbering)
+
+The binary layout is unchanged and completed and partial sections are rebuilt. IPA letters, the
+bullet operator (∙) and stars (★ ☆) that no reader font has are drawn from a built-in symbol face
+instead of a replacement glyph, which changes their width. Book metadata and saved progress are
+kept.
+
 ### Version 114 (fork numbering)
 
 Upstream's version 75, merged. The binary layout is unchanged and completed and partial sections
