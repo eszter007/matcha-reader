@@ -1,12 +1,12 @@
 ---
 name: firmware-handoff
-description: Final checks and human handoff for completed firmware/build changes. Use after implementation and self-review; excludes read-only audits and reviewer tasks.
+description: Final checks and handoff for completed firmware/build changes. Use after implementation and self-review; excludes read-only audits and reviewer tasks.
 ---
 
 # Firmware handoff
 
 Run after implementation and main-agent self-review, before calling a firmware
-change ready or making an approved local commit. The main agent owns the result;
+change ready or committing it. The main agent owns the result;
 reviewer output is evidence, not authority. This workflow has at most two review
 rounds per logical change, even when slot limits require dispatching in batches.
 
@@ -81,28 +81,20 @@ reasons for unavailable checks; an unavailable check is not a pass.
 **Done when:** relevant tests, formatting, and final firmware builds have passed,
 or missing verification is explicitly reported and handoff remains incomplete.
 
-## 5. Hand off the actual design
+## 5. Hand off
 
 Explain old and new behavior, state/resource ownership, affected files, the
-important tradeoff, checks, and remaining risks in plain English. Point to the
-diff. Ask the human to accept the specific behavior and design tradeoff just
-explained, including responsibility for maintaining it. Name the relevant choice:
-for example, bounded temporary storage and a fallback when allocation fails.
-For a straightforward fix, ask whether the new behavior and its state ownership
-match their intent; do not invent a tradeoff. A generic understanding/ownership
-question does not complete handoff. Prescribe no confirmation phrase. Recognize
-explicit acceptance already given for this logical change; record it once and
-reopen only after a material design change. Continuation or commit approval alone
-does not establish understanding and ownership.
+important tradeoff, checks, hardware results, and remaining risks in plain
+English, and point to the diff. No explicit human acceptance is needed. If the
+human objects to the design, ask what must change and revise.
 
-Give applicable hardware steps with expected results and likely failure signs,
-including orientations, resources, and caches when affected. Hardware testing is
-the human's responsibility and must happen before a PR is opened. Never claim
-hardware verification yourself. Publication follows the root guide's human
-ownership policy and the [Git rule](../../rules/git-workflow.md).
+Hardware testing must happen before a PR is opened. With a device connected, the
+agent runs it and owns the results: report what was run, what was seen, and what
+was not covered. Only for what was not covered, list the steps still needed with
+the expected result. Publication follows the root guide's ownership policy and the
+[Git rule](../../rules/git-workflow.md): the agent may commit, push, write the PR
+description from [the PR template](../../../.github/PULL_REQUEST_TEMPLATE.md), and
+open and merge the PR.
 
 **Done when:** checks and independent reviews cover the final change, no verified
-finding remains, and explicit human acceptance covers the described behavior,
-architecture, and maintenance responsibility. The hardware test plan is provided.
-If the human rejects the architecture, ask what must change and revise before
-calling it ready.
+finding remains, the change is explained, and hardware results are reported.

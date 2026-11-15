@@ -69,8 +69,9 @@ consume that release frame. Keep independent touch usable.
 
 ### Input verification matrix
 
-The main agent runs applicable host checks; give the human device steps with
-button remapping and relevant orientations. Verify these changed paths:
+The main agent runs applicable host checks and, with a device connected, the device
+checks; otherwise it gives the human device steps. Cover button remapping and
+relevant orientations. Verify these changed paths:
 
 | Scenario | Expected result |
 | --- | --- |

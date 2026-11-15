@@ -46,19 +46,23 @@ Use the table to find guidance for the decisions being changed. Read relevant se
 
 Repository-local skills live under `.agents/skills/`. Their descriptions identify specific procedures to use when needed; a keyword match alone does not require loading a skill.
 
-## Human ownership
+## Ownership
 
 A PR is a long-term maintenance commitment. Working code is not enough: prefer the simplest design that meets the real requirement, fits `SCOPE.md`, and can be understood and maintained by its human owner.
 
-Fully autonomous end-to-end agents are forbidden. Review subagents inspect code,
-diffs, history, and recorded checks only. The main agent owns verification:
-reviewers may not write files (including temporary diagnostics), run tests/builds,
-commit, publish, deploy, or flash.
+Review subagents inspect code, diffs, history, and recorded checks only. The main
+agent owns verification: reviewers may not write files (including temporary
+diagnostics), run tests/builds, commit, publish, deploy, or flash.
 
-The human must write PR descriptions; agents may give concise factual notes and test
-results, never ready-to-paste PR prose. Creating/amending local commits requires
-explicit human approval. Push only on an explicit human instruction to push;
-edit/commit approval does not authorize it. Never open or close a PR.
+The agent may commit, push the feature branch to the user's fork, open a PR against
+`develop`, and merge or close its own PRs. Firmware/build changes are committed only
+after a complete handoff. The PR description follows
+[the PR template](.github/PULL_REQUEST_TEMPLATE.md): concise and factual. Changes
+reach `develop` and `master` through PRs, not direct pushes.
+
+Hardware testing must happen before a PR is opened. The agent may do it and own it on
+a connected device, or the human does. Whoever runs it reports what was run, what was
+seen, and what was not covered.
 
 Repository-facing prose: use plain English for non-native readers and standard
 technical terms when clearest. Code comments must be short and useful after merge; follow the
@@ -66,7 +70,7 @@ technical terms when clearest. Code comments must be short and useful after merg
 
 ## Mandatory firmware handoff
 
-For every logical change that can affect shipped firmware or its build—including C/C++, build configuration, partitions, code-generation sources, translations, and release scripts—the main agent must complete [firmware-handoff](.agents/skills/firmware-handoff/SKILL.md) before declaring the work ready or making an approved local commit. That skill owns the required checks, four independent reviews, bounded follow-up, and explicit human acceptance of behavior, architecture, and maintenance ownership.
+For every logical change that can affect shipped firmware or its build—including C/C++, build configuration, partitions, code-generation sources, translations, and release scripts—the main agent must complete [firmware-handoff](.agents/skills/firmware-handoff/SKILL.md) before declaring the work ready or committing. That skill owns the required checks, four independent reviews, bounded follow-up, and the plain-English handoff.
 
 Pure tests, diagnostics, documentation, and host-only Python scripts use a lighter review unless they alter firmware output or its build.
 
@@ -76,9 +80,7 @@ This concise handoff checklist is a hard requirement:
 - [ ] Read-only reviews completed for correctness, architecture, embedded constraints, and i18n/user documentation.
 - [ ] The main agent verified, deduplicated, and fixed findings, then reran affected reviews after material fixes.
 - [ ] The main agent explained the behavior and architecture in plain English to someone unfamiliar with the codebase.
-- [ ] The human was told to review the diff and explicitly confirmed understanding of the behavior and architecture and ownership of maintenance.
-- [ ] The agent gave a concrete hardware test plan and reminded the human that hardware testing is required before a PR can be opened.
-- [ ] The agent did not claim hardware verification and did not write a PR description.
+- [ ] Hardware testing was done before the PR was opened, by the agent on a connected device or by the human. The agent reported what it ran, what it saw, and what it did not cover.
 
 1. Stack Safety: Limit local function variables to < 256 bytes. The ESP32-C3 default stack is small; use std::unique_ptr or static pools for larger buffers.
 2. Heap Fragmentation: Avoid repeated new/delete in loops. Allocate buffers once during onEnter() and reuse them.
@@ -755,8 +757,8 @@ upstream    https://github.com/crosspoint-reader/crosspoint-reader.git (fetch/pu
 ### Git Operation Rules
 
 1. Integration branches and PR comparisons target `develop`, not `master` or the remote's symbolic HEAD.
-2. Never push to any remote or open/close a PR without explicit user approval. Complete local work and any requested local commit, then stop.
-3. If the user explicitly approves a push, inspect remotes again and use `fork` for the feature branch unless the user specifies otherwise.
+2. The agent may commit, push feature branches, and open, merge, or close its PRs against `develop`. Changes reach `develop` and `master` through PRs, not direct pushes.
+3. Before pushing, inspect remotes again and push the feature branch to the user's fork (`fork`, or `origin` when that is the fork) unless the user specifies otherwise.
 4. Never add Claude, Codex, or assistant self-attribution as a commit co-author or generated-by trailer.
 5. When a change supersedes or adapts another person's PR, verify the original human author from Git/GitHub and add that person as `Co-Authored-By`; skip bot authors.
 
@@ -804,21 +806,16 @@ Tested in all 4 orientations with 5MB+ files.
 
 **DO commit when**:
 
-- User explicitly requests: "commit these changes"
-- Feature is complete and tested on device
+- Feature is complete and its checks pass
 - Bug fix is verified working
 - Refactoring preserves all functionality
 - All tests pass (`pio run` succeeds)
 
 **DO NOT commit when**:
 
-- Changes are untested on actual hardware
 - Build fails or has warnings
 - Experimenting or debugging in progress
-- User hasn't explicitly requested commit
 - Files excluded by `.gitignore` would be included — always run `git status` and cross-check against `.gitignore` before staging (e.g., `*.generated.h`, `.pio/`, `compile_commands.json`, `platformio.local.ini`)
-
-**Rule**: **If uncertain, ASK before committing.**
 
 ---
 
@@ -946,7 +943,7 @@ build_flags =
 4. ✅ **CI**: Fix GitHub Actions failures before review
 5. ✅ **Code review**: Ensure orientation-aware logic is correct in all 4 modes by inspecting switch/case coverage
 
-**Human tester scope** (flag these for the user):
+**Hardware scope** (the agent on a connected device, or the human; report what was not covered):
 6. 🔲 **Device**: Test on hardware
 7. 🔲 **Orientations**: Verify all 4 modes (Portrait/Inverted/Landscape CW/CCW)
 8. 🔲 **Heap**: `ESP.getFreeHeap()` > 50KB, no leaks

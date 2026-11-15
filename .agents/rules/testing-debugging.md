@@ -26,7 +26,7 @@ never invoke or probe raw `clang-format`. Run `pio check` when relevant.
 ### Testing and Verification Workflow
 
 [firmware-handoff](../skills/firmware-handoff/SKILL.md) owns firmware review rounds,
-final build ordering, and human acceptance. The main agent owns tests, builds,
+final build ordering, and the handoff. The main agent owns tests, builds,
 and diagnostic code. Reviewers inspect source and recorded results only.
 
 Run the smallest meaningful regression checks for the changed contract. Reuse
@@ -35,7 +35,8 @@ documentation, and host-only changes use relevant lighter checks unless they
 alter firmware output/build. Check ignored outputs before staging, using the
 [generated-file rules](generated-files-cache.md#files-generated-by-build-scripts).
 
-Human device checks cover changed behavior, relevant orientations/remapping,
+Device checks (by the agent on a connected device, or the human) cover changed
+behavior, relevant orientations/remapping,
 and resource/cache effects. Changed input, display, or layout paths cover all
 four orientations: portrait, inverted, landscape CW, and landscape CCW.
 C3 baseline target: more than 50 KB free and no leaks;
