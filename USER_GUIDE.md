@@ -698,6 +698,8 @@ The rows are grouped by the control they change. Each one is described further d
 
 - **Anki Sync**: Sync Anki decks and their review progress with Anki desktop (with AnkiConnect) or a self-hosted [companion server](#the-companion-server). Sync is optional. The page has **Anki Address**, **Anki Key**, **Anki Decks** (deck names separated by commas, as Anki shows them), **Sync AnkiWeb Too** and **Test Connection**. These rows are also on the web settings page, except **Test Connection**. See [Anki decks](#anki-decks).
 
+- **Migaku Sync**: Sync Migaku decks and their reviews through the companion server. The page has **Migaku Server Address**, **Migaku Server Key**, **Migaku Decks**, **Save Mined Words to Migaku** and **Test Connection**. See [Migaku decks](#migaku-decks).
+
 - **OPDS Servers**: Save online book catalogs (OPDS libraries) so you can browse them and download books straight to the device. See [OPDS Servers (Multiple Libraries)](#369-opds-servers-multiple-libraries) below. ([What is OPDS?](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System))
 
 #### Flashcards settings
@@ -1372,6 +1374,8 @@ If you sync with Anki (see [Anki decks](#anki-decks)), **Sync with Anki** sends 
 - Words you mine later stay in the device's own deck until the next sync.
 - You can rename the deck in Anki: the device follows it.
 
+With **Save Mined Words to Migaku** on, or with only Migaku set up, the words go to Migaku instead and Anki gets none. See [Migaku decks](#migaku-decks).
+
 A word that Anki does not take (for example one too large to send) stays on the device and is tried again at the next sync. It never stops your other decks from syncing.
 
 **Importing into Anki by hand**
@@ -1833,7 +1837,7 @@ When the deck is done, the screen says **All caught up** with the number of card
 
 #### Anki decks
 
-Anki decks are listed in the overview next to your own decks. Each card is drawn with its deck's own template and style, and is rated the same way. A long side is paged with the side buttons before the card turns. A very long side is cut off after a number of pages; review the rest in Anki. A card whose content is too large for the device says so; review that card in Anki.
+Anki decks are listed in the overview next to your own decks. Each card is drawn with its deck's own template and style, and is rated the same way. Card text uses your reader font and size: the deck's base text size becomes your reader size, and every other size keeps its proportion to it, from three quarters to one and a quarter of it. The deck's left and right margins are kept, up to twice the text size. A long side is paged with the side buttons before the card turns. A very long side is cut off after a number of pages; review the rest in Anki. A card whose content is too large for the device says so; review that card in Anki.
 
 There are two ways to get a deck onto the device:
 
@@ -1865,6 +1869,22 @@ It also prepares cards for the reader: large images are shrunk to grayscale, and
 Over the internet, use HTTPS so the key is not sent in the clear. HTTPS needs more memory on the reader: the X4 may not have enough during a sync, so on an X4 a server on your home network is the safer choice.
 
 The companion server is free for non-commercial use under the [CC BY-NC-SA 4.0](https://github.com/eszter007/matcha-anki-server/blob/main/LICENSE) licence: you may use, change and share it with credit, and changed versions must be shared under the same licence. For commercial use, ask first. The Anki library it uses keeps its own licence (AGPL-3.0).
+
+##### Migaku decks
+
+The [companion server](#the-companion-server) can also bring your [Migaku](https://migaku.com) decks to the device, next to your Anki decks or instead of them. The server signs in to Migaku with your account's email and password; an account that signs in only with Google or Apple does not work. See the [server's README](https://github.com/eszter007/matcha-anki-server) for its two settings. The server uses Migaku's own app protocol, which Migaku does not document, so a Migaku update can stop it working until the server is updated. On the reader (Settings → Connectivity → **Migaku Sync**; the web settings page has the same rows except **Test Connection**):
+
+- **Migaku Server Address** and **Migaku Server Key:** the same as **Anki Address** and **Anki Key** for the companion server.
+- **Migaku Decks:** the decks to sync, separated by commas. Migaku decks are named with their language first, for example `French::My Cards` or `Japanese::Animals`.
+- **Save Mined Words to Migaku:** **On** sends your mined words to Migaku instead of Anki. With only Migaku set up, they go to Migaku anyway.
+- **Test Connection** checks the address and the key. The Migaku login is checked by the next sync.
+
+With Anki or Migaku set up, the last row of the Flashcards overview syncs (**Sync with Anki**, **Sync with Migaku**, or **Sync with Anki and Migaku** when both are set up). With both, Anki syncs first, then Migaku. On a reader without a touch screen it restarts between them (a short **Loading** screen), because after one sync there is not enough memory left for the second. If one fails, the other still syncs; the result shows both and names the first one that failed.
+
+- Each Migaku card shows Migaku's front. The back reads like a dictionary entry: the word with its pronunciation, word class and frequency stars when Migaku has them, the meaning, the sentence with its translation, the first image and the notes. Japanese and Chinese get furigana. Sound is left out. Course cards show only the word and its reading. A card too large for the device says to review it in Migaku.
+- Cards are due on the device when they are due in Migaku. Your reviews go to Migaku as Migaku reviews: **Again** counts as fail, **Hard**, **Good** and **Easy** as pass, and Migaku works out the next due date. The device keeps its own schedule for its next reviews, as with Anki.
+- Mined words become cards of Migaku's Sentence type, in one deck per language named like the device's (**Matcha::Français** and so on), made in Migaku when missing. Migaku can only make that deck in a language you have already used in Migaku once.
+- Nothing is ever deleted in Migaku by a sync. Migaku decks and Anki decks never mix on the device, even when they have the same name; the overview adds **(Migaku)** to a Migaku deck named like another deck.
 
 ##### Offline reviews, synced with Anki on your computer
 

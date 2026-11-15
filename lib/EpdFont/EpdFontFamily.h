@@ -82,11 +82,14 @@ class EpdFontFamily {
   // loads glyphs for getGlyphResident(); see EpdFontFamily.cpp.
   static void setVariantFallback(const EpdFontFamily* fb) { variantFallback_ = fb; }
   static void setBuiltinFallback(const EpdFontFamily* fb) { builtinFallback_ = fb; }
+  // The very last stop: a built-in symbol face (IPA, stars) for what no other font draws.
+  static void setSymbolFallback(const EpdFontFamily* fb) { symbolFallback_ = fb; }
 
  private:
   static inline const EpdFontFamily* globalFallback_ = nullptr;
   static inline const EpdFontFamily* builtinFallback_ = nullptr;
   static inline const EpdFontFamily* variantFallback_ = nullptr;
+  static inline const EpdFontFamily* symbolFallback_ = nullptr;
   const EpdFont* regular;
   const EpdFont* bold;
   const EpdFont* italic;

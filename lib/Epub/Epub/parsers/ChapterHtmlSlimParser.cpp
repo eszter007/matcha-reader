@@ -1148,6 +1148,7 @@ void ChapterHtmlSlimParser::applyDropCap(const char* tagName, const std::string&
   if (!cssParser->resolveFirstLetterFontSize(tagName, classAttr, &cssPath, firstLetterSize)) {
     return;
   }
+  if (cardBasePx > 0.0f) firstLetterSize = cardFontSize(firstLetterSize, cardBasePx);
 
   // Reuse the block ladder's own unit handling (%, em, rem, pt) instead of re-deriving it:
   // `font-size: 300%` means the same multiple of the reader's size on a pseudo-element as it
@@ -1640,6 +1641,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // headings, captions and small print keep their intended relationship to the body text.
   if (strcasecmp(name, "body") == 0 || strcasecmp(name, "html") == 0) {
     cssStyle.defined.fontSize = 0;
+  }
+  if (self->cardBasePx > 0.0f && cssStyle.hasFontSize()) {
+    cssStyle.fontSize = cardFontSize(cssStyle.fontSize, self->cardBasePx);
   }
 
   if (cssStyle.hasFontFamily() && self->fontFamilyScopeCount < MAX_FONT_FAMILY_SCOPES) {

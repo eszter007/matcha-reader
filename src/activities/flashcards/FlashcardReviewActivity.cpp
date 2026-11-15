@@ -19,6 +19,7 @@
 #include "FlashcardsActivity.h"
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
+#include "activities/ActivityManager.h"
 #include "activities/reader/DefinitionTextRenderer.h"
 #include "components/UITheme.h"
 #include "flashcards/AnkiDeck.h"
@@ -357,10 +358,14 @@ const char* ratingName(const int i) {
 
 FlashcardReviewActivity::FlashcardReviewActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                  std::string language)
-    : Activity("FlashcardReview", renderer, mappedInput), language(std::move(language)) {}
+    : Activity("FlashcardReview", renderer, mappedInput),
+      language(std::move(language)),
+      isMigakuDeck(ankideck::isMigakuKey(this->language)) {}
 
 void FlashcardReviewActivity::onEnter() {
   Activity::onEnter();
+  // The first card is laid out before the first render: free the glyph slab before that.
+  activityManager.syncGlyphSlab();
   // Load the deck's CJK companion face, as a book in that script does: without it the card's
   // kanji fall back to the small built-in set.
   sdFontSystem.ensureLoaded(renderer);
@@ -889,7 +894,10 @@ void FlashcardReviewActivity::drawHtmlCard(const Rect4& inner) const {
     constexpr int PAD = 20;
     UITheme::drawCenteredWrappedText(renderer, Rect{area.x + PAD, area.y, area.width - 2 * PAD, area.height},
                                      UI_12_FONT_ID,
-                                     card.tooLarge ? tr(STR_FLASH_CARD_TOO_LARGE) : tr(STR_FLASH_CARD_ERROR), 6);
+                                     !card.tooLarge ? tr(STR_FLASH_CARD_ERROR)
+                                     : isMigakuDeck ? tr(STR_FLASH_CARD_TOO_LARGE_MIGAKU)
+                                                    : tr(STR_FLASH_CARD_TOO_LARGE),
+                                     6);
     return;
   }
   const Rect4 body = htmlBodyRect();

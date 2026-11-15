@@ -1,14 +1,34 @@
 #pragma once
 
+#include <I18n.h>
+
 #include <cstdint>
 #include <string>
 
 #include "AnkiClient.h"
 
-// One sync with Anki (desktop with AnkiConnect, or the companion server), run with Wi-Fi up:
-// the Anki decks chosen in the settings come onto the device (cards rendered as Anki renders
-// them, their CSS and images), and reviews go both ways. See docs/anki-sync-design.md.
+class SyncServiceStore;
+
+// One sync with Anki (desktop with AnkiConnect, or the companion server) or with Migaku (the
+// companion server's Migaku bridge, which speaks the same API), run with Wi-Fi up: the decks
+// chosen in the settings come onto the device (cards rendered as the server renders them, their
+// CSS and images), and reviews go both ways. See docs/anki-sync-design.md.
 namespace ankisync {
+
+// What differs between the services. Both use the same requests.
+struct Service {
+  SyncServiceStore& store;
+  const char* name;         // "Anki" or "Migaku", in logs and the sync summary
+  const char* remoteName;   // the cloud the server syncs with: "AnkiWeb" or "Migaku"
+  const char* localPrefix;  // added to the service's deck ids on the device
+  bool takesMined;          // mined words go to this service
+  bool syncRemote;          // ask the server to sync with the cloud before and after
+  bool requiresRemote;      // a server without the cloud's login is an error, not a local sync
+  // Messages that name the service.
+  StrId unreachable, keyRefused, notAllowed, deckMissing, replyError, loginMissing, connected, noAddress;
+};
+Service ankiService();
+Service migakuService();
 
 struct Progress {
   std::string deck;  // the deck being synced
@@ -40,6 +60,6 @@ bool testConnection(AnkiClient& client, std::string& ankiVersion);
 
 // nowMs: the time from the network clock, set at the start of this sync; 0 when it could not be
 // set. Reviews the device stamped later than that are sent as just before it.
-Result syncAll(AnkiClient& client, const ProgressFn& progress, int64_t nowMs);
+Result syncAll(AnkiClient& client, const Service& service, const ProgressFn& progress, int64_t nowMs);
 
 }  // namespace ankisync

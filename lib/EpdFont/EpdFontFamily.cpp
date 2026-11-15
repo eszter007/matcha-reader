@@ -47,11 +47,11 @@ const EpdFont* EpdFontFamily::nonCjkFallbackFont(const uint32_t cp, const Style 
 }
 
 // The last stops, after the global fallback: the variant cut (Chinese forms, loaded only for a
-// Chinese dictionary session), then the built-in Japanese subset. The variant loads a glyph it covers
-// but has not got resident, even for getGlyphResident(): it exists only during a lookup, for a few
+// Chinese dictionary session), then the built-in Japanese subset, then the built-in symbols. The variant loads a glyph
+// it covers but has not got resident, even for getGlyphResident(): it exists only during a lookup, for a few
 // characters, and pricing them at zero width would overlap the entry's text.
 const EpdFont* EpdFontFamily::lastResortFont(const uint32_t cp, const Style style, const EpdGlyph** glyph) const {
-  for (const EpdFontFamily* b : {variantFallback_, builtinFallback_}) {
+  for (const EpdFontFamily* b : {variantFallback_, builtinFallback_, symbolFallback_}) {
     if (b == nullptr || b == this || b == fallbackFamily || b == globalFallback_) continue;
     const EpdFont* bf = b->getFont(style);
     if (bf->hasGlyph(cp)) {

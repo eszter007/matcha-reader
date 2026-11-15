@@ -47,7 +47,14 @@ enum class SettingAction {
   OpenFlashcards,
   AnkiSync,
   AnkiTest,
+  MigakuSync,
+  MigakuTest,
 };
+
+// The Anki Sync and Migaku Sync pages: rows of one sync service, opened from Connectivity.
+inline bool isSyncServicePage(const StrId category) {
+  return category == StrId::STR_ANKI_SYNC || category == StrId::STR_MIGAKU_SYNC;
+}
 
 struct SettingInfo {
   StrId nameId;

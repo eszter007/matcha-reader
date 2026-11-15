@@ -83,6 +83,20 @@ python fontconvert.py ubuntu_8_regular 8 \
   --compress --zopfli --bw-threshold 6 --embolden-x 20 --embolden-y 20 --additional-intervals 0x05D0,0x05EA "${ARABIC_INTERVALS[@]}" \
   > ../builtinFonts/ubuntu_8_regular.h
 
+# Last-resort symbols for every font (EpdFontFamily::setSymbolFallback): IPA letters and modifiers
+# from Noto Serif, the bullet operator from Ubuntu, and the stars from Noto Sans CJK JP, which is not
+# in the repository. Set STAR_FONT to its NotoSansCJKjp-Regular.otf to regenerate this header; it is
+# skipped otherwise.
+if [ -n "${STAR_FONT:-}" ]; then
+  python fontconvert.py symbols_14_regular 14 ../builtinFonts/source/NotoSerif/NotoSerif-Regular.ttf "$STAR_FONT" \
+    ../builtinFonts/source/Ubuntu/Ubuntu-Regular.ttf \
+    --2bit --compress --zopfli --only-additional-intervals \
+    --additional-intervals 0x0250,0x02FF --additional-intervals 0x2219,0x2219 --additional-intervals 0x2605,0x2606 > ../builtinFonts/symbols_14_regular.h
+  echo "Generated ../builtinFonts/symbols_14_regular.h"
+else
+  echo "Skipped ../builtinFonts/symbols_14_regular.h: STAR_FONT is not set"
+fi
+
 echo ""
 python dedupe_font_tables.py ../builtinFonts/
 

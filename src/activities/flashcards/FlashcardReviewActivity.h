@@ -20,6 +20,9 @@ class FlashcardReviewActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  // No glyph slab: a symbol glyph (a Migaku star) would keep its 24 KB while the next card's
+  // layout and images need the heap.
+  bool wantsGlyphSlab() const override { return false; }
 
  private:
   struct Rect4 {
@@ -48,6 +51,7 @@ class FlashcardReviewActivity final : public Activity {
   Rect4 ratingsRect() const;
 
   std::string language;
+  bool isMigakuDeck = false;  // a deck from the Migaku bridge, not Anki
   flashcards::Session session;
   flashcards::CardText card;
   bool cardOk = false;

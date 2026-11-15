@@ -309,7 +309,10 @@ namespace {
 //       is unchanged.
 // v114: upstream merge (their v75): headings are not hyphenated, so a heading that used to break
 //       inside a word now wraps whole. The framing is unchanged.
-constexpr uint8_t SECTION_FILE_VERSION = 114;
+// v115: IPA letters, the bullet operator and stars that no reader font has draw from the built-in
+//       symbol face instead of a replacement glyph, so lines holding them move. The framing is
+//       unchanged.
+constexpr uint8_t SECTION_FILE_VERSION = 115;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

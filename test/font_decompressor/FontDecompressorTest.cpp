@@ -11,6 +11,7 @@
 #include "FontDecompressor.h"
 #include "builtinFonts/notosansjp_joyo_12_regular.h"
 #include "builtinFonts/notoserif_14_regular.h"
+#include "builtinFonts/symbols_14_regular.h"
 #include "builtinFonts/ubuntu_10_bold.h"
 #include "builtinFonts/ubuntu_10_regular.h"
 #include "builtinFonts/ubuntu_12_bold.h"
@@ -165,4 +166,28 @@ TEST(EpdFontFamilyTest, JoyoVariantDrawsAsTheFormTheFontCarries) {
   }
   // A kanji with no partner still falls through to the missing-glyph path.
   EXPECT_NE(family.getGlyph(0x20B9E), joyo.getGlyph(0x53F1));
+}
+
+TEST(EpdFontFamilyTest, SymbolFallbackDrawsIpaAndStarsNoOtherFontHas) {
+  EpdFont reader(&notoserif_14_regular);
+  EpdFont joyo(&notosansjp_joyo_12_regular);
+  EpdFont symbols(&symbols_14_regular);
+  const EpdFontFamily readerFamily(14, &reader);
+  const EpdFontFamily joyoFamily(12, &joyo);
+  const EpdFontFamily symbolFamily(14, &symbols);
+  EpdFontFamily::setBuiltinFallback(&joyoFamily);
+  EpdFontFamily::setSymbolFallback(&symbolFamily);
+  // A French pronunciation (ʁ), a definition bullet (∙) and a Migaku frequency star.
+  for (const uint32_t cp : {0x0281u, 0x2219u, 0x2605u}) {
+    ASSERT_FALSE(reader.hasCodepoint(cp));
+    ASSERT_FALSE(joyo.hasCodepoint(cp));
+    ASSERT_NE(symbols.getGlyph(cp), nullptr);
+    EXPECT_EQ(readerFamily.getGlyph(cp), symbols.getGlyph(cp));
+    EXPECT_EQ(readerFamily.getGlyphResident(cp), symbols.getGlyph(cp));
+    EXPECT_EQ(readerFamily.getDataForGlyph(cp), symbols.data);
+  }
+  // A glyph the reader font has is still its own.
+  EXPECT_EQ(readerFamily.getGlyph('a'), reader.getGlyph('a'));
+  EpdFontFamily::setSymbolFallback(nullptr);
+  EpdFontFamily::setBuiltinFallback(nullptr);
 }
