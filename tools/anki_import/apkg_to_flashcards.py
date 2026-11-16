@@ -3,12 +3,14 @@
 
 The reader cannot open an .apkg itself (it is a SQLite database, often zstd-compressed), so this
 script does what a sync would: it renders every card the way Anki does, cleans the HTML for the
-reader, and writes the same deck folder the sync writes:
+reader, and writes the same files the sync writes:
 
-    <out>/<deck id>/deck.json, cards.bin, style.css, <card id>q.xhtml, <card id>a.xhtml, images
+    <out>/<deck id>.json, <deck id>.cards.bin
+    <out>/<deck id>/style.css, <card id>q.xhtml, <card id>a.xhtml, images
 
-Copy the folder into the SD card's system folder, as `.system/anki/<deck id>/` (or pass --sd with
-the card's mount point and it is written there). Review progress then lives on the reader only.
+Copy them into the SD card's system folder, under `.system/anki/` (or pass --sd with the card's
+mount point and they are written there). Files in the older layout, deck.json and cards.bin inside
+the deck folder, are moved out by the reader the first time it opens the deck. Review progress then lives on the reader only.
 
 Requires the Anki library and lxml:  pip install anki lxml pillow
 
@@ -159,12 +161,12 @@ def export_deck(col: Collection, deck_id: int, deck_name: str, out_root: str) ->
                 for name in re.findall(r'src="([^"]+)"', side):
                     copy_image(col.media.dir(), html_lib.unescape(name), out_dir)
         records.append(struct.pack("<QQII", card_id, note.id, int(note.mod), flags))
-    with open(os.path.join(out_dir, "cards.bin"), "wb") as f:
+    with open(os.path.join(out_root, f"{deck_id}.cards.bin"), "wb") as f:
         f.write(b"".join(records))
     css_text = "\n".join(css_parts)
     with open(os.path.join(out_dir, "style.css"), "w", encoding="utf-8") as f:
         f.write(css_text[:MAX_CSS])
-    with open(os.path.join(out_dir, "deck.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(out_root, f"{deck_id}.json"), "w", encoding="utf-8") as f:
         json.dump({"name": deck_name, "lastReviewId": 0}, f, ensure_ascii=False)
     note = f", {too_large} too large for the reader" if too_large else ""
     print(f"  {deck_name}: {len(records)} cards{note} -> {out_dir}")

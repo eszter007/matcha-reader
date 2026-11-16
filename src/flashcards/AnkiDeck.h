@@ -8,8 +8,9 @@
 #include <vector>
 
 // A deck brought from Anki onto the device, kept in the system folder (never in the Library):
-//   anki/<deckId>/deck.json      name, last Anki review seen
-//   anki/<deckId>/cards.bin      the card index, CardRecord per card, sorted by card id
+//   anki/<deckId>.json           name, last Anki review seen
+//   anki/<deckId>.cards.bin      the card index, CardRecord per card, sorted by card id
+//   anki/<deckId>.buried.bin     cards buried until tomorrow; anki/<deckId>.leeches.bin, leeches
 //   anki/<deckId>/style.css      the note types' CSS
 //   anki/<deckId>/<cardId>q.xhtml, <cardId>a.xhtml   each side as Anki renders it, as XHTML
 //   anki/<deckId>/<media>        the images the cards use
@@ -74,7 +75,10 @@ inline bool isAnkiKey(const std::string& key) { return key.rfind(KEY_PREFIX, 0) 
 constexpr const char* MIGAKU_PREFIX = "m";
 inline bool isMigakuKey(const std::string& key) { return key.rfind(std::string(KEY_PREFIX) + MIGAKU_PREFIX, 0) == 0; }
 inline std::string keyFor(const std::string& deckId) { return KEY_PREFIX + deckId; }
-std::string dirFor(const std::string& deckId);  // with a trailing '/'
+std::string dirFor(const std::string& deckId);  // the deck's card folder, with a trailing '/'
+// One of the deck's small files beside that folder (suffix ".json", ".cards.bin"...): a lookup in a
+// folder of thousands of cards costs a quarter second. Moves an older layout's files on first use.
+std::string metaPath(const std::string& deckId, const char* suffix);
 std::string idOf(const std::string& key);
 
 bool readInfo(const std::string& deckId, DeckInfo& out);
