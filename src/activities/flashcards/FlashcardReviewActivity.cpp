@@ -952,7 +952,7 @@ void FlashcardReviewActivity::drawDone(const Rect4& a) const {
   y += renderer.getLineHeightScaled(NOTOSERIF_18_FONT_ID, 256) + 6;
   {
     char line[48];
-    snprintf(line, sizeof(line), tr(STR_FLASH_REVIEWED), static_cast<int>(session.reviewed()));
+    I18N.formatCount(line, sizeof(line), StrId::STR_FLASH_REVIEWED, static_cast<int>(session.reviewed()));
     UITheme::drawCenteredText(renderer, area, UI_10_FONT_ID, y, line);
     y += 48;
     // Four ruled boxes: how often each rating was given.

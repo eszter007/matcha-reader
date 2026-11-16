@@ -5,13 +5,75 @@
 #include <Logging.h>
 #include <Memory.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
 
+#include "PluralRules.h"
+
 using namespace i18n_strings;
 
 namespace {
+plural::Rule pluralRule(const Language lang) {
+  using plural::Rule;
+  switch (lang) {
+    case Language::JA:
+    case Language::ZHS:
+    case Language::ZHT:
+    case Language::VI:
+    case Language::ID:
+      return Rule::None;
+    case Language::FR:
+    case Language::PT:  // Portuguese (Brazil); Portugal counts 0 as other
+    case Language::FA:
+      return Rule::ZeroOneOther;
+    case Language::RU:
+    case Language::UK:
+    case Language::BE:
+      return Rule::EastSlavic;
+    case Language::PL:
+      return Rule::Polish;
+    case Language::CS:
+    case Language::SK:
+      return Rule::CzechSlovak;
+    case Language::LT:
+      return Rule::Lithuanian;
+    case Language::BS:
+      return Rule::Bosnian;
+    case Language::SI:
+      return Rule::Slovenian;
+    case Language::RO:
+      return Rule::Romanian;
+    case Language::AR:
+      return Rule::Arabic;
+    case Language::HE:
+      return Rule::Hebrew;
+    // Every language is listed, so a new one warns (-Wswitch) in the host test build instead of
+    // silently taking the English rule.
+    case Language::EN:
+    case Language::AZ:
+    case Language::BG:
+    case Language::CA:
+    case Language::CAV:
+    case Language::DA:
+    case Language::DE:
+    case Language::ES:
+    case Language::FI:
+    case Language::HU:
+    case Language::IT:
+    case Language::KK:
+    case Language::NB:
+    case Language::NL:
+    case Language::P2:  // Portuguese (Portugal)
+    case Language::SV:
+    case Language::TR:
+    case Language::_COUNT:
+      return Rule::OneOther;
+  }
+  return Rule::OneOther;
+}
+
 // .cplang layout, little-endian, written by scripts/gen_i18n.py::write_language_packs():
 //   magic[8] "CPLANG\0\0" | version u16 | keyCount u16 | blobLen u16 | code[4]
 //   offsets u16 * keyCount | blob blobLen
@@ -69,6 +131,12 @@ I18n& I18n::getInstance() {
 }
 
 const char* I18n::get(StrId id) const {
+  bool english = false;
+  return lookup(id, english);
+}
+
+const char* I18n::lookup(StrId id, bool& english) const {
+  english = _language == Language::EN;
   const auto index = static_cast<size_t>(id);
   if (index >= static_cast<size_t>(StrId::_COUNT)) {
     return "???";
@@ -81,8 +149,28 @@ const char* I18n::get(StrId id) const {
 
   // If bit 15 of the offset is set, apply the offset to the English lookup table
   const uint16_t off = lang.offsets[index];
-  if (off & 0x8000) return STRINGS_EN_DATA + (off & 0x7FFF);
+  if (off & 0x8000) {
+    english = true;
+    return STRINGS_EN_DATA + (off & 0x7FFF);
+  }
   return lang.data + off;
+}
+
+void I18n::formatCount(char* out, const size_t size, const StrId id, const int n) const {
+  bool english = false;
+  const char* form = lookup(id, english);
+  const uint8_t pick = plural::form(english ? plural::Rule::OneOther : pluralRule(_language), n);
+  for (uint8_t i = 0; i < pick; i++) {
+    const char* bar = strchr(form, '|');
+    if (!bar) break;  // fewer forms than the language has: the last one
+    form = bar + 1;
+  }
+  const char* end = strchr(form, '|');
+  char format[96];
+  const size_t len = std::min(end ? static_cast<size_t>(end - form) : strlen(form), sizeof(format) - 1);
+  memcpy(format, form, len);
+  format[len] = '\0';
+  snprintf(out, size, format, n);
 }
 
 bool I18n::setLanguage(Language lang) {

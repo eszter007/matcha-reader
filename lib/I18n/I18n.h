@@ -2,6 +2,7 @@
 
 #include <I18nKeys.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 /**
@@ -20,6 +21,12 @@ class I18n {
   const char* get(StrId id) const;
 
   const char* operator[](StrId id) const { return get(id); }
+
+  /// A count message: its forms are separated by '|' in the order of the language's plural
+  /// categories (PluralRules.h), each formatted with the count ("%d day read|%d days read").
+  /// Writes the form for n into out. A message with fewer forms uses its last; one that falls
+  /// back to English follows the English rule.
+  void formatCount(char* out, size_t size, StrId id, int n) const;
 
   Language getLanguage() const { return _language; }
   /// Select the UI language. A language whose strings are compiled in switches with no I/O; any
@@ -57,6 +64,9 @@ class I18n {
   // Reads PACK_DIR/<CODE>.cplang into _packBuffer and points _packStrings at it.
   // Leaves both untouched and returns false on any rejection.
   bool loadPack(Language lang);
+
+  // The string for id, and whether it is the English text (English, or a fallback to it).
+  const char* lookup(StrId id, bool& english) const;
 
   Language _language;
   // Backing store for a language that is not compiled in. Held for as long as that language is

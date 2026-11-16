@@ -19,7 +19,9 @@ remain unstaged even when used for local verification.
 
 ### Translation workflow
 
-Every user-facing string uses `tr(STR_*)`; log messages may stay hardcoded.
+Every user-facing string uses `tr(STR_*)`; log messages may stay hardcoded. A count
+message (forms separated by `|`) uses `I18N.formatCount()`, so each language gets its
+plural form; see `docs/i18n.md`, Count messages.
 Add new keys to `english.yaml`, then regenerate:
 
 ```bash

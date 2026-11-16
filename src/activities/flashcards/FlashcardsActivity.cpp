@@ -174,7 +174,9 @@ void FlashcardsActivity::drawFooter() {
     const int left = pad + ROW_INSET;
     const int right = w - pad - ROW_INSET;
     const int numH = renderer.getLineHeightScaled(NOTOSERIF_18_FONT_ID, HERO_SCALE);
-    const char* caption = tr(STR_FLASH_TO_REVIEW);
+    char toReview[48];
+    I18N.formatCount(toReview, sizeof(toReview), StrId::STR_FLASH_TO_REVIEW, due);
+    const char* caption = toReview;
     int y = heroTop_;
     if (due > 0) {
       char n[12];

@@ -30,6 +30,18 @@ namespace {
 // Between a service's name and its test result in the message.
 constexpr char RESULT_SEPARATOR = '\x1F';
 
+// Adds "Anki: 1 new card, 2 reviews received, 0 sent". Not inlined, so its buffers are not part
+// of the caller's stack frame during the sync itself.
+__attribute__((noinline)) void appendSummary(std::string& summary, const char* name, const ankisync::Result& result) {
+  char added[48], pulled[64], text[128];  // room for longer translations than "1234 new cards"
+  I18N.formatCount(added, sizeof(added), StrId::STR_SYNC_NEW_CARDS, static_cast<int>(result.cardsAdded));
+  I18N.formatCount(pulled, sizeof(pulled), StrId::STR_SYNC_REVIEWS_RECEIVED, static_cast<int>(result.reviewsPulled));
+  snprintf(text, sizeof(text), I18n::getInstance().get(StrId::STR_SYNC_SERVICE_DONE), name, added, pulled,
+           static_cast<int>(result.reviewsPushed));
+  if (!summary.empty()) summary += "; ";
+  summary += text;
+}
+
 // The outcome carried across the restart between services: three lines.
 std::string stashPath() { return sdsystem::path("flashcard_sync_pending.txt"); }
 
@@ -271,11 +283,7 @@ void AnkiSyncActivity::run() {
       result.error = client.error();
     }
     if (result.ok) {
-      char text[128];
-      snprintf(text, sizeof(text), tr(STR_SYNC_SERVICE_DONE), name, static_cast<int>(result.cardsAdded),
-               static_cast<int>(result.reviewsPulled), static_cast<int>(result.reviewsPushed));
-      if (!outcome.summary.empty()) outcome.summary += "; ";
-      outcome.summary += text;
+      appendSummary(outcome.summary, name, result);
       if (result.remoteSkipped) {
         outcome.summary += ". ";
         outcome.summary += tr(STR_ANKIWEB_NOT_SYNCED);
