@@ -13,8 +13,10 @@
 //   anki/<deckId>.buried.bin     cards buried until tomorrow; anki/<deckId>.leeches.bin, leeches
 //   anki/<deckId>.css            the note types' CSS
 //   anki-cache/<deckId>/         the card images' decoded pixels (.pxc)
-//   anki/<deckId>/<cardId>q.xhtml, <cardId>a.xhtml   each side as Anki renders it, as XHTML
-//   anki/<deckId>/<media>        the images the cards use
+//   anki/<deckId>/               the deck's marker folder (older syncs kept sides and images here)
+//   anki-cards/<deckId>/<NN>/<cardId>q.xhtml, <cardId>a.xhtml   each side as Anki renders it, as
+//                                XHTML; NN is the card id modulo SIDE_FOLDERS
+//   anki-cards/<deckId>/media/   the images the cards use
 // Its review progress uses the flashcard store under the deck key "anki-<deckId>".
 namespace ankideck {
 
@@ -67,6 +69,8 @@ struct DeckInfo {
   // until a refresh completes. Kept across failed or cancelled syncs.
   bool refetchAll = false;
   uint64_t refetchedUpTo = 0;  // cards up to this id were fetched again already (index saved)
+  // Its sides and images are in cardsDir(), not dirFor(): moved by a sync, or written there.
+  bool cardsMoved = false;
 };
 constexpr size_t MAX_CSS_HASHES = 16;
 
@@ -83,8 +87,8 @@ std::string imageCacheDir(const std::string& deckId);
 // One of the deck's small files beside that folder (suffix ".json", ".cards.bin"...): a lookup in a
 // folder of thousands of cards costs a quarter second. Moves an older layout's files on first use.
 std::string metaPath(const std::string& deckId, const char* suffix);
-// Removes those small files: a deck whose folder was deleted starts again from nothing, as it did
-// when they lived inside the folder.
+// Removes those small files, its sides and images (cardsDir()) and its image caches: a deck whose
+// folder was deleted starts again from nothing, as it did when they all lived inside the folder.
 void forgetDeckFiles(const std::string& deckId);
 std::string idOf(const std::string& key);
 
@@ -147,8 +151,19 @@ class IndexWriter {
 // Every deck on the card, by name.
 void list(std::vector<DeckInfo>& out);
 
+// A card's sides and the deck's images, out of dirFor(): anki-cards/<deckId>/<NN>/ for the sides
+// (NN = the card id modulo SIDE_FOLDERS, two digits) and anki-cards/<deckId>/media/ for the images.
+// In one folder of thousands of files, FAT took up to a quarter second to find each one; these hold
+// a few dozen. The sync moves an older deck's files here (DeckInfo::cardsMoved).
+constexpr unsigned SIDE_FOLDERS = 64;
+std::string cardsDir(const std::string& deckId);                    // with a trailing '/'
+std::string sideFolder(const std::string& deckId, unsigned index);  // index < SIDE_FOLDERS; trailing '/'
+std::string mediaDir(const std::string& deckId);                    // with a trailing '/'
 std::string frontPath(const std::string& deckId, uint64_t cardId);
 std::string backPath(const std::string& deckId, uint64_t cardId);
+// Where a card's sides were before they moved: inside dirFor(), beside the images.
+std::string oldFrontPath(const std::string& deckId, uint64_t cardId);
+std::string oldBackPath(const std::string& deckId, uint64_t cardId);
 std::string cssPath(const std::string& deckId);
 // Leeches found on the device, for the next sync to suspend or tag in Anki: 16 bytes each.
 std::string leechPath(const std::string& deckId);

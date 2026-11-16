@@ -116,6 +116,7 @@ struct CardText {
   std::string backPath;
   std::string cssPath;
   std::string imageCacheDir;  // where its images' decoded pixels are kept
+  std::string mediaDir;       // where its images are; empty: beside the sides
   bool tooLarge = false;      // Anki's rendering did not fit the device
 };
 

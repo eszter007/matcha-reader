@@ -25,7 +25,7 @@ constexpr size_t MAX_ELEMENTS = 512;
 bool buildCardHtmlPages(GfxRenderer& renderer, const std::string& xhtmlPath, const std::string& cssPath,
                         const uint16_t viewportWidth, const uint16_t viewportHeight, const int fontId,
                         const bool furigana, std::vector<std::unique_ptr<Page>>& pagesOut,
-                        const std::string& imageCacheDir) {
+                        const std::string& imageCacheDir, const std::string& mediaDir) {
   pagesOut.clear();
   if (ESP.getFreeHeap() < MIN_FREE_HEAP || ESP.getMaxAllocHeap() < MIN_MAX_ALLOC) {
     LOG_ERR("CARD", "Low heap for a card page (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
@@ -47,7 +47,9 @@ bool buildCardHtmlPages(GfxRenderer& renderer, const std::string& xhtmlPath, con
     // The parser keeps references to these strings.
     const std::string path = xhtmlPath;
     const size_t slash = path.rfind('/');
-    const std::string base = slash == std::string::npos ? std::string() : path.substr(0, slash + 1);
+    const std::string base = !mediaDir.empty()            ? mediaDir
+                             : slash == std::string::npos ? std::string()
+                                                          : path.substr(0, slash + 1);
     const std::string imageBase = base;
     auto parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
         // The deck's CSS decides alignment, nested blocks inheriting it; the reader's own
