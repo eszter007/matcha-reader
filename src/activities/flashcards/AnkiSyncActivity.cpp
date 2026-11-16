@@ -230,7 +230,8 @@ void AnkiSyncActivity::run() {
     {
       RenderLock lock(*self);
       self->message = text;
-      self->detail = std::to_string(p.done) + " / " + std::to_string(p.total);
+      // No total while a deck's files are moved: only how many so far.
+      self->detail = p.total > 0 ? std::to_string(p.done) + " / " + std::to_string(p.total) : std::to_string(p.done);
     }
     self->requestUpdate(true);
   };
