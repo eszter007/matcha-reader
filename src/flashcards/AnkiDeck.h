@@ -79,6 +79,9 @@ std::string dirFor(const std::string& deckId);  // the deck's card folder, with 
 // One of the deck's small files beside that folder (suffix ".json", ".cards.bin"...): a lookup in a
 // folder of thousands of cards costs a quarter second. Moves an older layout's files on first use.
 std::string metaPath(const std::string& deckId, const char* suffix);
+// Removes those small files: a deck whose folder was deleted starts again from nothing, as it did
+// when they lived inside the folder.
+void forgetDeckFiles(const std::string& deckId);
 std::string idOf(const std::string& key);
 
 bool readInfo(const std::string& deckId, DeckInfo& out);

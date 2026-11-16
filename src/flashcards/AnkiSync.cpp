@@ -1146,6 +1146,8 @@ bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key, std::
 bool DeckSync::run(const std::string& name, const std::string& deckId, const std::string& serverDeckId,
                    const char* presetId) {
   this->serverDeckId = serverDeckId;
+  // No folder (a new deck, or one deleted on a computer): nothing beside it is current either.
+  if (!Storage.exists(ankideck::dirFor(deckId).c_str())) ankideck::forgetDeckFiles(deckId);
   if (!Storage.ensureDirectoryExists(ankideck::dirFor(deckId).c_str())) return false;
   ankideck::DeckInfo info;
   if (!ankideck::readInfo(deckId, info)) {

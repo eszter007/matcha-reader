@@ -44,7 +44,9 @@ std::string besideDir(const std::string& deckId, const char* suffix) {
 }
 
 // Once per deck and boot: files an older firmware (or the import tool) kept inside the deck's
-// folder move beside it. deck.json goes last, so a move cut short is finished next time.
+// folder move beside it. deck.json goes last, and only when the others moved, so a move cut short
+// is finished next time. A file already beside the folder is kept and the old one left alone: a
+// rename cut short can leave both names on the same data, and removing one would free the other's.
 void moveOutOfFolder(const std::string& deckId) {
   static std::vector<std::string> done;
   if (std::find(done.begin(), done.end(), deckId) != done.end()) return;
@@ -59,7 +61,11 @@ void moveOutOfFolder(const std::string& deckId) {
     const std::string from = dir + move[0];
     if (!Storage.exists(from.c_str())) continue;
     const std::string to = besideDir(deckId, move[1]);
-    if (!Storage.rename(from.c_str(), to.c_str())) LOG_ERR("ANKI", "Could not move %s", from.c_str());
+    if (Storage.exists(to.c_str())) continue;
+    if (!Storage.rename(from.c_str(), to.c_str())) {
+      LOG_ERR("ANKI", "Could not move %s", from.c_str());
+      return;
+    }
   }
 }
 }  // namespace
@@ -84,6 +90,13 @@ std::string backPath(const std::string& deckId, const uint64_t cardId) {
 std::string cssPath(const std::string& deckId) { return dirFor(deckId) + "style.css"; }
 
 std::string leechPath(const std::string& deckId) { return metaPath(deckId, ".leeches.bin"); }
+
+void forgetDeckFiles(const std::string& deckId) {
+  for (const char* suffix : {".json", ".cards.bin", ".buried.bin", ".leeches.bin"}) {
+    const std::string path = besideDir(deckId, suffix);
+    if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
+  }
+}
 
 bool readInfo(const std::string& deckId, DeckInfo& out) {
   JsonDocument doc;

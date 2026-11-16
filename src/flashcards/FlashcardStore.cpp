@@ -369,7 +369,17 @@ class StateStream {
     const uint8_t* p = header + 4;
     day = take<uint16_t>(p);
     newToday = take<uint16_t>(p);
-    left = std::min<uint32_t>(take<uint32_t>(p), Session::MAX_CARDS);
+    left = total = std::min<uint32_t>(take<uint32_t>(p), Session::MAX_CARDS);
+    return true;
+  }
+  // Back to the first card of a file already opened, without looking its name up again.
+  bool restart() {
+    have = pos = 0;
+    seen = error = false;
+    if (absent) return true;
+    left = 0;
+    if (!file.isOpen() || !file.seek(HEADER_BYTES)) return false;
+    left = total;
     return true;
   }
   // The next card, ids rising. False at the end, and on a short read or an id out of order, which
@@ -402,6 +412,7 @@ class StateStream {
   }
   static constexpr size_t CHUNK = 8;
   HalFile file;
+  uint32_t total = 0;
   uint32_t left = 0;
   size_t have = 0;
   size_t pos = 0;
@@ -433,10 +444,12 @@ struct StreamedStates {
   CardState current;
   bool has = false;
   bool atStart = false;  // rewound and nothing asked yet: each() need not open the file again
+  bool opened = false;
   bool rewind() {
     has = false;
     atStart = false;
-    if (!stream.open(language)) return false;
+    if (!(opened ? stream.restart() : stream.open(language))) return false;
+    opened = true;
     has = stream.next(current);
     atStart = !stream.failed();
     return atStart;
@@ -595,727 +608,567 @@ void listDecks(std::vector<DeckSummary>& out) {
     if (paused) deck.due = deck.fresh = 0;
     out.push_back(std::move(deck));
   }
-}
 
-CardState* Session::find(const uint64_t id) { return const_cast<CardState*>(findIn(states, id)); }
+  CardState* Session::find(const uint64_t id) { return const_cast<CardState*>(findIn(states, id)); }
 
-const CardState* Session::find(const uint64_t id) const { return findIn(states, id); }
+  const CardState* Session::find(const uint64_t id) const { return findIn(states, id); }
 
-bool Session::open(const std::string& language) {
-  lang = language;
-  anki = ankideck::isAnkiKey(language);
-  csvPath = anki ? std::string() : deckPath(language);
-  // Record offsets are taken after this, so they point into the upgraded file.
-  upgraded = !anki && sentencemining::upgradeExport(csvPath);
-  queue.clear();
-  learning.clear();
-  activeLearn = -1;
-  position = 0;
-  reviewedCount = 0;
-  std::fill(std::begin(ratingCounts), std::end(ratingCounts), 0);
-  syncVacation();
-  ankideck::DeckInfo info;
-  const bool preset = anki && ankideck::readInfo(ankideck::idOf(language), info);
-  params = schedulingParams(preset ? &info : nullptr);
-  perDay = newCardsPerDay(preset ? &info : nullptr);
-  // Anki's steps where the deck's preset gave them; a single ten-minute step otherwise.
-  learnCount = relearnCount = 1;
-  learnSteps[0] = relearnSteps[0] = 10;
-  if (preset && info.learnCount != 0xFF) {
-    learnCount = info.learnCount;
-    std::copy(info.learnSteps, info.learnSteps + learnCount, learnSteps);
-  }
-  if (preset && info.relearnCount != 0xFF) {
-    relearnCount = info.relearnCount;
-    std::copy(info.relearnSteps, info.relearnSteps + relearnCount, relearnSteps);
-  }
-  buryNew = preset && info.buryNew;
-  buryReviews = preset && info.buryReviews;
-  std::fill(std::begin(easyDays), std::end(easyDays), static_cast<uint8_t>(100));
-  if (preset) std::copy(info.easyDays, info.easyDays + 7, easyDays);
-  leechThreshold = preset ? info.leechThreshold : 0;
-  leechSuspend = !preset || info.leechSuspend;
-  notesDone.clear();
-  leeches.clear();
-  if (preset && info.leechThreshold > 0 && info.leechSuspend) readLeeches(ankideck::idOf(language), leeches);
-  if (!loadStates(language, states, day, newToday, MAX_QUEUE)) return false;
-  const uint16_t now = todayOr(day);
-  if (now != day) newToday = 0;
-  day = now;
-  if (onVacation()) return true;  // progress loaded, nothing queued
-  {
-    // Notes of the cards reviewed today, and room for this session's.
-    const auto reviewedToday = static_cast<size_t>(std::count_if(
-        states.begin(), states.end(), [this](const CardState& c) { return c.reps > 0 && c.lastReview == day; }));
-    // std::vector reserves with throwing new: without room, burying is skipped this session.
-    if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= (reviewedToday + 64) * sizeof(uint64_t) + 8 * 1024) {
-      notesDone.reserve(reviewedToday + 64);
-    } else {
-      buryNew = buryReviews = false;
+  bool Session::open(const std::string& language) {
+    lang = language;
+    anki = ankideck::isAnkiKey(language);
+    csvPath = anki ? std::string() : deckPath(language);
+    // Record offsets are taken after this, so they point into the upgraded file.
+    upgraded = !anki && sentencemining::upgradeExport(csvPath);
+    queue.clear();
+    learning.clear();
+    activeLearn = -1;
+    position = 0;
+    reviewedCount = 0;
+    std::fill(std::begin(ratingCounts), std::end(ratingCounts), 0);
+    syncVacation();
+    ankideck::DeckInfo info;
+    const bool preset = anki && ankideck::readInfo(ankideck::idOf(language), info);
+    params = schedulingParams(preset ? &info : nullptr);
+    perDay = newCardsPerDay(preset ? &info : nullptr);
+    // Anki's steps where the deck's preset gave them; a single ten-minute step otherwise.
+    learnCount = relearnCount = 1;
+    learnSteps[0] = relearnSteps[0] = 10;
+    if (preset && info.learnCount != 0xFF) {
+      learnCount = info.learnCount;
+      std::copy(info.learnSteps, info.learnSteps + learnCount, learnSteps);
     }
-  }
-
-  std::vector<QueueItem> fresh;
-  const size_t newLimit = perDay > newToday ? perDay - newToday : 0;
-  queue.reserve(64);
-  pendingLog.reserve(8);  // ratings between two saves
-  fresh.reserve(std::min<size_t>(newLimit, MAX_QUEUE));
-  learning.reserve(32);  // cards between steps: at most 64, 24 bytes each
-  // When the saved steps fall due, by the wall clock (see stepsPath).
-  std::vector<std::pair<uint64_t, int64_t>> stepDue;
-  {
-    HalFile file;
-    if (Storage.exists(stepsPath(language).c_str()) && Storage.openFileForRead("FLASH", stepsPath(language), file)) {
-      stepDue.reserve(64);
-      uint8_t rec[16];
-      while (stepDue.size() < 64 && file.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec))) {
-        uint64_t id = 0;
-        int64_t due = 0;
-        memcpy(&id, rec, 8);
-        memcpy(&due, rec + 8, 8);
-        stepDue.emplace_back(id, due);
+    if (preset && info.relearnCount != 0xFF) {
+      relearnCount = info.relearnCount;
+      std::copy(info.relearnSteps, info.relearnSteps + relearnCount, relearnSteps);
+    }
+    buryNew = preset && info.buryNew;
+    buryReviews = preset && info.buryReviews;
+    std::fill(std::begin(easyDays), std::end(easyDays), static_cast<uint8_t>(100));
+    if (preset) std::copy(info.easyDays, info.easyDays + 7, easyDays);
+    leechThreshold = preset ? info.leechThreshold : 0;
+    leechSuspend = !preset || info.leechSuspend;
+    notesDone.clear();
+    leeches.clear();
+    if (preset && info.leechThreshold > 0 && info.leechSuspend) readLeeches(ankideck::idOf(language), leeches);
+    if (!loadStates(language, states, day, newToday, MAX_QUEUE)) return false;
+    const uint16_t now = todayOr(day);
+    if (now != day) newToday = 0;
+    day = now;
+    if (onVacation()) return true;  // progress loaded, nothing queued
+    {
+      // Notes of the cards reviewed today, and room for this session's.
+      const auto reviewedToday = static_cast<size_t>(std::count_if(
+          states.begin(), states.end(), [this](const CardState& c) { return c.reps > 0 && c.lastReview == day; }));
+      // std::vector reserves with throwing new: without room, burying is skipped this session.
+      if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= (reviewedToday + 64) * sizeof(uint64_t) + 8 * 1024) {
+        notesDone.reserve(reviewedToday + 64);
+      } else {
+        buryNew = buryReviews = false;
       }
     }
-  }
-  const time_t wallNow = time(nullptr);
-  const auto stepDueMs = [&](const uint64_t id) {
-    const uint32_t ms = millis();
-    if (!clockValid(wallNow)) return ms;
-    for (const auto& d : stepDue) {
-      if (d.first != id) continue;
-      const int64_t wait = d.second - static_cast<int64_t>(wallNow);
-      return wait > 0 ? static_cast<uint32_t>(ms + std::min<int64_t>(wait, 86400) * 1000) : ms;
+
+    std::vector<QueueItem> fresh;
+    const size_t newLimit = perDay > newToday ? perDay - newToday : 0;
+    queue.reserve(64);
+    pendingLog.reserve(8);  // ratings between two saves
+    fresh.reserve(std::min<size_t>(newLimit, MAX_QUEUE));
+    learning.reserve(32);  // cards between steps: at most 64, 24 bytes each
+    // When the saved steps fall due, by the wall clock (see stepsPath).
+    std::vector<std::pair<uint64_t, int64_t>> stepDue;
+    {
+      HalFile file;
+      if (Storage.exists(stepsPath(language).c_str()) && Storage.openFileForRead("FLASH", stepsPath(language), file)) {
+        stepDue.reserve(64);
+        uint8_t rec[16];
+        while (stepDue.size() < 64 && file.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec))) {
+          uint64_t id = 0;
+          int64_t due = 0;
+          memcpy(&id, rec, 8);
+          memcpy(&due, rec + 8, 8);
+          stepDue.emplace_back(id, due);
+        }
+      }
     }
-    return ms;
-  };
-  const auto consider = [&](const uint64_t id, const uint32_t offset, const uint64_t note = 0) {
-    // A leech the next sync suspends in Anki is not shown meanwhile.
-    if (std::binary_search(leeches.begin(), leeches.end(), id)) return;
-    if (const CardState* s = find(id)) {
-      // Between learning steps when the last session ended: it goes on from its saved step, due
-      // now (the time of day is not kept), outside the review limit.
-      const uint8_t saved = s->flags & CardState::LEARN_STEP;
-      const bool relearn = (s->flags & CardState::LEARN_RELEARN) != 0;
-      const uint8_t count = relearn ? relearnCount : learnCount;  // the preset may have changed since
-      if (saved > 0 && count > 0 && s->due <= day && learning.size() < 64) {
-        const uint8_t step = std::min<uint8_t>(saved - 1, count - 1);
-        learning.push_back({{id, offset, note}, stepDueMs(id), step, relearn});
+    const time_t wallNow = time(nullptr);
+    const auto stepDueMs = [&](const uint64_t id) {
+      const uint32_t ms = millis();
+      if (!clockValid(wallNow)) return ms;
+      for (const auto& d : stepDue) {
+        if (d.first != id) continue;
+        const int64_t wait = d.second - static_cast<int64_t>(wallNow);
+        return wait > 0 ? static_cast<uint32_t>(ms + std::min<int64_t>(wait, 86400) * 1000) : ms;
+      }
+      return ms;
+    };
+    const auto consider = [&](const uint64_t id, const uint32_t offset, const uint64_t note = 0) {
+      // A leech the next sync suspends in Anki is not shown meanwhile.
+      if (std::binary_search(leeches.begin(), leeches.end(), id)) return;
+      if (const CardState* s = find(id)) {
+        // Between learning steps when the last session ended: it goes on from its saved step, due
+        // now (the time of day is not kept), outside the review limit.
+        const uint8_t saved = s->flags & CardState::LEARN_STEP;
+        const bool relearn = (s->flags & CardState::LEARN_RELEARN) != 0;
+        const uint8_t count = relearn ? relearnCount : learnCount;  // the preset may have changed since
+        if (saved > 0 && count > 0 && s->due <= day && learning.size() < 64) {
+          const uint8_t step = std::min<uint8_t>(saved - 1, count - 1);
+          learning.push_back({{id, offset, note}, stepDueMs(id), step, relearn});
+          return;
+        }
+        if (s->due <= day && queue.size() < MAX_QUEUE) queue.push_back({id, offset, note});
+      } else if (fresh.size() < newLimit && fresh.size() < MAX_QUEUE) {
+        fresh.push_back({id, offset, note});
+      }
+    };
+    if (anki) {
+      // An Anki deck's cards come from its index, in Anki's order; offset holds the record's flags.
+      std::vector<uint64_t> buriedIds;
+      ankideck::readBuried(ankideck::idOf(language), day, buriedIds);
+      const bool read = ankideck::scanIndex(ankideck::idOf(language), [&](const ankideck::CardRecord& c) {
+        if (std::binary_search(buriedIds.begin(), buriedIds.end(), c.cardId)) return;
+        // Notes already reviewed today bury their siblings for the rest of the day.
+        const CardState* s = find(c.cardId);
+        if ((buryNew || buryReviews) && s && s->reps > 0 && s->lastReview == day) notesDone.push_back(c.noteId);
+        consider(c.cardId, c.flags, c.noteId);
+      });
+      if (!read) {
+        queue.clear();  // as before: a session that did not open has nothing to show
+        learning.clear();
+        return false;
+      }
+      std::sort(notesDone.begin(), notesDone.end());
+    } else {
+      // Cards handed over to Anki are reviewed in its deck now.
+      std::vector<uint64_t> handed;
+      loadHanded(lang, handed);
+      CsvRecordParser parser(1u << GUID, 32);
+      const bool found = scanCsv(csvPath, parser, [&](const CsvRecordParser& row) {
+        const uint64_t id = guidToId(row.field(GUID));
+        if (id != 0 && !std::binary_search(handed.begin(), handed.end(), id)) consider(id, row.recordStart());
+        return true;
+      });
+      if (!found) return false;
+    }
+    // Most overdue first; Anki's daily review limit keeps the most overdue.
+    std::stable_sort(queue.begin(), queue.end(),
+                     [this](const QueueItem& a, const QueueItem& b) { return find(a.id)->due < find(b.id)->due; });
+    const uint16_t allowed = reviewsLeft(preset ? &info : nullptr, states, day, newToday);
+    if (queue.size() > allowed) queue.resize(allowed);
+    // Then the preset's order: of the reviews kept, and of the new cards (as added, or random).
+    const uint8_t order = preset ? info.reviewOrder : ankideck::DeckInfo::REVIEW_DUE;
+    std::minstd_rand shuffle(static_cast<uint32_t>(millis()) ^ static_cast<uint32_t>(time(nullptr)));
+    if (order == ankideck::DeckInfo::REVIEW_RANDOM) {
+      std::shuffle(queue.begin(), queue.end(), shuffle);
+    } else if (order == ankideck::DeckInfo::REVIEW_INTERVAL_ASC || order == ankideck::DeckInfo::REVIEW_INTERVAL_DESC) {
+      const bool asc = order == ankideck::DeckInfo::REVIEW_INTERVAL_ASC;
+      std::stable_sort(queue.begin(), queue.end(), [this, asc](const QueueItem& a, const QueueItem& b) {
+        const int ia = find(a.id)->due - find(a.id)->lastReview;
+        const int ib = find(b.id)->due - find(b.id)->lastReview;
+        return asc ? ia < ib : ia > ib;
+      });
+    }
+    if (preset && info.newRandom) std::shuffle(fresh.begin(), fresh.end(), shuffle);
+    const uint8_t mix = preset ? info.newMix : ankideck::DeckInfo::NEW_AFTER;
+    // The queue holds MAX_QUEUE at most: the side placed last is cut first, as Anki does.
+    if (mix == ankideck::DeckInfo::NEW_BEFORE) {
+      if (fresh.size() > MAX_QUEUE) fresh.resize(MAX_QUEUE);
+      if (queue.size() + fresh.size() > MAX_QUEUE) queue.resize(MAX_QUEUE - fresh.size());
+      queue.insert(queue.begin(), fresh.begin(), fresh.end());
+    } else if (mix == ankideck::DeckInfo::NEW_MIXED && !queue.empty() && !fresh.empty()) {
+      // Spread the new cards evenly among the reviews.
+      if (queue.size() + fresh.size() > MAX_QUEUE)
+        fresh.resize(MAX_QUEUE > queue.size() ? MAX_QUEUE - queue.size() : 0);
+      std::vector<QueueItem> merged;
+      merged.reserve(queue.size() + fresh.size());
+      const size_t every = fresh.empty() ? queue.size() : std::max<size_t>(1, queue.size() / fresh.size());
+      size_t r = 0;
+      for (const auto& item : fresh) {
+        for (size_t k = 0; k < every && r < queue.size(); k++) merged.push_back(queue[r++]);
+        merged.push_back(item);
+      }
+      while (r < queue.size()) merged.push_back(queue[r++]);
+      queue.swap(merged);
+    } else {
+      if (queue.size() + fresh.size() > MAX_QUEUE)
+        fresh.resize(MAX_QUEUE > queue.size() ? MAX_QUEUE - queue.size() : 0);
+      queue.insert(queue.end(), fresh.begin(), fresh.end());
+    }
+    pickNext();
+    LOG_INF("FLASH", "Deck %s: %u queued, %u states", language.c_str(), static_cast<unsigned>(queue.size()),
+            static_cast<unsigned>(states.size()));
+    return true;
+  }
+
+  // A learning card whose step has passed comes first. When nothing else is left, the next one is
+  // shown early rather than leaving the session waiting.
+  void Session::pickNext() {
+    activeLearn = -1;
+    if (!leeches.empty()) {
+      learning.erase(std::remove_if(learning.begin(), learning.end(),
+                                    [this](const Learning& l) {
+                                      return std::binary_search(leeches.begin(), leeches.end(), l.item.id);
+                                    }),
+                     learning.end());
+    }
+    while (position < queue.size() &&
+           (buried(queue[position]) || std::binary_search(leeches.begin(), leeches.end(), queue[position].id))) {
+      position++;
+    }
+    if (learning.empty()) return;
+    int earliest = 0;
+    for (size_t i = 1; i < learning.size(); i++) {
+      if (static_cast<int32_t>(learning[i].dueMs - learning[earliest].dueMs) < 0) earliest = static_cast<int>(i);
+    }
+    const bool due = static_cast<int32_t>(millis() - learning[earliest].dueMs) >= 0;
+    if (due || position >= queue.size()) activeLearn = earliest;
+  }
+
+  // A sibling of a note reviewed today, held back until tomorrow as the preset asks.
+  bool Session::buried(const QueueItem& item) const {
+    if (item.note == 0 || notesDone.empty()) return false;
+    if (!std::binary_search(notesDone.begin(), notesDone.end(), item.note)) return false;
+    const CardState* s = find(item.id);
+    if (s && s->reps > 0 && s->lastReview == day) return false;  // this very card, again
+    return s == nullptr ? buryNew : buryReviews;
+  }
+
+  // Easy Days: within a few percent of the interval, the weekday with the most room is chosen.
+  uint16_t Session::easyDay(const uint16_t interval) const {
+    if (interval < 3 || std::all_of(std::begin(easyDays), std::end(easyDays), [](uint8_t p) { return p == 100; })) {
+      return interval;
+    }
+    const int spread = std::max(1, interval * 5 / 100);
+    uint16_t best = interval;
+    int bestRoom = -1;
+    for (int d = -spread; d <= spread; d++) {
+      const int candidate = interval + d;
+      if (candidate < 1 || candidate > params.maxInterval) continue;
+      // Day 0 is 2020-01-01, a Wednesday; easyDays starts on Monday.
+      const int room = easyDays[(day + candidate + 2) % 7];
+      if (room > bestRoom || (room == bestRoom && std::abs(d) < std::abs(best - static_cast<int>(interval)))) {
+        bestRoom = room;
+        best = static_cast<uint16_t>(candidate);
+      }
+    }
+    return best;
+  }
+
+  // A leech: noted for the next sync, which tags it (and suspends it, as the preset says) in Anki.
+  void Session::markLeech(const QueueItem& item, const CardState& s) {
+    if (!anki) return;
+    LOG_INF("FLASH", "Leech %llu after %u lapses", static_cast<unsigned long long>(item.id), s.lapses);
+    HalFile file;
+    if (!Storage.openFileForAppend("FLASH", ankideck::leechPath(ankideck::idOf(lang)).c_str(), file)) return;
+    if (leechSuspend && leeches.size() < 512)
+      leeches.insert(std::upper_bound(leeches.begin(), leeches.end(), item.id), item.id);
+    uint8_t rec[16];
+    memcpy(rec, &item.id, 8);
+    memcpy(rec + 8, &item.note, 8);
+    if (file.write(rec, sizeof(rec)) != sizeof(rec)) LOG_ERR("FLASH", "Leech not noted");
+  }
+
+  int Session::nextStep(const fsrs::Rating rating, const int current, const uint8_t count) {
+    int next = -1;
+    switch (rating) {
+      case fsrs::Rating::Again:
+        next = 0;
+        break;
+      case fsrs::Rating::Hard:
+        next = current;
+        break;
+      case fsrs::Rating::Good:
+        next = current + 1;
+        break;
+      case fsrs::Rating::Easy:
+        return -1;
+    }
+    return next < static_cast<int>(count) ? next : -1;
+  }
+
+  uint16_t Session::stepMinutes(const uint16_t* steps, const uint8_t count, const fsrs::Rating rating,
+                                const int current, const int next) {
+    if (rating == fsrs::Rating::Hard && current == 0) {
+      if (count >= 2) return static_cast<uint16_t>((steps[0] + steps[1]) / 2);
+      return static_cast<uint16_t>(std::min<uint32_t>(steps[0] * 3u / 2u, steps[0] + 1440u));
+    }
+    return steps[next];
+  }
+
+  bool Session::current(CardText & out) const {
+    if (finished()) return false;
+    if (anki) {
+      const std::string deckId = ankideck::idOf(lang);
+      const QueueItem& item = active();
+      out = CardText{};
+      out.frontPath = ankideck::frontPath(deckId, item.id);
+      out.backPath = ankideck::backPath(deckId, item.id);
+      out.cssPath = ankideck::cssPath(deckId);
+      out.tooLarge = (item.offset & ankideck::TOO_LARGE) != 0;
+      if (out.tooLarge || Storage.exists(out.frontPath.c_str())) return true;
+      // The sync trusted its index for this card: the next one checks every card again.
+      if (!cardsSyncForgotten) {
+        ankideck::forgetCardsSynced(deckId);
+        cardsSyncForgotten = true;
+      }
+      return false;
+    }
+    HalFile file;
+    if (!Storage.openFileForRead("FLASH", csvPath, file) || !file.seekSet(active().offset)) return false;
+    CsvRecordParser parser(
+        (1u << WORD) | (1u << READING) | (1u << SENTENCE) | (1u << DEFINITION) | (1u << BOOK) | (1u << FURIGANA), 2048);
+    char buf[256];
+    int n;
+    bool done = false;
+    while (!done && (n = file.read(buf, sizeof(buf))) > 0) {
+      for (int i = 0; i < n && !done; i++) done = parser.feed(buf[i]);
+    }
+    if (!done) done = parser.finish();
+    if (!done) return false;
+    out.word = parser.field(WORD);
+    out.reading = parser.field(READING);
+    out.sentence = parser.field(SENTENCE);
+    out.definition = parser.field(DEFINITION);
+    out.book = parser.field(BOOK);
+    // A file that could not be upgraded still has Tags here.
+    out.furigana = upgraded ? parser.field(FURIGANA) : std::string();
+    return true;
+  }
+
+  bool Session::currentIsNew() const { return !finished() && find(active().id) == nullptr; }
+
+  void Session::previews(Interval out[4]) const {
+    for (int i = 0; i < 4; i++) out[i] = Interval{};
+    if (finished()) return;
+    const CardState* s = find(active().id);
+    const fsrs::Memory memory = s ? fsrs::Memory{s->stability, s->difficulty} : fsrs::Memory{};
+    const float elapsed = s ? static_cast<float>(day - s->lastReview) : 0;
+    uint16_t days[4];
+    fsrs::previewIntervals(memory, s == nullptr, elapsed, params, days);
+    const bool inLearning = activeLearn >= 0;
+    const bool relearn = inLearning && learning[activeLearn].relearn;
+    const int currentStep = inLearning ? learning[activeLearn].step : 0;
+    for (int i = 0; i < 4; i++) {
+      const auto rating = static_cast<fsrs::Rating>(i + 1);
+      out[i].value = easyDay(days[i]);
+      // A review card only enters steps when it is forgotten.
+      const bool steps = s == nullptr || inLearning || rating == fsrs::Rating::Again;
+      if (!steps) continue;
+      const bool re = inLearning ? relearn : s != nullptr;
+      const uint8_t count = re ? relearnCount : learnCount;
+      const int next = nextStep(rating, currentStep, count);
+      if (next < 0) {
+        if (rating == fsrs::Rating::Again) {
+          const fsrs::Memory m = s ? fsrs::next(memory, elapsed, rating) : fsrs::initial(rating);
+          out[i].value = easyDay(fsrs::intervalDays(m.stability, params));
+        }
+        continue;
+      }
+      const uint16_t minutes = stepMinutes(re ? relearnSteps : learnSteps, count, rating, currentStep, next);
+      out[i] = minutes >= 1440 ? Interval{static_cast<uint16_t>(minutes / 1440), false} : Interval{minutes, true};
+    }
+  }
+
+  void Session::rate(const fsrs::Rating rating) {
+    if (finished()) return;
+    const bool fromLearning = activeLearn >= 0;
+    Learning learnt{};
+    if (fromLearning) {
+      learnt = learning[activeLearn];
+      learning.erase(learning.begin() + activeLearn);
+      activeLearn = -1;
+    } else {
+      position++;
+    }
+    const QueueItem item = fromLearning ? learnt.item : queue[position - 1];
+    CardState* s = find(item.id);
+    if (!s) {
+      // Room for this session's new cards was reserved at open: never grow the table here.
+      if (states.size() >= MAX_CARDS || states.size() >= states.capacity()) {
+        LOG_ERR("FLASH", "No room for another card's progress; not kept");
         return;
       }
-      if (s->due <= day && queue.size() < MAX_QUEUE) queue.push_back({id, offset, note});
-    } else if (fresh.size() < newLimit && fresh.size() < MAX_QUEUE) {
-      fresh.push_back({id, offset, note});
-    }
-  };
-  if (anki) {
-    // An Anki deck's cards come from its index, in Anki's order; offset holds the record's flags.
-    std::vector<uint64_t> buriedIds;
-    ankideck::readBuried(ankideck::idOf(language), day, buriedIds);
-    const bool read = ankideck::scanIndex(ankideck::idOf(language), [&](const ankideck::CardRecord& c) {
-      if (std::binary_search(buriedIds.begin(), buriedIds.end(), c.cardId)) return;
-      // Notes already reviewed today bury their siblings for the rest of the day.
-      const CardState* s = find(c.cardId);
-      if ((buryNew || buryReviews) && s && s->reps > 0 && s->lastReview == day) notesDone.push_back(c.noteId);
-      consider(c.cardId, c.flags, c.noteId);
-    });
-    if (!read) {
-      queue.clear();  // as before: a session that did not open has nothing to show
-      learning.clear();
-      return false;
-    }
-    std::sort(notesDone.begin(), notesDone.end());
-  } else {
-    // Cards handed over to Anki are reviewed in its deck now.
-    std::vector<uint64_t> handed;
-    loadHanded(lang, handed);
-    CsvRecordParser parser(1u << GUID, 32);
-    const bool found = scanCsv(csvPath, parser, [&](const CsvRecordParser& row) {
-      const uint64_t id = guidToId(row.field(GUID));
-      if (id != 0 && !std::binary_search(handed.begin(), handed.end(), id)) consider(id, row.recordStart());
-      return true;
-    });
-    if (!found) return false;
-  }
-  // Most overdue first; Anki's daily review limit keeps the most overdue.
-  std::stable_sort(queue.begin(), queue.end(),
-                   [this](const QueueItem& a, const QueueItem& b) { return find(a.id)->due < find(b.id)->due; });
-  const uint16_t allowed = reviewsLeft(preset ? &info : nullptr, states, day, newToday);
-  if (queue.size() > allowed) queue.resize(allowed);
-  // Then the preset's order: of the reviews kept, and of the new cards (as added, or random).
-  const uint8_t order = preset ? info.reviewOrder : ankideck::DeckInfo::REVIEW_DUE;
-  std::minstd_rand shuffle(static_cast<uint32_t>(millis()) ^ static_cast<uint32_t>(time(nullptr)));
-  if (order == ankideck::DeckInfo::REVIEW_RANDOM) {
-    std::shuffle(queue.begin(), queue.end(), shuffle);
-  } else if (order == ankideck::DeckInfo::REVIEW_INTERVAL_ASC || order == ankideck::DeckInfo::REVIEW_INTERVAL_DESC) {
-    const bool asc = order == ankideck::DeckInfo::REVIEW_INTERVAL_ASC;
-    std::stable_sort(queue.begin(), queue.end(), [this, asc](const QueueItem& a, const QueueItem& b) {
-      const int ia = find(a.id)->due - find(a.id)->lastReview;
-      const int ib = find(b.id)->due - find(b.id)->lastReview;
-      return asc ? ia < ib : ia > ib;
-    });
-  }
-  if (preset && info.newRandom) std::shuffle(fresh.begin(), fresh.end(), shuffle);
-  const uint8_t mix = preset ? info.newMix : ankideck::DeckInfo::NEW_AFTER;
-  // The queue holds MAX_QUEUE at most: the side placed last is cut first, as Anki does.
-  if (mix == ankideck::DeckInfo::NEW_BEFORE) {
-    if (fresh.size() > MAX_QUEUE) fresh.resize(MAX_QUEUE);
-    if (queue.size() + fresh.size() > MAX_QUEUE) queue.resize(MAX_QUEUE - fresh.size());
-    queue.insert(queue.begin(), fresh.begin(), fresh.end());
-  } else if (mix == ankideck::DeckInfo::NEW_MIXED && !queue.empty() && !fresh.empty()) {
-    // Spread the new cards evenly among the reviews.
-    if (queue.size() + fresh.size() > MAX_QUEUE) fresh.resize(MAX_QUEUE > queue.size() ? MAX_QUEUE - queue.size() : 0);
-    std::vector<QueueItem> merged;
-    merged.reserve(queue.size() + fresh.size());
-    const size_t every = fresh.empty() ? queue.size() : std::max<size_t>(1, queue.size() / fresh.size());
-    size_t r = 0;
-    for (const auto& item : fresh) {
-      for (size_t k = 0; k < every && r < queue.size(); k++) merged.push_back(queue[r++]);
-      merged.push_back(item);
-    }
-    while (r < queue.size()) merged.push_back(queue[r++]);
-    queue.swap(merged);
-  } else {
-    if (queue.size() + fresh.size() > MAX_QUEUE) fresh.resize(MAX_QUEUE > queue.size() ? MAX_QUEUE - queue.size() : 0);
-    queue.insert(queue.end(), fresh.begin(), fresh.end());
-  }
-  pickNext();
-  LOG_INF("FLASH", "Deck %s: %u queued, %u states", language.c_str(), static_cast<unsigned>(queue.size()),
-          static_cast<unsigned>(states.size()));
-  return true;
-}
-
-// A learning card whose step has passed comes first. When nothing else is left, the next one is
-// shown early rather than leaving the session waiting.
-void Session::pickNext() {
-  activeLearn = -1;
-  if (!leeches.empty()) {
-    learning.erase(std::remove_if(learning.begin(), learning.end(),
-                                  [this](const Learning& l) {
-                                    return std::binary_search(leeches.begin(), leeches.end(), l.item.id);
-                                  }),
-                   learning.end());
-  }
-  while (position < queue.size() &&
-         (buried(queue[position]) || std::binary_search(leeches.begin(), leeches.end(), queue[position].id))) {
-    position++;
-  }
-  if (learning.empty()) return;
-  int earliest = 0;
-  for (size_t i = 1; i < learning.size(); i++) {
-    if (static_cast<int32_t>(learning[i].dueMs - learning[earliest].dueMs) < 0) earliest = static_cast<int>(i);
-  }
-  const bool due = static_cast<int32_t>(millis() - learning[earliest].dueMs) >= 0;
-  if (due || position >= queue.size()) activeLearn = earliest;
-}
-
-// A sibling of a note reviewed today, held back until tomorrow as the preset asks.
-bool Session::buried(const QueueItem& item) const {
-  if (item.note == 0 || notesDone.empty()) return false;
-  if (!std::binary_search(notesDone.begin(), notesDone.end(), item.note)) return false;
-  const CardState* s = find(item.id);
-  if (s && s->reps > 0 && s->lastReview == day) return false;  // this very card, again
-  return s == nullptr ? buryNew : buryReviews;
-}
-
-// Easy Days: within a few percent of the interval, the weekday with the most room is chosen.
-uint16_t Session::easyDay(const uint16_t interval) const {
-  if (interval < 3 || std::all_of(std::begin(easyDays), std::end(easyDays), [](uint8_t p) { return p == 100; })) {
-    return interval;
-  }
-  const int spread = std::max(1, interval * 5 / 100);
-  uint16_t best = interval;
-  int bestRoom = -1;
-  for (int d = -spread; d <= spread; d++) {
-    const int candidate = interval + d;
-    if (candidate < 1 || candidate > params.maxInterval) continue;
-    // Day 0 is 2020-01-01, a Wednesday; easyDays starts on Monday.
-    const int room = easyDays[(day + candidate + 2) % 7];
-    if (room > bestRoom || (room == bestRoom && std::abs(d) < std::abs(best - static_cast<int>(interval)))) {
-      bestRoom = room;
-      best = static_cast<uint16_t>(candidate);
-    }
-  }
-  return best;
-}
-
-// A leech: noted for the next sync, which tags it (and suspends it, as the preset says) in Anki.
-void Session::markLeech(const QueueItem& item, const CardState& s) {
-  if (!anki) return;
-  LOG_INF("FLASH", "Leech %llu after %u lapses", static_cast<unsigned long long>(item.id), s.lapses);
-  HalFile file;
-  if (!Storage.openFileForAppend("FLASH", ankideck::leechPath(ankideck::idOf(lang)).c_str(), file)) return;
-  if (leechSuspend && leeches.size() < 512)
-    leeches.insert(std::upper_bound(leeches.begin(), leeches.end(), item.id), item.id);
-  uint8_t rec[16];
-  memcpy(rec, &item.id, 8);
-  memcpy(rec + 8, &item.note, 8);
-  if (file.write(rec, sizeof(rec)) != sizeof(rec)) LOG_ERR("FLASH", "Leech not noted");
-}
-
-int Session::nextStep(const fsrs::Rating rating, const int current, const uint8_t count) {
-  int next = -1;
-  switch (rating) {
-    case fsrs::Rating::Again:
-      next = 0;
-      break;
-    case fsrs::Rating::Hard:
-      next = current;
-      break;
-    case fsrs::Rating::Good:
-      next = current + 1;
-      break;
-    case fsrs::Rating::Easy:
-      return -1;
-  }
-  return next < static_cast<int>(count) ? next : -1;
-}
-
-uint16_t Session::stepMinutes(const uint16_t* steps, const uint8_t count, const fsrs::Rating rating, const int current,
-                              const int next) {
-  if (rating == fsrs::Rating::Hard && current == 0) {
-    if (count >= 2) return static_cast<uint16_t>((steps[0] + steps[1]) / 2);
-    return static_cast<uint16_t>(std::min<uint32_t>(steps[0] * 3u / 2u, steps[0] + 1440u));
-  }
-  return steps[next];
-}
-
-bool Session::current(CardText& out) const {
-  if (finished()) return false;
-  if (anki) {
-    const std::string deckId = ankideck::idOf(lang);
-    const QueueItem& item = active();
-    out = CardText{};
-    out.frontPath = ankideck::frontPath(deckId, item.id);
-    out.backPath = ankideck::backPath(deckId, item.id);
-    out.cssPath = ankideck::cssPath(deckId);
-    out.tooLarge = (item.offset & ankideck::TOO_LARGE) != 0;
-    if (out.tooLarge || Storage.exists(out.frontPath.c_str())) return true;
-    // The sync trusted its index for this card: the next one checks every card again.
-    if (!cardsSyncForgotten) {
-      ankideck::forgetCardsSynced(deckId);
-      cardsSyncForgotten = true;
-    }
-    return false;
-  }
-  HalFile file;
-  if (!Storage.openFileForRead("FLASH", csvPath, file) || !file.seekSet(active().offset)) return false;
-  CsvRecordParser parser(
-      (1u << WORD) | (1u << READING) | (1u << SENTENCE) | (1u << DEFINITION) | (1u << BOOK) | (1u << FURIGANA), 2048);
-  char buf[256];
-  int n;
-  bool done = false;
-  while (!done && (n = file.read(buf, sizeof(buf))) > 0) {
-    for (int i = 0; i < n && !done; i++) done = parser.feed(buf[i]);
-  }
-  if (!done) done = parser.finish();
-  if (!done) return false;
-  out.word = parser.field(WORD);
-  out.reading = parser.field(READING);
-  out.sentence = parser.field(SENTENCE);
-  out.definition = parser.field(DEFINITION);
-  out.book = parser.field(BOOK);
-  // A file that could not be upgraded still has Tags here.
-  out.furigana = upgraded ? parser.field(FURIGANA) : std::string();
-  return true;
-}
-
-bool Session::currentIsNew() const { return !finished() && find(active().id) == nullptr; }
-
-void Session::previews(Interval out[4]) const {
-  for (int i = 0; i < 4; i++) out[i] = Interval{};
-  if (finished()) return;
-  const CardState* s = find(active().id);
-  const fsrs::Memory memory = s ? fsrs::Memory{s->stability, s->difficulty} : fsrs::Memory{};
-  const float elapsed = s ? static_cast<float>(day - s->lastReview) : 0;
-  uint16_t days[4];
-  fsrs::previewIntervals(memory, s == nullptr, elapsed, params, days);
-  const bool inLearning = activeLearn >= 0;
-  const bool relearn = inLearning && learning[activeLearn].relearn;
-  const int currentStep = inLearning ? learning[activeLearn].step : 0;
-  for (int i = 0; i < 4; i++) {
-    const auto rating = static_cast<fsrs::Rating>(i + 1);
-    out[i].value = easyDay(days[i]);
-    // A review card only enters steps when it is forgotten.
-    const bool steps = s == nullptr || inLearning || rating == fsrs::Rating::Again;
-    if (!steps) continue;
-    const bool re = inLearning ? relearn : s != nullptr;
-    const uint8_t count = re ? relearnCount : learnCount;
-    const int next = nextStep(rating, currentStep, count);
-    if (next < 0) {
-      if (rating == fsrs::Rating::Again) {
-        const fsrs::Memory m = s ? fsrs::next(memory, elapsed, rating) : fsrs::initial(rating);
-        out[i].value = easyDay(fsrs::intervalDays(m.stability, params));
-      }
-      continue;
-    }
-    const uint16_t minutes = stepMinutes(re ? relearnSteps : learnSteps, count, rating, currentStep, next);
-    out[i] = minutes >= 1440 ? Interval{static_cast<uint16_t>(minutes / 1440), false} : Interval{minutes, true};
-  }
-}
-
-void Session::rate(const fsrs::Rating rating) {
-  if (finished()) return;
-  const bool fromLearning = activeLearn >= 0;
-  Learning learnt{};
-  if (fromLearning) {
-    learnt = learning[activeLearn];
-    learning.erase(learning.begin() + activeLearn);
-    activeLearn = -1;
-  } else {
-    position++;
-  }
-  const QueueItem item = fromLearning ? learnt.item : queue[position - 1];
-  CardState* s = find(item.id);
-  if (!s) {
-    // Room for this session's new cards was reserved at open: never grow the table here.
-    if (states.size() >= MAX_CARDS || states.size() >= states.capacity()) {
-      LOG_ERR("FLASH", "No room for another card's progress; not kept");
-      return;
-    }
-    CardState fresh;
-    fresh.id = item.id;
-    const auto at = std::lower_bound(states.begin(), states.end(), item.id,
-                                     [](const CardState& c, const uint64_t key) { return c.id < key; });
-    s = &*states.insert(at, fresh);
-    newToday++;
-  }
-  const bool isNew = s->reps == 0;
-  const uint16_t previous = isNew ? 0 : static_cast<uint16_t>(std::max(0, s->due - s->lastReview));
-  const fsrs::Memory before{s->stability, s->difficulty};
-  const fsrs::Memory after =
-      isNew ? fsrs::initial(rating) : fsrs::next(before, static_cast<float>(day - s->lastReview), rating);
-  s->stability = after.stability;
-  s->difficulty = after.difficulty;
-  s->lastReview = day;
-  s->reps++;
-  // New and forgotten cards go through the learning (or relearning) steps before a day interval.
-  const bool relearn = fromLearning ? learnt.relearn : (!isNew && rating == fsrs::Rating::Again);
-  const bool stepping = fromLearning || isNew || rating == fsrs::Rating::Again;
-  if (rating == fsrs::Rating::Again && !isNew && !fromLearning) {
-    if (s->lapses < 255) s->lapses++;
-    // Anki's rule: a leech at the threshold, and again every half threshold after it.
-    const uint8_t t = leechThreshold;
-    if (t > 0 && s->lapses >= t && (s->lapses - t) % std::max(1, t / 2) == 0) markLeech(item, *s);
-  }
-  if (item.note != 0 && (buryNew || buryReviews) &&
-      !std::binary_search(notesDone.begin(), notesDone.end(), item.note)) {
-    notesDone.insert(std::upper_bound(notesDone.begin(), notesDone.end(), item.note), item.note);
-  }
-  const int currentStep = fromLearning ? learnt.step : 0;
-  const uint8_t count = relearn ? relearnCount : learnCount;
-  const int next = stepping ? nextStep(rating, currentStep, count) : -1;
-  uint16_t stepMinutesLogged = 0;  // set while the card stays in a minute step
-  s->flags &= static_cast<uint8_t>(~(CardState::LEARN_STEP | CardState::LEARN_RELEARN));
-  if (next >= 0) {
-    const uint16_t minutes = stepMinutes(relearn ? relearnSteps : learnSteps, count, rating, currentStep, next);
-    if (minutes < 1440) {
-      s->flags |= static_cast<uint8_t>((next + 1) & CardState::LEARN_STEP);
-      if (relearn) s->flags |= CardState::LEARN_RELEARN;
-    }
-    if (minutes >= 1440) {
-      s->due = static_cast<uint16_t>(day + minutes / 1440);  // a step of days ends this session for the card
-    } else {
-      s->due = day;
-      stepMinutesLogged = minutes;
-      if (learning.size() < 64) {
-        learning.push_back(
-            {item, static_cast<uint32_t>(millis() + minutes * 60000UL), static_cast<uint8_t>(next), relearn});
-      } else if (queue.size() < MAX_QUEUE + 50) {
-        queue.insert(queue.begin() + static_cast<long>(std::min(queue.size(), position + 4)), item);
-      }
-    }
-  } else {
-    s->due = static_cast<uint16_t>(day + easyDay(fsrs::intervalDays(after.stability, params)));
-  }
-  // Logged for Anki only with a real clock: a review's time is its identity there.
-  const time_t now = time(nullptr);
-  if (now > 1577836800) {  // 2020-01-01
-    ReviewLogEntry e;
-    e.id = item.id;
-    e.timeMs = static_cast<int64_t>(now) * 1000 + static_cast<int64_t>(millis() % 1000);
-    e.interval = stepMinutesLogged > 0 ? stepMinutesLogged : static_cast<uint16_t>(s->due - day);
-    e.previous = previous;
-    e.rating = static_cast<uint8_t>(rating);
-    e.kind = relearn ? 2 : (stepping ? 0 : 1);
-    if (stepMinutesLogged > 0) e.kind |= ReviewLogEntry::MINUTES;
-    pendingLog.push_back(e);
-  }
-  ratingCounts[static_cast<int>(rating) - 1]++;
-  reviewedCount++;
-  // Saved every few ratings rather than each one: an SD write per card would be the slowest
-  // part of reviewing. The session saves again when it ends.
-  if (++unsaved >= 5) save();
-  pickNext();
-}
-
-bool Session::save() {
-  if (unsaved == 0) return true;
-  if (!writeStates(lang, states, day, newToday)) return false;
-  saveStepTimes();
-  // After the states: a rating logged without its new state would be sent to Anki twice over.
-  if (appendLog(lang, pendingLog)) {
-    pendingLog.clear();
-  } else {
-    LOG_ERR("FLASH", "Review log for %s not written; kept for the next save", lang.c_str());
-  }
-  unsaved = 0;
-  return true;
-}
-
-void Session::saveStepTimes() const {
-  const std::string path = stepsPath(lang);
-  const time_t now = time(nullptr);
-  if (!clockValid(now)) return;  // the saved times stay until a clock can replace them
-  if (learning.empty()) {
-    if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
-    return;
-  }
-  HalFile file;
-  if (!Storage.openFileForWrite("FLASH", path, file)) return;
-  const uint32_t ms = millis();
-  for (const auto& l : learning) {
-    // Signed difference: a step already passed is due now.
-    const int64_t due = static_cast<int64_t>(now) + std::max<int32_t>(0, static_cast<int32_t>(l.dueMs - ms)) / 1000;
-    uint8_t rec[16];
-    memcpy(rec, &l.item.id, 8);
-    memcpy(rec + 8, &due, 8);
-    if (file.write(rec, sizeof(rec)) != sizeof(rec)) {
-      LOG_ERR("FLASH", "Step times not saved");
-      return;
-    }
-  }
-}
-
-bool applyPulledReviews(const std::string& deck, const std::vector<PulledReview>& reviews) {
-  if (reviews.empty()) return true;
-  std::vector<CardState> states;
-  uint16_t day = 0, newToday = 0;
-  if (!loadStates(deck, states, day, newToday, std::min<size_t>(reviews.size(), Session::MAX_QUEUE))) return false;
-  for (const auto& r : reviews) {
-    if (r.rating < 1 || r.rating > 4 || r.timeMs <= 0) continue;
-    const int32_t reviewDay = static_cast<int32_t>(r.timeMs / 86400000) - EPOCH_2020;
-    if (reviewDay < 0) continue;
-    auto it = std::lower_bound(states.begin(), states.end(), r.id,
-                               [](const CardState& c, const uint64_t key) { return c.id < key; });
-    if (it == states.end() || it->id != r.id) {
-      if (states.size() >= Session::MAX_CARDS || states.size() >= states.capacity()) continue;
       CardState fresh;
-      fresh.id = r.id;
-      it = states.insert(it, fresh);
+      fresh.id = item.id;
+      const auto at = std::lower_bound(states.begin(), states.end(), item.id,
+                                       [](const CardState& c, const uint64_t key) { return c.id < key; });
+      s = &*states.insert(at, fresh);
+      newToday++;
     }
-    CardState& s = *it;
-    // Older than what the device already counted (rated here since): its schedule stands.
-    if (s.reps > 0 && reviewDay < s.lastReview) continue;
-    const auto rating = static_cast<fsrs::Rating>(r.rating);
+    const bool isNew = s->reps == 0;
+    const uint16_t previous = isNew ? 0 : static_cast<uint16_t>(std::max(0, s->due - s->lastReview));
+    const fsrs::Memory before{s->stability, s->difficulty};
     const fsrs::Memory after =
-        s.reps == 0 ? fsrs::initial(rating)
-                    : fsrs::next({s.stability, s.difficulty}, static_cast<float>(reviewDay - s.lastReview), rating);
-    s.stability = after.stability;
-    s.difficulty = after.difficulty;
-    s.lastReview = static_cast<uint16_t>(reviewDay);
-    s.due = static_cast<uint16_t>(reviewDay + r.interval);
-    s.flags &= static_cast<uint8_t>(~(CardState::LEARN_STEP | CardState::LEARN_RELEARN));
-    if (rating == fsrs::Rating::Again && s.reps > 0) s.lapses++;
-    s.reps++;
-  }
-  return writeStates(deck, states, day, newToday);
-}
-
-bool readStates(const std::string& deck, const std::vector<uint64_t>& ids, std::vector<CardState>& out,
-                uint16_t& today) {
-  out.clear();
-  std::vector<CardState> states;
-  uint16_t day = 0, newToday = 0;
-  if (!loadStates(deck, states, day, newToday)) return false;
-  today = todayOr(day);
-  out.reserve(ids.size());
-  for (const uint64_t id : ids) {
-    if (const CardState* s = findIn(states, id)) out.push_back(*s);
-  }
-  return true;
-}
-
-bool readReviewLog(const std::string& deck, std::vector<ReviewLogEntry>& out) {
-  out.clear();
-  const std::string path = logPath(deck);
-  if (!Storage.exists(path.c_str())) return true;
-  HalFile file;
-  if (!Storage.openFileForRead("FLASH", path, file)) return false;
-  // As many as the heap holds, down to a few: the caller sends them and asks again for the rest.
-  constexpr size_t HEADROOM = 8 * 1024;
-  constexpr size_t MIN_ENTRIES = 8;
-  const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  const size_t fits = largest > HEADROOM ? (largest - HEADROOM) / sizeof(ReviewLogEntry) : 0;
-  const size_t count = std::min({file.fileSize() / LOG_BYTES, MAX_LOG_ENTRIES, fits});
-  if (count < std::min<size_t>(MIN_ENTRIES, file.fileSize() / LOG_BYTES)) {
-    LOG_ERR("FLASH", "OOM: %u bytes free for %s", static_cast<unsigned>(largest), path.c_str());
-    return false;
-  }
-  out.reserve(count);
-  uint8_t rec[LOG_BYTES];
-  for (size_t i = 0; i < count; i++) {
-    if (file.read(rec, sizeof(rec)) != static_cast<int>(sizeof(rec))) return false;
-    const uint8_t* p = rec;
-    ReviewLogEntry e;
-    e.id = take<uint64_t>(p);
-    e.timeMs = take<int64_t>(p);
-    e.interval = take<uint16_t>(p);
-    e.previous = take<uint16_t>(p);
-    e.rating = take<uint8_t>(p);
-    e.kind = take<uint8_t>(p);
-    out.push_back(e);
-  }
-  return true;
-}
-
-bool rewriteReviewLog(const std::string& deck, const std::vector<ReviewLogEntry>& oldest) {
-  const std::string path = logPath(deck);
-  const std::string tmp = path + ".tmp";
-  {
-    HalFile in, out;
-    if (!Storage.openFileForRead("FLASH", path, in) || !Storage.openFileForWrite("FLASH", tmp, out)) return false;
-    uint8_t rec[LOG_BYTES];
-    for (size_t i = 0; in.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec)); i++) {
-      if (i < oldest.size()) {
-        const uint8_t* p = rec;
-        if (take<uint64_t>(p) != oldest[i].id) return false;  // not the entries that were read
-        encodeLogEntry(rec, oldest[i]);
+        isNew ? fsrs::initial(rating) : fsrs::next(before, static_cast<float>(day - s->lastReview), rating);
+    s->stability = after.stability;
+    s->difficulty = after.difficulty;
+    s->lastReview = day;
+    s->reps++;
+    // New and forgotten cards go through the learning (or relearning) steps before a day interval.
+    const bool relearn = fromLearning ? learnt.relearn : (!isNew && rating == fsrs::Rating::Again);
+    const bool stepping = fromLearning || isNew || rating == fsrs::Rating::Again;
+    if (rating == fsrs::Rating::Again && !isNew && !fromLearning) {
+      if (s->lapses < 255) s->lapses++;
+      // Anki's rule: a leech at the threshold, and again every half threshold after it.
+      const uint8_t t = leechThreshold;
+      if (t > 0 && s->lapses >= t && (s->lapses - t) % std::max(1, t / 2) == 0) markLeech(item, *s);
+    }
+    if (item.note != 0 && (buryNew || buryReviews) &&
+        !std::binary_search(notesDone.begin(), notesDone.end(), item.note)) {
+      notesDone.insert(std::upper_bound(notesDone.begin(), notesDone.end(), item.note), item.note);
+    }
+    const int currentStep = fromLearning ? learnt.step : 0;
+    const uint8_t count = relearn ? relearnCount : learnCount;
+    const int next = stepping ? nextStep(rating, currentStep, count) : -1;
+    uint16_t stepMinutesLogged = 0;  // set while the card stays in a minute step
+    s->flags &= static_cast<uint8_t>(~(CardState::LEARN_STEP | CardState::LEARN_RELEARN));
+    if (next >= 0) {
+      const uint16_t minutes = stepMinutes(relearn ? relearnSteps : learnSteps, count, rating, currentStep, next);
+      if (minutes < 1440) {
+        s->flags |= static_cast<uint8_t>((next + 1) & CardState::LEARN_STEP);
+        if (relearn) s->flags |= CardState::LEARN_RELEARN;
       }
-      if (out.write(rec, sizeof(rec)) != sizeof(rec)) return false;
+      if (minutes >= 1440) {
+        s->due = static_cast<uint16_t>(day + minutes / 1440);  // a step of days ends this session for the card
+      } else {
+        s->due = day;
+        stepMinutesLogged = minutes;
+        if (learning.size() < 64) {
+          learning.push_back(
+              {item, static_cast<uint32_t>(millis() + minutes * 60000UL), static_cast<uint8_t>(next), relearn});
+        } else if (queue.size() < MAX_QUEUE + 50) {
+          queue.insert(queue.begin() + static_cast<long>(std::min(queue.size(), position + 4)), item);
+        }
+      }
+    } else {
+      s->due = static_cast<uint16_t>(day + easyDay(fsrs::intervalDays(after.stability, params)));
     }
-    // A read error ends the loop early too: the copy would lose the rest of the log.
-    if (in.position() != in.fileSize()) return false;
+    // Logged for Anki only with a real clock: a review's time is its identity there.
+    const time_t now = time(nullptr);
+    if (now > 1577836800) {  // 2020-01-01
+      ReviewLogEntry e;
+      e.id = item.id;
+      e.timeMs = static_cast<int64_t>(now) * 1000 + static_cast<int64_t>(millis() % 1000);
+      e.interval = stepMinutesLogged > 0 ? stepMinutesLogged : static_cast<uint16_t>(s->due - day);
+      e.previous = previous;
+      e.rating = static_cast<uint8_t>(rating);
+      e.kind = relearn ? 2 : (stepping ? 0 : 1);
+      if (stepMinutesLogged > 0) e.kind |= ReviewLogEntry::MINUTES;
+      pendingLog.push_back(e);
+    }
+    ratingCounts[static_cast<int>(rating) - 1]++;
+    reviewedCount++;
+    // Saved every few ratings rather than each one: an SD write per card would be the slowest
+    // part of reviewing. The session saves again when it ends.
+    if (++unsaved >= 5) save();
+    pickNext();
   }
-  return Storage.replaceFile(tmp.c_str(), path.c_str());
-}
 
-bool dropReviewLog(const std::string& deck, const size_t count) {
-  const std::string path = logPath(deck);
-  if (!Storage.exists(path.c_str())) return true;
-  const std::string tmp = path + ".tmp";
-  {
-    HalFile in;
-    if (!Storage.openFileForRead("FLASH", path, in)) return false;
-    const uint64_t skip = static_cast<uint64_t>(count) * LOG_BYTES;
-    if (in.fileSize64() <= skip) {
-      in.close();
-      return Storage.remove(path.c_str());
+  bool Session::save() {
+    if (unsaved == 0) return true;
+    if (!writeStates(lang, states, day, newToday)) return false;
+    saveStepTimes();
+    // After the states: a rating logged without its new state would be sent to Anki twice over.
+    if (appendLog(lang, pendingLog)) {
+      pendingLog.clear();
+    } else {
+      LOG_ERR("FLASH", "Review log for %s not written; kept for the next save", lang.c_str());
     }
-    HalFile out;
-    if (!in.seek64(skip) || !Storage.openFileForWrite("FLASH", tmp, out)) return false;
-    uint8_t rec[LOG_BYTES];
-    while (in.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec))) {
-      if (out.write(rec, sizeof(rec)) != sizeof(rec)) return false;
-    }
-    if (in.position() != in.fileSize()) return false;  // a read error, not the end of the log
+    unsaved = 0;
+    return true;
   }
-  return Storage.replaceFile(tmp.c_str(), path.c_str());
-}
 
-const char* autonym(const std::string& code) {
-  // Korean and Cantonese are left out: the UI font has no Hangul and no 粵.
-  struct Autonym {
-    const char* code;
-    const char* name;
-  };
-  static constexpr Autonym AUTONYMS[] = {
-      {"ja", "日本語"},  {"zh", "中文"},     {"en", "English"},    {"de", "Deutsch"},    {"fr", "Français"},
-      {"es", "Español"}, {"it", "Italiano"}, {"pt", "Português"},  {"nl", "Nederlands"}, {"hu", "Magyar"},
-      {"pl", "Polski"},  {"ru", "Русский"},  {"uk", "Українська"},
-  };
-  const auto* const found =
-      std::find_if(std::begin(AUTONYMS), std::end(AUTONYMS), [&code](const Autonym& a) { return code == a.code; });
-  return found == std::end(AUTONYMS) ? nullptr : found->name;
-}
-
-void miningLanguages(std::vector<std::string>& out) { deckLanguages(out); }
-
-size_t newMinedRows(const std::string& language, const std::vector<uint64_t>& skip, const size_t max,
-                    std::vector<MinedRow>& out) {
-  out.clear();
-  out.reserve(max);
-  std::vector<uint64_t> handed;
-  if (!loadHanded(language, handed)) return 0;
-  const std::string path = deckPath(language);
-  sentencemining::upgradeExport(path);
-  CsvRecordParser parser(static_cast<uint16_t>((1u << COLUMNS) - 1));
-  scanCsv(path, parser, [&](const CsvRecordParser& row) {
-    const uint64_t id = guidToId(row.field(GUID));
-    if (id == 0 || std::binary_search(handed.begin(), handed.end(), id) ||
-        std::find(skip.begin(), skip.end(), id) != skip.end()) {
-      return true;
+  void Session::saveStepTimes() const {
+    const std::string path = stepsPath(lang);
+    const time_t now = time(nullptr);
+    if (!clockValid(now)) return;  // the saved times stay until a clock can replace them
+    if (learning.empty()) {
+      if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
+      return;
     }
-    out.emplace_back();  // filled in place: a MinedRow on the stack would pass 256 bytes
-    out.back().id = id;
-    for (uint8_t c = WORD; c < COLUMNS; c++) out.back().fields[c] = row.field(static_cast<Column>(c));
-    return out.size() < max;
-  });
-  return out.size();
-}
-
-// The Anki deck a language's mined words go to: its id, as text (flashcards-<lang>.deck).
-std::string minedDeckId(const std::string& language) {
-  const std::string path = sdsystem::path(("flashcards-" + language + ".deck").c_str());
-  if (!Storage.exists(path.c_str())) return {};
-  HalFile file;
-  if (!Storage.openFileForRead("FLASH", path, file)) return {};
-  char id[24] = {};
-  const int n = file.read(reinterpret_cast<uint8_t*>(id), sizeof(id) - 1);
-  return n > 0 ? std::string(id, static_cast<size_t>(n)) : std::string();
-}
-
-bool setMinedDeckId(const std::string& language, const std::string& deckId) {
-  if (minedDeckId(language) == deckId) return true;
-  const std::string path = sdsystem::path(("flashcards-" + language + ".deck").c_str());
-  const std::string tmp = path + ".tmp";
-  {
     HalFile file;
-    if (!Storage.openFileForWrite("FLASH", tmp, file) ||
-        file.write(reinterpret_cast<const uint8_t*>(deckId.data()), deckId.size()) != deckId.size()) {
+    if (!Storage.openFileForWrite("FLASH", path, file)) return;
+    const uint32_t ms = millis();
+    for (const auto& l : learning) {
+      // Signed difference: a step already passed is due now.
+      const int64_t due = static_cast<int64_t>(now) + std::max<int32_t>(0, static_cast<int32_t>(l.dueMs - ms)) / 1000;
+      uint8_t rec[16];
+      memcpy(rec, &l.item.id, 8);
+      memcpy(rec + 8, &due, 8);
+      if (file.write(rec, sizeof(rec)) != sizeof(rec)) {
+        LOG_ERR("FLASH", "Step times not saved");
+        return;
+      }
+    }
+  }
+
+  bool applyPulledReviews(const std::string& deck, const std::vector<PulledReview>& reviews) {
+    if (reviews.empty()) return true;
+    std::vector<CardState> states;
+    uint16_t day = 0, newToday = 0;
+    if (!loadStates(deck, states, day, newToday, std::min<size_t>(reviews.size(), Session::MAX_QUEUE))) return false;
+    for (const auto& r : reviews) {
+      if (r.rating < 1 || r.rating > 4 || r.timeMs <= 0) continue;
+      const int32_t reviewDay = static_cast<int32_t>(r.timeMs / 86400000) - EPOCH_2020;
+      if (reviewDay < 0) continue;
+      auto it = std::lower_bound(states.begin(), states.end(), r.id,
+                                 [](const CardState& c, const uint64_t key) { return c.id < key; });
+      if (it == states.end() || it->id != r.id) {
+        if (states.size() >= Session::MAX_CARDS || states.size() >= states.capacity()) continue;
+        CardState fresh;
+        fresh.id = r.id;
+        it = states.insert(it, fresh);
+      }
+      CardState& s = *it;
+      // Older than what the device already counted (rated here since): its schedule stands.
+      if (s.reps > 0 && reviewDay < s.lastReview) continue;
+      const auto rating = static_cast<fsrs::Rating>(r.rating);
+      const fsrs::Memory after =
+          s.reps == 0 ? fsrs::initial(rating)
+                      : fsrs::next({s.stability, s.difficulty}, static_cast<float>(reviewDay - s.lastReview), rating);
+      s.stability = after.stability;
+      s.difficulty = after.difficulty;
+      s.lastReview = static_cast<uint16_t>(reviewDay);
+      s.due = static_cast<uint16_t>(reviewDay + r.interval);
+      s.flags &= static_cast<uint8_t>(~(CardState::LEARN_STEP | CardState::LEARN_RELEARN));
+      if (rating == fsrs::Rating::Again && s.reps > 0) s.lapses++;
+      s.reps++;
+    }
+    return writeStates(deck, states, day, newToday);
+  }
+
+  bool readStates(const std::string& deck, const std::vector<uint64_t>& ids, std::vector<CardState>& out,
+                  uint16_t& today) {
+    out.clear();
+    std::vector<CardState> states;
+    uint16_t day = 0, newToday = 0;
+    if (!loadStates(deck, states, day, newToday)) return false;
+    today = todayOr(day);
+    out.reserve(ids.size());
+    for (const uint64_t id : ids) {
+      if (const CardState* s = findIn(states, id)) out.push_back(*s);
+    }
+    return true;
+  }
+
+  bool readReviewLog(const std::string& deck, std::vector<ReviewLogEntry>& out) {
+    out.clear();
+    const std::string path = logPath(deck);
+    if (!Storage.exists(path.c_str())) return true;
+    HalFile file;
+    if (!Storage.openFileForRead("FLASH", path, file)) return false;
+    // As many as the heap holds, down to a few: the caller sends them and asks again for the rest.
+    constexpr size_t HEADROOM = 8 * 1024;
+    constexpr size_t MIN_ENTRIES = 8;
+    const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    const size_t fits = largest > HEADROOM ? (largest - HEADROOM) / sizeof(ReviewLogEntry) : 0;
+    const size_t count = std::min({file.fileSize() / LOG_BYTES, MAX_LOG_ENTRIES, fits});
+    if (count < std::min<size_t>(MIN_ENTRIES, file.fileSize() / LOG_BYTES)) {
+      LOG_ERR("FLASH", "OOM: %u bytes free for %s", static_cast<unsigned>(largest), path.c_str());
       return false;
     }
-  }
-  return Storage.replaceFile(tmp.c_str(), path.c_str());
-}
-
-bool handOver(const std::string& language, const std::string& ankiKey, const std::vector<HandedCard>& cards) {
-  if (cards.empty()) return true;
-  // 1. Each card's progress, under its Anki card id in the Anki deck's state table.
-  std::vector<CardState> from, to;
-  uint16_t fromDay = 0, fromNew = 0, toDay = 0, toNew = 0;
-  if (!loadStates(language, from, fromDay, fromNew) || !loadStates(ankiKey, to, toDay, toNew, cards.size())) {
-    return false;
-  }
-  std::vector<uint64_t> withProgress;  // Anki card ids whose schedule must reach Anki
-  withProgress.reserve(cards.size());
-  for (const auto& c : cards) {
-    const CardState* s = c.adopted ? nullptr : findIn(from, c.csvId);
-    if (!s) continue;  // never reviewed (a new card in Anki too), or Anki's schedule is kept
-    withProgress.push_back(c.cardId);
-    CardState moved = *s;
-    moved.id = c.cardId;
-    const auto it = std::lower_bound(to.begin(), to.end(), c.cardId,
-                                     [](const CardState& a, const uint64_t key) { return a.id < key; });
-    if (it != to.end() && it->id == c.cardId) {
-      *it = moved;
-    } else {
-      to.insert(it, moved);
-    }
-  }
-  if (!writeStates(ankiKey, to, todayOr(toDay), toNew)) return false;
-  std::vector<CardState>().swap(from);
-  std::vector<CardState>().swap(to);
-
-  // 2. Their review history, into the Anki deck's log: the deck's sync sends it to Anki. A
-  // repeat after an interruption sends a review twice, which Anki refuses as a conflict.
-  const std::string fromLog = logPath(language);
-  if (Storage.exists(fromLog.c_str())) {
-    HalFile file;
-    if (!Storage.openFileForRead("FLASH", fromLog, file)) return false;
-    std::vector<ReviewLogEntry> batch;
-    batch.reserve(32);
+    out.reserve(count);
     uint8_t rec[LOG_BYTES];
-    while (file.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec))) {
+    for (size_t i = 0; i < count; i++) {
+      if (file.read(rec, sizeof(rec)) != static_cast<int>(sizeof(rec))) return false;
       const uint8_t* p = rec;
       ReviewLogEntry e;
       e.id = take<uint64_t>(p);
@@ -1324,107 +1177,268 @@ bool handOver(const std::string& language, const std::string& ankiKey, const std
       e.previous = take<uint16_t>(p);
       e.rating = take<uint8_t>(p);
       e.kind = take<uint8_t>(p);
-      const auto c = std::find_if(cards.begin(), cards.end(), [&e](const HandedCard& h) { return h.csvId == e.id; });
-      if (c == cards.end()) continue;
-      e.id = c->cardId;
-      batch.push_back(e);
-      if (batch.size() == 32) {
-        if (!appendLog(ankiKey, batch)) return false;
-        batch.clear();
+      out.push_back(e);
+    }
+    return true;
+  }
+
+  bool rewriteReviewLog(const std::string& deck, const std::vector<ReviewLogEntry>& oldest) {
+    const std::string path = logPath(deck);
+    const std::string tmp = path + ".tmp";
+    {
+      HalFile in, out;
+      if (!Storage.openFileForRead("FLASH", path, in) || !Storage.openFileForWrite("FLASH", tmp, out)) return false;
+      uint8_t rec[LOG_BYTES];
+      for (size_t i = 0; in.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec)); i++) {
+        if (i < oldest.size()) {
+          const uint8_t* p = rec;
+          if (take<uint64_t>(p) != oldest[i].id) return false;  // not the entries that were read
+          encodeLogEntry(rec, oldest[i]);
+        }
+        if (out.write(rec, sizeof(rec)) != sizeof(rec)) return false;
       }
+      // A read error ends the loop early too: the copy would lose the rest of the log.
+      if (in.position() != in.fileSize()) return false;
     }
-    if (!appendLog(ankiKey, batch)) return false;
-  }
-  // A card reviewed before ratings were logged has progress but no history: its schedule still
-  // goes to Anki, through an entry without a rating.
-  {
-    std::vector<ReviewLogEntry> scheduleOnly;
-    scheduleOnly.reserve(withProgress.size());
-    for (const uint64_t id : withProgress) {
-      ReviewLogEntry e;
-      e.id = id;
-      e.timeMs = static_cast<int64_t>(time(nullptr)) * 1000;
-      scheduleOnly.push_back(e);
-    }
-    if (!appendLog(ankiKey, scheduleOnly)) return false;
+    return Storage.replaceFile(tmp.c_str(), path.c_str());
   }
 
-  // 3. Last: from now on the local deck leaves these cards out.
-  std::vector<uint64_t> handed;
-  if (!loadHanded(language, handed)) return false;
-  handed.reserve(handed.size() + cards.size());
-  std::transform(cards.begin(), cards.end(), std::back_inserter(handed), [](const HandedCard& c) { return c.csvId; });
-  std::sort(handed.begin(), handed.end());
-  handed.erase(std::unique(handed.begin(), handed.end()), handed.end());
-  const std::string path = handedPath(language);
-  const std::string tmp = path + ".tmp";
-  {
-    HalFile file;
-    if (!Storage.openFileForWrite("FLASH", tmp, file)) return false;
-    const size_t bytes = handed.size() * sizeof(uint64_t);
-    if (file.write(reinterpret_cast<const uint8_t*>(handed.data()), bytes) != bytes) return false;
-  }
-  return Storage.replaceFile(tmp.c_str(), path.c_str());
-}
-
-bool onVacation() { return SETTINGS.flashcardVacation != 0; }
-
-void syncVacation() {
-  const std::string path = vacationPath();
-  const bool recorded = Storage.exists(path.c_str());
-  const int32_t now = today();
-  if (onVacation()) {
-    if (recorded) return;
-    // The start day, so the end can move every due date forward by the days away.
-    HalFile file;
-    if (now < 0 || !Storage.openFileForWrite("FLASH", path, file)) {
-      LOG_ERR("FLASH", "Vacation start not recorded yet (clock %ld)", static_cast<long>(now));
-      return;
+  bool dropReviewLog(const std::string& deck, const size_t count) {
+    const std::string path = logPath(deck);
+    if (!Storage.exists(path.c_str())) return true;
+    const std::string tmp = path + ".tmp";
+    {
+      HalFile in;
+      if (!Storage.openFileForRead("FLASH", path, in)) return false;
+      const uint64_t skip = static_cast<uint64_t>(count) * LOG_BYTES;
+      if (in.fileSize64() <= skip) {
+        in.close();
+        return Storage.remove(path.c_str());
+      }
+      HalFile out;
+      if (!in.seek64(skip) || !Storage.openFileForWrite("FLASH", tmp, out)) return false;
+      uint8_t rec[LOG_BYTES];
+      while (in.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec))) {
+        if (out.write(rec, sizeof(rec)) != sizeof(rec)) return false;
+      }
+      if (in.position() != in.fileSize()) return false;  // a read error, not the end of the log
     }
-    const uint16_t start = static_cast<uint16_t>(now);
-    if (file.write(reinterpret_cast<const uint8_t*>(&start), sizeof(start)) != sizeof(start)) {
-      file.close();
-      Storage.remove(path.c_str());  // an empty record would end the vacation with no shift
-      LOG_ERR("FLASH", "Vacation start not recorded");
-    }
-    return;
+    return Storage.replaceFile(tmp.c_str(), path.c_str());
   }
-  if (!recorded) return;
-  uint16_t start = 0;
-  {
-    HalFile file;
-    if (!Storage.openFileForRead("FLASH", path, file)) return;
-    if (file.read(reinterpret_cast<uint8_t*>(&start), sizeof(start)) != static_cast<int>(sizeof(start))) start = 0;
+
+  const char* autonym(const std::string& code) {
+    // Korean and Cantonese are left out: the UI font has no Hangul and no 粵.
+    struct Autonym {
+      const char* code;
+      const char* name;
+    };
+    static constexpr Autonym AUTONYMS[] = {
+        {"ja", "日本語"},  {"zh", "中文"},     {"en", "English"},    {"de", "Deutsch"},    {"fr", "Français"},
+        {"es", "Español"}, {"it", "Italiano"}, {"pt", "Português"},  {"nl", "Nederlands"}, {"hu", "Magyar"},
+        {"pl", "Polski"},  {"ru", "Русский"},  {"uk", "Українська"},
+    };
+    const auto* const found =
+        std::find_if(std::begin(AUTONYMS), std::end(AUTONYMS), [&code](const Autonym& a) { return code == a.code; });
+    return found == std::end(AUTONYMS) ? nullptr : found->name;
   }
-  // Without a clock the length of the trip is unknown: keep the record and try again later.
-  if (now < 0) return;
-  const int shift = now - static_cast<int>(start);
-  if (start != 0 && shift > 0) {
-    std::vector<std::string> languages;
-    deckLanguages(languages);
-    std::vector<CardState> states;
-    uint16_t day = 0, newToday = 0;
-    // Every deck must load before any is written: a deck skipped now would never be shifted,
-    // and a retry after a partial shift would move the others twice.
-    const auto unreadable = std::find_if(languages.begin(), languages.end(), [&](const std::string& language) {
-      return !loadStates(language, states, day, newToday);
+
+  void miningLanguages(std::vector<std::string> & out) { deckLanguages(out); }
+
+  size_t newMinedRows(const std::string& language, const std::vector<uint64_t>& skip, const size_t max,
+                      std::vector<MinedRow>& out) {
+    out.clear();
+    out.reserve(max);
+    std::vector<uint64_t> handed;
+    if (!loadHanded(language, handed)) return 0;
+    const std::string path = deckPath(language);
+    sentencemining::upgradeExport(path);
+    CsvRecordParser parser(static_cast<uint16_t>((1u << COLUMNS) - 1));
+    scanCsv(path, parser, [&](const CsvRecordParser& row) {
+      const uint64_t id = guidToId(row.field(GUID));
+      if (id == 0 || std::binary_search(handed.begin(), handed.end(), id) ||
+          std::find(skip.begin(), skip.end(), id) != skip.end()) {
+        return true;
+      }
+      out.emplace_back();  // filled in place: a MinedRow on the stack would pass 256 bytes
+      out.back().id = id;
+      for (uint8_t c = WORD; c < COLUMNS; c++) out.back().fields[c] = row.field(static_cast<Column>(c));
+      return out.size() < max;
     });
-    if (unreadable != languages.end()) {
-      LOG_ERR("FLASH", "Vacation end postponed: %s progress could not be read", unreadable->c_str());
+    return out.size();
+  }
+
+  // The Anki deck a language's mined words go to: its id, as text (flashcards-<lang>.deck).
+  std::string minedDeckId(const std::string& language) {
+    const std::string path = sdsystem::path(("flashcards-" + language + ".deck").c_str());
+    if (!Storage.exists(path.c_str())) return {};
+    HalFile file;
+    if (!Storage.openFileForRead("FLASH", path, file)) return {};
+    char id[24] = {};
+    const int n = file.read(reinterpret_cast<uint8_t*>(id), sizeof(id) - 1);
+    return n > 0 ? std::string(id, static_cast<size_t>(n)) : std::string();
+  }
+
+  bool setMinedDeckId(const std::string& language, const std::string& deckId) {
+    if (minedDeckId(language) == deckId) return true;
+    const std::string path = sdsystem::path(("flashcards-" + language + ".deck").c_str());
+    const std::string tmp = path + ".tmp";
+    {
+      HalFile file;
+      if (!Storage.openFileForWrite("FLASH", tmp, file) ||
+          file.write(reinterpret_cast<const uint8_t*>(deckId.data()), deckId.size()) != deckId.size()) {
+        return false;
+      }
+    }
+    return Storage.replaceFile(tmp.c_str(), path.c_str());
+  }
+
+  bool handOver(const std::string& language, const std::string& ankiKey, const std::vector<HandedCard>& cards) {
+    if (cards.empty()) return true;
+    // 1. Each card's progress, under its Anki card id in the Anki deck's state table.
+    std::vector<CardState> from, to;
+    uint16_t fromDay = 0, fromNew = 0, toDay = 0, toNew = 0;
+    if (!loadStates(language, from, fromDay, fromNew) || !loadStates(ankiKey, to, toDay, toNew, cards.size())) {
+      return false;
+    }
+    std::vector<uint64_t> withProgress;  // Anki card ids whose schedule must reach Anki
+    withProgress.reserve(cards.size());
+    for (const auto& c : cards) {
+      const CardState* s = c.adopted ? nullptr : findIn(from, c.csvId);
+      if (!s) continue;  // never reviewed (a new card in Anki too), or Anki's schedule is kept
+      withProgress.push_back(c.cardId);
+      CardState moved = *s;
+      moved.id = c.cardId;
+      const auto it = std::lower_bound(to.begin(), to.end(), c.cardId,
+                                       [](const CardState& a, const uint64_t key) { return a.id < key; });
+      if (it != to.end() && it->id == c.cardId) {
+        *it = moved;
+      } else {
+        to.insert(it, moved);
+      }
+    }
+    if (!writeStates(ankiKey, to, todayOr(toDay), toNew)) return false;
+    std::vector<CardState>().swap(from);
+    std::vector<CardState>().swap(to);
+
+    // 2. Their review history, into the Anki deck's log: the deck's sync sends it to Anki. A
+    // repeat after an interruption sends a review twice, which Anki refuses as a conflict.
+    const std::string fromLog = logPath(language);
+    if (Storage.exists(fromLog.c_str())) {
+      HalFile file;
+      if (!Storage.openFileForRead("FLASH", fromLog, file)) return false;
+      std::vector<ReviewLogEntry> batch;
+      batch.reserve(32);
+      uint8_t rec[LOG_BYTES];
+      while (file.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec))) {
+        const uint8_t* p = rec;
+        ReviewLogEntry e;
+        e.id = take<uint64_t>(p);
+        e.timeMs = take<int64_t>(p);
+        e.interval = take<uint16_t>(p);
+        e.previous = take<uint16_t>(p);
+        e.rating = take<uint8_t>(p);
+        e.kind = take<uint8_t>(p);
+        const auto c = std::find_if(cards.begin(), cards.end(), [&e](const HandedCard& h) { return h.csvId == e.id; });
+        if (c == cards.end()) continue;
+        e.id = c->cardId;
+        batch.push_back(e);
+        if (batch.size() == 32) {
+          if (!appendLog(ankiKey, batch)) return false;
+          batch.clear();
+        }
+      }
+      if (!appendLog(ankiKey, batch)) return false;
+    }
+    // A card reviewed before ratings were logged has progress but no history: its schedule still
+    // goes to Anki, through an entry without a rating.
+    {
+      std::vector<ReviewLogEntry> scheduleOnly;
+      scheduleOnly.reserve(withProgress.size());
+      for (const uint64_t id : withProgress) {
+        ReviewLogEntry e;
+        e.id = id;
+        e.timeMs = static_cast<int64_t>(time(nullptr)) * 1000;
+        scheduleOnly.push_back(e);
+      }
+      if (!appendLog(ankiKey, scheduleOnly)) return false;
+    }
+
+    // 3. Last: from now on the local deck leaves these cards out.
+    std::vector<uint64_t> handed;
+    if (!loadHanded(language, handed)) return false;
+    handed.reserve(handed.size() + cards.size());
+    std::transform(cards.begin(), cards.end(), std::back_inserter(handed), [](const HandedCard& c) { return c.csvId; });
+    std::sort(handed.begin(), handed.end());
+    handed.erase(std::unique(handed.begin(), handed.end()), handed.end());
+    const std::string path = handedPath(language);
+    const std::string tmp = path + ".tmp";
+    {
+      HalFile file;
+      if (!Storage.openFileForWrite("FLASH", tmp, file)) return false;
+      const size_t bytes = handed.size() * sizeof(uint64_t);
+      if (file.write(reinterpret_cast<const uint8_t*>(handed.data()), bytes) != bytes) return false;
+    }
+    return Storage.replaceFile(tmp.c_str(), path.c_str());
+  }
+
+  bool onVacation() { return SETTINGS.flashcardVacation != 0; }
+
+  void syncVacation() {
+    const std::string path = vacationPath();
+    const bool recorded = Storage.exists(path.c_str());
+    const int32_t now = today();
+    if (onVacation()) {
+      if (recorded) return;
+      // The start day, so the end can move every due date forward by the days away.
+      HalFile file;
+      if (now < 0 || !Storage.openFileForWrite("FLASH", path, file)) {
+        LOG_ERR("FLASH", "Vacation start not recorded yet (clock %ld)", static_cast<long>(now));
+        return;
+      }
+      const uint16_t start = static_cast<uint16_t>(now);
+      if (file.write(reinterpret_cast<const uint8_t*>(&start), sizeof(start)) != sizeof(start)) {
+        file.close();
+        Storage.remove(path.c_str());  // an empty record would end the vacation with no shift
+        LOG_ERR("FLASH", "Vacation start not recorded");
+      }
       return;
     }
-    for (const auto& language : languages) {
-      if (!loadStates(language, states, day, newToday) || states.empty()) continue;
-      for (auto& s : states) {
-        s.due = static_cast<uint16_t>(std::min<int>(s.due + shift, UINT16_MAX));
-        s.lastReview = static_cast<uint16_t>(std::min<int>(s.lastReview + shift, UINT16_MAX));
-      }
-      if (!writeStates(language, states, day, newToday))
-        LOG_ERR("FLASH", "Vacation shift lost for %s", language.c_str());
+    if (!recorded) return;
+    uint16_t start = 0;
+    {
+      HalFile file;
+      if (!Storage.openFileForRead("FLASH", path, file)) return;
+      if (file.read(reinterpret_cast<uint8_t*>(&start), sizeof(start)) != static_cast<int>(sizeof(start))) start = 0;
     }
-    LOG_INF("FLASH", "Vacation over: %d days added to every due date", shift);
+    // Without a clock the length of the trip is unknown: keep the record and try again later.
+    if (now < 0) return;
+    const int shift = now - static_cast<int>(start);
+    if (start != 0 && shift > 0) {
+      std::vector<std::string> languages;
+      deckLanguages(languages);
+      std::vector<CardState> states;
+      uint16_t day = 0, newToday = 0;
+      // Every deck must load before any is written: a deck skipped now would never be shifted,
+      // and a retry after a partial shift would move the others twice.
+      const auto unreadable = std::find_if(languages.begin(), languages.end(), [&](const std::string& language) {
+        return !loadStates(language, states, day, newToday);
+      });
+      if (unreadable != languages.end()) {
+        LOG_ERR("FLASH", "Vacation end postponed: %s progress could not be read", unreadable->c_str());
+        return;
+      }
+      for (const auto& language : languages) {
+        if (!loadStates(language, states, day, newToday) || states.empty()) continue;
+        for (auto& s : states) {
+          s.due = static_cast<uint16_t>(std::min<int>(s.due + shift, UINT16_MAX));
+          s.lastReview = static_cast<uint16_t>(std::min<int>(s.lastReview + shift, UINT16_MAX));
+        }
+        if (!writeStates(language, states, day, newToday))
+          LOG_ERR("FLASH", "Vacation shift lost for %s", language.c_str());
+      }
+      LOG_INF("FLASH", "Vacation over: %d days added to every due date", shift);
+    }
+    Storage.remove(path.c_str());
   }
-  Storage.remove(path.c_str());
-}
 
 }  // namespace flashcards

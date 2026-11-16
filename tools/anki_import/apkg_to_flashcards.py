@@ -9,8 +9,9 @@ reader, and writes the same files the sync writes:
     <out>/<deck id>/style.css, <card id>q.xhtml, <card id>a.xhtml, images
 
 Copy them into the SD card's system folder, under `.system/anki/` (or pass --sd with the card's
-mount point and they are written there). Files in the older layout, deck.json and cards.bin inside
-the deck folder, are moved out by the reader the first time it opens the deck. Review progress then lives on the reader only.
+mount point and they are written there). Over a deck in the older layout, with deck.json and
+cards.bin inside its folder, the script removes those two and moves the folder's buried.bin and
+leeches.bin beside it, as the reader would. Review progress then lives on the reader only.
 
 Requires the Anki library and lxml:  pip install anki lxml pillow
 
@@ -133,6 +134,15 @@ def copy_image(media_dir: str, name: str, out_dir: str) -> None:
 def export_deck(col: Collection, deck_id: int, deck_name: str, out_root: str) -> int:
     out_dir = os.path.join(out_root, str(deck_id))
     os.makedirs(out_dir, exist_ok=True)
+    # The older layout kept the deck's small files inside its folder; the reader looks beside it.
+    for name in ("buried.bin", "leeches.bin"):
+        old, new = os.path.join(out_dir, name), os.path.join(out_root, f"{deck_id}.{name}")
+        if os.path.exists(old) and not os.path.exists(new):
+            os.replace(old, new)
+    for name in ("deck.json", "cards.bin"):
+        old = os.path.join(out_dir, name)
+        if os.path.exists(old):
+            os.remove(old)
     card_ids = sorted(col.find_cards(deck_query(deck_name)))
     if len(card_ids) > MAX_CARDS:
         print(f"  {deck_name}: {len(card_ids)} cards, keeping the first {MAX_CARDS}")
