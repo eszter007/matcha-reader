@@ -1041,9 +1041,10 @@ void LibraryListActivity::drawPositionReadout() const {
   const int count = listCount();
   if (count <= 0) return;
 
-  char buf[32];
-  const char* positionFormat = groupsCollapsed ? tr(STR_LIBRARY_GROUP_POSITION) : tr(STR_LIBRARY_POSITION);
-  snprintf(buf, sizeof(buf), positionFormat, selectedEntry() + 1, count);
+  char buf[48];
+  I18N.formatCountOf(buf, sizeof(buf),
+                     groupsCollapsed ? StrId::STR_LIBRARY_GROUP_POSITION : StrId::STR_LIBRARY_POSITION,
+                     selectedEntry() + 1, count);
   const int width = renderer.getTextWidth(SMALL_FONT_ID, buf);
   // Bottom-right, above the tab bar and clear of the bezel and rounded corner.
   const Rect area = UITheme::getContentArea(renderer);
