@@ -110,7 +110,9 @@ For each mapped deck:
    reviews back. The pushed log is cleared only after every card's calls have finished. A
    failed sync changes nothing that would make a retry wrong:
    imports use the device review's own id (its time in ms), so re-sending one is rejected as a
-   duplicate rather than recorded twice.
+   duplicate rather than recorded twice. A review of a card deleted in Anki is refused
+   (`notFound`). It is dropped with the log, and the card gets no schedule calls; if it were
+   kept, every later sync would stop on it.
 6. `collection.sync` asks Anki to sync to AnkiWeb, before step 1 and after step 5. Without an
    AnkiWeb login it is skipped. If the first one does not finish (`timeout`: it may wait for the
    user to choose a full sync in Anki), the sync stops before step 1, so the device's changes
