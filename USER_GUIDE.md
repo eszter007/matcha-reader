@@ -1865,7 +1865,7 @@ It also prepares cards for the reader: large images are shrunk to grayscale, and
 - **Server Key:** the key from step 2.
 - **Anki Server:** **Sync Server**.
 
-Each sync also asks the server to sync with AnkiWeb, before and after the device's own sync, so reviews from your phone and the device meet. A server without an AnkiWeb login skips that. When AnkiWeb and the server cannot be merged (a full sync), the companion server keeps AnkiWeb's copy on its own. With Anki desktop, Anki asks you which copy to keep: the device then stops before it sends anything and says so; choose in Anki, then sync again. If AnkiWeb cannot sync for another reason, for example while it is down, the device still syncs with the server and says AnkiWeb was not synced; the next sync tries again.
+Each sync also asks the server to sync with AnkiWeb, before and after the device's own sync, so reviews from your phone and the device meet. A server without an AnkiWeb login skips that. When AnkiWeb and the server cannot be merged (a full sync), the companion server takes AnkiWeb's copy on its own and adds back the reviews and words from the device it had not sent yet. With Anki desktop, Anki asks you which copy to keep: the device then stops before it sends anything and says so; choose in Anki, then sync again. If AnkiWeb cannot sync for another reason, for example while it is down, the device still syncs with the server and says AnkiWeb was not synced; the next sync tries again.
 
 Over the internet, use HTTPS so the key is not sent in the clear. HTTPS needs more memory on the reader: the X4 may not have enough during a sync, so on an X4 a server on your home network is the safer choice.
 
