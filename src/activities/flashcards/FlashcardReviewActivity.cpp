@@ -865,6 +865,12 @@ void FlashcardReviewActivity::layoutHtmlSide() {
   if (!buildCardHtmlPages(renderer, path, card.cssPath, static_cast<uint16_t>(body.w), static_cast<uint16_t>(body.h),
                           htmlFont(), /*furigana=*/true, htmlPages)) {
     LOG_ERR("FLASH", "Card side %s not laid out", path.c_str());
+    // Only now is the front looked up: asking first for every card costs a quarter second each in
+    // a big deck's folder.
+    if (!showBack && !Storage.exists(card.frontPath.c_str())) {
+      session.cardFileMissing();
+      cardOk = false;
+    }
   }
 }
 

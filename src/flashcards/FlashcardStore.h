@@ -165,8 +165,11 @@ class Session {
   size_t total() const { return queue.size(); }
   const std::string& language() const { return lang; }
 
-  // The card at the front of the queue; false when its row could not be read.
+  // The card at the front of the queue; false when its row could not be read. An Anki card's files
+  // are not looked up here (a quarter second in a big deck): see cardFileMissing().
   bool current(CardText& out) const;
+  // The current Anki card's front file is not on the card: the next sync checks every card again.
+  void cardFileMissing() const;
   bool currentIsNew() const;
   // What each rating would give: a learning step in minutes, or an interval in days.
   void previews(Interval out[4]) const;
