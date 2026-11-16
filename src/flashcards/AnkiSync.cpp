@@ -1442,13 +1442,6 @@ void handOverMined(AnkiClient& client, const Service& service, const ProgressFn&
   }
 }
 
-namespace {
-// Mined words go to Migaku when it is set up and either takes them or Anki is not set up.
-bool minedGoToMigaku() {
-  return MIGAKU_STORE.isConfigured() && (MIGAKU_STORE.getTakesMined() || !ANKI_STORE.isConfigured());
-}
-}  // namespace
-
 Service ankiService() {
   return Service{.store = ANKI_STORE,
                  .name = "Anki",
@@ -1463,8 +1456,7 @@ Service ankiService() {
                  .deckMissing = StrId::STR_ANKI_DECK_MISSING,
                  .replyError = StrId::STR_ANKI_REPLY_ERROR,
                  .loginMissing = StrId::STR_ANKI_REPLY_ERROR,  // no AnkiWeb login is not an error
-                 .connected = StrId::STR_ANKI_CONNECTED,
-                 .noAddress = StrId::STR_ANKI_NO_ADDRESS};
+                 .connected = StrId::STR_ANKI_CONNECTED};
 }
 
 // The bridge's own sync is the Migaku sync: it always runs.
@@ -1482,8 +1474,7 @@ Service migakuService() {
                  .deckMissing = StrId::STR_MIGAKU_DECK_MISSING,
                  .replyError = StrId::STR_MIGAKU_REPLY_ERROR,
                  .loginMissing = StrId::STR_MIGAKU_NOT_SET_UP,
-                 .connected = StrId::STR_MIGAKU_CONNECTED,
-                 .noAddress = StrId::STR_MIGAKU_NO_ADDRESS};
+                 .connected = StrId::STR_MIGAKU_CONNECTED};
 }
 
 Result syncAll(AnkiClient& client, const Service& service, const ProgressFn& progress, const int64_t nowMs) {

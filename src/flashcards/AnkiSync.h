@@ -25,7 +25,7 @@ struct Service {
   bool syncRemote;          // ask the server to sync with the cloud before and after
   bool requiresRemote;      // a server without the cloud's login is an error, not a local sync
   // Messages that name the service.
-  StrId unreachable, keyRefused, notAllowed, deckMissing, replyError, loginMissing, connected, noAddress;
+  StrId unreachable, keyRefused, notAllowed, deckMissing, replyError, loginMissing, connected;
 };
 Service ankiService();
 Service migakuService();

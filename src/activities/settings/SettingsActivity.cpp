@@ -1,5 +1,6 @@
 #include "SettingsActivity.h"
 
+#include <AnkiSyncStore.h>
 #include <BlePageTurner.h>
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
@@ -53,6 +54,31 @@ namespace {
 // Shared-list filtering for this board; false drops the row from the device UI
 // (it stays in the shared list for the web settings API).
 SettingsSection sectionFor(const SettingInfo& setting);
+
+// Flashcards Sync hides the rows of a service that is off, the address and key of one that uses
+// the shared server, and where mined words go unless both services are on.
+bool flashcardSyncRowShown(const SettingInfo& setting) {
+  using Server = SyncServiceStore::Server;
+  const Server anki = ANKI_STORE.getServer();
+  const Server migaku = MIGAKU_STORE.getServer();
+  switch (setting.nameId) {
+    case StrId::STR_ANKI_ADDRESS:
+    case StrId::STR_ANKI_KEY:
+      return anki == Server::Own;
+    case StrId::STR_ANKI_DECKS:
+    case StrId::STR_ANKI_SYNC_ANKIWEB:
+      return anki != Server::Off;
+    case StrId::STR_MIGAKU_ADDRESS:
+    case StrId::STR_MIGAKU_KEY:
+      return migaku == Server::Own;
+    case StrId::STR_MIGAKU_DECKS:
+      return migaku != Server::Off;
+    case StrId::STR_SYNC_MINED_TO:
+      return anki != Server::Off && migaku != Server::Off;
+    default:
+      return true;
+  }
+}
 
 bool showOnDevice(const SettingInfo& setting) {
   if (sectionFor(setting) == SettingsSection::End || home_button::isSetting(setting.valuePtr)) return false;
@@ -172,10 +198,10 @@ void SettingsActivity::rebuildSettings() {
   auto all = getSettingsList(&sdFontSystem.registry(), &dictionaries, category);
 
   const auto belongsHere = [this, dictionaryPage](const SettingInfo& setting) {
-    // Anki Sync's rows are kept off the Connectivity list (sectionFor() has no section for them)
-    // and shown on their own page.
-    if (isSyncServicePage(subCategory)) {
-      return setting.category == subCategory;
+    // Flashcards Sync's rows are kept off the Connectivity list (sectionFor() has no section for
+    // them) and shown on their own page.
+    if (isFlashcardSyncPage(subCategory)) {
+      return setting.category == subCategory && flashcardSyncRowShown(setting);
     }
     if (!showOnDevice(setting)) return false;
     if (dictionaryPage) return dictionaryRowOrder(setting) >= 0;
@@ -293,8 +319,7 @@ void SettingsActivity::rebuildSettings() {
   }
   addAction(SettingsSection::Connectivity, StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync);
   addAction(SettingsSection::Connectivity, StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser);
-  addAction(SettingsSection::Connectivity, StrId::STR_ANKI_SYNC, SettingAction::AnkiSync);
-  addAction(SettingsSection::Connectivity, StrId::STR_MIGAKU_SYNC, SettingAction::MigakuSync);
+  addAction(SettingsSection::Connectivity, StrId::STR_FLASHCARD_SYNC, SettingAction::FlashcardSync);
   rebuildRowItems();
 }
 
@@ -453,24 +478,18 @@ void SettingsActivity::toggleSelectedSetting() {
       startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
       return;
     }
-    case SettingAction::AnkiSync:
-    case SettingAction::MigakuSync: {
-      auto activity = makeUniqueNoThrow<SettingsActivity>(
-          renderer, mappedInput, SettingsSection::Connectivity,
-          setting.action == SettingAction::AnkiSync ? StrId::STR_ANKI_SYNC : StrId::STR_MIGAKU_SYNC);
+    case SettingAction::FlashcardSync: {
+      auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, SettingsSection::Connectivity,
+                                                          StrId::STR_FLASHCARD_SYNC);
       if (!activity) {
-        LOG_ERR("SET", "OOM: Anki settings");
+        LOG_ERR("SET", "OOM: Flashcards Sync settings");
         return;
       }
       startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
       return;
     }
-    case SettingAction::AnkiTest:
-    case SettingAction::MigakuTest: {
-      auto test = makeUniqueNoThrow<AnkiSyncActivity>(renderer, mappedInput,
-                                                      setting.action == SettingAction::AnkiTest
-                                                          ? AnkiSyncActivity::Mode::TestAnki
-                                                          : AnkiSyncActivity::Mode::TestMigaku);
+    case SettingAction::FlashcardSyncTest: {
+      auto test = makeUniqueNoThrow<AnkiSyncActivity>(renderer, mappedInput, AnkiSyncActivity::Mode::Test);
       if (!test) {
         LOG_ERR("SET", "OOM: Anki connection test");
         return;

@@ -28,7 +28,7 @@ The user has to set two AnkiConnect options once, on the computer: `webBindAddre
 
 ## Settings
 
-All of these are edited in **Settings → Connectivity → Anki** on the device and on the web
+All of these are edited in **Settings → Connectivity → Flashcards Sync** on the device and on the web
 settings page; the text fields are easier to type on the web page. They live in a new
 `AnkiSyncStore` (`/.crosspoint/anki.json`), modelled on `KOReaderCredentialStore`: a
 `PersistableStore`, the key XOR-obfuscated with the device secret.

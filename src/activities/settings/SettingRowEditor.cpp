@@ -40,8 +40,8 @@ SettingRowEditor::EditResult SettingRowEditor::editValue(const SettingInfo& sett
     return EditResult::Opened;
   }
 
-  // An Anki or Migaku Sync text row (address, key, decks) opens the keyboard on its current value.
-  if (setting.type == SettingType::STRING && isSyncServicePage(setting.category) && setting.stringGetter &&
+  // A Flashcards Sync text row (address, key, decks) opens the keyboard on its current value.
+  if (setting.type == SettingType::STRING && isFlashcardSyncPage(setting.category) && setting.stringGetter &&
       setting.stringSetter) {
     auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, I18N.get(setting.nameId),
                                                              setting.stringGetter(), 255, InputType::Text);
@@ -309,7 +309,7 @@ std::string SettingRowEditor::valueText(const SettingInfo& setting) {
     }
     return std::to_string(SETTINGS.*(setting.valuePtr));
   }
-  if (setting.type == SettingType::STRING && isSyncServicePage(setting.category) && setting.stringGetter) {
+  if (setting.type == SettingType::STRING && isFlashcardSyncPage(setting.category) && setting.stringGetter) {
     const std::string value = setting.stringGetter();
     if (value.empty()) return tr(STR_NOT_SET);
     // A key shows only its last four characters.
