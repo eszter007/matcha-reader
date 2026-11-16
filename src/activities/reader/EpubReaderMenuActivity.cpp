@@ -276,8 +276,10 @@ void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
   // Progress summary where the old sub-header band sat.
   std::string progressLine;
   if (totalPages > 0) {
+    char pages[48];
+    I18N.formatCount(pages, sizeof(pages), StrId::STR_PAGES_COUNT, totalPages);
     progressLine = std::string(tr(STR_CHAPTER_PREFIX)) + std::to_string(currentPage) + "/" +
-                   std::to_string(totalPages) + std::string(tr(STR_PAGES_SEPARATOR));
+                   std::to_string(totalPages) + pages + "  |  ";
   }
   progressLine += std::string(tr(STR_BOOK_PREFIX)) + std::to_string(bookProgressPercent) + "%";
   const fui::Rect band = screen.takeTop(static_cast<int16_t>(metrics.tabBarHeight));
