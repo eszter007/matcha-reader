@@ -1326,13 +1326,21 @@ void SleepActivity::renderDeparturesSleepScreen() const {
   const int blockH = DepWordNext.height + 16 + DepWordOneMore.height + 14 + DepWordChapter.height;
   const int rowsRight =
       DEP_MARGIN + std::max<int>(DEP_TILES * (layout.tileW + layout.tileGap), DepWordMinutesThisWeek.width + 2);
+  // Clear of the bezel and of a rounded bottom corner: on the EEGO A4 the bezel covers 8 px at the
+  // right and 16 at the bottom, and the corner curves in over 40 px; the cat's box keeps its corner
+  // inside that curve (about 30% of the radius in from each edge). 10 px wherever that is less.
+  const Rect content = UITheme::getContentArea(renderer);
+  const int corner = BoardConfig::ACTIVE.bottomCornerRadius != 0 ? BoardConfig::ACTIVE.bottomCornerRadius
+                                                                 : BoardConfig::ACTIVE.cornerRadius;
+  const int catRight = std::max(10, pageWidth - content.x - content.width + corner * 3 / 10);
+  const int catBottom = std::max(10, pageHeight - content.y - content.height + corner * 3 / 10);
   const DepartureCat* cat = nullptr;
   int catX = 0;
   int catY = 0;
   int rowStep = 0;
   for (const DepartureCat& candidate : DEP_CATS) {
-    const int x = pageWidth - candidate.width - 10;
-    const int top = pageHeight - candidate.height - 10;
+    const int x = pageWidth - candidate.width - catRight;
+    const int top = pageHeight - candidate.height - catBottom;
     int limit = top + candidate.height / 2 - blockH / 2 - 16;
     if (rowsRight + 8 > x) limit = std::min(limit, top + 8);
     const int step = (limit - layout.firstRow - layout.tileH - labelH) / 2;
