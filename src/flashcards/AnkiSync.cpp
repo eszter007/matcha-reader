@@ -1162,8 +1162,24 @@ bool testConnection(AnkiClient& client, std::string& ankiVersion) {
   filter["methods"][0]["name"] = true;
   JsonDocument none;
   none.to<JsonObject>();
-  if (!client.call("api.describe", none, description, &filter)) return false;
-  ankiVersion = description["ankiVersion"] | "";
+  if (client.call("api.describe", none, description, &filter)) {
+    ankiVersion = description["ankiVersion"] | "";
+    return true;
+  }
+  // Anki desktop's AnkiConnect also sends its whole API schema: over 200 KB (too large on boards
+  // without PSRAM) and nested deeper than the parser allows. The version is near the start of
+  // what was kept; only a working AnkiConnect names it there.
+  using Kind = AnkiClient::Error::Kind;
+  if (client.error().kind != Kind::TooLarge && client.error().kind != Kind::BadReply) return false;
+  const std::string_view head = client.replyHead();
+  const size_t key = head.find("\"ankiVersion\"");
+  const size_t colon = key == std::string_view::npos ? key : head.find(':', key);
+  // The value must follow the colon directly: a quoted string, not a nested object.
+  const size_t open = colon == std::string_view::npos ? colon : head.find_first_not_of(" \t\r\n", colon + 1);
+  if (open == std::string_view::npos || head[open] != '"') return false;
+  const size_t close = head.find('"', open + 1);
+  if (close == std::string_view::npos) return false;
+  ankiVersion.assign(head.substr(open + 1, close - open - 1));
   return true;
 }
 

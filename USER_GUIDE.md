@@ -1893,10 +1893,11 @@ You do not need AnkiWeb or any cloud service. The device can sync directly with 
 
 **Once, on the computer:**
 
-1. Install Anki desktop 26.08 or later.
-2. In Anki, install the AnkiConnect add-on (**Tools → Add-ons → Get Add-ons**, code `2055492159`), then restart Anki.
-3. Open the add-on's settings (**Tools → Add-ons → AnkiConnect → Config**). Set `webBindAddress` to `0.0.0.0`, so the device can reach Anki on your Wi-Fi. We recommend also setting an `apiKey`: any password you choose. Restart Anki.
-4. Find your computer's address on the Wi-Fi network, for example `192.168.1.20`.
+1. Install [Anki desktop](https://apps.ankiweb.net) 26.08 or later.
+2. Install the [AnkiConnect add-on](https://ankiweb.net/shared/info/2055492159): in Anki, choose **Tools → Add-ons → Get Add-ons…**, enter the code `2055492159` and choose **OK**. Restart Anki when it asks. AnkiConnect then shows in the **Add-ons** list.
+3. In that list, select **AnkiConnect** and choose **Config**. In the text that opens, change `"webBindAddress": "127.0.0.1"` to `"webBindAddress": "0.0.0.0"`, so the device can reach Anki on your Wi-Fi (with `127.0.0.1` only programs on the computer itself can). We recommend also setting `"apiKey"` to a password you choose, in quotes. Choose **OK**, then restart Anki.
+4. Find your computer's address on the Wi-Fi network, for example `192.168.1.20` (on a Mac: **System Settings → Wi-Fi → Details**; on Windows: `ipconfig`).
+5. If the computer asks whether Anki may accept incoming network connections, allow it.
 
 **Once, on the device** (easier on the web settings page in **File Transfer**):
 
