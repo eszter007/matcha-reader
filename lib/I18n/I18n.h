@@ -62,7 +62,7 @@ class I18n {
   static const char* getCharacterSet(Language lang);
 
  private:
-  // The form of id for the count n, NUL-terminated in format.
+  // The form of id for the count n, NUL-terminated in format (size > 0).
   void countForm(StrId id, int n, char* format, size_t size) const;
   I18n() : _language(Language::EN) { i18n_strings::requireCurrentTable(); }
 
