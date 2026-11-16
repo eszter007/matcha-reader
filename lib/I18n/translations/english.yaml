@@ -246,6 +246,7 @@ STR_ANKI_DECK_MISSING: "This deck is not in Anki. Check its name in Settings > C
 STR_MIGAKU_DECKS: "Migaku Decks"
 STR_MIGAKU_SYNC_NOW: "Sync with Migaku"
 STR_SYNC_BOTH_NOW: "Sync with Anki and Migaku"
+STR_FLASHCARDS_SYNC: "Sync Flashcards"
 STR_ANKIWEB_NEEDS_ANKI: "Anki was not synced: AnkiWeb did not finish. If Anki asks which copy to keep, choose there, then sync again"
 STR_ANKIWEB_NOT_SYNCED: "AnkiWeb was not synced this time; the next sync tries again"
 STR_SYNC_SERVICE_DONE: "%s: %d new cards, %d reviews received, %d sent"
