@@ -95,7 +95,7 @@ int drawStreakCard(const GfxRenderer& renderer, const int x, const int y, const 
   renderer.drawRoundedRect(x, y, w, streakH, 2, CARD_RADIUS, true);
 
   char streakBuf[64];
-  snprintf(streakBuf, sizeof(streakBuf), tr(STR_STREAK_FORMAT), streak);
+  I18N.formatCount(streakBuf, sizeof(streakBuf), StrId::STR_STREAK_FORMAT, streak);
   const int streakTextW = renderer.getTextWidth(UI_12_FONT_ID, streakBuf, EpdFontFamily::BOLD);
   const int row1TotalW = iconSize + 8 + streakTextW;
   const int row1X = x + (w - row1TotalW) / 2;
@@ -105,8 +105,7 @@ int drawStreakCard(const GfxRenderer& renderer, const int x, const int y, const 
                     streakBuf, true, EpdFontFamily::BOLD);
 
   char weekBuf[96];
-  snprintf(weekBuf, sizeof(weekBuf), tr(STR_WEEK_MINUTES_READ_FORMAT), weekMinutes,
-           weekMinutes == 1 ? tr(STR_MINUTE) : tr(STR_MINUTES));
+  I18N.formatCount(weekBuf, sizeof(weekBuf), StrId::STR_WEEK_MINUTES_READ_FORMAT, weekMinutes);
   const int weekTextW = renderer.getTextWidth(SMALL_FONT_ID, weekBuf);
   const int row2Y = row1Y + iconSize + 4;
   renderer.drawText(SMALL_FONT_ID, x + (w - weekTextW) / 2, row2Y, weekBuf, true);

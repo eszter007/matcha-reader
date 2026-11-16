@@ -529,6 +529,7 @@ void EndOfBookOptions::drawStub(const int x, const int y, const int w, const int
 
   struct Cell {
     char value[16];
+    char labelBuf[48];  // a count's label agrees with its number
     const char* label;
   };
   Cell cells[3];
@@ -538,10 +539,16 @@ void EndOfBookOptions::drawStub(const int x, const int y, const int w, const int
   // Time and days always show, so the stub keeps its shape after a short read. A book finished the
   // day it was started still took a day. Lookups join them when there are any; two cells centre.
   snprintf(cells[count].value, sizeof(cells[0].value), "%d", std::max(summary.daysToFinish, 1));
-  cells[count++].label = tr(STR_EOB_DAYS_TO_FINISH);
+  I18N.formatCount(cells[count].labelBuf, sizeof(cells[0].labelBuf), StrId::STR_EOB_DAYS_TO_FINISH,
+                   std::max(summary.daysToFinish, 1));
+  cells[count].label = cells[count].labelBuf;
+  count++;
   if (summary.lookups > 0) {
     snprintf(cells[count].value, sizeof(cells[0].value), "%lu", static_cast<unsigned long>(summary.lookups));
-    cells[count++].label = tr(STR_EOB_LOOKUPS);
+    I18N.formatCount(cells[count].labelBuf, sizeof(cells[0].labelBuf), StrId::STR_EOB_LOOKUPS,
+                     static_cast<int>(std::min<unsigned long>(summary.lookups, INT32_MAX)));
+    cells[count].label = cells[count].labelBuf;
+    count++;
   }
   const int valueY = y + TEAR + 10 + (summary.booksFinished > 0 ? renderer.getLineHeight(SMALL_FONT_ID) + 8 : 0);
   const int valueH = renderer.getLineHeight(UI_12_FONT_ID);
