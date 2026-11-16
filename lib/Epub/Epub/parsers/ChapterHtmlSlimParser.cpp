@@ -2355,7 +2355,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 return;
               } else {
                 LOG_ERR("EHP", "Failed to get image dimensions");
-                Storage.remove(cachedImagePath.c_str());
+                // A card's image is used in place: it is the deck's own file, not an extracted copy.
+                if (!standalone) Storage.remove(cachedImagePath.c_str());
               }
             }
           }  // isFormatSupported
