@@ -426,14 +426,14 @@ class StateStream {
 // A deck's progress for countAnkiDeck(), from the table in memory.
 struct TableStates {
   const std::vector<CardState>& states;
-  bool rewind() { return true; }
-  const CardState* find(const uint64_t id) { return findIn(states, id); }
+  static bool rewind() { return true; }
+  const CardState* find(const uint64_t id) const { return findIn(states, id); }
   template <typename Each>
   bool each(Each fn) {
     for (const auto& s : states) fn(s);
     return true;
   }
-  bool failed() const { return false; }
+  static bool failed() { return false; }
 };
 
 // The same from the file, without the table: a 2000-card table needs a 48 KB block, which a
