@@ -11,7 +11,8 @@
 //   anki/<deckId>.json           name, last Anki review seen
 //   anki/<deckId>.cards.bin      the card index, CardRecord per card, sorted by card id
 //   anki/<deckId>.buried.bin     cards buried until tomorrow; anki/<deckId>.leeches.bin, leeches
-//   anki/<deckId>/style.css      the note types' CSS
+//   anki/<deckId>.css            the note types' CSS
+//   anki-cache/<deckId>/         the card images' decoded pixels (.pxc)
 //   anki/<deckId>/<cardId>q.xhtml, <cardId>a.xhtml   each side as Anki renders it, as XHTML
 //   anki/<deckId>/<media>        the images the cards use
 // Its review progress uses the flashcard store under the deck key "anki-<deckId>".

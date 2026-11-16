@@ -1930,8 +1930,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               if (standalone) {
                 cachedImagePath = resolvedPath;
                 if (!self->pixelCacheDir.empty()) {
-                  const size_t slash = resolvedPath.rfind('/');
-                  std::string name = resolvedPath.substr(slash == std::string::npos ? 0 : slash + 1);
+                  // Named by its path below the page's folder, '/' as '_': "x/a.png" and "a.png" keep
+                  // apart, as they did when each was cached next to itself.
+                  const std::string base = FsHelpers::normalisePath(self->contentBase);
+                  std::string name = resolvedPath.compare(0, base.size(), base) == 0 && !base.empty()
+                                         ? resolvedPath.substr(base.size())
+                                         : resolvedPath;
+                  while (!name.empty() && name[0] == '/') name.erase(0, 1);
+                  std::replace(name.begin(), name.end(), '/', '_');
                   const size_t dot = name.rfind('.');
                   if (dot != std::string::npos) name.resize(dot);
                   pixelCachePath = self->pixelCacheDir + name + ".pxc";

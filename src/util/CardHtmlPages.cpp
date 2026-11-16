@@ -79,8 +79,12 @@ bool buildCardHtmlPages(GfxRenderer& renderer, const std::string& xhtmlPath, con
     } else {
       parser->setTextSpacing(SETTINGS.getCharacterSpacing(), SETTINGS.wordSpacing);
       parser->setParagraphIndentSpaces(0);
-      // Only when the folder is there: otherwise each image caches next to itself, as before.
-      if (!imageCacheDir.empty() && Storage.ensureDirectoryExists(imageCacheDir.c_str())) {
+      // Only when the folder is there: otherwise each image caches next to itself, as before. Made
+      // once per deck and boot, not for every side.
+      static std::string madeDir;
+      if (!imageCacheDir.empty() &&
+          (imageCacheDir == madeDir || Storage.ensureDirectoryExists(imageCacheDir.c_str()))) {
+        madeDir = imageCacheDir;
         parser->setPixelCacheDir(imageCacheDir);
       }
       // The card's base text at the reader's size: deck CSS is sized for a desktop screen. The
