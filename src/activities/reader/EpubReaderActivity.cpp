@@ -361,8 +361,8 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
   }
 }
 
-// A button contact is closed right now. Reads the Xteink ADC ladder, power pin, and T5S3 expander
-// key only; on other boards a press stops the build once the loop has debounced it.
+// A button contact is closed right now (HalGPIO::rawInputActive()). Input it cannot read stops the
+// build once the loop has debounced it.
 bool buttonContactClosed() { return gpio.rawInputActive(); }
 
 }  // namespace

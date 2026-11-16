@@ -6,6 +6,9 @@
 #include <WiFi.h>
 #include <esp_sleep.h>
 #include <soc/soc_caps.h>
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+#include <HWCDC.h>
+#endif
 
 #include <atomic>
 #include <cassert>
@@ -61,12 +64,19 @@ void HalPowerManager::setPowerSaving(bool enabled) {
   xSemaphoreTake(freqMutex, portMAX_DELAY);
   const bool locked = lockCount.load(std::memory_order_acquire) != 0;
 
-  if (!locked && enabled && !isLowPower) {
-    LOG_DBG("PWR", "Going to low-power mode");
-    if (setCpuFrequencyMhz(LOW_POWER_FREQ)) {
-      isLowPower = true;
+  const int target = LOW_POWER_FREQ < USB_MIN_FREQ && enabled && usbHostActive() ? USB_MIN_FREQ : LOW_POWER_FREQ;
+  if (!locked && enabled && (!isLowPower || lowFreq != target)) {
+    // Also when a USB host comes or goes while already in low power.
+    if (!isLowPower) {
+      LOG_DBG("PWR", "Going to low-power mode");
     } else {
-      LOG_DBG("PWR", "Failed to set CPU frequency = %d MHz", LOW_POWER_FREQ);
+      LOG_DBG("PWR", "Low-power clock now %d MHz", target);
+    }
+    if (setCpuFrequencyMhz(target)) {
+      isLowPower = true;
+      lowFreq = target;
+    } else {
+      LOG_DBG("PWR", "Failed to set CPU frequency = %d MHz", target);
     }
   } else if ((!enabled || locked) && isLowPower) {
     LOG_DBG("PWR", "Restoring normal CPU frequency");
@@ -78,6 +88,25 @@ void HalPowerManager::setPowerSaving(bool enabled) {
   }
   // Otherwise, no change needed
   xSemaphoreGive(freqMutex);
+}
+
+// Called only from setPowerSaving(true), which only the main loop makes.
+bool HalPowerManager::usbHostActive() {
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+  // A host sends a start-of-frame packet every millisecond, which the USB serial sees directly.
+  // Not the USB-detect state: on a charger nothing uses the serial, so the 10 MHz saving stays, and
+  // the X3 has no detect pin (its "USB connected" comes from the charge current, false once full).
+  // Plugging in at 10 MHz is noticed because setCpuFrequencyMhz() leaves the PLL that clocks the
+  // USB running; a clock switch that stops it would hide a host until the next button press.
+  const unsigned long now = millis();
+  if (HWCDC::isPlugged()) {
+    hostSeen = true;
+    hostSeenMs = now;
+  }
+  return hostSeen && now - hostSeenMs < USB_HOST_HOLD_MS;
+#else
+  return false;
+#endif
 }
 
 void HalPowerManager::startDeepSleep(HalGPIO& gpio, const bool wakeOnHeldButton) const {
