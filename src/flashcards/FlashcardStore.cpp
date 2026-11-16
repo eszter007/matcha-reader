@@ -892,6 +892,13 @@ uint16_t Session::stepMinutes(const uint16_t* steps, const uint8_t count, const 
   return steps[next];
 }
 
+void Session::cardFileMissing() const {
+  if (!anki || cardsSyncForgotten) return;
+  // The sync trusted its index for this card: the next one checks every card again.
+  ankideck::forgetCardsSynced(ankideck::idOf(lang));
+  cardsSyncForgotten = true;
+}
+
 bool Session::current(CardText& out) const {
   if (finished()) return false;
   if (anki) {
@@ -902,13 +909,7 @@ bool Session::current(CardText& out) const {
     out.backPath = ankideck::backPath(deckId, item.id);
     out.cssPath = ankideck::cssPath(deckId);
     out.tooLarge = (item.offset & ankideck::TOO_LARGE) != 0;
-    if (out.tooLarge || Storage.exists(out.frontPath.c_str())) return true;
-    // The sync trusted its index for this card: the next one checks every card again.
-    if (!cardsSyncForgotten) {
-      ankideck::forgetCardsSynced(deckId);
-      cardsSyncForgotten = true;
-    }
-    return false;
+    return true;
   }
   HalFile file;
   if (!Storage.openFileForRead("FLASH", csvPath, file) || !file.seekSet(active().offset)) return false;

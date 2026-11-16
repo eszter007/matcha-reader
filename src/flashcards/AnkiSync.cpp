@@ -742,6 +742,43 @@ void dropRemoved(const std::string& deckId, ankideck::IndexReader& known, const 
   }
 }
 
+// Marks in `fronts` (one bit per entry of the sorted `ids`) the cards whose front file is in the deck
+// folder, read in one pass. Asking for each card instead costs about a quarter second apiece in a
+// 2000-card folder (FAT reads the folder from the start for every name), minutes for a whole deck;
+// the pass takes a few seconds. False when the folder cannot be read, or `cancelled` says stop: then
+// ask per card.
+template <typename Cancelled>
+bool listFronts(const std::string& dir, const std::vector<uint64_t>& ids, std::vector<uint8_t>& fronts,
+                Cancelled cancelled) {
+  fronts.assign((ids.size() + 7) / 8, 0);
+  HalFile folder = Storage.open(dir.c_str());
+  if (!folder || !folder.isDirectory()) return false;
+  static constexpr char SUFFIX[] = "q.xhtml";
+  static constexpr size_t SUFFIX_LEN = sizeof(SUFFIX) - 1;
+  static constexpr size_t MAX_DIGITS = 20;  // as many as a uint64_t has
+  char name[40];
+  size_t seen = 0;
+  for (HalFile entry = folder.openNextFile(); entry; entry = folder.openNextFile()) {
+    if (++seen % 64 == 0 && cancelled()) return false;
+    const size_t len = entry.getName(name, sizeof(name));
+    if (len <= SUFFIX_LEN || len >= sizeof(name) || strcmp(name + len - SUFFIX_LEN, SUFFIX) != 0) continue;
+    // Only names the sync writes: no leading zero, no more digits than an id has.
+    if (len - SUFFIX_LEN > MAX_DIGITS || name[0] == '0') continue;
+    uint64_t id = 0;
+    bool digits = true;
+    for (size_t i = 0; i < len - SUFFIX_LEN && digits; i++) {
+      digits = name[i] >= '0' && name[i] <= '9';
+      id = id * 10 + static_cast<uint64_t>(name[i] - '0');
+    }
+    if (!digits) continue;
+    const auto it = std::lower_bound(ids.begin(), ids.end(), id);
+    if (it == ids.end() || *it != id) continue;
+    const size_t i = static_cast<size_t>(it - ids.begin());
+    fronts[i / 8] |= static_cast<uint8_t>(1u << (i % 8));
+  }
+  return true;
+}
+
 bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, const std::vector<uint64_t>& ids,
                             const std::vector<uint64_t>* edited) {
   const std::string dir = ankideck::dirFor(deckId);
@@ -770,6 +807,20 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
   need.reserve(BATCH);
   noteIds.reserve(BATCH);
   noteMods.reserve(BATCH);
+  // Without the edited list every unedited card is checked for its file: from one pass over the
+  // folder, not a lookup each.
+  // Read on the first card that needs it: a refetch or a first sync never does.
+  std::vector<uint8_t> fronts;
+  enum class Listing : uint8_t { NotYet, Listed, PerCard } listing = edited ? Listing::PerCard : Listing::NotYet;
+  const auto hasFront = [&](const size_t i) {
+    if (listing == Listing::NotYet) {
+      listing = listFronts(dir, ids, fronts, [this] { return cancelRequested(); }) ? Listing::Listed : Listing::PerCard;
+    }
+    // A card not seen is asked about too: a read error ends a folder walk early, and taking the
+    // rest as missing would fetch them all again. Only cards really missing pay for the lookup.
+    if (listing == Listing::Listed && (fronts[i / 8] >> (i % 8) & 1) != 0) return true;
+    return Storage.exists(ankideck::frontPath(deckId, ids[i]).c_str());
+  };
 
   Progress p{name, 0, static_cast<uint32_t>(ids.size())};
   uint32_t kept = 0, checkpoints = 0, skipped = 0;
@@ -833,8 +884,7 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
       const bool tooLarge = (old.flags & ankideck::TOO_LARGE) != 0;
       // While refetching, only the cards the saved index has not fetched again yet.
       const bool refetch = info->refetchAll && r.cardId > info->refetchedUpTo;
-      const bool current = wasHere && old.noteMod == r.noteMod && !refetch &&
-                           (tooLarge ? !retryTooLarge : Storage.exists(ankideck::frontPath(deckId, r.cardId).c_str()));
+      const bool current = wasHere && old.noteMod == r.noteMod && !refetch && (tooLarge ? !retryTooLarge : hasFront(i));
       if (current) {
         kept++;
         ankideck::CardRecord kept1 = old;
