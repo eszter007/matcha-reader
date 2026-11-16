@@ -183,26 +183,19 @@ void readBuried(const std::string& deckId, const int32_t day, std::vector<uint64
   if (file.read(reinterpret_cast<uint8_t*>(out.data()), bytes) != bytes) out.clear();
 }
 
-bool readIndex(const std::string& deckId, std::vector<CardRecord>& out) {
-  out.clear();
+bool scanIndex(const std::string& deckId, const std::function<void(const CardRecord&)>& each) {
   const std::string path = dirFor(deckId) + "cards.bin";
   if (!Storage.exists(path.c_str())) return true;
   HalFile file;
   if (!Storage.openFileForRead("ANKI", path, file)) return false;
   const size_t count = std::min<size_t>(file.fileSize() / RECORD_BYTES, MAX_CARDS);
-  // std::vector allocates with throwing new: check the block first.
-  if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < count * sizeof(CardRecord) + 8 * 1024) {
-    LOG_ERR("ANKI", "OOM: index of %u cards", static_cast<unsigned>(count));
-    return false;
-  }
-  out.reserve(count);
-  uint8_t rec[RECORD_BYTES];
-  for (size_t i = 0; i < count; i++) {
-    if (file.read(rec, sizeof(rec)) != static_cast<int>(sizeof(rec))) {
-      out.clear();
-      return false;
-    }
-    out.push_back(decode(rec));
+  constexpr size_t CHUNK = 16;
+  uint8_t buf[CHUNK * RECORD_BYTES];
+  for (size_t i = 0; i < count;) {
+    const size_t n = std::min(CHUNK, count - i);
+    if (file.read(buf, n * RECORD_BYTES) != static_cast<int>(n * RECORD_BYTES)) return false;
+    for (size_t k = 0; k < n; k++) each(decode(buf + k * RECORD_BYTES));
+    i += n;
   }
   return true;
 }

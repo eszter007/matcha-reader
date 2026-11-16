@@ -381,9 +381,8 @@ void listDecks(std::vector<DeckSummary>& out) {
     deck.language = ankideck::keyFor(info.id);
     deck.label = info.name;
     std::vector<CardState> states;
-    std::vector<ankideck::CardRecord> cards;
     uint16_t day = 0, newToday = 0;
-    if (!loadStates(deck.language, states, day, newToday) || !ankideck::readIndex(info.id, cards)) {
+    if (!loadStates(deck.language, states, day, newToday)) {
       out.push_back(std::move(deck));
       continue;
     }
@@ -399,34 +398,47 @@ void listDecks(std::vector<DeckSummary>& out) {
         states.begin(), states.end(), [now](const CardState& c) { return c.reps > 0 && c.lastReview == now; }));
     const bool bury = (info.buryNew || info.buryReviews) &&
                       heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= reviewedToday * sizeof(uint64_t) + 8 * 1024;
+    // A first pass over the index finds the notes reviewed today, whose siblings the second skips.
+    bool readable = true;
     if (bury) {
       notesDone.reserve(reviewedToday);
-      for (const auto& c : cards) {
+      readable = ankideck::scanIndex(info.id, [&](const ankideck::CardRecord& c) {
         const CardState* s = findIn(states, c.cardId);
-        if (s && s->reps > 0 && s->lastReview == now) notesDone.push_back(c.noteId);
-      }
+        if (s && s->reps > 0 && s->lastReview == now && notesDone.size() < reviewedToday) {
+          notesDone.push_back(c.noteId);
+        }
+      });
       std::sort(notesDone.begin(), notesDone.end());
     }
-    for (const auto& c : cards) {
-      deck.total++;
-      if (std::binary_search(buried.begin(), buried.end(), c.cardId)) continue;
-      if (std::binary_search(leeches.begin(), leeches.end(), c.cardId)) continue;
-      const CardState* known = findIn(states, c.cardId);
-      // A sibling of a note reviewed today waits for tomorrow, as in a session.
-      if (std::binary_search(notesDone.begin(), notesDone.end(), c.noteId) &&
-          !(known && known->reps > 0 && known->lastReview == now) && (known ? info.buryReviews : info.buryNew)) {
-        continue;
-      }
-      if (const CardState* s = known) {
-        if (s->due > now) continue;
-        if ((s->flags & CardState::LEARN_STEP) != 0) {
-          stepping++;
-        } else {
-          deck.due++;
-        }
-      } else {
-        fresh++;
-      }
+    readable =
+        readable && ankideck::scanIndex(info.id, [&](const ankideck::CardRecord& c) {
+          deck.total++;
+          if (std::binary_search(buried.begin(), buried.end(), c.cardId)) return;
+          if (std::binary_search(leeches.begin(), leeches.end(), c.cardId)) return;
+          const CardState* known = findIn(states, c.cardId);
+          // A sibling of a note reviewed today waits for tomorrow, as in a session.
+          if (std::binary_search(notesDone.begin(), notesDone.end(), c.noteId) &&
+              !(known && known->reps > 0 && known->lastReview == now) && (known ? info.buryReviews : info.buryNew)) {
+            return;
+          }
+          if (const CardState* s = known) {
+            if (s->due > now) return;
+            if ((s->flags & CardState::LEARN_STEP) != 0) {
+              stepping++;
+            } else {
+              deck.due++;
+            }
+          } else {
+            fresh++;
+          }
+        });
+    if (!readable) {
+      // As before the counts: an index that cannot be read lists the deck with none due.
+      DeckSummary none;
+      none.language = std::move(deck.language);
+      none.label = std::move(deck.label);
+      out.push_back(std::move(none));
+      continue;
     }
     deck.fresh = std::min<uint16_t>(fresh, perDay > newToday ? perDay - newToday : 0);
     deck.due = std::min(deck.due, reviewsLeft(&info, states, now, newToday)) + stepping;
@@ -547,17 +559,16 @@ bool Session::open(const std::string& language) {
   };
   if (anki) {
     // An Anki deck's cards come from its index, in Anki's order; offset holds the record's flags.
-    std::vector<ankideck::CardRecord> cards;
-    if (!ankideck::readIndex(ankideck::idOf(language), cards)) return false;
     std::vector<uint64_t> buriedIds;
     ankideck::readBuried(ankideck::idOf(language), day, buriedIds);
-    for (const auto& c : cards) {
-      if (std::binary_search(buriedIds.begin(), buriedIds.end(), c.cardId)) continue;
+    const bool read = ankideck::scanIndex(ankideck::idOf(language), [&](const ankideck::CardRecord& c) {
+      if (std::binary_search(buriedIds.begin(), buriedIds.end(), c.cardId)) return;
       // Notes already reviewed today bury their siblings for the rest of the day.
       const CardState* s = find(c.cardId);
       if ((buryNew || buryReviews) && s && s->reps > 0 && s->lastReview == day) notesDone.push_back(c.noteId);
       consider(c.cardId, c.flags, c.noteId);
-    }
+    });
+    if (!read) return false;
     std::sort(notesDone.begin(), notesDone.end());
   } else {
     // Cards handed over to Anki are reviewed in its deck now.

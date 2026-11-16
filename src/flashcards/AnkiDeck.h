@@ -3,6 +3,7 @@
 #include <HalStorage.h>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -80,7 +81,10 @@ bool readInfo(const std::string& deckId, DeckInfo& out);
 bool writeInfo(const DeckInfo& info);
 // A card file the index lists is missing: the next sync checks every card again.
 void forgetCardsSynced(const std::string& deckId);
-bool readIndex(const std::string& deckId, std::vector<CardRecord>& out);
+// Each card of the index in turn, read a few records at a time: a 2000-card index whole needs a
+// 48 KB block, which a fragmented heap often does not have. True with no calls when the deck has no
+// index yet; false when unreadable, possibly after some calls.
+bool scanIndex(const std::string& deckId, const std::function<void(const CardRecord&)>& each);
 
 constexpr size_t INDEX_RECORD_BYTES = 24;  // one CardRecord in cards.bin
 
