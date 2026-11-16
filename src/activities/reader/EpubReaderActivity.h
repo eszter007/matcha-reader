@@ -135,7 +135,6 @@ class EpubReaderActivity final : public ReaderActivity {
   // which recovers a transiently corrupt cache; capped so a persistently bad page can't spin forever.
   uint8_t pageLoadRetryCount = 0;
   static constexpr uint8_t MAX_PAGE_LOAD_RETRIES = 3;
-  bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   bool automaticPageTurnActive = false;
   bool showBookmarkMessage = false;
   // "No dictionary set" popup, shown when a lookup is triggered without a configured dictionary.
@@ -355,6 +354,9 @@ class EpubReaderActivity final : public ReaderActivity {
   int lastSavedSpineIndex = -1;
   int lastSavedPage = -1;
   int lastSavedPageCount = -1;
+  // Chapter title shown in the status bar, cached per spine item.
+  mutable int statusTitleSpine = -1;
+  mutable std::string statusTitle;
 
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft, bool glyphsAlreadyWarm = false,

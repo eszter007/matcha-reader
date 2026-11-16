@@ -432,6 +432,27 @@ uint32_t sparseGlyphIndex(const std::vector<Run>& runs, uint32_t cp) {
   return UINT32_MAX;
 }
 
+TEST(SdCardFontTest, ReleasedLayoutCachesRewarmWithoutChangingFontMetrics) {
+  makeKerningFont(0, 2, 2, true);
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  const EpdFont* epd = font.getEpdFont();
+  for (int chapter = 0; chapter < 3; ++chapter) {
+    ASSERT_EQ(0, font.buildAdvanceTable("ABCDEF", 1));
+    ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+    EXPECT_EQ(32 << 4, font.getAdvance('A', 0));
+    EXPECT_EQ(-3, epd->getKerning('A', 'B'));
+    EXPECT_EQ(static_cast<uint32_t>('A'), epd->getLigature('E', 'F'));
+    ASSERT_NE(nullptr, epd->data->bitmap);
+
+    font.clearCache();  // upstream's releaseResidentCaches()
+    font.clearPersistentCache();
+    EXPECT_FALSE(font.hasAdvanceTable());
+    EXPECT_TRUE(epd->hasCodepoint('A'));
+    EXPECT_EQ(epd, font.getEpdFont());
+  }
+}
+
 constexpr uint16_t SPARSE_BITMAP_BYTES = 8;
 
 void makeSparseFont(uint8_t styles) {

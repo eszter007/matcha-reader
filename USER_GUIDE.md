@@ -215,9 +215,12 @@ Matcha has two Library screens. Choose one in **Settings → Library → Library
 
 The list keeps an index of up to 4,096 books on the SD card, so you can find a book without remembering its folder. It has three tabs. An arrow next to a tab shows the sort direction.
 
-* **Recent** shows the ten books you opened most recently first, then the rest of your books by file date.
+* **Recent** shows the ten books you opened most recently first, then the rest of your books by file date. Turn on
+  **Hide New Files in Recent** in **Settings → Library** to show only the books you opened.
 * **Title** groups books by the first letter of the title. Titles that start with a number or a symbol go under `#`. Other alphabets, such as Hebrew, get their own groups.
 * **Author** groups books by author.
+
+`My Clippings.txt` and `crash_report.txt` are not listed. They stay in **Browse Files**.
 
 On a device with buttons only:
 
@@ -225,12 +228,12 @@ On a device with buttons only:
 * Press **Confirm** to open the selected book.
 * Press **Back** to move the cursor from the list up to the tabs.
 * On the tabs, press **Confirm** to go to the next tab, and hold **Confirm** to reverse the sort direction. Press **Left** (or **Up**) to open Search. Press **Down** to return to the list.
-* In **Recent**, hold **Confirm** on a book for a menu with **Open**, **Delete**, **Rebuild Library Index** and an option to remove it from the recent books.
+* In **Recent**, hold **Confirm** on a book for a menu with **Open**, **Delete**, **Refresh Library** and an option to remove it from the recent books.
 * In **Title** or **Author**, hold **Confirm** on a book to fold the list into its letter or author groups. The group you were in stays selected. Press **Confirm** to open a group, or **Back** to return to the exact book you came from.
 
 On a touch device, tap a tab, a book or the Search icon. Tap the tab you are on to reverse its sort. Swipe to scroll. Long-press a book in **Recent** for the book menu. Long-press a book in **Title** or **Author** to fold the list into groups, then tap a group to open it. The refresh icon in the header rebuilds the index.
 
-The device builds the index the first time you open the list. If you add or change books later, use **Settings → Library → Rebuild Library Index**. The **Use Book Metadata** setting in the same place decides whether the index uses the title and author stored inside each book.
+The device builds the index the first time you open the list. If you add or change books later, use **Settings → Library → Refresh Library**. The **Use Book Metadata** setting in the same place decides whether the index uses the title and author stored inside each book.
 
 ### 3.5 File Transfer Screen
 
@@ -315,6 +318,9 @@ Some rows only appear on certain devices or while another setting is on. The not
 - **Clear Reading Cache**: Deletes the data the reader saves for each book on the SD card. Your books stay, but
   **reading progress is lost** and each book is prepared again the next time you open it.
 
+- **Display Refresh**: Flashes the screen black and white ten times to clear ghosting left by earlier pages.
+  Press **Back** to stop early; the screen always ends white.
+
 - **Language**: The menu language. English, Japanese, Spanish, French and German are built in. The other languages
   in the list show **Download**: select one and the device downloads its language pack over Wi-Fi and switches to it; see
   [Language Packs (SD Card)](#39-language-packs-sd-card). Chinese menus also need a Chinese font on the SD card
@@ -335,7 +341,7 @@ Some rows only appear on certain devices or while another setting is on. The not
   pick it from the list.
 
 **Check for Updates** and **SD Card Firmware Update** are missing on boards that cannot update themselves.
-**Rebuild Library Index** is under **Settings → Library**. **Manage Fonts** is at the bottom of the font list in
+**Refresh Library** is under **Settings → Library**. **Manage Fonts** is at the bottom of the font list in
 any profile of **Settings → Reader → Text Settings**.
 
 #### 3.6.2 Display
@@ -406,14 +412,16 @@ any profile of **Settings → Reader → Text Settings**.
 - **Library View**: What the Library entry opens.
   - **Matcha Covers** (default): a grid of book covers.
   - **CrossPoint List**: a list of titles and authors; see [Library Screen](#34-library-screen).
-- **Rebuild Library Index**: Scans the card again to pick up new, moved or changed books.
+- **Hide New Files in Recent** (off by default): The Recent tab lists only the books you opened, not the rest of
+  your books below them.
+- **Refresh Library**: Scans the card again to pick up new, moved or changed books.
 - **Clear Read Books from Recent List** (off by default): Removes a book from the Recent tab once you finish it.
 - **Move Finished Books to Read Folder** (off by default): Moves a finished book into a `Read` folder.
 - **Use Book Metadata** (on by default): Uses the title and author stored inside each book when the list is
   rebuilt. Without it, or when a book has none, the file name is used.
 
 While **Matcha Covers** is selected, only **Library View** and **Move Finished Books to Read Folder** appear. The
-other three only affect the CrossPoint List. The cover grid always shows every book it finds on the card.
+other four only affect the CrossPoint List. The cover grid always shows every book it finds on the card.
 
 #### 3.6.5 Insights
 

@@ -2333,6 +2333,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 }
                 if (!imageBlock) {
                   LOG_ERR("EHP", "Failed to create ImageBlock");
+                  self->layoutOom = true;
+                  self->depth += 1;
                   return;
                 }
                 if (!pixelCachePath.empty()) imageBlock->setCachePath(pixelCachePath);
@@ -2340,6 +2342,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                                                               static_cast<int16_t>(yPos));
                 if (!pageImage) {
                   LOG_ERR("EHP", "Failed to create PageImage");
+                  self->layoutOom = true;
+                  self->depth += 1;
                   return;
                 }
                 self->currentPage->elements.push_back(std::move(pageImage));

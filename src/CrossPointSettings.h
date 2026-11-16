@@ -371,8 +371,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t textAntiAliasing = 1;
   // Short power button click behaviour
   uint8_t shortPwrBtn = IGNORE;
-  // X4 Pro double click; Ignore disables the single-click delay.
-  uint8_t doublePwrBtn = PWR_FRONTLIGHT;
+  // Power double click (see hasPowerDoubleClick()); Ignore disables the
+  // single-click delay.
+  uint8_t doublePwrBtn = defaultDoublePwrBtn();
   // Power + Side Up, a SIDE_BUTTON_ACTION. Sleep, Refresh and the syncs work on any screen; the
   // rest only in a book. Default is never offered: the combination has no built-in role.
   uint8_t powerUpAction = SIDE_BTN_NONE;
@@ -545,6 +546,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t libraryUseMetadata = 1;
   // Cover grid by default: it is the reason this fork keeps its own library screen.
   uint8_t libraryView = LIBRARY_VIEW_COVERS;
+  // Library Recent tab lists only opened books, without the by-arrival list below them (0 = off, 1 = on)
+  uint8_t libraryRecentOpenedOnly = 0;
   // Remove a book from the Recent Books list when its End-of-Book screen is reached (0 = off, 1 = on)
   uint8_t removeReadBooksFromRecents = 0;
   // Move epub to /Read/ folder on SD card when finished (0 = disabled, 1 = enabled)
@@ -623,8 +626,20 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   SdFontIdResolver sdFontIdResolver = nullptr;
   void* sdFontResolverCtx = nullptr;
 
+  // Every board offers a power double-click action except those whose power
+  // button is also Confirm.
+  static bool hasPowerDoubleClick() {
+    return BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::DigitalConfirmPowerHold;
+  }
+  // Frontlight toggle where it shipped enabled; off elsewhere, so a single
+  // click has no double-click wait unless the user picks an action.
+  static uint8_t defaultDoublePwrBtn() {
+    return (BoardConfig::isX4Pro() || BoardConfig::isEegoA4()) ? PWR_FRONTLIGHT : IGNORE;
+  }
   uint16_t getPowerButtonDuration() const {
-    return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? 10 : PowerButtonInput::LONG_PRESS_MS;
+    if (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) return 10;
+    // EEGO A4: the hold must last 400 ms longer.
+    return PowerButtonInput::LONG_PRESS_MS + (BoardConfig::isEegoA4() ? 400 : 0);
   }
   int getReaderFontId() const;
   /// Built-in Noto Serif at the current reader size, used when a selected CJK-only

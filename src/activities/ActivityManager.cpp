@@ -503,6 +503,8 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
     }
   }
+  // Leaving a reader cleans on every board (upstream does so on the EEGO A4 alone: its gray page
+  // ghosts in Home's dithered areas after a fast refresh).
   replaceActivity(
       std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem, cleanInitialRefresh || leftReaderFrame));
 }
