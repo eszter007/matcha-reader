@@ -373,7 +373,7 @@ class DeckSync {
   // inAnki: this sync's deck search, sorted; a review's card missing from it may be deleted in Anki.
   bool pushReviews(ankideck::DeckInfo& info, const std::vector<uint64_t>& inAnki);
   // Sends one read of the log (history, then each card's schedule) and drops it from the log.
-  bool pushChunk(ankideck::DeckInfo& info, const std::string& key, const std::vector<flashcards::ReviewLogEntry>& log,
+  bool pushChunk(ankideck::DeckInfo& info, const std::string& key, std::vector<flashcards::ReviewLogEntry>& log,
                  const std::vector<uint64_t>& inAnki);
   // A sync's large tables and each card are checked first: a failed allocation aborts the device.
   bool roomFor(size_t bytes, const char* what);
@@ -957,13 +957,13 @@ bool DeckSync::pullReviews(ankideck::DeckInfo& info) {
   std::vector<flashcards::PulledReview> pulled;
   pulled.reserve(limit);
   const std::string key = ankideck::keyFor(info.id);
-  // Ratings made here and not yet sent: an Anki review of the same card from before one of them
-  // is already outdated on this device.
+  // Ratings made here and not yet sent: an Anki review of the same card from before one of them is
+  // already outdated on this device, and one at the same time is that rating, sent by a stopped sync.
   std::vector<flashcards::ReviewLogEntry> unsent;
   if (!flashcards::readReviewLog(key, unsent)) return false;
   const auto outdated = [&unsent](const uint64_t cardId, const int64_t timeMs) {
     for (const auto& e : unsent) {
-      if (e.id == cardId && e.timeMs > timeMs) return true;
+      if (e.id == cardId && e.timeMs >= timeMs) return true;
     }
     return false;
   };
@@ -1028,36 +1028,39 @@ bool DeckSync::pushReviews(ankideck::DeckInfo& info, const std::vector<uint64_t>
   }
 }
 
-bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
-                         const std::vector<flashcards::ReviewLogEntry>& log, const std::vector<uint64_t>& inAnki) {
+bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key, std::vector<flashcards::ReviewLogEntry>& log,
+                         const std::vector<uint64_t>& inAnki) {
   // History first, in batches. A review already in Anki (a sync cut off after its import) is a
-  // conflict for the whole batch, so a failed batch is retried one review at a time.
-  // Each review's time once: a batch refused for a conflict is sent again a review at a time.
+  // conflict for the whole batch, so a failed batch is retried one review at a time with the same ids.
   // Schedule-only entries (no rating: a mined card's progress from before reviews were logged)
   // send no history.
   std::vector<uint16_t> history;
-  std::vector<int64_t> stamps;
   history.reserve(log.size());  // at most MAX_LOG_ENTRIES
-  stamps.reserve(log.size());
+  bool restamped = false;
   for (size_t i = 0; i < log.size(); i++) {
     if (log[i].rating == 0) continue;
     history.push_back(static_cast<uint16_t>(i));
-    stamps.push_back(stampOf(log[i]));
+    const int64_t stamp = stampOf(log[i]);
+    restamped |= stamp != log[i].timeMs;
+    log[i].timeMs = stamp;
   }
+  // A time stampOf() changed is written to the log before the import, so a retry sends the same id
+  // and Anki rejects it as a duplicate instead of recording the review twice.
+  if (restamped && !flashcards::rewriteReviewLog(key, log)) return false;
   // One card deleted in Anki fails the whole batch with notFound. Such cards (sorted) are left out
   // of later imports, their reviews are dropped with the log, and they get no schedule calls; if the
   // reviews were kept, every later sync would stop on them. A card still in the deck search is not
   // taken for deleted: its notFound has another cause, and the sync stops.
   std::vector<uint64_t> gone;
   const auto isGone = [&gone](const uint64_t id) { return std::binary_search(gone.begin(), gone.end(), id); };
-  const auto importBatch = [this, &log, &history, &stamps, &isGone](const size_t from, const size_t count) {
+  const auto importBatch = [this, &log, &history, &isGone](const size_t from, const size_t count) {
     JsonDocument params, done;
     JsonArray reviews = params["reviews"].to<JsonArray>();
     for (size_t i = 0; i < count; i++) {
       const auto& e = log[history[from + i]];
       if (isGone(e.id)) continue;
       JsonObject r = reviews.add<JsonObject>();
-      r["id"] = std::to_string(stamps[from + i]);
+      r["id"] = std::to_string(e.timeMs);
       r["cardId"] = std::to_string(e.id);
       r["rating"] = RATING_NAMES[std::clamp<int>(e.rating, 1, 4) - 1];
       // A learning step is logged in minutes and reaches Anki in seconds, as its own log keeps it.
@@ -1094,7 +1097,8 @@ bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
       std::count_if(history.begin(), history.end(), [&](const uint16_t i) { return isGone(log[i].id); });
   // Past these reviews before the schedule calls, so the next pull does not take them for Anki's,
   // even when the sync stops partway through those calls.
-  for (const int64_t t : stamps) info.lastReviewId = std::max(info.lastReviewId, static_cast<uint64_t>(t));
+  for (const uint16_t i : history)
+    info.lastReviewId = std::max(info.lastReviewId, static_cast<uint64_t>(log[i].timeMs));
   if (!ankideck::writeInfo(info)) return false;
   // Then each reviewed card's resulting schedule.
   std::vector<uint64_t> ids;

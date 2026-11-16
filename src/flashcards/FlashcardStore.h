@@ -50,6 +50,8 @@ struct ReviewLogEntry {
 constexpr size_t MAX_LOG_ENTRIES = 200;
 bool readReviewLog(const std::string& deck, std::vector<ReviewLogEntry>& out);
 bool dropReviewLog(const std::string& deck, size_t count);
+// Replaces the oldest entries with these (as read by readReviewLog() and then changed).
+bool rewriteReviewLog(const std::string& deck, const std::vector<ReviewLogEntry>& oldest);
 
 // A review done in Anki, folded into the device's progress by a sync.
 struct PulledReview {

@@ -157,6 +157,17 @@ bool clockValid(const time_t now) { return now > 1577836800; }  // 2020-01-01
 
 constexpr size_t LOG_BYTES = 24;
 
+void encodeLogEntry(uint8_t* rec, const ReviewLogEntry& e) {
+  uint8_t* q = rec;
+  put(q, e.id);
+  put(q, e.timeMs);
+  put(q, e.interval);
+  put(q, e.previous);
+  put(q, e.rating);
+  put(q, e.kind);
+  put<uint16_t>(q, 0);
+}
+
 // Appends the ratings since the last save. Only a successful save drops them from RAM.
 bool appendLog(const std::string& deck, const std::vector<ReviewLogEntry>& entries) {
   if (entries.empty()) return true;
@@ -165,14 +176,7 @@ bool appendLog(const std::string& deck, const std::vector<ReviewLogEntry>& entri
   const uint64_t start = file.fileSize64();
   uint8_t rec[LOG_BYTES];
   for (const auto& e : entries) {
-    uint8_t* q = rec;
-    put(q, e.id);
-    put(q, e.timeMs);
-    put(q, e.interval);
-    put(q, e.previous);
-    put(q, e.rating);
-    put(q, e.kind);
-    put<uint16_t>(q, 0);
+    encodeLogEntry(rec, e);
     if (file.write(rec, sizeof(rec)) != sizeof(rec)) {
       // A partial record would shift every later one: drop the whole batch, retried at the next save.
       file.truncate(start);
@@ -999,6 +1003,27 @@ bool readReviewLog(const std::string& deck, std::vector<ReviewLogEntry>& out) {
   return true;
 }
 
+bool rewriteReviewLog(const std::string& deck, const std::vector<ReviewLogEntry>& oldest) {
+  const std::string path = logPath(deck);
+  const std::string tmp = path + ".tmp";
+  {
+    HalFile in, out;
+    if (!Storage.openFileForRead("FLASH", path, in) || !Storage.openFileForWrite("FLASH", tmp, out)) return false;
+    uint8_t rec[LOG_BYTES];
+    for (size_t i = 0; in.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec)); i++) {
+      if (i < oldest.size()) {
+        const uint8_t* p = rec;
+        if (take<uint64_t>(p) != oldest[i].id) return false;  // not the entries that were read
+        encodeLogEntry(rec, oldest[i]);
+      }
+      if (out.write(rec, sizeof(rec)) != sizeof(rec)) return false;
+    }
+    // A read error ends the loop early too: the copy would lose the rest of the log.
+    if (in.position() != in.fileSize()) return false;
+  }
+  return Storage.replaceFile(tmp.c_str(), path.c_str());
+}
+
 bool dropReviewLog(const std::string& deck, const size_t count) {
   const std::string path = logPath(deck);
   if (!Storage.exists(path.c_str())) return true;
@@ -1017,6 +1042,7 @@ bool dropReviewLog(const std::string& deck, const size_t count) {
     while (in.read(rec, sizeof(rec)) == static_cast<int>(sizeof(rec))) {
       if (out.write(rec, sizeof(rec)) != sizeof(rec)) return false;
     }
+    if (in.position() != in.fileSize()) return false;  // a read error, not the end of the log
   }
   return Storage.replaceFile(tmp.c_str(), path.c_str());
 }
