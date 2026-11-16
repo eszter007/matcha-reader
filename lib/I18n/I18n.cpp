@@ -156,7 +156,7 @@ const char* I18n::lookup(StrId id, bool& english) const {
   return lang.data + off;
 }
 
-void I18n::formatCount(char* out, const size_t size, const StrId id, const int n) const {
+void I18n::countForm(const StrId id, const int n, char* format, const size_t size) const {
   bool english = false;
   const char* form = lookup(id, english);
   const uint8_t pick = plural::form(english ? plural::Rule::OneOther : pluralRule(_language), n);
@@ -166,11 +166,21 @@ void I18n::formatCount(char* out, const size_t size, const StrId id, const int n
     form = bar + 1;
   }
   const char* end = strchr(form, '|');
-  char format[96];
-  const size_t len = std::min(end ? static_cast<size_t>(end - form) : strlen(form), sizeof(format) - 1);
+  const size_t len = std::min(end ? static_cast<size_t>(end - form) : strlen(form), size - 1);
   memcpy(format, form, len);
   format[len] = '\0';
+}
+
+void I18n::formatCount(char* out, const size_t size, const StrId id, const int n) const {
+  char format[96];
+  countForm(id, n, format, sizeof(format));
   snprintf(out, size, format, n);
+}
+
+void I18n::formatCountOf(char* out, const size_t size, const StrId id, const int position, const int total) const {
+  char format[96];
+  countForm(id, total, format, sizeof(format));
+  snprintf(out, size, format, position, total);
 }
 
 bool I18n::setLanguage(Language lang) {

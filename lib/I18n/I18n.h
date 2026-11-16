@@ -27,6 +27,9 @@ class I18n {
   /// Writes the form for n into out. A message with fewer forms uses its last; one that falls
   /// back to English follows the English rule.
   void formatCount(char* out, size_t size, StrId id, int n) const;
+  /// The same for a position in a counted list ("%d/%d book|%d/%d books"): the form follows the
+  /// total, and each form takes the position and then the total.
+  void formatCountOf(char* out, size_t size, StrId id, int position, int total) const;
 
   Language getLanguage() const { return _language; }
   /// Select the UI language. A language whose strings are compiled in switches with no I/O; any
@@ -59,6 +62,8 @@ class I18n {
   static const char* getCharacterSet(Language lang);
 
  private:
+  // The form of id for the count n, NUL-terminated in format (size > 0).
+  void countForm(StrId id, int n, char* format, size_t size) const;
   I18n() : _language(Language::EN) { i18n_strings::requireCurrentTable(); }
 
   // Reads PACK_DIR/<CODE>.cplang into _packBuffer and points _packStrings at it.
