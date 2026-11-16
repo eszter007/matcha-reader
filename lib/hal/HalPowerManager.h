@@ -17,6 +17,7 @@ extern HalPowerManager powerManager;  // Singleton
 class HalPowerManager {
   int normalFreq = 0;  // MHz
   bool isLowPower = false;
+  int lowFreq = 0;  // MHz while isLowPower
 
   mutable int _batteryCachedPercent = 0;         // Last read battery percentage (0-100)
   mutable unsigned long _batteryLastPollMs = 0;  // Timestamp of last battery read in milliseconds
@@ -43,6 +44,9 @@ class HalPowerManager {
 #else
   static constexpr int LOW_POWER_FREQ = 10;  // MHz
 #endif
+  // The USB serial (USB-Serial-JTAG on the C3) drops bytes at 10 MHz, so while USB is plugged in
+  // the low-power clock stays at this; on USB power the saving does not matter.
+  static constexpr int USB_MIN_FREQ = 80;                      // MHz
   static constexpr unsigned long IDLE_POWER_SAVING_MS = 3000;  // ms
   static constexpr unsigned long BATTERY_POLL_MS = 1500;       // ms
 

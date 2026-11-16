@@ -183,6 +183,8 @@ class HalGPIO {
 
   // Returns true once per edge (plug or unplug) since the last update()
   bool wasUsbStateChanged() const;
+  // isUsbConnected() as read by the last update(), without reading it again.
+  bool usbConnectedAtUpdate() const { return lastUsbConnected; }
 
   enum class WakeupReason { PowerButton, AfterFlash, AfterUSBPower, Other };
 

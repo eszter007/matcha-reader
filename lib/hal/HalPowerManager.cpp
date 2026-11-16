@@ -61,12 +61,17 @@ void HalPowerManager::setPowerSaving(bool enabled) {
   xSemaphoreTake(freqMutex, portMAX_DELAY);
   const bool locked = lockCount.load(std::memory_order_acquire) != 0;
 
-  if (!locked && enabled && !isLowPower) {
-    LOG_DBG("PWR", "Going to low-power mode");
-    if (setCpuFrequencyMhz(LOW_POWER_FREQ)) {
+  // Only the main loop passes enabled, right after its input update() read the USB state.
+  const int target =
+      LOW_POWER_FREQ < USB_MIN_FREQ && enabled && gpio.usbConnectedAtUpdate() ? USB_MIN_FREQ : LOW_POWER_FREQ;
+  if (!locked && enabled && (!isLowPower || lowFreq != target)) {
+    // Also when USB is plugged in or out while already in low power.
+    if (!isLowPower) LOG_DBG("PWR", "Going to low-power mode");
+    if (setCpuFrequencyMhz(target)) {
       isLowPower = true;
+      lowFreq = target;
     } else {
-      LOG_DBG("PWR", "Failed to set CPU frequency = %d MHz", LOW_POWER_FREQ);
+      LOG_DBG("PWR", "Failed to set CPU frequency = %d MHz", target);
     }
   } else if ((!enabled || locked) && isLowPower) {
     LOG_DBG("PWR", "Restoring normal CPU frequency");
