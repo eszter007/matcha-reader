@@ -370,9 +370,11 @@ class DeckSync {
   }
   bool deckUses(const std::string& name, const char* noteType);
   bool pullReviews(ankideck::DeckInfo& info);
-  bool pushReviews(ankideck::DeckInfo& info);
+  // inAnki: this sync's deck search, sorted; a review's card missing from it may be deleted in Anki.
+  bool pushReviews(ankideck::DeckInfo& info, const std::vector<uint64_t>& inAnki);
   // Sends one read of the log (history, then each card's schedule) and drops it from the log.
-  bool pushChunk(ankideck::DeckInfo& info, const std::string& key, const std::vector<flashcards::ReviewLogEntry>& log);
+  bool pushChunk(ankideck::DeckInfo& info, const std::string& key, const std::vector<flashcards::ReviewLogEntry>& log,
+                 const std::vector<uint64_t>& inAnki);
   // A sync's large tables and each card are checked first: a failed allocation aborts the device.
   bool roomFor(size_t bytes, const char* what);
 
@@ -1016,18 +1018,18 @@ bool DeckSync::pullReviews(ankideck::DeckInfo& info) {
   return true;
 }
 
-bool DeckSync::pushReviews(ankideck::DeckInfo& info) {
+bool DeckSync::pushReviews(ankideck::DeckInfo& info, const std::vector<uint64_t>& inAnki) {
   const std::string key = ankideck::keyFor(info.id);
   std::vector<flashcards::ReviewLogEntry> log;
   for (;;) {
     if (!flashcards::readReviewLog(key, log)) return false;
     if (log.empty()) return true;
-    if (!pushChunk(info, key, log)) return false;
+    if (!pushChunk(info, key, log, inAnki)) return false;
   }
 }
 
 bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
-                         const std::vector<flashcards::ReviewLogEntry>& log) {
+                         const std::vector<flashcards::ReviewLogEntry>& log, const std::vector<uint64_t>& inAnki) {
   // History first, in batches. A review already in Anki (a sync cut off after its import) is a
   // conflict for the whole batch, so a failed batch is retried one review at a time.
   // Each review's time once: a batch refused for a conflict is sent again a review at a time.
@@ -1042,11 +1044,18 @@ bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
     history.push_back(static_cast<uint16_t>(i));
     stamps.push_back(stampOf(log[i]));
   }
-  const auto importBatch = [this, &log, &history, &stamps](const size_t from, const size_t count) {
+  // One card deleted in Anki fails the whole batch with notFound. Such cards (sorted) are left out
+  // of later imports, their reviews are dropped with the log, and they get no schedule calls; if the
+  // reviews were kept, every later sync would stop on them. A card still in the deck search is not
+  // taken for deleted: its notFound has another cause, and the sync stops.
+  std::vector<uint64_t> gone;
+  const auto isGone = [&gone](const uint64_t id) { return std::binary_search(gone.begin(), gone.end(), id); };
+  const auto importBatch = [this, &log, &history, &stamps, &isGone](const size_t from, const size_t count) {
     JsonDocument params, done;
     JsonArray reviews = params["reviews"].to<JsonArray>();
     for (size_t i = 0; i < count; i++) {
       const auto& e = log[history[from + i]];
+      if (isGone(e.id)) continue;
       JsonObject r = reviews.add<JsonObject>();
       r["id"] = std::to_string(stamps[from + i]);
       r["cardId"] = std::to_string(e.id);
@@ -1063,16 +1072,26 @@ bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
       const uint8_t kind = e.kind & ~flashcards::ReviewLogEntry::MINUTES;
       r["kind"] = kind == 0 ? "learning" : (kind == 2 ? "relearning" : "review");
     }
+    if (reviews.size() == 0) return true;
     return client.callOperation("advanced.reviews.import", params, done, OPERATION_TIMEOUT);
   };
+  // No cancel inside the import: a stop between batches would leave lastReviewId behind reviews
+  // already in Anki, and the next pull would apply them again.
   for (size_t at = 0; at < history.size(); at += BATCH) {
     const size_t count = std::min(BATCH, history.size() - at);
     if (importBatch(at, count)) continue;
-    if (client.error().type != "conflict") return false;
+    if (client.error().type != "conflict" && client.error().type != "notFound") return false;
+    if (gone.capacity() == 0) gone.reserve(history.size());
     for (size_t i = 0; i < count; i++) {
-      if (!importBatch(at + i, 1) && client.error().type != "conflict") return false;
+      if (importBatch(at + i, 1) || client.error().type == "conflict") continue;
+      const uint64_t id = log[history[at + i]].id;
+      if (client.error().type != "notFound" || std::binary_search(inAnki.begin(), inAnki.end(), id)) return false;
+      LOG_INF("ANKI", "Card %llu is not in Anki: its reviews are dropped", id);
+      gone.insert(std::lower_bound(gone.begin(), gone.end(), id), id);
     }
   }
+  const size_t dropped =
+      std::count_if(history.begin(), history.end(), [&](const uint16_t i) { return isGone(log[i].id); });
   // Past these reviews before the schedule calls, so the next pull does not take them for Anki's,
   // even when the sync stops partway through those calls.
   for (const int64_t t : stamps) info.lastReviewId = std::max(info.lastReviewId, static_cast<uint64_t>(t));
@@ -1088,6 +1107,7 @@ bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
   if (!flashcards::readStates(key, ids, states, today)) return false;
   for (const auto& s : states) {
     if (cancelRequested()) return false;
+    if (isGone(s.id)) continue;
     JsonDocument due, ok;
     due["cardIds"][0] = std::to_string(s.id);
     due["days"] = std::to_string(s.due > today ? s.due - today : 0);
@@ -1115,7 +1135,7 @@ bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
       LOG_INF("ANKI", "No FSRS memory for %llu", s.id);
     }
   }
-  result.reviewsPushed += static_cast<uint32_t>(history.size());
+  result.reviewsPushed += static_cast<uint32_t>(history.size() - dropped);
   return flashcards::dropReviewLog(key, log.size());
 }
 
@@ -1158,7 +1178,7 @@ bool DeckSync::run(const std::string& name, const std::string& deckId, const std
   info.refetchedUpTo = 0;
   info.fetchVersion = FETCH_VERSION;
   // Pull before push: Anki's reviews land first, then the device's own go out on top.
-  if (!pullReviews(info) || !pushReviews(info)) return false;
+  if (!pullReviews(info) || !pushReviews(info, ids)) return false;
   // Past the schedule changes just made, so they are not pulled back as Anki's.
   JsonDocument latestParams, latest;
   latestParams["deck"]["id"] = serverDeckId;

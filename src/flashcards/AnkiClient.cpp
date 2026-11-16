@@ -143,7 +143,11 @@ bool AnkiClient::callOperation(const char* method, const JsonDocument& params, J
   const uint32_t start = millis();
   for (;;) {
     JsonDocument op;
-    if (!call("operations.get", poll, op)) return false;
+    if (!call("operations.get", poll, op)) {
+      // The server lost the operation (a restart): not the operation's own notFound.
+      if (error_.type == "notFound") error_.type = "operationLost";
+      return false;
+    }
     const char* state = op["state"] | "";
     if (std::strcmp(state, "succeeded") == 0) {
       result.set(op["result"]);
