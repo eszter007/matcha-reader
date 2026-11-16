@@ -5,11 +5,12 @@ The reader cannot open an .apkg itself (it is a SQLite database, often zstd-comp
 script does what a sync would: it renders every card the way Anki does, cleans the HTML for the
 reader, and writes the same files the sync writes:
 
-    <out>/<deck id>.json, <deck id>.cards.bin
-    <out>/<deck id>/style.css, <card id>q.xhtml, <card id>a.xhtml, images
+    <out>/<deck id>.json, <deck id>.cards.bin, <deck id>.css, and an empty <out>/<deck id>/
+    <out>/../anki-cards/<deck id>/<NN>/<card id>q.xhtml, <card id>a.xhtml  (NN: card id % 64)
+    <out>/../anki-cards/<deck id>/media/  the images
 
-Copy them into the SD card's system folder, under `.system/anki/` (or pass --sd with the card's
-mount point and they are written there). Over a deck in the older layout, with deck.json and
+Copy them into the SD card's system folder, `<out>` being `.system/anki/` (or pass --sd with the
+card's mount point and they are written there). Over a deck in the older layout, with deck.json and
 cards.bin inside its folder, the script removes those two and moves the folder's buried.bin and
 leeches.bin beside it, as the reader would. Review progress then lives on the reader only.
 
@@ -131,9 +132,17 @@ def copy_image(media_dir: str, name: str, out_dir: str) -> None:
         shutil.copyfile(src, dst)
 
 
+SIDE_FOLDERS = 64  # as ankideck::SIDE_FOLDERS
+
+
 def export_deck(col: Collection, deck_id: int, deck_name: str, out_root: str) -> int:
-    out_dir = os.path.join(out_root, str(deck_id))
+    out_dir = os.path.join(out_root, str(deck_id))  # the deck's marker folder
     os.makedirs(out_dir, exist_ok=True)
+    # Sides and images in small folders of their own: one folder of thousands of files is slow to
+    # search on the reader's FAT card.
+    cards_dir = os.path.join(os.path.dirname(os.path.normpath(out_root)), "anki-cards", str(deck_id))
+    media_dir = os.path.join(cards_dir, "media")
+    os.makedirs(media_dir, exist_ok=True)
     # The older layout kept the deck's small files inside its folder; the reader looks beside it.
     for name in ("buried.bin", "leeches.bin"):
         old, new = os.path.join(out_dir, name), os.path.join(out_root, f"{deck_id}.{name}")
@@ -165,21 +174,23 @@ def export_deck(col: Collection, deck_id: int, deck_name: str, out_root: str) ->
             flags |= TOO_LARGE
             too_large += 1
         else:
+            side_dir = os.path.join(cards_dir, f"{card_id % SIDE_FOLDERS:02d}")
+            os.makedirs(side_dir, exist_ok=True)
             for suffix, side in zip(("q", "a"), sides):
-                with open(os.path.join(out_dir, f"{card_id}{suffix}.xhtml"), "w", encoding="utf-8") as f:
+                with open(os.path.join(side_dir, f"{card_id}{suffix}.xhtml"), "w", encoding="utf-8") as f:
                     f.write(side)
                 for name in re.findall(r'src="([^"]+)"', side):
-                    copy_image(col.media.dir(), html_lib.unescape(name), out_dir)
+                    copy_image(col.media.dir(), html_lib.unescape(name), media_dir)
         records.append(struct.pack("<QQII", card_id, note.id, int(note.mod), flags))
     with open(os.path.join(out_root, f"{deck_id}.cards.bin"), "wb") as f:
         f.write(b"".join(records))
     css_text = "\n".join(css_parts)
-    with open(os.path.join(out_dir, "style.css"), "w", encoding="utf-8") as f:
+    with open(os.path.join(out_root, f"{deck_id}.css"), "w", encoding="utf-8") as f:
         f.write(css_text[:MAX_CSS])
     with open(os.path.join(out_root, f"{deck_id}.json"), "w", encoding="utf-8") as f:
-        json.dump({"name": deck_name, "lastReviewId": 0}, f, ensure_ascii=False)
+        json.dump({"name": deck_name, "lastReviewId": 0, "cardsMoved": True}, f, ensure_ascii=False)
     note = f", {too_large} too large for the reader" if too_large else ""
-    print(f"  {deck_name}: {len(records)} cards{note} -> {out_dir}")
+    print(f"  {deck_name}: {len(records)} cards{note} -> {cards_dir}")
     return len(records)
 
 

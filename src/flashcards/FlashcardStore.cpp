@@ -909,7 +909,15 @@ bool Session::current(CardText& out) const {
     out.backPath = ankideck::backPath(deckId, item.id);
     out.cssPath = ankideck::cssPath(deckId);
     out.imageCacheDir = ankideck::imageCacheDir(deckId);
+    out.mediaDir = ankideck::mediaDir(deckId);
     out.tooLarge = (item.offset & ankideck::TOO_LARGE) != 0;
+    // A deck the sync has not moved yet keeps its sides, and their images, where older syncs wrote
+    // them. Asking in the new place costs a few ms: its folders hold a few dozen files.
+    if (!out.tooLarge && !Storage.exists(out.frontPath.c_str())) {
+      out.frontPath = ankideck::oldFrontPath(deckId, item.id);
+      out.backPath = ankideck::oldBackPath(deckId, item.id);
+      out.mediaDir.clear();
+    }
     return true;
   }
   HalFile file;

@@ -84,10 +84,26 @@ std::string metaPath(const std::string& deckId, const char* suffix) {
 
 std::string idOf(const std::string& key) { return isAnkiKey(key) ? key.substr(std::strlen(KEY_PREFIX)) : key; }
 
+std::string cardsDir(const std::string& deckId) { return sdsystem::path(("anki-cards/" + deckId + "/").c_str()); }
+
+std::string sideFolder(const std::string& deckId, const unsigned index) {
+  char folder[4];
+  snprintf(folder, sizeof(folder), "%02u", index % SIDE_FOLDERS);
+  return cardsDir(deckId) + folder + "/";
+}
+
+std::string mediaDir(const std::string& deckId) { return cardsDir(deckId) + "media/"; }
+
 std::string frontPath(const std::string& deckId, const uint64_t cardId) {
-  return dirFor(deckId) + std::to_string(cardId) + "q.xhtml";
+  return sideFolder(deckId, static_cast<unsigned>(cardId % SIDE_FOLDERS)) + std::to_string(cardId) + "q.xhtml";
 }
 std::string backPath(const std::string& deckId, const uint64_t cardId) {
+  return sideFolder(deckId, static_cast<unsigned>(cardId % SIDE_FOLDERS)) + std::to_string(cardId) + "a.xhtml";
+}
+std::string oldFrontPath(const std::string& deckId, const uint64_t cardId) {
+  return dirFor(deckId) + std::to_string(cardId) + "q.xhtml";
+}
+std::string oldBackPath(const std::string& deckId, const uint64_t cardId) {
   return dirFor(deckId) + std::to_string(cardId) + "a.xhtml";
 }
 // Beside the folder too: a refetch rewrites it, which puts it at the folder's end, two lookups per
@@ -114,8 +130,9 @@ void forgetDeckFiles(const std::string& deckId) {
     if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
   }
   // Its images' decoded pixels: a new image of the same name and size would otherwise show the old.
-  const std::string images = imageCacheDir(deckId);
-  if (Storage.exists(images.c_str())) Storage.removeDir(images.c_str());
+  for (const std::string& folder : {imageCacheDir(deckId), cardsDir(deckId)}) {
+    if (Storage.exists(folder.c_str())) Storage.removeDir(folder.c_str());
+  }
 }
 
 bool readInfo(const std::string& deckId, DeckInfo& out) {
@@ -152,6 +169,7 @@ bool readInfo(const std::string& deckId, DeckInfo& out) {
   out.typesMod = doc["typesMod"] | static_cast<uint32_t>(0);
   out.refetchAll = doc["refetchAll"] | false;
   out.refetchedUpTo = doc["refetchedUpTo"] | static_cast<uint64_t>(0);
+  out.cardsMoved = doc["cardsMoved"] | false;
   out.cssHashes.clear();
   for (JsonVariantConst h : doc["cssHashes"].as<JsonArrayConst>()) {
     if (out.cssHashes.size() < MAX_CSS_HASHES) out.cssHashes.push_back(h.as<uint32_t>());
@@ -194,6 +212,7 @@ bool writeInfo(const DeckInfo& info) {
     doc["refetchAll"] = true;
     if (info.refetchedUpTo > 0) doc["refetchedUpTo"] = info.refetchedUpTo;
   }
+  if (info.cardsMoved) doc["cardsMoved"] = true;
   if (!info.cssHashes.empty()) {
     JsonArray hashes = doc["cssHashes"].to<JsonArray>();
     for (const uint32_t h : info.cssHashes) hashes.add(h);

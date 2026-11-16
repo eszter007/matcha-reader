@@ -14,7 +14,8 @@ class GfxRenderer;
 // way the reader lays out a chapter. Draw a page with Page::render at any origin. False when
 // the page cannot be laid out (low heap, unreadable file); pagesOut is then empty.
 // imageCacheDir (with a trailing '/', made if missing) keeps the images' decoded pixels; empty keeps
-// them next to each image.
+// them next to each image. mediaDir (trailing '/') is where the side's images are; empty: beside it.
 bool buildCardHtmlPages(GfxRenderer& renderer, const std::string& xhtmlPath, const std::string& cssPath,
                         uint16_t viewportWidth, uint16_t viewportHeight, int fontId, bool furigana,
-                        std::vector<std::unique_ptr<Page>>& pagesOut, const std::string& imageCacheDir = "");
+                        std::vector<std::unique_ptr<Page>>& pagesOut, const std::string& imageCacheDir = "",
+                        const std::string& mediaDir = "");

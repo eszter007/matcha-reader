@@ -346,7 +346,14 @@ class DeckSync {
   // MEDIA_STREAM_VERSION. True when the record's MEDIA_MISSING flag changed.
   bool recheckMedia(const std::string& deckId, const std::string& dir, ankideck::CardRecord& r, std::string& scratch,
                     size_t limit, std::vector<std::string>& failedMedia);
-  bool checkAllMedia = false;             // set for the first sync after MEDIA_STREAM_VERSION
+  bool checkAllMedia = false;  // set for the first sync after MEDIA_STREAM_VERSION
+  // Moves an older deck's sides and images out of its folder (ankideck::cardsDir()). False when
+  // cancelled or a file could not be moved; the next sync goes on from there.
+  bool moveCardFiles(const std::string& deckId);
+  // Makes the folder a card's sides go in, once a sync.
+  bool sideFolderFor(const std::string& deckId, uint64_t cardId);
+  uint64_t sideFoldersMade = 0;  // bit per side folder made this sync
+  static_assert(ankideck::SIDE_FOLDERS <= 64, "one bit per side folder");
   std::vector<std::string> presentMedia;  // images with nothing left to do this sync: on the card, or not kept
   void saveBuried(const std::string& name, const std::string& deckId);
   bool fetchCss(const JsonDocument& renderParams, const std::string& cssPath, uint32_t hash);
@@ -742,46 +749,121 @@ void dropRemoved(const std::string& deckId, ankideck::IndexReader& known, const 
   }
 }
 
-// Marks in `fronts` (one bit per entry of the sorted `ids`) the cards whose front file is in the deck
-// folder, read in one pass. Asking for each card instead costs about a quarter second apiece in a
-// 2000-card folder (FAT reads the folder from the start for every name), minutes for a whole deck;
-// the pass takes a few seconds. False when the folder cannot be read, or `cancelled` says stop: then
-// ask per card.
+// Marks in `fronts` (one bit per entry of the sorted `ids`) the cards whose front file is in the deck's
+// side folders, read in one pass over them. False when they cannot be read, or `cancelled` says
+// stop: then ask per card.
 template <typename Cancelled>
-bool listFronts(const std::string& dir, const std::vector<uint64_t>& ids, std::vector<uint8_t>& fronts,
+bool listFronts(const std::string& deckId, const std::vector<uint64_t>& ids, std::vector<uint8_t>& fronts,
                 Cancelled cancelled) {
   fronts.assign((ids.size() + 7) / 8, 0);
-  HalFile folder = Storage.open(dir.c_str());
-  if (!folder || !folder.isDirectory()) return false;
   static constexpr char SUFFIX[] = "q.xhtml";
   static constexpr size_t SUFFIX_LEN = sizeof(SUFFIX) - 1;
   static constexpr size_t MAX_DIGITS = 20;  // as many as a uint64_t has
   char name[40];
   size_t seen = 0;
-  for (HalFile entry = folder.openNextFile(); entry; entry = folder.openNextFile()) {
-    if (++seen % 64 == 0 && cancelled()) return false;
-    const size_t len = entry.getName(name, sizeof(name));
-    if (len <= SUFFIX_LEN || len >= sizeof(name) || strcmp(name + len - SUFFIX_LEN, SUFFIX) != 0) continue;
-    // Only names the sync writes: no leading zero, no more digits than an id has.
-    if (len - SUFFIX_LEN > MAX_DIGITS || name[0] == '0') continue;
-    uint64_t id = 0;
-    bool digits = true;
-    for (size_t i = 0; i < len - SUFFIX_LEN && digits; i++) {
-      digits = name[i] >= '0' && name[i] <= '9';
-      id = id * 10 + static_cast<uint64_t>(name[i] - '0');
+  for (unsigned f = 0; f < ankideck::SIDE_FOLDERS; f++) {
+    HalFile folder = Storage.open(ankideck::sideFolder(deckId, f).c_str());
+    if (!folder) continue;  // no card of the deck goes in it yet
+    if (!folder.isDirectory()) return false;
+    for (HalFile entry = folder.openNextFile(); entry; entry = folder.openNextFile()) {
+      if (++seen % 64 == 0 && cancelled()) return false;
+      const size_t len = entry.getName(name, sizeof(name));
+      if (len <= SUFFIX_LEN || len >= sizeof(name) || strcmp(name + len - SUFFIX_LEN, SUFFIX) != 0) continue;
+      // Only names the sync writes: no leading zero, no more digits than an id has.
+      if (len - SUFFIX_LEN > MAX_DIGITS || name[0] == '0') continue;
+      uint64_t id = 0;
+      bool digits = true;
+      for (size_t i = 0; i < len - SUFFIX_LEN && digits; i++) {
+        digits = name[i] >= '0' && name[i] <= '9';
+        id = id * 10 + static_cast<uint64_t>(name[i] - '0');
+      }
+      if (!digits) continue;
+      const auto it = std::lower_bound(ids.begin(), ids.end(), id);
+      if (it == ids.end() || *it != id) continue;
+      const size_t i = static_cast<size_t>(it - ids.begin());
+      fronts[i / 8] |= static_cast<uint8_t>(1u << (i % 8));
     }
-    if (!digits) continue;
-    const auto it = std::lower_bound(ids.begin(), ids.end(), id);
-    if (it == ids.end() || *it != id) continue;
-    const size_t i = static_cast<size_t>(it - ids.begin());
-    fronts[i / 8] |= static_cast<uint8_t>(1u << (i % 8));
   }
+  return true;
+}
+
+// A card side's name as the sync writes it ("<card id>q.xhtml" or "a.xhtml"): its card id and side.
+bool parseSideName(const char* name, const size_t len, uint64_t& id, bool& back) {
+  static constexpr size_t EXT_LEN = sizeof(".xhtml") - 1;
+  if (len < EXT_LEN + 2 || len - EXT_LEN - 1 > 20 || strcmp(name + len - EXT_LEN, ".xhtml") != 0) return false;
+  const char side = name[len - EXT_LEN - 1];
+  if ((side != 'q' && side != 'a') || name[0] == '0') return false;
+  id = 0;
+  for (size_t i = 0; i + EXT_LEN + 1 < len; i++) {
+    if (name[i] < '0' || name[i] > '9') return false;
+    id = id * 10 + static_cast<uint64_t>(name[i] - '0');
+  }
+  back = side == 'a';
+  return true;
+}
+
+bool DeckSync::sideFolderFor(const std::string& deckId, const uint64_t cardId) {
+  const unsigned index = static_cast<unsigned>(cardId % ankideck::SIDE_FOLDERS);
+  if ((sideFoldersMade >> index) & 1) return true;
+  if (!Storage.ensureDirectoryExists(ankideck::sideFolder(deckId, index).c_str())) return false;
+  sideFoldersMade |= 1ULL << index;
+  return true;
+}
+
+// One pass over the old folder, each file moved through the handle the pass already has: no name
+// is looked up there. Older pixel caches and leftovers of cut-off writes stay behind.
+bool DeckSync::moveCardFiles(const std::string& deckId) {
+  HalFile folder = Storage.open(ankideck::dirFor(deckId).c_str());
+  if (!folder || !folder.isDirectory()) return true;  // a new deck: nothing to move
+  const std::string media = ankideck::mediaDir(deckId);
+  if (!Storage.ensureDirectoryExists(media.c_str())) return false;
+  static constexpr const char* LEAVE[] = {".pxc", ".part", ".tmp", ".ckp"};
+  static constexpr const char* KEEP_NAMES[] = {"style.css", "deck.json", "cards.bin", "buried.bin", "leeches.bin"};
+  char name[64];
+  size_t seen = 0, moved = 0, there = 0;
+  for (HalFile entry = folder.openNextFile(); entry; entry = folder.openNextFile()) {
+    if (++seen % 32 == 0 && cancelRequested()) return false;
+    if (entry.isDirectory()) continue;
+    const size_t len = entry.getName(name, sizeof(name));
+    if (len == 0 || len >= sizeof(name)) continue;
+    const auto endsWith = [&](const char* suffix) {
+      const size_t n = strlen(suffix);
+      return len >= n && strcmp(name + len - n, suffix) == 0;
+    };
+    if (std::any_of(std::begin(LEAVE), std::end(LEAVE), endsWith)) continue;
+    // The deck's own small files move beside the folder (ankideck::metaPath), not here.
+    if (std::any_of(std::begin(KEEP_NAMES), std::end(KEEP_NAMES),
+                    [&](const char* n) { return strcmp(name, n) == 0; })) {
+      continue;
+    }
+    uint64_t id = 0;
+    bool back = false;
+    std::string to;
+    if (parseSideName(name, len, id, back)) {
+      if (!sideFolderFor(deckId, id)) return false;
+      to = back ? ankideck::backPath(deckId, id) : ankideck::frontPath(deckId, id);
+    } else {
+      to = media + name;
+    }
+    // A newer copy written there already (an earlier move cut short): this one stays behind.
+    if (Storage.exists(to.c_str())) {
+      there++;
+      continue;
+    }
+    if (!entry.rename(to.c_str())) {
+      LOG_ERR("ANKI", "Could not move %s to %s", name, to.c_str());
+      return false;
+    }
+    moved++;
+  }
+  LOG_INF("ANKI", "Deck %s: %u files moved out of its folder, %u already there", deckId.c_str(),
+          static_cast<unsigned>(moved), static_cast<unsigned>(there));
   return true;
 }
 
 bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, const std::vector<uint64_t>& ids,
                             const std::vector<uint64_t>* edited) {
-  const std::string dir = ankideck::dirFor(deckId);
+  const std::string dir = ankideck::mediaDir(deckId);  // the images; the sides are in side folders
   // What is already here, and the new index, both on the card: a large deck's two tables would
   // not fit in RAM beside Wi-Fi.
   ankideck::IndexReader known;
@@ -814,7 +896,8 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
   enum class Listing : uint8_t { NotYet, Listed, PerCard } listing = edited ? Listing::PerCard : Listing::NotYet;
   const auto hasFront = [&](const size_t i) {
     if (listing == Listing::NotYet) {
-      listing = listFronts(dir, ids, fronts, [this] { return cancelRequested(); }) ? Listing::Listed : Listing::PerCard;
+      listing =
+          listFronts(deckId, ids, fronts, [this] { return cancelRequested(); }) ? Listing::Listed : Listing::PerCard;
     }
     // A card not seen is asked about too: a read error ends a folder walk early, and taking the
     // rest as missing would fetch them all again. Only cards really missing pay for the lookup.
@@ -919,6 +1002,7 @@ bool DeckSync::refreshCards(const std::string& name, const std::string& deckId, 
         // Room for the cleaned side, about as long as the side itself.
         const size_t sideBytes = std::max(side[0] ? strlen(side[0]) : 0, side[1] ? strlen(side[1]) : 0);
         if (!roomFor(std::min(sideBytes + 1024, sideLimit), "a card")) return Fetch::NoRoom;
+        if (!sideFolderFor(deckId, r.cardId)) return Fetch::Failed;
         for (unsigned k = 0; k < 2; k++) {
           if ((sides & (1U << k)) == 0) continue;
           const bool written = writeSide(paths[k], side[k] ? side[k] : "", sideLimit, scratch, cssPath, *info);
@@ -1200,11 +1284,20 @@ bool DeckSync::run(const std::string& name, const std::string& deckId, const std
   if (!Storage.exists(ankideck::dirFor(deckId).c_str())) ankideck::forgetDeckFiles(deckId);
   if (!Storage.ensureDirectoryExists(ankideck::dirFor(deckId).c_str())) return false;
   ankideck::DeckInfo info;
-  if (!ankideck::readInfo(deckId, info)) {
+  const bool listed = ankideck::readInfo(deckId, info);
+  if (!listed) {
     info.id = deckId;
     info.name = name;
   }
   info.name = name;
+  if (!info.cardsMoved) {
+    if (!moveCardFiles(deckId)) return false;
+    info.cardsMoved = true;
+    // Saved now for a deck already listed: the rest of the sync may fail. A new deck's file is
+    // written once it has its cards, as before.
+    if (listed && !ankideck::writeInfo(info)) return false;
+  }
+  if (!Storage.ensureDirectoryExists(ankideck::mediaDir(deckId).c_str())) return false;
   readPreset(presetId, info);
   const bool leechesSent = pushLeeches(deckId, info.leechSuspend);
   retryTooLarge = info.fetchVersion < FETCH_VERSION;
