@@ -76,6 +76,9 @@ constexpr const char* MIGAKU_PREFIX = "m";
 inline bool isMigakuKey(const std::string& key) { return key.rfind(std::string(KEY_PREFIX) + MIGAKU_PREFIX, 0) == 0; }
 inline std::string keyFor(const std::string& deckId) { return KEY_PREFIX + deckId; }
 std::string dirFor(const std::string& deckId);  // the deck's card folder, with a trailing '/'
+// Where the deck's card images keep their decoded pixels (the reader's .pxc files), with a trailing
+// '/': not the card folder, where a name costs a quarter second to find. Made when first needed.
+std::string imageCacheDir(const std::string& deckId);
 // One of the deck's small files beside that folder (suffix ".json", ".cards.bin"...): a lookup in a
 // folder of thousands of cards costs a quarter second. Moves an older layout's files on first use.
 std::string metaPath(const std::string& deckId, const char* suffix);

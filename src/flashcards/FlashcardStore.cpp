@@ -908,6 +908,7 @@ bool Session::current(CardText& out) const {
     out.frontPath = ankideck::frontPath(deckId, item.id);
     out.backPath = ankideck::backPath(deckId, item.id);
     out.cssPath = ankideck::cssPath(deckId);
+    out.imageCacheDir = ankideck::imageCacheDir(deckId);
     out.tooLarge = (item.offset & ankideck::TOO_LARGE) != 0;
     return true;
   }

@@ -115,7 +115,8 @@ struct CardText {
   std::string frontPath;
   std::string backPath;
   std::string cssPath;
-  bool tooLarge = false;  // Anki's rendering did not fit the device
+  std::string imageCacheDir;  // where its images' decoded pixels are kept
+  bool tooLarge = false;      // Anki's rendering did not fit the device
 };
 
 // The user's scheduling settings (Settings > Flashcards), or an Anki deck's own preset where its

@@ -24,7 +24,8 @@ constexpr size_t MAX_ELEMENTS = 512;
 
 bool buildCardHtmlPages(GfxRenderer& renderer, const std::string& xhtmlPath, const std::string& cssPath,
                         const uint16_t viewportWidth, const uint16_t viewportHeight, const int fontId,
-                        const bool furigana, std::vector<std::unique_ptr<Page>>& pagesOut) {
+                        const bool furigana, std::vector<std::unique_ptr<Page>>& pagesOut,
+                        const std::string& imageCacheDir) {
   pagesOut.clear();
   if (ESP.getFreeHeap() < MIN_FREE_HEAP || ESP.getMaxAllocHeap() < MIN_MAX_ALLOC) {
     LOG_ERR("CARD", "Low heap for a card page (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
@@ -78,6 +79,10 @@ bool buildCardHtmlPages(GfxRenderer& renderer, const std::string& xhtmlPath, con
     } else {
       parser->setTextSpacing(SETTINGS.getCharacterSpacing(), SETTINGS.wordSpacing);
       parser->setParagraphIndentSpaces(0);
+      // Only when the folder is there: otherwise each image caches next to itself, as before.
+      if (!imageCacheDir.empty() && Storage.ensureDirectoryExists(imageCacheDir.c_str())) {
+        parser->setPixelCacheDir(imageCacheDir);
+      }
       // The card's base text at the reader's size: deck CSS is sized for a desktop screen. The
       // `card` class is the wrapper AnkiSync writes around each side.
       parser->setCardFontBase(cardBasePx(css.resolveStyle("div", "card")));

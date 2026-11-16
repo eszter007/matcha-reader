@@ -72,6 +72,8 @@ void moveOutOfFolder(const std::string& deckId) {
 
 std::string dirFor(const std::string& deckId) { return sdsystem::path(("anki/" + deckId + "/").c_str()); }
 
+std::string imageCacheDir(const std::string& deckId) { return sdsystem::path(("anki-cache/" + deckId + "/").c_str()); }
+
 // Not in the deck's folder: that holds two files per card and their images, and FAT finds a name
 // by reading the folder through -- about 250 ms a lookup in a 2000-card deck, every time.
 std::string metaPath(const std::string& deckId, const char* suffix) {

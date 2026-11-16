@@ -863,7 +863,7 @@ void FlashcardReviewActivity::layoutHtmlSide() {
   const Rect4 body = htmlBodyRect();
   const std::string& path = showBack ? card.backPath : card.frontPath;
   if (!buildCardHtmlPages(renderer, path, card.cssPath, static_cast<uint16_t>(body.w), static_cast<uint16_t>(body.h),
-                          htmlFont(), /*furigana=*/true, htmlPages)) {
+                          htmlFont(), /*furigana=*/true, htmlPages, card.imageCacheDir)) {
     LOG_ERR("FLASH", "Card side %s not laid out", path.c_str());
     // Only now is the front looked up: asking first for every card costs a quarter second each in
     // a big deck's folder.
