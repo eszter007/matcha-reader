@@ -31,7 +31,7 @@ python3 tools/anki_import/apkg_to_flashcards.py deck.apkg --out ./decks --deck "
 
 ### Two-way sync
 
-Under **Settings → Connectivity → Flashcards Sync**, enter the address and key of one of these as **Server Address** and **Server Key** (or, with **Anki Server** set to **Own**, as **Anki Address** and **Anki Key**):
+Under **Settings → Connectivity → Flashcards Sync**, enter the address and key of one of these as **Server Address** and **Server Key** (or, with **Anki Server** set to **Own Server**, as **Anki Address** and **Anki Key**):
 
 - Anki desktop 26.08 or later, with AnkiConnect
 - the companion server, [matcha-anki-server](https://github.com/eszter007/matcha-anki-server), which you run yourself with Docker

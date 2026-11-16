@@ -380,6 +380,12 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
            },
            "syncKey")
            .withObfuscated());
+  {
+    SettingInfo test = SettingInfo::Action(StrId::STR_ANKI_TEST, SettingAction::FlashcardSyncTest);
+    test.category = StrId::STR_FLASHCARD_SYNC;
+    test.webHidden = true;  // needs the device's own Wi-Fi
+    emit(std::move(test));
+  }
 
   const std::vector<StrId> serverValues = {StrId::STR_STATE_OFF, StrId::STR_SYNC_SAME_SERVER,
                                            StrId::STR_SYNC_OWN_SERVER};
@@ -467,12 +473,6 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
         FLASHCARD_SYNC_STORE.saveToFile();
       },
       "syncMinedTo", StrId::STR_FLASHCARD_SYNC));
-  {
-    SettingInfo test = SettingInfo::Action(StrId::STR_ANKI_TEST, SettingAction::FlashcardSyncTest);
-    test.category = StrId::STR_FLASHCARD_SYNC;
-    test.webHidden = true;  // needs the device's own Wi-Fi
-    emit(std::move(test));
-  }
 
   // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
   emit(SettingInfo::DynamicString(

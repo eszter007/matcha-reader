@@ -27,6 +27,9 @@
 #include "network/WifiPowerSaveGuard.h"
 
 namespace {
+// Between a service's name and its test result in the message.
+constexpr char RESULT_SEPARATOR = '\x1F';
+
 // The outcome carried across the restart between services: three lines.
 std::string stashPath() { return sdsystem::path("flashcard_sync_pending.txt"); }
 
@@ -172,7 +175,8 @@ void AnkiSyncActivity::pollCancel(void* ctx) {
   self->requestUpdate(true);
 }
 
-// One line per service that is on.
+// One block per service that is on: its name, then the result. Blocks are separated by '\n', and
+// the name from the result by RESULT_SEPARATOR.
 void AnkiSyncActivity::test() {
   WifiPowerSaveGuard psGuard;
   std::string text;
@@ -186,11 +190,13 @@ void AnkiSyncActivity::test() {
         ankisync::testConnection(client, version)) {
       snprintf(line, sizeof(line), I18n::getInstance().get(service.connected), version.c_str());
     } else {
-      snprintf(line, sizeof(line), tr(STR_SYNC_SERVICE_LINE), service.name, errorText(client.error(), service));
+      snprintf(line, sizeof(line), "%s", errorText(client.error(), service));
       failed = true;
     }
     client.end();
-    if (!text.empty()) text += "\n";
+    if (!text.empty()) text += '\n';
+    text += service.name;
+    text += RESULT_SEPARATOR;
     text += line;
   }
   setStatus(failed ? State::Failed : State::Done, text);
@@ -380,20 +386,29 @@ void AnkiSyncActivity::render(RenderLock&&) {
     UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID, top - 40, tr(STR_ANKI_SYNC_FAILED), true,
                               EpdFontFamily::BOLD);
   }
-  if (message.find('\n') == std::string::npos) {
+  if (message.find(RESULT_SEPARATOR) == std::string::npos) {
     UITheme::drawCenteredWrappedText(renderer, Rect{screen.x + 30, top, screen.width - 60, 120}, UI_10_FONT_ID,
                                      message.c_str(), 4);
   } else {
-    // The test's lines, one per service: each wraps in its own block.
-    const int block = 4 * renderer.getLineHeight(UI_10_FONT_ID);
+    // The test's blocks, one per service: the name in bold, the result wrapped below it.
+    const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+    const int block = 5 * lineHeight;
     int y = top - block / 2;
     size_t start = 0;
     while (start < message.size()) {
       size_t end = message.find('\n', start);
       if (end == std::string::npos) end = message.size();
-      const std::string line = message.substr(start, end - start);
-      UITheme::drawCenteredWrappedText(renderer, Rect{screen.x + 30, y, screen.width - 60, block}, UI_10_FONT_ID,
-                                       line.c_str(), 4);
+      const size_t split = message.find(RESULT_SEPARATOR, start);
+      const bool named = split != std::string::npos && split < end;
+      const std::string name = named ? message.substr(start, split - start) : std::string();
+      const std::string result = message.substr(named ? split + 1 : start, end - (named ? split + 1 : start));
+      int textTop = y;
+      if (named) {
+        UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, y, name.c_str(), true, EpdFontFamily::BOLD);
+        textTop += lineHeight;
+      }
+      UITheme::drawCenteredWrappedText(renderer, Rect{screen.x + 30, textTop, screen.width - 60, 4 * lineHeight},
+                                       UI_10_FONT_ID, result.c_str(), 4);
       y += block + 10;
       start = end + 1;
     }

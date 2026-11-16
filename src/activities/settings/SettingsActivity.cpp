@@ -55,6 +55,59 @@ namespace {
 // (it stays in the shared list for the web settings API).
 SettingsSection sectionFor(const SettingInfo& setting);
 
+// The Flashcards Sync group a row starts, or nullptr. Each group's first row is always shown.
+const char* flashcardSyncHeading(const StrId row) {
+  switch (row) {
+    case StrId::STR_SYNC_SERVER_ADDRESS:
+      return tr(STR_SYNC_SERVER_HEADING);
+    case StrId::STR_ANKI_SERVER:
+      return tr(STR_ANKI_NAME);
+    case StrId::STR_MIGAKU_SERVER:
+      return tr(STR_MIGAKU_NAME);
+    case StrId::STR_SYNC_MINED_TO:
+      return tr(STR_SYNC_MINED_HEADING);
+    default:
+      return nullptr;
+  }
+}
+
+// A value wider than this share of the screen is cut with an ellipsis, so the row's label stays
+// readable (a long deck list otherwise covers it).
+constexpr int MAX_VALUE_WIDTH_PERCENT = 55;
+
+void fitValueWidth(const fui::DrawTarget& target, const fui::TextStyle& style, const int16_t maxWidth,
+                   std::string& value) {
+  if (target.measureText(style.font, value.c_str(), style).width <= maxWidth) return;
+  static constexpr char ELLIPSIS[] = "\xE2\x80\xA6";
+  // The longest prefix ending at a UTF-8 character start that fits with the ellipsis. Every
+  // length tried is a character start; lo always fits (0 does), hi is an upper bound.
+  const auto isStart = [&value](const size_t at) {
+    return at >= value.size() || (static_cast<uint8_t>(value[at]) & 0xC0) != 0x80;
+  };
+  size_t lo = 0;
+  size_t hi = value.size();
+  std::string candidate;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo + 1) / 2;
+    while (mid > lo && !isStart(mid)) mid--;
+    if (mid == lo) {
+      mid = lo + 1;
+      while (mid <= hi && !isStart(mid)) mid++;
+      if (mid > hi) break;
+    }
+    candidate.assign(value, 0, mid);
+    candidate += ELLIPSIS;
+    if (target.measureText(style.font, candidate.c_str(), style).width <= maxWidth) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  while (lo > 0 && value[lo - 1] == ' ') lo--;
+  value.resize(lo);
+  value += ELLIPSIS;
+}
+
 // Flashcards Sync hides the rows of a service that is off, the address and key of one that uses
 // the shared server, and where mined words go unless both services are on.
 bool flashcardSyncRowShown(const SettingInfo& setting) {
@@ -351,6 +404,7 @@ void SettingsActivity::rebuildRowItems() {
     fui::ListItem item;
     item.label = I18N.get(settings[i].nameId);
     item.actionValue = static_cast<int16_t>(i);
+    if (isFlashcardSyncPage(subCategory)) item.sectionHeading = flashcardSyncHeading(settings[i].nameId);
     rowItems_.push_back(item);
   }
 }
@@ -543,6 +597,10 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   // rowItems_ (label/actionValue) was built by rebuildRowItems(); only the
   // live value text needs refreshing here, by assigning into the existing
   // rowValues_ strings (no vector growth).
+  // The style the list draws values in (props.valueText is left to the theme).
+  fui::TextStyle valueStyle = screen.theme().smallText;
+  valueStyle.maxLines = 1;
+  const auto maxValueWidth = static_cast<int16_t>(renderer.getScreenWidth() * MAX_VALUE_WIDTH_PERCENT / 100);
   for (size_t i = 0; i < settings.size(); i++) {
     const auto& setting = settings[i];
     const auto labels = setting.enumLabels();
@@ -558,6 +616,7 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
       GUI.setCheckboxRow(rowItems_[i], checked);
     } else {
       rowValues_[i] = SettingRowEditor::valueText(setting);
+      fitValueWidth(screen.target(), valueStyle, maxValueWidth, rowValues_[i]);
       rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
     }
   }
@@ -573,6 +632,14 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   // maxLines also marks smallText as explicit so the list does not replace it with bodyText.
   props.labelText = mappedInput.hasTouch() ? screen.theme().bodyText : screen.theme().smallText;
   props.labelText.maxLines = 2;
+  if (isFlashcardSyncPage(subCategory)) {
+    // Group headings as in Text Settings: the small UI font, on their first row, with room above.
+    props.headerText = screen.theme().smallText;
+    props.headerText.font = fui::GfxRendererTarget::FONT_LABEL;
+    props.headerUnderline = 0;
+    props.headerRowHeight = static_cast<int16_t>(screen.target().lineHeight(props.headerText.font));
+    props.sectionGap = 28;
+  }
   syncListViewport(screen, props);
   screen.list(props);
 }
