@@ -1444,7 +1444,7 @@ void loop() {
         delay(10);
         if (gpio.rawInputActive()) {
           // Back to full clock before the press is even debounced: the poll, the activity's
-          // handler and the render that follows would otherwise all start at 10 MHz.
+          // handler and the render that follows would otherwise all start at the low-power clock.
           powerManager.setPowerSaving(false);
           break;
         }

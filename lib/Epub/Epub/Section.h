@@ -61,7 +61,7 @@ class Section {
     uint32_t smoothedAtConsumed = 0;
     // Held for the whole build, not per tick. Laying out pages is not "idle" just because no
     // button was pressed: the main loop drops the CPU to LOW_POWER_FREQ after
-    // IDLE_POWER_SAVING_MS of no input (10 MHz against 160 on the C3). A per-tick lock let the
+    // IDLE_POWER_SAVING_MS of no input (10 MHz, or 80 with a USB host, against 160 on the C3). A per-tick lock let the
     // throttle re-engage in the gaps between ticks -- measured as six drop/restore cycles inside
     // one 4.6s chapter build, each spending ~62ms at a sixteenth of the clock. Living in
     // BuildContext ties it to exactly the span that must stay at full speed.

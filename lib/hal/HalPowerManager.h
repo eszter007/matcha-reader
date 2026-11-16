@@ -18,6 +18,9 @@ class HalPowerManager {
   int normalFreq = 0;  // MHz
   bool isLowPower = false;
   int lowFreq = 0;  // MHz while isLowPower
+  // When usbHostActive() last saw a host.
+  bool hostSeen = false;
+  unsigned long hostSeenMs = 0;
 
   mutable int _batteryCachedPercent = 0;         // Last read battery percentage (0-100)
   mutable unsigned long _batteryLastPollMs = 0;  // Timestamp of last battery read in milliseconds
@@ -38,15 +41,22 @@ class HalPowerManager {
   // disagreeing with the real clock.
   SemaphoreHandle_t freqMutex = nullptr;
 
+  // A USB host seen on the USB serial within USB_HOST_HOLD_MS.
+  bool usbHostActive();
+
  public:
 #if BOARD_HAS_PSRAM
   static constexpr int LOW_POWER_FREQ = 80;  // MHz
 #else
   static constexpr int LOW_POWER_FREQ = 10;  // MHz
 #endif
-  // The USB serial (USB-Serial-JTAG on the C3) drops bytes at 10 MHz, so while USB is plugged in
-  // the low-power clock stays at this; on USB power the saving does not matter.
-  static constexpr int USB_MIN_FREQ = 80;                      // MHz
+  // The USB serial (USB-Serial-JTAG on the C3) drops bytes at 10 MHz, so while a USB host is
+  // attached the low-power clock stays at this. The board then runs from USB, so the saving does
+  // not matter.
+  static constexpr int USB_MIN_FREQ = 80;  // MHz
+  // HWCDC::isPlugged() reads false for a few ms now and then with a host attached, so a host
+  // counts as gone only after this long without it.
+  static constexpr unsigned long USB_HOST_HOLD_MS = 1000;      // ms
   static constexpr unsigned long IDLE_POWER_SAVING_MS = 3000;  // ms
   static constexpr unsigned long BATTERY_POLL_MS = 1500;       // ms
 
