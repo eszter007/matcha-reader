@@ -56,6 +56,7 @@ void moveOutOfFolder(const std::string& deckId) {
   static constexpr const char* MOVES[][2] = {{"cards.bin", ".cards.bin"},
                                              {"buried.bin", ".buried.bin"},
                                              {"leeches.bin", ".leeches.bin"},
+                                             {"style.css", ".css"},
                                              {"deck.json", ".json"}};
   for (const auto& move : MOVES) {
     const std::string from = dir + move[0];
@@ -72,6 +73,8 @@ void moveOutOfFolder(const std::string& deckId) {
 
 std::string dirFor(const std::string& deckId) { return sdsystem::path(("anki/" + deckId + "/").c_str()); }
 
+std::string imageCacheDir(const std::string& deckId) { return sdsystem::path(("anki-cache/" + deckId + "/").c_str()); }
+
 // Not in the deck's folder: that holds two files per card and their images, and FAT finds a name
 // by reading the folder through -- about 250 ms a lookup in a 2000-card deck, every time.
 std::string metaPath(const std::string& deckId, const char* suffix) {
@@ -87,15 +90,32 @@ std::string frontPath(const std::string& deckId, const uint64_t cardId) {
 std::string backPath(const std::string& deckId, const uint64_t cardId) {
   return dirFor(deckId) + std::to_string(cardId) + "a.xhtml";
 }
-std::string cssPath(const std::string& deckId) { return dirFor(deckId) + "style.css"; }
+// Beside the folder too: a refetch rewrites it, which puts it at the folder's end, two lookups per
+// card side. Decks moved before it was (their deck.json already beside) move it on first use.
+std::string cssPath(const std::string& deckId) {
+  static std::vector<std::string> checked;
+  const std::string path = metaPath(deckId, ".css");
+  if (std::find(checked.begin(), checked.end(), deckId) == checked.end()) {
+    checked.push_back(deckId);
+    const std::string old = dirFor(deckId) + "style.css";
+    if (!Storage.exists(path.c_str()) && Storage.exists(old.c_str()) && !Storage.rename(old.c_str(), path.c_str())) {
+      LOG_ERR("ANKI", "Could not move %s", old.c_str());
+      return old;
+    }
+  }
+  return path;
+}
 
 std::string leechPath(const std::string& deckId) { return metaPath(deckId, ".leeches.bin"); }
 
 void forgetDeckFiles(const std::string& deckId) {
-  for (const char* suffix : {".json", ".cards.bin", ".buried.bin", ".leeches.bin"}) {
+  for (const char* suffix : {".json", ".cards.bin", ".buried.bin", ".leeches.bin", ".css"}) {
     const std::string path = besideDir(deckId, suffix);
     if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
   }
+  // Its images' decoded pixels: a new image of the same name and size would otherwise show the old.
+  const std::string images = imageCacheDir(deckId);
+  if (Storage.exists(images.c_str())) Storage.removeDir(images.c_str());
 }
 
 bool readInfo(const std::string& deckId, DeckInfo& out) {

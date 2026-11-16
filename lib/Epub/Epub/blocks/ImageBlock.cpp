@@ -343,8 +343,10 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
 
 }  // namespace
 
+std::string ImageBlock::pixelCachePath() const { return cachePath.empty() ? getCachePath(imagePath) : cachePath; }
+
 bool ImageBlock::hasValidCache() const {
-  const auto cachePath = getCachePath(imagePath);
+  const auto cachePath = pixelCachePath();
   HalFile cacheFile;
   if (!Storage.openFileForRead("IMG", cachePath, cacheFile)) {
     return false;
@@ -467,7 +469,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   }
 
   // Try to render from cache first
-  std::string cachePath = getCachePath(imagePath);
+  std::string cachePath = pixelCachePath();
   if (renderFromCache(renderer, cachePath, drawX, drawY, drawW, drawH)) {
     // The DRAWN rect, not the block's: a rotated fit moves and resizes the image, and inverting
     // the block rect would counter-invert the wrong pixels (see the rotated-fit branch above).
@@ -630,7 +632,7 @@ ImageBlock::WarmResult ImageBlock::warmCache(GfxRenderer& renderer, bool (*shoul
     fitWithin(usableW, usableH, dstW, dstH);
   }
 
-  const std::string cachePath = getCachePath(imagePath);
+  const std::string cachePath = pixelCachePath();
   {
     HalFile cacheFile;
     if (Storage.openFileForRead("IMG", cachePath, cacheFile)) {

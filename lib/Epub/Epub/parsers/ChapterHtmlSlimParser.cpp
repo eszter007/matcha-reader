@@ -1914,6 +1914,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               ext = resolvedPath.substr(extPos);
             }
             std::string cachedImagePath = self->imageBasePath + std::to_string(self->imageCounter++) + ext;
+            std::string pixelCachePath;  // a standalone page's own cache folder, when it has one
 
             {
               // Probe the dimensions from the entry's first bytes (early-aborted
@@ -1928,6 +1929,19 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               const bool standalone = self->epub == nullptr;
               if (standalone) {
                 cachedImagePath = resolvedPath;
+                if (!self->pixelCacheDir.empty()) {
+                  // Named by its path below the page's folder, '/' as '_': "x/a.png" and "a.png" keep
+                  // apart, as they did when each was cached next to itself.
+                  const std::string base = FsHelpers::normalisePath(self->contentBase);
+                  std::string name = resolvedPath.compare(0, base.size(), base) == 0 && !base.empty()
+                                         ? resolvedPath.substr(base.size())
+                                         : resolvedPath;
+                  while (!name.empty() && name[0] == '/') name.erase(0, 1);
+                  std::replace(name.begin(), name.end(), '/', '_');
+                  const size_t dot = name.rfind('.');
+                  if (dot != std::string::npos) name.resize(dot);
+                  pixelCachePath = self->pixelCacheDir + name + ".pxc";
+                }
                 // From the header: a PNG decoder needs a 43 KB block just to read the size.
                 bool opened = false;
                 // normalisePath() drops the leading slash of an absolute card path.
@@ -2214,6 +2228,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                     LOG_ERR("EHP", "Failed to create inline ImageBlock");
                     return;
                   }
+                  if (!pixelCachePath.empty()) inlineBlock->setCachePath(pixelCachePath);
                   const int inlineX = std::max(0, (self->viewportWidth - displayWidth) / 2);
                   auto inlineImage = makeUniqueNoThrow<PageImage>(std::move(inlineBlock), static_cast<int16_t>(inlineX),
                                                                   static_cast<int16_t>(self->currentPageNextY));
@@ -2320,6 +2335,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   LOG_ERR("EHP", "Failed to create ImageBlock");
                   return;
                 }
+                if (!pixelCachePath.empty()) imageBlock->setCachePath(pixelCachePath);
                 auto pageImage = makeUniqueNoThrow<PageImage>(std::move(imageBlock), static_cast<int16_t>(xPos),
                                                               static_cast<int16_t>(yPos));
                 if (!pageImage) {
