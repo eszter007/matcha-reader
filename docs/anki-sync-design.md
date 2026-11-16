@@ -90,17 +90,25 @@ For each mapped deck:
    day, then take Anki's due date (review day + Anki's interval) as the device's due date.
    Anki's own intervals win for reviews done in Anki.
 3. **Push the device's reviews.** Every device review since the last sync, from a new
-   **review log** (`flashcards-<lang>.log`: card id, time, rating; 16 bytes each, cleared
+   **review log** (`flashcards-<lang>.log`: card id, time, rating; 24 bytes each, cleared
    after a successful push):
    - `advanced.reviews.import` writes them into Anki's history with their real times, so
      Anki's statistics and its FSRS optimizer see them.
-   - Then, per card, the result: `scheduling.setDueDate` to the device's due date and
-     `advanced.cards.update` with the device's FSRS memory (stability, difficulty), so
-     Anki shows the same next review as the device.
+   - Then, for each card, the result:
+     - `scheduling.setDueDate` sets the device's due date.
+     - `advanced.cards.update` sets the interval: the due date minus the last review day, at
+       least one day. A due date alone can leave the interval at 0, as Anki desktop does.
+     - A second `advanced.cards.update` sets the device's FSRS memory (stability, difficulty).
+
+     Anki then shows the same next review as the device. If Anki refuses the interval or
+     the memory, that is logged and the sync goes on; any other failure (no reply, for
+     example) stops the sync, so the next sync sends it again.
 4. **Same card reviewed on both sides since the last sync:** the reviews are merged by time
    (both histories keep every review). The later of the two decides the due date.
-5. Save the new "last seen" Anki review id and clear the pushed log, only after every step
-   for that deck succeeded. A failed sync changes nothing that would make a retry wrong:
+5. The new "last seen" Anki review id is saved once the history import has succeeded, before
+   the per-card calls, so a sync stopped during those calls does not pull the device's own
+   reviews back. The pushed log is cleared only after every card's calls have finished. A
+   failed sync changes nothing that would make a retry wrong:
    imports use the device review's own id (its time in ms), so re-sending one is rejected as a
    duplicate rather than recorded twice.
 6. `collection.sync` asks Anki to sync to AnkiWeb, before step 1 and after step 5. Without an
@@ -114,12 +122,14 @@ For each mapped deck:
 Both sides use FSRS, but with their own parameters (Anki's are optimized per preset, the
 device's are the defaults with the user's retention and maximum interval). Taking the due
 date from whichever side reviewed last avoids the two fighting. Anki users on the old SM-2
-scheduler still get history and due dates; the FSRS memory write is skipped.
+scheduler still get history, due dates and intervals; SM-2 uses the interval to work out the
+next one. When FSRS is off, Anki refuses an FSRS memory (`unsupportedCapability`), so after
+the first refusal the sync stops sending it for the rest of that deck.
 
 ## Memory and network budget (ESP32-C3)
 
 - One HTTP request at a time over plain HTTP on the LAN (no TLS, so no 35 KB TLS reserve).
-- Requests and responses go through one 8 KB heap buffer (checked allocation, freed when
+- Requests and responses go through one heap buffer of up to 48 KB (256 KB in PSRAM) (checked allocation, freed when
   the sync ends); `reviews.list` pages and searches are parsed with ArduinoJson filters so
   only the needed fields are kept.
 - Link table: 16 bytes per card, loaded per deck (2000 cards = 32 KB, with the same
