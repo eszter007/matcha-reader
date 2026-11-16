@@ -77,7 +77,7 @@ The device keeps a **link table** per deck, `flashcards-<lang>.anki` in the syst
 
 ## What a sync does
 
-Sync runs from the Flashcards overview (**Sync with Anki**), only on demand: no background
+Sync runs from the Flashcards overview (**Sync Flashcards**), only on demand: no background
 Wi-Fi. It connects to Wi-Fi like KOReader Sync does, and shows progress per deck.
 
 For each mapped deck:

@@ -28,7 +28,7 @@ class FlashcardsActivity final : public UiListActivity {
   int selectedRow_ = -1;
   int dueTotal_ = 0;
   int rowHeight_ = 0;
-  bool syncRow_ = false;  // the last row is "Sync with Anki"
+  bool syncRow_ = false;  // the last row is "Sync Flashcards"
 
   void reload();
   // Height of the numeral, caption and ornament above the rows.

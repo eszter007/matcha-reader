@@ -31,7 +31,7 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
   <img src="docs/images/screenshots/word-lookup-chinese.png" width="260" alt="Word lookup panel over a page of 紅樓夢: 繁華 with pinyin and zhuyin, both scripts and two senses">
 </p>
 
-**Sentence mining.** Save a word with its sentence to a CSV per language that Anki imports as is. With Anki sync set up, **Sync with Anki** sends new words to Anki as notes, one deck per language, with their review progress (or to Migaku instead, if you choose; see [Migaku decks](USER_GUIDE.md#migaku-decks)). Japanese words also get their furigana per kanji, from the book or the dictionary. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
+**Sentence mining.** Save a word with its sentence to a CSV per language that Anki imports as is. With Anki sync set up, **Sync Flashcards** sends new words to Anki as notes, one deck per language, with their review progress (or to Migaku instead, if you choose; see [Migaku decks](USER_GUIDE.md#migaku-decks)). Japanese words also get their furigana per kanji, from the book or the dictionary. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
 
 **Flashcards.** Review the words you saved right on the device, one deck per language, scheduled with FSRS. Each card shows the word on a spine and the sentence you found it in. Japanese cards read vertically, with the reading beside each kanji on the back. Turn it on in Settings → Flashcards. See [Guide §6.8](USER_GUIDE.md#68-flashcards).
 
@@ -40,7 +40,7 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
 **Migaku decks.** The companion server can also sync your Migaku decks, next to Anki or instead of it: cards are due when Migaku says so, and your reviews and mined words go back to Migaku. Both share one server setting, under **Settings → Connectivity → Flashcards Sync**. See [Migaku decks](USER_GUIDE.md#migaku-decks).
 
 <p align="center">
-  <img src="docs/images/screenshots/flashcards-anki-decks.png" width="200" alt="The Flashcards tab: Anki decks such as HSK 1, Kaishi 1.5k and the Open Anki JLPT N5 deck next to the reader's own decks, with a Sync with Anki button under the list">
+  <img src="docs/images/screenshots/flashcards-anki-decks.png" width="200" alt="The Flashcards tab: Anki decks such as HSK 1, Kaishi 1.5k and the Open Anki JLPT N5 deck next to the reader's own decks, with a Sync Flashcards button under the list">
   <img src="docs/images/screenshots/flashcard-anki-hsk.png" width="200" alt="Back of a card from an HSK 1 Anki deck, drawn with the deck's own template: 的 with zhuyin and pinyin">
 </p>
 

@@ -113,7 +113,7 @@ void FlashcardsActivity::reload() {
   // With Anki or Migaku set up, the last row syncs.
   syncRow_ = AnkiSyncActivity::syncLabel() != nullptr;
   if (syncRow_) {
-    labels_.emplace_back(AnkiSyncActivity::syncLabel());
+    labels_.emplace_back(tr(STR_FLASHCARDS_SYNC));
     values_.emplace_back();
   }
   // Pointers into labels_/values_ only once both are complete: no reallocation after this.
@@ -207,7 +207,7 @@ void FlashcardsActivity::drawFooter() {
         // Laid out like Insights' Refresh row: icon and small text, outlined only while focused.
         constexpr int ICON = 24;
         constexpr int GAP = 8;
-        const char* label = AnkiSyncActivity::syncLabel();
+        const char* label = tr(STR_FLASHCARDS_SYNC);
         const int rowW = ICON + GAP + renderer.getTextWidth(SMALL_FONT_ID, label);
         const int rx = (left + right - rowW) / 2;
         if (static_cast<int>(i) == selectedRow_) {
