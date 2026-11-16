@@ -1448,7 +1448,6 @@ Service ankiService() {
                  .remoteName = "AnkiWeb",
                  .localPrefix = "",
                  .takesMined = !minedGoToMigaku(),
-                 .syncRemote = ANKI_STORE.getSyncAnkiWeb(),
                  .requiresRemote = false,
                  .unreachable = StrId::STR_ANKI_UNREACHABLE,
                  .keyRefused = StrId::STR_ANKI_KEY_REFUSED,
@@ -1466,7 +1465,6 @@ Service migakuService() {
                  .remoteName = "Migaku",
                  .localPrefix = ankideck::MIGAKU_PREFIX,
                  .takesMined = minedGoToMigaku(),
-                 .syncRemote = true,
                  .requiresRemote = true,
                  .unreachable = StrId::STR_MIGAKU_UNREACHABLE,
                  .keyRefused = StrId::STR_MIGAKU_KEY_REFUSED,
@@ -1489,15 +1487,29 @@ Result syncAll(AnkiClient& client, const Service& service, const ProgressFn& pro
     return result;
   };
   const char* remote = service.remoteName;
-  const auto syncRemote = [&] {
+  // False when the sync must stop. Without an AnkiWeb account the sync goes on locally. An AnkiWeb
+  // sync still running before the device's changes (it may wait for a full sync to be chosen in
+  // Anki) stops the sync, so the changes cannot land in a collection that full sync replaces. Any
+  // other AnkiWeb error the server reports (AnkiWeb down) is noted and the next sync tries again.
+  // A server that cannot be reached or answers badly stops the sync. The Migaku bridge's sync is
+  // the Migaku sync, so for it every failure stops the sync.
+  const auto syncRemote = [&](const bool beforeChanges) {
     JsonDocument params, done;
     params["includeMedia"] = false;
     if (client.callOperation("collection.sync", params, done, OPERATION_TIMEOUT)) return true;
-    // Without an AnkiWeb account (a server set up without one) the sync goes on locally. The
-    // Migaku bridge has nothing to sync without its Migaku login.
-    return !service.requiresRemote && client.error().type == "authenticationRequired";
+    if (service.requiresRemote) return false;
+    if (client.error().type == "authenticationRequired") return true;
+    if (client.error().kind != AnkiClient::Error::Kind::Rpc) return false;
+    LOG_ERR("ANKI", "%s not synced (%s)", remote, client.error().type.c_str());
+    // "timeout": still running, or waiting for the user (a full sync to choose in Anki).
+    if (beforeChanges && client.error().type == "timeout") {
+      result.remoteBlocked = true;
+      return false;
+    }
+    result.remoteSkipped = true;
+    return true;
   };
-  if (service.syncRemote && !syncRemote()) return fail(remote);
+  if (!syncRemote(true)) return fail(remote);
   handOverMined(client, service, progress, result);
   JsonDocument decks;
   if (!client.call("decks.list", decks)) return fail({});
@@ -1548,7 +1560,7 @@ Result syncAll(AnkiClient& client, const Service& service, const ProgressFn& pro
     service.store.setSyncedDecks(std::move(wanted));
     service.store.save();
   }
-  if (service.syncRemote && !syncRemote()) return fail(remote);
+  if (!syncRemote(false)) return fail(remote);
   // The other decks are synced; a missing one still fails the sync so it is not missed.
   if (!missing.empty()) {
     result.failedDeck = missing;

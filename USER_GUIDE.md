@@ -696,7 +696,7 @@ The rows are grouped by the control they change. Each one is described further d
 
 - **CrossPoint Sync**: Sync your reading position with the CrossPoint sync server or any KOReader-compatible sync server. See [KOReader Sync Quick Setup](#3611-koreader-sync-quick-setup) below.
 
-- **Flashcards Sync**: Sync Anki and Migaku decks and their review progress with Anki desktop (with AnkiConnect) or a self-hosted [companion server](#the-companion-server). Sync is optional. Under **Sync Server**, **Server Address** and **Server Key** name the server both services usually share, and **Test Connection** checks each service that is on. **Anki Server** and **Migaku Server** each say which server that service uses: **Off**, **Sync Server** (the one at the top), or **Own Server**, which adds its own address and key rows (for example Anki desktop for Anki, and the companion server for Migaku). A service that is on also shows its decks (**Anki Decks**, **Migaku Decks**: deck names separated by commas, as the service shows them) and, for Anki, **Sync AnkiWeb Too**. With both on, **Mined Words To** chooses where mined words go. These rows are also on the web settings page, except **Test Connection**; there every row shows, and a service's address and key only apply with **Own Server**. Settings from the older **Anki Sync** and **Migaku Sync** pages move here on their own. If Anki used Anki desktop and Migaku was not set up, Anki desktop becomes the shared server; to add Migaku later, put the companion server at the top and set **Anki Server** to **Own Server** with Anki desktop's address. See [Anki decks](#anki-decks) and [Migaku decks](#migaku-decks).
+- **Flashcards Sync**: Sync Anki and Migaku decks and their review progress with a self-hosted [companion server](#the-companion-server) or, for Anki, Anki desktop (with AnkiConnect). Sync is optional. Under **Sync Server**, **Use Sync Server** turns on the companion server both services share; its **Server Address** and **Server Key** show while it is on. **Test Connection** checks each service that is on. **Anki Server** is **Off**, **Sync Server** or **Anki Desktop**, which adds **Anki Desktop Address** and **Anki Desktop Key**. **Migaku Server** is **Off** or **Sync Server**: Migaku syncs only through the companion server, so its rows are hidden while **Use Sync Server** is off. Turning **Use Sync Server** off also turns off a service that used it. A service that is on shows its decks (**Anki Decks**, **Migaku Decks**: deck names separated by commas, as the service shows them). With both on, **Mined Words To** chooses where mined words go. These rows are also on the web settings page, except **Test Connection**; there every row shows. Every sync also asks the server to sync with AnkiWeb when it has a login. See [Anki decks](#anki-decks) and [Migaku decks](#migaku-decks).
 
 - **OPDS Servers**: Save online book catalogs (OPDS libraries) so you can browse them and download books straight to the device. See [OPDS Servers (Multiple Libraries)](#369-opds-servers-multiple-libraries) below. ([What is OPDS?](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System))
 
@@ -1860,10 +1860,12 @@ It also prepares cards for the reader: large images are shrunk to grayscale, and
 
 **On the reader** (Settings → Connectivity → Flashcards Sync, or the web settings page):
 
+- **Use Sync Server:** **On**.
 - **Server Address:** `http://<the computer's address>:8080` at home, or the `https://` address of a cloud server.
 - **Server Key:** the key from step 2.
 - **Anki Server:** **Sync Server**.
-- **Sync AnkiWeb Too:** **On**, so each sync also brings the server and AnkiWeb up to date.
+
+Each sync also asks the server to sync with AnkiWeb, before and after the device's own sync, so reviews from your phone and the device meet. A server without an AnkiWeb login skips that. When AnkiWeb and the server cannot be merged (a full sync), the companion server keeps AnkiWeb's copy on its own. With Anki desktop, Anki asks you which copy to keep: the device then stops before it sends anything and says so; choose in Anki, then sync again. If AnkiWeb cannot sync for another reason, for example while it is down, the device still syncs with the server and says AnkiWeb was not synced; the next sync tries again.
 
 Over the internet, use HTTPS so the key is not sent in the clear. HTTPS needs more memory on the reader: the X4 may not have enough during a sync, so on an X4 a server on your home network is the safer choice.
 
@@ -1873,7 +1875,7 @@ The companion server is free for non-commercial use under the [CC BY-NC-SA 4.0](
 
 The [companion server](#the-companion-server) can also bring your [Migaku](https://migaku.com) decks to the device, next to your Anki decks or instead of them. The server signs in to Migaku with your account's email and password; an account that signs in only with Google or Apple does not work. See the [server's README](https://github.com/eszter007/matcha-anki-server) for its two settings. The server uses Migaku's own app protocol, which Migaku does not document, so a Migaku update can stop it working until the server is updated. On the reader (Settings → Connectivity → **Flashcards Sync**; the web settings page has the same rows except **Test Connection**):
 
-- **Migaku Server:** **Sync Server** when **Server Address** and **Server Key** are the companion server. If Anki uses Anki desktop instead, set **Anki Server** to **Own Server** with Anki desktop's address, and keep the companion server at the top. For Migaku only, set **Anki Server** to **Off**.
+- **Migaku Server:** **Sync Server**, with **Use Sync Server** on and the companion server's address and key under it. If Anki uses Anki desktop instead, set **Anki Server** to **Anki Desktop** with Anki desktop's address. For Migaku only, set **Anki Server** to **Off**.
 - **Migaku Decks:** the decks to sync, separated by commas. Migaku decks are named with their language first, for example `French::My Cards` or `Japanese::Animals`.
 - **Mined Words To:** **Migaku** sends your mined words to Migaku instead of Anki. With only Migaku on, they go to Migaku anyway.
 - **Test Connection** checks the address and the key of each service that is on. The Migaku login is checked by the next sync.
@@ -1898,11 +1900,12 @@ You do not need AnkiWeb or any cloud service. The device can sync directly with 
 
 **Once, on the device** (easier on the web settings page in **File Transfer**):
 
-1. **Settings → Connectivity → Flashcards Sync → Server Address:** `http://` + your computer's address + `:8765`, for example `http://192.168.1.20:8765`. (If the companion server is at the top for Migaku, set **Anki Server** to **Own Server** and enter this as **Anki Address** instead.)
-2. **Server Key:** the `apiKey` you chose, or empty if you set none.
+1. **Settings → Connectivity → Flashcards Sync → Anki Server:** **Anki Desktop**. Then **Anki Desktop Address:** `http://` + your computer's address + `:8765`, for example `http://192.168.1.20:8765`. (Without Migaku, **Use Sync Server** can be turned off.)
+2. **Anki Desktop Key:** the `apiKey` you chose, or empty if you set none.
 3. **Anki Decks:** the decks to review, separated by commas, as Anki shows them (a subdeck is `Parent::Child`).
-4. **Sync AnkiWeb Too:** **Off**, if you do not use AnkiWeb.
-5. **Test Connection** checks the address, the key and the Anki version.
+4. **Test Connection** checks the address, the key and the Anki version.
+
+If Anki on the computer is signed in to AnkiWeb, each sync also asks it to sync with AnkiWeb. If you do not use AnkiWeb, nothing changes.
 
 **Each time:**
 

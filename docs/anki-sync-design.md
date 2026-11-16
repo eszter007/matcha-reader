@@ -16,7 +16,7 @@ AnkiWeb's own sync protocol expects the client to hold a full Anki collection (a
 database, change counters on every object, zstd-compressed transfers). That does not fit the
 ESP32-C3's ~380 KB of RAM. Instead the device talks to **AnkiConnect**, the Anki desktop add-on
 (code 2055492159), over the local network while Anki is open. Anki then syncs to AnkiWeb as it
-always does; the device can ask it to (`collection.sync`) at the end of a sync.
+always does; the device asks it to (`collection.sync`) before and after each sync.
 
 We use AnkiConnect's **v1 API** (JSON-RPC 2.0 at `http://<host>:<port>/api/v1`), which needs
 **Anki 26.08 or later**. Only v1 can write review history with its real timestamps
@@ -103,7 +103,11 @@ For each mapped deck:
    for that deck succeeded. A failed sync changes nothing that would make a retry wrong:
    imports use the device review's own id (its time in ms), so re-sending one is rejected as a
    duplicate rather than recorded twice.
-6. If set, `collection.sync` asks Anki to sync to AnkiWeb.
+6. `collection.sync` asks Anki to sync to AnkiWeb, before step 1 and after step 5. Without an
+   AnkiWeb login it is skipped. If the first one does not finish (`timeout`: it may wait for the
+   user to choose a full sync in Anki), the sync stops before step 1, so the device's changes
+   cannot land in a collection a full sync then replaces. Any other AnkiWeb error is noted in
+   the result and the next sync tries again.
 
 ### Scheduler differences
 

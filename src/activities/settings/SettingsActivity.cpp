@@ -58,7 +58,7 @@ SettingsSection sectionFor(const SettingInfo& setting);
 // The Flashcards Sync group a row starts, or nullptr. Each group's first row is always shown.
 const char* flashcardSyncHeading(const StrId row) {
   switch (row) {
-    case StrId::STR_SYNC_SERVER_ADDRESS:
+    case StrId::STR_SYNC_USE_SERVER:
       return tr(STR_SYNC_SERVER_HEADING);
     case StrId::STR_ANKI_SERVER:
       return tr(STR_ANKI_NAME);
@@ -108,24 +108,26 @@ void fitValueWidth(const fui::DrawTarget& target, const fui::TextStyle& style, c
   value += ELLIPSIS;
 }
 
-// Flashcards Sync hides the rows of a service that is off, the address and key of one that uses
-// the shared server, and where mined words go unless both services are on.
+// Flashcards Sync shows only the rows that apply: the shared server's while it is on (Migaku needs
+// it), a service's while it is on, and where mined words go when both are.
 bool flashcardSyncRowShown(const SettingInfo& setting) {
   using Server = SyncServiceStore::Server;
+  const bool shared = FLASHCARD_SYNC_STORE.isEnabled();
   const Server anki = ANKI_STORE.getServer();
   const Server migaku = MIGAKU_STORE.getServer();
   switch (setting.nameId) {
+    case StrId::STR_SYNC_SERVER_ADDRESS:
+    case StrId::STR_SYNC_SERVER_KEY:
+      return shared;
+    case StrId::STR_MIGAKU_SERVER:
+      return shared;
     case StrId::STR_ANKI_ADDRESS:
     case StrId::STR_ANKI_KEY:
       return anki == Server::Own;
     case StrId::STR_ANKI_DECKS:
-    case StrId::STR_ANKI_SYNC_ANKIWEB:
       return anki != Server::Off;
-    case StrId::STR_MIGAKU_ADDRESS:
-    case StrId::STR_MIGAKU_KEY:
-      return migaku == Server::Own;
     case StrId::STR_MIGAKU_DECKS:
-      return migaku != Server::Off;
+      return shared && migaku != Server::Off;
     case StrId::STR_SYNC_MINED_TO:
       return anki != Server::Off && migaku != Server::Off;
     default:
@@ -310,6 +312,10 @@ void SettingsActivity::rebuildSettings() {
 
   for (auto& setting : all) {
     if (!belongsHere(setting)) continue;
+    // With the sync server off, a service's choices leave it out.
+    if (setting.nameId == StrId::STR_ANKI_SERVER && !FLASHCARD_SYNC_STORE.isEnabled()) {
+      std::erase(setting.enumOrder, static_cast<uint8_t>(SyncServiceStore::Server::Shared));
+    }
     if (section == SettingsSection::Controls && subCategory == StrId::STR_NONE_OPT &&
         setting.valuePtr == &CrossPointSettings::longPressButtonBehavior) {
       setting.nameId = StrId::STR_PAGE_TURN_LONG_PRESS;

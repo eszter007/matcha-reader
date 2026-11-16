@@ -113,10 +113,11 @@ struct SettingInfo {
     if (order.empty()) return slot;
     return slot < order.size() ? order[slot] : order[0];
   }
-  uint8_t slotFromStored(const uint8_t stored) const {
-    if (enumOrder.empty()) return stored;
-    const auto it = std::find(enumOrder.begin(), enumOrder.end(), stored);
-    return it != enumOrder.end() ? static_cast<uint8_t>(it - enumOrder.begin()) : 0;
+  uint8_t slotFromStored(const uint8_t stored) const { return slotFromStored(enumOrder, stored); }
+  static uint8_t slotFromStored(const std::vector<uint8_t>& order, const uint8_t stored) {
+    if (order.empty()) return stored;
+    const auto it = std::find(order.begin(), order.end(), stored);
+    return it != order.end() ? static_cast<uint8_t>(it - order.begin()) : 0;
   }
   // The labels in menu order. Returned by value: the popup wants a contiguous array and the
   // reordered view does not exist anywhere else. At most SIDE_BUTTON_ACTION_COUNT entries.

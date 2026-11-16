@@ -276,10 +276,14 @@ void AnkiSyncActivity::run() {
                static_cast<int>(result.reviewsPulled), static_cast<int>(result.reviewsPushed));
       if (!outcome.summary.empty()) outcome.summary += "; ";
       outcome.summary += text;
+      if (result.remoteSkipped) {
+        outcome.summary += ". ";
+        outcome.summary += tr(STR_ANKIWEB_NOT_SYNCED);
+      }
     } else {
       LOG_ERR("ANKI", "%s sync stopped at %s", name, result.failedDeck.c_str());
       if (outcome.failure.empty()) {
-        outcome.failure = errorText(result.error, service);
+        outcome.failure = result.remoteBlocked ? tr(STR_ANKIWEB_NEEDS_ANKI) : errorText(result.error, service);
         outcome.failedAt =
             both ? std::string(name) + (result.failedDeck.empty() ? "" : ": " + result.failedDeck) : result.failedDeck;
       }

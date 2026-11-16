@@ -22,8 +22,8 @@ struct Service {
   const char* remoteName;   // the cloud the server syncs with: "AnkiWeb" or "Migaku"
   const char* localPrefix;  // added to the service's deck ids on the device
   bool takesMined;          // mined words go to this service
-  bool syncRemote;          // ask the server to sync with the cloud before and after
   bool requiresRemote;      // a server without the cloud's login is an error, not a local sync
+                            // (the cloud is synced before and after every sync)
   // Messages that name the service.
   StrId unreachable, keyRefused, notAllowed, deckMissing, replyError, loginMissing, connected;
 };
@@ -53,6 +53,8 @@ struct Result {
   uint32_t cardsAdded = 0;
   uint32_t reviewsPulled = 0;
   uint32_t reviewsPushed = 0;
+  bool remoteBlocked = false;  // the cloud (AnkiWeb) sync did not finish first; nothing was synced
+  bool remoteSkipped = false;  // the cloud could not sync this time; the next sync tries again
 };
 
 // Checks the address and key; fills the running Anki's version. False with client.error() set.

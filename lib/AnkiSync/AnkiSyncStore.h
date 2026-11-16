@@ -7,10 +7,10 @@
 #include <vector>
 
 // Flashcard sync settings (Settings > Connectivity > Flashcards Sync):
-// - FlashcardSyncStore: the server both services usually share, the Matcha companion server.
-// - One store per service: Anki (Anki desktop with AnkiConnect, or the companion server) and
-//   Migaku (the companion server's Migaku bridge, which answers in the same AnkiConnect API under
-//   /migaku/api/v1). Each is off, uses the shared server, or has its own, and says which of its
+// - FlashcardSyncStore: the sync server both services can share, the Matcha companion server.
+// - One store per service: Anki (the companion server, or Anki desktop with AnkiConnect as its
+//   own server) and Migaku (only the companion server's Migaku bridge, which answers in the same
+//   AnkiConnect API under /migaku/api/v1). Each is off or uses its server, and says which of its
 //   decks come onto the device.
 // Keys are obfuscated like other credentials.
 namespace ankisync {
@@ -32,6 +32,9 @@ class FlashcardSyncStore : public PersistableStore<FlashcardSyncStore> {
   void toJson(JsonDocument& doc) const;
   bool fromJson(JsonVariantConst doc);
 
+  // Off: no shared server; each service is off or has its own. The address and key are kept.
+  bool isEnabled() const { return enabled; }
+  void setEnabled(bool on) { enabled = on; }
   // Base URL of the server, e.g. "http://192.168.1.20:8080".
   const std::string& getUrl() const { return url; }
   void setUrl(const std::string& value) { url = value; }
@@ -45,6 +48,7 @@ class FlashcardSyncStore : public PersistableStore<FlashcardSyncStore> {
   ~FlashcardSyncStore() = default;
   friend class PersistableStore<FlashcardSyncStore>;
 
+  bool enabled = true;
   std::string url;
   std::string key;
   MinedTo minedTo = MinedTo::Anki;
@@ -67,7 +71,7 @@ class SyncServiceStore {
   void setUrl(const std::string& value) { url = value; }
   const std::string& getKey() const { return key; }
   void setKey(const std::string& value) { key = value; }
-  // The server this service talks to now: the shared one or its own.
+  // The server this service talks to now: the shared one (none while it is turned off) or its own.
   const std::string& serverUrl() const;
   const std::string& serverKey() const;
   // The endpoint requests go to: serverUrl() with "http://" added when it has no scheme, and the
@@ -104,17 +108,10 @@ class AnkiSyncStore : public SyncServiceStore, public PersistableStore<AnkiSyncS
   bool fromJson(JsonVariantConst doc);
   bool save() const override { return saveToFile(); }
 
-  // Ask the server to sync with AnkiWeb before and after. (The Migaku bridge always syncs with
-  // Migaku: that is its sync.)
-  bool getSyncAnkiWeb() const { return syncAnkiWeb; }
-  void setSyncAnkiWeb(bool on) { syncAnkiWeb = on; }
-
  private:
   AnkiSyncStore() : SyncServiceStore("/api/v1", Server::Shared) {}
   ~AnkiSyncStore() = default;
   friend class PersistableStore<AnkiSyncStore>;
-
-  bool syncAnkiWeb = true;
 };
 
 class MigakuSyncStore : public SyncServiceStore, public PersistableStore<MigakuSyncStore> {
@@ -124,25 +121,17 @@ class MigakuSyncStore : public SyncServiceStore, public PersistableStore<MigakuS
   bool fromJson(JsonVariantConst doc);
   bool save() const override { return saveToFile(); }
 
-  // The old "Save Mined Words to Migaku" switch, moved to the shared store by loadSyncStores().
-  bool getLegacyTakesMined() const { return legacyTakesMined; }
-
  private:
   MigakuSyncStore() : SyncServiceStore("/migaku/api/v1", Server::Off) {}
   ~MigakuSyncStore() = default;
   friend class PersistableStore<MigakuSyncStore>;
-
-  bool legacyTakesMined = false;
 };
 
 #define ANKI_STORE AnkiSyncStore::getInstance()
 #define MIGAKU_STORE MigakuSyncStore::getInstance()
 
 namespace ankisync {
-// Loads the three sync stores. The first time, moves the separate Anki and Migaku addresses of
-// older firmware to the shared server: Migaku's, as only the companion server serves it, else
-// Anki's. A service whose address matches it then uses the shared server; one without an address
-// stays off.
+// Loads the three sync stores.
 void loadSyncStores();
 // Mined words go to Migaku: it is on and either takes them or Anki is off.
 bool minedGoToMigaku();

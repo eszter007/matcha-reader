@@ -365,6 +365,24 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
         },
         key, StrId::STR_FLASHCARD_SYNC);
   };
+  emit(SettingInfo::DynamicEnum(
+      StrId::STR_SYNC_USE_SERVER, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
+      [] { return static_cast<uint8_t>(FLASHCARD_SYNC_STORE.isEnabled() ? 1 : 0); },
+      [](const uint8_t v) {
+        const bool on = v != 0;
+        if (on == FLASHCARD_SYNC_STORE.isEnabled()) return;
+        FLASHCARD_SYNC_STORE.setEnabled(on);
+        FLASHCARD_SYNC_STORE.saveToFile();
+        if (on) return;
+        // A service left on the shared server would have none: it turns off.
+        for (SyncServiceStore* store :
+             {static_cast<SyncServiceStore*>(&ANKI_STORE), static_cast<SyncServiceStore*>(&MIGAKU_STORE)}) {
+          if (store->getServer() != SyncServiceStore::Server::Shared) continue;
+          store->setServer(SyncServiceStore::Server::Off);
+          store->save();
+        }
+      },
+      "syncEnabled", StrId::STR_FLASHCARD_SYNC));
   emit(stringRow(
       StrId::STR_SYNC_SERVER_ADDRESS, [] { return FLASHCARD_SYNC_STORE.getUrl(); },
       [](const std::string& v) {
@@ -387,22 +405,28 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
     emit(std::move(test));
   }
 
-  const std::vector<StrId> serverValues = {StrId::STR_STATE_OFF, StrId::STR_SYNC_SAME_SERVER,
-                                           StrId::STR_SYNC_OWN_SERVER};
-  const auto serverRow = [&serverValues](StrId name, SyncServiceStore& store, const char* key) {
+  // Labels by stored value (Off, Sync Server, the service's own server). Migaku has no own server:
+  // only the companion server serves it. The device also leaves out Sync Server while the switch is
+  // off (SettingsActivity); the web page keeps one fixed list, as it maps choices by position.
+  using Server = SyncServiceStore::Server;
+  const auto serverRow = [](StrId name, SyncServiceStore& store, StrId ownLabel, bool offersOwn, const char* key) {
+    std::vector<uint8_t> offered = {static_cast<uint8_t>(Server::Off), static_cast<uint8_t>(Server::Shared)};
+    if (offersOwn) offered.push_back(static_cast<uint8_t>(Server::Own));
     return SettingInfo::DynamicEnum(
-        name, serverValues, [&store] { return static_cast<uint8_t>(store.getServer()); },
-        [&store](const uint8_t v) {
-          const auto server =
-              static_cast<SyncServiceStore::Server>(std::min(v, static_cast<uint8_t>(SyncServiceStore::Server::Own)));
-          if (server == store.getServer()) return;
-          store.setServer(server);
-          store.save();
-        },
-        key, StrId::STR_FLASHCARD_SYNC);
+               name, {StrId::STR_STATE_OFF, StrId::STR_SYNC_SAME_SERVER, ownLabel},
+               [&store] { return static_cast<uint8_t>(store.getServer()); },
+               [&store](const uint8_t v) {
+                 const auto server = static_cast<Server>(std::min(v, static_cast<uint8_t>(Server::Own)));
+                 if (server == store.getServer()) return;
+                 if (server == Server::Shared && !FLASHCARD_SYNC_STORE.isEnabled()) return;
+                 store.setServer(server);
+                 store.save();
+               },
+               key, StrId::STR_FLASHCARD_SYNC)
+        .withEnumOrder(std::move(offered));
   };
 
-  emit(serverRow(StrId::STR_ANKI_SERVER, ANKI_STORE, "ankiServer"));
+  emit(serverRow(StrId::STR_ANKI_SERVER, ANKI_STORE, StrId::STR_SYNC_ANKI_DESKTOP, true, "ankiServer"));
   emit(stringRow(
       StrId::STR_ANKI_ADDRESS, [] { return ANKI_STORE.getUrl(); },
       [](const std::string& v) {
@@ -427,32 +451,8 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
         ANKI_STORE.saveToFile();
       },
       "ankiDecks", StrId::STR_FLASHCARD_SYNC));
-  emit(SettingInfo::DynamicEnum(
-      StrId::STR_ANKI_SYNC_ANKIWEB, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
-      [] { return static_cast<uint8_t>(ANKI_STORE.getSyncAnkiWeb() ? 1 : 0); },
-      [](const uint8_t v) {
-        if ((v != 0) == ANKI_STORE.getSyncAnkiWeb()) return;
-        ANKI_STORE.setSyncAnkiWeb(v != 0);
-        ANKI_STORE.saveToFile();
-      },
-      "ankiSyncAnkiWeb", StrId::STR_FLASHCARD_SYNC));
 
-  emit(serverRow(StrId::STR_MIGAKU_SERVER, MIGAKU_STORE, "migakuServer"));
-  emit(stringRow(
-      StrId::STR_MIGAKU_ADDRESS, [] { return MIGAKU_STORE.getUrl(); },
-      [](const std::string& v) {
-        MIGAKU_STORE.setUrl(v);
-        MIGAKU_STORE.saveToFile();
-      },
-      "migakuUrl"));
-  emit(stringRow(
-           StrId::STR_MIGAKU_KEY, [] { return MIGAKU_STORE.getKey(); },
-           [](const std::string& v) {
-             MIGAKU_STORE.setKey(v);
-             MIGAKU_STORE.saveToFile();
-           },
-           "migakuKey")
-           .withObfuscated());
+  emit(serverRow(StrId::STR_MIGAKU_SERVER, MIGAKU_STORE, StrId::STR_SYNC_OWN_SERVER, false, "migakuServer"));
   emit(SettingInfo::DynamicString(
       StrId::STR_MIGAKU_DECKS, [] { return ankisync::joinDeckNames(MIGAKU_STORE.getSyncedDecks()); },
       [](const std::string& v) {
