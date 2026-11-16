@@ -3,12 +3,15 @@
 
 The reader cannot open an .apkg itself (it is a SQLite database, often zstd-compressed), so this
 script does what a sync would: it renders every card the way Anki does, cleans the HTML for the
-reader, and writes the same deck folder the sync writes:
+reader, and writes the same files the sync writes:
 
-    <out>/<deck id>/deck.json, cards.bin, style.css, <card id>q.xhtml, <card id>a.xhtml, images
+    <out>/<deck id>.json, <deck id>.cards.bin
+    <out>/<deck id>/style.css, <card id>q.xhtml, <card id>a.xhtml, images
 
-Copy the folder into the SD card's system folder, as `.system/anki/<deck id>/` (or pass --sd with
-the card's mount point and it is written there). Review progress then lives on the reader only.
+Copy them into the SD card's system folder, under `.system/anki/` (or pass --sd with the card's
+mount point and they are written there). Over a deck in the older layout, with deck.json and
+cards.bin inside its folder, the script removes those two and moves the folder's buried.bin and
+leeches.bin beside it, as the reader would. Review progress then lives on the reader only.
 
 Requires the Anki library and lxml:  pip install anki lxml pillow
 
@@ -131,6 +134,15 @@ def copy_image(media_dir: str, name: str, out_dir: str) -> None:
 def export_deck(col: Collection, deck_id: int, deck_name: str, out_root: str) -> int:
     out_dir = os.path.join(out_root, str(deck_id))
     os.makedirs(out_dir, exist_ok=True)
+    # The older layout kept the deck's small files inside its folder; the reader looks beside it.
+    for name in ("buried.bin", "leeches.bin"):
+        old, new = os.path.join(out_dir, name), os.path.join(out_root, f"{deck_id}.{name}")
+        if os.path.exists(old) and not os.path.exists(new):
+            os.replace(old, new)
+    for name in ("deck.json", "cards.bin"):
+        old = os.path.join(out_dir, name)
+        if os.path.exists(old):
+            os.remove(old)
     card_ids = sorted(col.find_cards(deck_query(deck_name)))
     if len(card_ids) > MAX_CARDS:
         print(f"  {deck_name}: {len(card_ids)} cards, keeping the first {MAX_CARDS}")
@@ -159,12 +171,12 @@ def export_deck(col: Collection, deck_id: int, deck_name: str, out_root: str) ->
                 for name in re.findall(r'src="([^"]+)"', side):
                     copy_image(col.media.dir(), html_lib.unescape(name), out_dir)
         records.append(struct.pack("<QQII", card_id, note.id, int(note.mod), flags))
-    with open(os.path.join(out_dir, "cards.bin"), "wb") as f:
+    with open(os.path.join(out_root, f"{deck_id}.cards.bin"), "wb") as f:
         f.write(b"".join(records))
     css_text = "\n".join(css_parts)
     with open(os.path.join(out_dir, "style.css"), "w", encoding="utf-8") as f:
         f.write(css_text[:MAX_CSS])
-    with open(os.path.join(out_dir, "deck.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(out_root, f"{deck_id}.json"), "w", encoding="utf-8") as f:
         json.dump({"name": deck_name, "lastReviewId": 0}, f, ensure_ascii=False)
     note = f", {too_large} too large for the reader" if too_large else ""
     print(f"  {deck_name}: {len(records)} cards{note} -> {out_dir}")

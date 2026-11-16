@@ -37,9 +37,47 @@ CardRecord decode(const uint8_t* p) {
   r.flags = take<uint32_t>(p);
   return r;
 }
+
+// The deck's own small files, beside its folder: "anki/<deckId>.json" and so on.
+std::string besideDir(const std::string& deckId, const char* suffix) {
+  return sdsystem::path(("anki/" + deckId + suffix).c_str());
+}
+
+// Once per deck and boot: files an older firmware (or the import tool) kept inside the deck's
+// folder move beside it. deck.json goes last, and only when the others moved, so a move cut short
+// is finished next time. A file already beside the folder is kept and the old one left alone: a
+// rename cut short can leave both names on the same data, and removing one would free the other's.
+void moveOutOfFolder(const std::string& deckId) {
+  static std::vector<std::string> done;
+  if (std::find(done.begin(), done.end(), deckId) != done.end()) return;
+  done.push_back(deckId);
+  if (Storage.exists(besideDir(deckId, ".json").c_str())) return;
+  const std::string dir = sdsystem::path(("anki/" + deckId + "/").c_str());
+  static constexpr const char* MOVES[][2] = {{"cards.bin", ".cards.bin"},
+                                             {"buried.bin", ".buried.bin"},
+                                             {"leeches.bin", ".leeches.bin"},
+                                             {"deck.json", ".json"}};
+  for (const auto& move : MOVES) {
+    const std::string from = dir + move[0];
+    if (!Storage.exists(from.c_str())) continue;
+    const std::string to = besideDir(deckId, move[1]);
+    if (Storage.exists(to.c_str())) continue;
+    if (!Storage.rename(from.c_str(), to.c_str())) {
+      LOG_ERR("ANKI", "Could not move %s", from.c_str());
+      return;
+    }
+  }
+}
 }  // namespace
 
 std::string dirFor(const std::string& deckId) { return sdsystem::path(("anki/" + deckId + "/").c_str()); }
+
+// Not in the deck's folder: that holds two files per card and their images, and FAT finds a name
+// by reading the folder through -- about 250 ms a lookup in a 2000-card deck, every time.
+std::string metaPath(const std::string& deckId, const char* suffix) {
+  moveOutOfFolder(deckId);
+  return besideDir(deckId, suffix);
+}
 
 std::string idOf(const std::string& key) { return isAnkiKey(key) ? key.substr(std::strlen(KEY_PREFIX)) : key; }
 
@@ -51,11 +89,18 @@ std::string backPath(const std::string& deckId, const uint64_t cardId) {
 }
 std::string cssPath(const std::string& deckId) { return dirFor(deckId) + "style.css"; }
 
-std::string leechPath(const std::string& deckId) { return dirFor(deckId) + "leeches.bin"; }
+std::string leechPath(const std::string& deckId) { return metaPath(deckId, ".leeches.bin"); }
+
+void forgetDeckFiles(const std::string& deckId) {
+  for (const char* suffix : {".json", ".cards.bin", ".buried.bin", ".leeches.bin"}) {
+    const std::string path = besideDir(deckId, suffix);
+    if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
+  }
+}
 
 bool readInfo(const std::string& deckId, DeckInfo& out) {
   JsonDocument doc;
-  if (!PersistableStoreBase::readDocFromFile((dirFor(deckId) + "deck.json").c_str(), doc)) return false;
+  if (!PersistableStoreBase::readDocFromFile(metaPath(deckId, ".json").c_str(), doc)) return false;
   out.id = deckId;
   out.name = doc["name"] | "";
   out.lastReviewId = doc["lastReviewId"] | static_cast<uint64_t>(0);
@@ -133,7 +178,7 @@ bool writeInfo(const DeckInfo& info) {
     JsonArray hashes = doc["cssHashes"].to<JsonArray>();
     for (const uint32_t h : info.cssHashes) hashes.add(h);
   }
-  return PersistableStoreBase::writeDocToFile((dirFor(info.id) + "deck.json").c_str(), doc);
+  return PersistableStoreBase::writeDocToFile(metaPath(info.id, ".json").c_str(), doc);
 }
 
 void forgetCardsSynced(const std::string& deckId) {
@@ -144,7 +189,7 @@ void forgetCardsSynced(const std::string& deckId) {
 }
 
 bool writeBuried(const std::string& deckId, const int32_t day, const std::vector<uint64_t>& ids) {
-  const std::string path = dirFor(deckId) + "buried.bin";
+  const std::string path = metaPath(deckId, ".buried.bin");
   if (ids.empty()) {
     if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
     return true;
@@ -162,7 +207,7 @@ bool writeBuried(const std::string& deckId, const int32_t day, const std::vector
 
 void readBuried(const std::string& deckId, const int32_t day, std::vector<uint64_t>& out) {
   out.clear();
-  const std::string path = dirFor(deckId) + "buried.bin";
+  const std::string path = metaPath(deckId, ".buried.bin");
   if (day < 0 || !Storage.exists(path.c_str())) return;
   HalFile file;
   if (!Storage.openFileForRead("ANKI", path, file)) return;
@@ -183,35 +228,27 @@ void readBuried(const std::string& deckId, const int32_t day, std::vector<uint64
   if (file.read(reinterpret_cast<uint8_t*>(out.data()), bytes) != bytes) out.clear();
 }
 
-bool readIndex(const std::string& deckId, std::vector<CardRecord>& out) {
-  out.clear();
-  const std::string path = dirFor(deckId) + "cards.bin";
-  if (!Storage.exists(path.c_str())) return true;
+bool scanIndex(const std::string& deckId, const std::function<void(const CardRecord&)>& each) {
+  const std::string path = metaPath(deckId, ".cards.bin");
   HalFile file;
-  if (!Storage.openFileForRead("ANKI", path, file)) return false;
+  // Opened first: the index is nearly always there, and asking first would look it up twice.
+  if (!Storage.openFileForRead("ANKI", path, file)) return !Storage.exists(path.c_str());
   const size_t count = std::min<size_t>(file.fileSize() / RECORD_BYTES, MAX_CARDS);
-  // std::vector allocates with throwing new: check the block first.
-  if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < count * sizeof(CardRecord) + 8 * 1024) {
-    LOG_ERR("ANKI", "OOM: index of %u cards", static_cast<unsigned>(count));
-    return false;
-  }
-  out.reserve(count);
-  uint8_t rec[RECORD_BYTES];
-  for (size_t i = 0; i < count; i++) {
-    if (file.read(rec, sizeof(rec)) != static_cast<int>(sizeof(rec))) {
-      out.clear();
-      return false;
-    }
-    out.push_back(decode(rec));
+  constexpr size_t CHUNK = 16;
+  uint8_t buf[CHUNK * RECORD_BYTES];
+  for (size_t i = 0; i < count;) {
+    const size_t n = std::min(CHUNK, count - i);
+    if (file.read(buf, n * RECORD_BYTES) != static_cast<int>(n * RECORD_BYTES)) return false;
+    for (size_t k = 0; k < n; k++) each(decode(buf + k * RECORD_BYTES));
+    i += n;
   }
   return true;
 }
 
 bool IndexReader::open(const std::string& deckId) {
   count = next = bufStart = bufCount = 0;
-  const std::string path = dirFor(deckId) + "cards.bin";
-  if (!Storage.exists(path.c_str())) return true;
-  if (!Storage.openFileForRead("ANKI", path, file)) return false;
+  const std::string path = metaPath(deckId, ".cards.bin");
+  if (!Storage.openFileForRead("ANKI", path, file)) return !Storage.exists(path.c_str());
   count = std::min<size_t>(file.fileSize() / RECORD_BYTES, MAX_CARDS);
   return true;
 }
@@ -268,7 +305,7 @@ static bool writeRecord(HalFile& file, const CardRecord& r) {
 
 bool IndexWriter::open(const std::string& id) {
   deckId = id;
-  path = dirFor(deckId) + "cards.bin";
+  path = metaPath(deckId, ".cards.bin");
   tmp = path + ".tmp";
   return Storage.openFileForWrite("ANKI", tmp, file);
 }

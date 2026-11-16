@@ -68,6 +68,19 @@ T take(const uint8_t*& p) {
   return value;
 }
 
+CardState decodeState(const uint8_t* q) {
+  CardState s;
+  s.id = take<uint64_t>(q);
+  s.stability = take<float>(q);
+  s.difficulty = take<float>(q);
+  s.due = take<uint16_t>(q);
+  s.lastReview = take<uint16_t>(q);
+  s.reps = take<uint16_t>(q);
+  s.lapses = take<uint8_t>(q);
+  s.flags = take<uint8_t>(q);
+  return s;
+}
+
 // `spare` reserves room for cards rated for the first time, so rating never grows the vector.
 // std::vector allocates with throwing new (abort on failure), so the block is checked first.
 // Room for the table and the cards rated this session: a full vector would refuse them.
@@ -120,17 +133,7 @@ bool loadStates(const std::string& language, std::vector<CardState>& out, uint16
       out.clear();
       return false;
     }
-    const uint8_t* q = rec;
-    CardState s;
-    s.id = take<uint64_t>(q);
-    s.stability = take<float>(q);
-    s.difficulty = take<float>(q);
-    s.due = take<uint16_t>(q);
-    s.lastReview = take<uint16_t>(q);
-    s.reps = take<uint16_t>(q);
-    s.lapses = take<uint8_t>(q);
-    s.flags = take<uint8_t>(q);
-    out.push_back(s);
+    out.push_back(decodeState(rec));
   }
   std::sort(out.begin(), out.end(), [](const CardState& a, const CardState& b) { return a.id < b.id; });
   return true;
@@ -323,12 +326,209 @@ uint16_t reviewsDoneToday(const std::vector<CardState>& states, const uint16_t d
   return rated > newToday ? rated - newToday : 0;
 }
 
+// The same, from the number of cards rated today.
+uint16_t reviewsLeftAfter(const ankideck::DeckInfo* deck, const size_t ratedToday, const uint16_t newToday) {
+  if (!deck || deck->reviewsPerDay < 0) return UINT16_MAX;
+  const uint16_t done =
+      ratedToday > newToday ? static_cast<uint16_t>(std::min<size_t>(ratedToday - newToday, UINT16_MAX)) : 0;
+  return deck->reviewsPerDay > done ? static_cast<uint16_t>(std::min<int32_t>(deck->reviewsPerDay - done, UINT16_MAX))
+                                    : 0;
+}
+
 uint16_t reviewsLeft(const ankideck::DeckInfo* deck, const std::vector<CardState>& states, const uint16_t day,
                      const uint16_t newToday) {
   if (!deck || deck->reviewsPerDay < 0) return UINT16_MAX;
   const uint16_t done = reviewsDoneToday(states, day, newToday);
   return deck->reviewsPerDay > done ? static_cast<uint16_t>(std::min<int32_t>(deck->reviewsPerDay - done, UINT16_MAX))
                                     : 0;
+}
+// A deck's progress file read in order, a few records at a time. Files are written sorted by card
+// id; one found out of order fails, and the caller loads the whole table instead.
+class StateStream {
+ public:
+  // Back to the first card. False when the file cannot be read or is not a progress file; a deck
+  // with no file yet has no cards to give.
+  bool open(const std::string& language) {
+    if (file.isOpen()) file.close();
+    day = newToday = 0;
+    left = 0;
+    have = pos = 0;
+    seen = error = false;
+    if (absent) return true;
+    const std::string path = statePath(language);
+    // A deck with no reviews yet has no file. Asked once: its passes do not look again.
+    if (!Storage.exists(path.c_str())) {
+      absent = true;
+      return true;
+    }
+    if (!Storage.openFileForRead("FLASH", path, file)) return false;
+    uint8_t header[HEADER_BYTES];
+    if (file.read(header, sizeof(header)) != static_cast<int>(sizeof(header)) || memcmp(header, MAGIC, 4) != 0) {
+      return false;
+    }
+    const uint8_t* p = header + 4;
+    day = take<uint16_t>(p);
+    newToday = take<uint16_t>(p);
+    left = total = std::min<uint32_t>(take<uint32_t>(p), Session::MAX_CARDS);
+    return true;
+  }
+  // Back to the first card of a file already opened, without looking its name up again.
+  bool restart() {
+    have = pos = 0;
+    seen = error = false;
+    if (absent) return true;
+    left = 0;
+    if (!file.isOpen() || !file.seek(HEADER_BYTES)) return false;
+    left = total;
+    return true;
+  }
+  // The next card, ids rising. False at the end, and on a short read or an id out of order, which
+  // failed() then reports.
+  bool next(CardState& out) {
+    if (pos == have) {
+      if (left == 0) return false;
+      const size_t n = std::min<size_t>(CHUNK, left);
+      if (file.read(buf, n * RECORD_BYTES) != static_cast<int>(n * RECORD_BYTES)) return fail();
+      have = n;
+      pos = 0;
+      left -= n;
+    }
+    out = decodeState(buf + pos++ * RECORD_BYTES);
+    if (seen && out.id <= lastId) return fail();
+    seen = true;
+    lastId = out.id;
+    return true;
+  }
+  bool failed() const { return error; }
+  uint16_t day = 0;
+  uint16_t newToday = 0;
+
+ private:
+  bool fail() {
+    error = true;
+    left = 0;
+    have = pos = 0;
+    return false;
+  }
+  static constexpr size_t CHUNK = 8;
+  HalFile file;
+  uint32_t total = 0;
+  uint32_t left = 0;
+  size_t have = 0;
+  size_t pos = 0;
+  uint64_t lastId = 0;
+  bool seen = false;
+  bool error = false;
+  bool absent = false;  // no progress file: every open after the first gives no cards
+  uint8_t buf[CHUNK * RECORD_BYTES] = {};
+};
+
+// A deck's progress for countAnkiDeck(), from the table in memory.
+struct TableStates {
+  const std::vector<CardState>& states;
+  static bool rewind() { return true; }
+  const CardState* find(const uint64_t id) const { return findIn(states, id); }
+  template <typename Each>
+  bool each(Each fn) {
+    for (const auto& s : states) fn(s);
+    return true;
+  }
+  static bool failed() { return false; }
+};
+
+// The same from the file, without the table: a 2000-card table needs a 48 KB block, which a
+// fragmented heap often lacks. find() takes rising ids within a pass; rewind() starts the next.
+struct StreamedStates {
+  const std::string& language;
+  StateStream stream;
+  CardState current;
+  bool has = false;
+  bool atStart = false;  // rewound and nothing asked yet: each() need not open the file again
+  bool opened = false;
+  bool rewind() {
+    has = false;
+    atStart = false;
+    if (!(opened ? stream.restart() : stream.open(language))) return false;
+    opened = true;
+    has = stream.next(current);
+    atStart = !stream.failed();
+    return atStart;
+  }
+  const CardState* find(const uint64_t id) {
+    atStart = false;
+    while (has && current.id < id) has = stream.next(current);
+    return has && current.id == id ? &current : nullptr;
+  }
+  template <typename Each>
+  bool each(Each fn) {
+    if (!atStart && !rewind()) return false;
+    atStart = false;
+    for (; has; has = stream.next(current)) fn(current);
+    return !stream.failed();
+  }
+  bool failed() const { return stream.failed(); }
+};
+
+// An Anki deck's counts into `deck`, its progress from `states` (TableStates or StreamedStates).
+// False when the progress or the card index cannot be read.
+template <typename States>
+bool countAnkiDeck(const ankideck::DeckInfo& info, const uint16_t now, const uint16_t newToday, States& states,
+                   DeckSummary& deck) {
+  size_t reviewedToday = 0;
+  if (!states.each([&](const CardState& c) {
+        if (c.reps > 0 && c.lastReview == now) reviewedToday++;
+      })) {
+    return false;
+  }
+  const uint16_t perDay = newCardsPerDay(&info);
+  uint16_t fresh = 0;
+  uint16_t stepping = 0;  // between learning steps: outside the review limit, as in a session
+  std::vector<uint64_t> buried, leeches, notesDone;
+  ankideck::readBuried(info.id, now, buried);
+  if (info.leechThreshold > 0 && info.leechSuspend) readLeeches(info.id, leeches);
+  const bool bury = (info.buryNew || info.buryReviews) && reviewedToday > 0 &&
+                    heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= reviewedToday * sizeof(uint64_t) + 8 * 1024;
+  // A first pass over the index finds the notes reviewed today, whose siblings the second skips.
+  if (bury) {
+    notesDone.reserve(reviewedToday);
+    if (!states.rewind() || !ankideck::scanIndex(info.id, [&](const ankideck::CardRecord& c) {
+          const CardState* s = states.find(c.cardId);
+          if (s && s->reps > 0 && s->lastReview == now && notesDone.size() < reviewedToday) {
+            notesDone.push_back(c.noteId);
+          }
+        })) {
+      return false;
+    }
+    if (states.failed()) return false;
+    std::sort(notesDone.begin(), notesDone.end());
+  }
+  if (!states.rewind() || !ankideck::scanIndex(info.id, [&](const ankideck::CardRecord& c) {
+        deck.total++;
+        if (std::binary_search(buried.begin(), buried.end(), c.cardId)) return;
+        if (std::binary_search(leeches.begin(), leeches.end(), c.cardId)) return;
+        const CardState* known = states.find(c.cardId);
+        // A sibling of a note reviewed today waits for tomorrow, as in a session.
+        if (std::binary_search(notesDone.begin(), notesDone.end(), c.noteId) &&
+            !(known && known->reps > 0 && known->lastReview == now) && (known ? info.buryReviews : info.buryNew)) {
+          return;
+        }
+        if (known) {
+          if (known->due > now) return;
+          if ((known->flags & CardState::LEARN_STEP) != 0) {
+            stepping++;
+          } else {
+            deck.due++;
+          }
+        } else {
+          fresh++;
+        }
+      })) {
+    return false;
+  }
+  if (states.failed()) return false;
+  deck.fresh = std::min<uint16_t>(fresh, perDay > newToday ? perDay - newToday : 0);
+  deck.due = std::min(deck.due, reviewsLeftAfter(&info, reviewedToday, newToday)) + stepping;
+  return true;
 }
 }  // namespace
 
@@ -377,59 +577,34 @@ void listDecks(std::vector<DeckSummary>& out) {
   ankideck::list(anki);
   out.reserve(out.size() + anki.size());
   for (const auto& info : anki) {
-    DeckSummary deck;
-    deck.language = ankideck::keyFor(info.id);
-    deck.label = info.name;
-    std::vector<CardState> states;
-    std::vector<ankideck::CardRecord> cards;
-    uint16_t day = 0, newToday = 0;
-    if (!loadStates(deck.language, states, day, newToday) || !ankideck::readIndex(info.id, cards)) {
-      out.push_back(std::move(deck));
-      continue;
+    const std::string key = ankideck::keyFor(info.id);
+    const auto fresh = [&] {
+      DeckSummary d;
+      d.language = key;
+      d.label = info.name;
+      return d;
+    };
+    DeckSummary deck = fresh();
+    StreamedStates streamed{key};
+    bool counted = false;
+    if (streamed.rewind()) {
+      const uint16_t now = todayOr(streamed.stream.day);
+      counted = countAnkiDeck(info, now, now != streamed.stream.day ? 0 : streamed.stream.newToday, streamed, deck);
     }
-    const uint16_t now = todayOr(day);
-    if (now != day) newToday = 0;
-    const uint16_t perDay = newCardsPerDay(&info);
-    uint16_t fresh = 0;
-    uint16_t stepping = 0;  // between learning steps: outside the review limit, as in a session
-    std::vector<uint64_t> buried, leeches, notesDone;
-    ankideck::readBuried(info.id, now, buried);
-    if (info.leechThreshold > 0 && info.leechSuspend) readLeeches(info.id, leeches);
-    const auto reviewedToday = static_cast<size_t>(std::count_if(
-        states.begin(), states.end(), [now](const CardState& c) { return c.reps > 0 && c.lastReview == now; }));
-    const bool bury = (info.buryNew || info.buryReviews) &&
-                      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= reviewedToday * sizeof(uint64_t) + 8 * 1024;
-    if (bury) {
-      notesDone.reserve(reviewedToday);
-      for (const auto& c : cards) {
-        const CardState* s = findIn(states, c.cardId);
-        if (s && s->reps > 0 && s->lastReview == now) notesDone.push_back(c.noteId);
+    if (!counted) {
+      // Not readable in order (or not a progress file, which loadStates sets aside): the table, as
+      // the counts were taken before. Without it, or without the index, the deck shows none due.
+      LOG_DBG("FLASH", "%s: counting from the table", key.c_str());
+      deck = fresh();
+      std::vector<CardState> states;
+      uint16_t day = 0, newToday = 0;
+      if (loadStates(key, states, day, newToday)) {
+        const uint16_t now = todayOr(day);
+        TableStates table{states};
+        counted = countAnkiDeck(info, now, now != day ? 0 : newToday, table, deck);
       }
-      std::sort(notesDone.begin(), notesDone.end());
+      if (!counted) deck = fresh();
     }
-    for (const auto& c : cards) {
-      deck.total++;
-      if (std::binary_search(buried.begin(), buried.end(), c.cardId)) continue;
-      if (std::binary_search(leeches.begin(), leeches.end(), c.cardId)) continue;
-      const CardState* known = findIn(states, c.cardId);
-      // A sibling of a note reviewed today waits for tomorrow, as in a session.
-      if (std::binary_search(notesDone.begin(), notesDone.end(), c.noteId) &&
-          !(known && known->reps > 0 && known->lastReview == now) && (known ? info.buryReviews : info.buryNew)) {
-        continue;
-      }
-      if (const CardState* s = known) {
-        if (s->due > now) continue;
-        if ((s->flags & CardState::LEARN_STEP) != 0) {
-          stepping++;
-        } else {
-          deck.due++;
-        }
-      } else {
-        fresh++;
-      }
-    }
-    deck.fresh = std::min<uint16_t>(fresh, perDay > newToday ? perDay - newToday : 0);
-    deck.due = std::min(deck.due, reviewsLeft(&info, states, now, newToday)) + stepping;
     if (paused) deck.due = deck.fresh = 0;
     out.push_back(std::move(deck));
   }
@@ -547,16 +722,19 @@ bool Session::open(const std::string& language) {
   };
   if (anki) {
     // An Anki deck's cards come from its index, in Anki's order; offset holds the record's flags.
-    std::vector<ankideck::CardRecord> cards;
-    if (!ankideck::readIndex(ankideck::idOf(language), cards)) return false;
     std::vector<uint64_t> buriedIds;
     ankideck::readBuried(ankideck::idOf(language), day, buriedIds);
-    for (const auto& c : cards) {
-      if (std::binary_search(buriedIds.begin(), buriedIds.end(), c.cardId)) continue;
+    const bool read = ankideck::scanIndex(ankideck::idOf(language), [&](const ankideck::CardRecord& c) {
+      if (std::binary_search(buriedIds.begin(), buriedIds.end(), c.cardId)) return;
       // Notes already reviewed today bury their siblings for the rest of the day.
       const CardState* s = find(c.cardId);
       if ((buryNew || buryReviews) && s && s->reps > 0 && s->lastReview == day) notesDone.push_back(c.noteId);
       consider(c.cardId, c.flags, c.noteId);
+    });
+    if (!read) {
+      queue.clear();  // as before: a session that did not open has nothing to show
+      learning.clear();
+      return false;
     }
     std::sort(notesDone.begin(), notesDone.end());
   } else {

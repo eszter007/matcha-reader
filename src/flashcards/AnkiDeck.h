@@ -3,12 +3,14 @@
 #include <HalStorage.h>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
 // A deck brought from Anki onto the device, kept in the system folder (never in the Library):
-//   anki/<deckId>/deck.json      name, last Anki review seen
-//   anki/<deckId>/cards.bin      the card index, CardRecord per card, sorted by card id
+//   anki/<deckId>.json           name, last Anki review seen
+//   anki/<deckId>.cards.bin      the card index, CardRecord per card, sorted by card id
+//   anki/<deckId>.buried.bin     cards buried until tomorrow; anki/<deckId>.leeches.bin, leeches
 //   anki/<deckId>/style.css      the note types' CSS
 //   anki/<deckId>/<cardId>q.xhtml, <cardId>a.xhtml   each side as Anki renders it, as XHTML
 //   anki/<deckId>/<media>        the images the cards use
@@ -73,14 +75,23 @@ inline bool isAnkiKey(const std::string& key) { return key.rfind(KEY_PREFIX, 0) 
 constexpr const char* MIGAKU_PREFIX = "m";
 inline bool isMigakuKey(const std::string& key) { return key.rfind(std::string(KEY_PREFIX) + MIGAKU_PREFIX, 0) == 0; }
 inline std::string keyFor(const std::string& deckId) { return KEY_PREFIX + deckId; }
-std::string dirFor(const std::string& deckId);  // with a trailing '/'
+std::string dirFor(const std::string& deckId);  // the deck's card folder, with a trailing '/'
+// One of the deck's small files beside that folder (suffix ".json", ".cards.bin"...): a lookup in a
+// folder of thousands of cards costs a quarter second. Moves an older layout's files on first use.
+std::string metaPath(const std::string& deckId, const char* suffix);
+// Removes those small files: a deck whose folder was deleted starts again from nothing, as it did
+// when they lived inside the folder.
+void forgetDeckFiles(const std::string& deckId);
 std::string idOf(const std::string& key);
 
 bool readInfo(const std::string& deckId, DeckInfo& out);
 bool writeInfo(const DeckInfo& info);
 // A card file the index lists is missing: the next sync checks every card again.
 void forgetCardsSynced(const std::string& deckId);
-bool readIndex(const std::string& deckId, std::vector<CardRecord>& out);
+// Each card of the index in turn, read a few records at a time: a 2000-card index whole needs a
+// 48 KB block, which a fragmented heap often does not have. True with no calls when the deck has no
+// index yet; false when unreadable, possibly after some calls.
+bool scanIndex(const std::string& deckId, const std::function<void(const CardRecord&)>& each);
 
 constexpr size_t INDEX_RECORD_BYTES = 24;  // one CardRecord in cards.bin
 
