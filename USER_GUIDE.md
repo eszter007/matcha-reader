@@ -1911,7 +1911,7 @@ If Anki on the computer is signed in to AnkiWeb, each sync also asks it to sync 
 **Each time:**
 
 1. Open Anki on your computer. The device is on the same Wi-Fi.
-2. On the device, choose **Flashcards → Sync with Anki**. New and changed cards come to the device. Your reviews from the device go to Anki, with their real time, the next due date and the card's memory. Reviews you did in Anki come to the device.
+2. On the device, choose **Flashcards → Sync with Anki**. New and changed cards come to the device. Your reviews from the device go to Anki with their real time. Anki also gets each card's next due date and interval and, if FSRS is on in Anki, the card's memory (stability and difficulty). Reviews you did in Anki come to the device.
 3. Review offline on the device. Your ratings are kept on the device until the next sync, however long that takes.
 
 If you review the same card in Anki and on the device between two syncs, both reviews are kept in the card's history.

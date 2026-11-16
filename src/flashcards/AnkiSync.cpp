@@ -324,6 +324,7 @@ class DeckSync {
   bool retryTooLarge = false;          // cards marked too large under an older FETCH_VERSION are tried again
   ankideck::DeckInfo* info = nullptr;  // the deck being synced, saved at the end of run()
   uint32_t typesModSeen = 0;           // newest note type change seen; saved with a complete refresh
+  bool fsrsRefused = false;            // Anki refused an FSRS memory (FSRS is off): send none for the rest
   // Asks the screen whether the user cancelled; once true, stays true for this sync.
   bool cancelRequested() {
     if (result.error.kind != AnkiClient::Error::Kind::Cancelled && progress.cancelled()) {
@@ -1072,6 +1073,10 @@ bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
       if (!importBatch(at + i, 1) && client.error().type != "conflict") return false;
     }
   }
+  // Past these reviews before the schedule calls, so the next pull does not take them for Anki's,
+  // even when the sync stops partway through those calls.
+  for (const int64_t t : stamps) info.lastReviewId = std::max(info.lastReviewId, static_cast<uint64_t>(t));
+  if (!ankideck::writeInfo(info)) return false;
   // Then each reviewed card's resulting schedule.
   std::vector<uint64_t> ids;
   ids.reserve(log.size());
@@ -1082,23 +1087,35 @@ bool DeckSync::pushChunk(ankideck::DeckInfo& info, const std::string& key,
   uint16_t today = 0;
   if (!flashcards::readStates(key, ids, states, today)) return false;
   for (const auto& s : states) {
+    if (cancelRequested()) return false;
     JsonDocument due, ok;
     due["cardIds"][0] = std::to_string(s.id);
     due["days"] = std::to_string(s.due > today ? s.due - today : 0);
     if (!client.call("scheduling.setDueDate", due, ok)) return false;
-    JsonDocument memory, card;
+    // A due date alone can leave the interval at 0 (Anki desktop does), and SM-2 works out the next one from it.
+    JsonDocument none;
+    none["id"] = true;
+    JsonDocument interval, card;
+    interval["cardId"] = std::to_string(s.id);
+    interval["patch"]["intervalDays"] = s.due > s.lastReview ? s.due - s.lastReview : 1;
+    // Only Anki's own refusal is skipped; any other failure stops the sync, so the next one sends it again.
+    using Kind = AnkiClient::Error::Kind;
+    if (!client.call("advanced.cards.update", interval, card, &none)) {
+      if (client.error().kind != Kind::Rpc) return false;
+      LOG_INF("ANKI", "No interval for %llu", s.id);
+    }
+    if (fsrsRefused) continue;
+    JsonDocument memory;
     memory["cardId"] = std::to_string(s.id);
     memory["patch"]["fsrsMemory"]["difficulty"] = std::clamp(s.difficulty, 1.0f, 10.0f);
     memory["patch"]["fsrsMemory"]["stabilityDays"] = s.stability;
-    JsonDocument none;
-    none["id"] = true;
-    // Decks on the old SM-2 scheduler refuse an FSRS memory; their due date is set already.
-    if (!client.call("advanced.cards.update", memory, card, &none)) LOG_INF("ANKI", "No FSRS memory for %llu", s.id);
+    if (!client.call("advanced.cards.update", memory, card, &none)) {
+      if (client.error().kind != Kind::Rpc) return false;
+      fsrsRefused = client.error().type == "unsupportedCapability";
+      LOG_INF("ANKI", "No FSRS memory for %llu", s.id);
+    }
   }
   result.reviewsPushed += static_cast<uint32_t>(history.size());
-  // Past these reviews before they leave the log, so the next pull does not take them for Anki's.
-  for (const int64_t t : stamps) info.lastReviewId = std::max(info.lastReviewId, static_cast<uint64_t>(t));
-  if (!ankideck::writeInfo(info)) return false;
   return flashcards::dropReviewLog(key, log.size());
 }
 
