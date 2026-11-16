@@ -21,9 +21,7 @@ TEST(PluralRules, NoPlurals) { EXPECT_EQ(forms(Rule::None, {0, 1, 2, 21}), (std:
 
 TEST(PluralRules, OneOther) { EXPECT_EQ(forms(Rule::OneOther, {0, 1, 2, 21}), (std::vector<int>{1, 0, 1, 1})); }
 
-TEST(PluralRules, ZeroOneOther) {
-  EXPECT_EQ(forms(Rule::ZeroOneOther, {0, 1, 2, 21}), (std::vector<int>{0, 0, 1, 1}));
-}
+TEST(PluralRules, ZeroOneOther) { EXPECT_EQ(forms(Rule::ZeroOneOther, {0, 1, 2, 21}), (std::vector<int>{0, 0, 1, 1})); }
 
 // Russian: 1 день, 2 дня, 5 дней, 11 дней, 21 день, 22 дня, 112 дней.
 TEST(PluralRules, EastSlavic) {
@@ -58,7 +56,8 @@ TEST(PluralRules, Slovenian) {
 
 // Romanian: 1 zi; 0, 2-19 zile and 101-119 zile; 20 de zile.
 TEST(PluralRules, Romanian) {
-  EXPECT_EQ(forms(Rule::Romanian, {0, 1, 2, 19, 20, 100, 101, 119, 120}), (std::vector<int>{1, 0, 1, 1, 2, 2, 1, 1, 2}));
+  EXPECT_EQ(forms(Rule::Romanian, {0, 1, 2, 19, 20, 100, 101, 119, 120}),
+            (std::vector<int>{1, 0, 1, 1, 2, 2, 1, 1, 2}));
 }
 
 TEST(PluralRules, Arabic) {
