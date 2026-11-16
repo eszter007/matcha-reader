@@ -800,8 +800,7 @@ void setup() {
   // from there. A missing or stale pack leaves the UI in English rather than failing the boot.
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
-  ANKI_STORE.loadFromFile();
-  MIGAKU_STORE.loadFromFile();
+  ankisync::loadSyncStores();
   OPDS_STORE.loadFromFile();
   OPDS_TOKENS.loadFromFile();
   LCP_PASSPHRASES.loadFromFile();

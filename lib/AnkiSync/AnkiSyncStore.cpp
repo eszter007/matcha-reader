@@ -1,5 +1,6 @@
 #include "AnkiSyncStore.h"
 
+#include <Logging.h>
 #include <ObfuscationUtils.h>
 
 #include <algorithm>
@@ -35,14 +36,52 @@ std::vector<SyncedDeck> splitDeckNames(const std::string& text) {
 
 using namespace ankisync;
 
+void FlashcardSyncStore::toJson(JsonDocument& doc) const {
+  doc["enabled"] = enabled;
+  doc["url"] = url;
+  doc["key_obf"] = obfuscation::obfuscateToBase64(key);
+  doc["minedTo"] = static_cast<uint8_t>(minedTo);
+}
+
+bool FlashcardSyncStore::fromJson(JsonVariantConst doc) {
+  enabled = doc["enabled"] | true;
+  url = doc["url"] | "";
+  bool ok = true;
+  key = obfuscation::deobfuscateFromBase64(doc["key_obf"] | "", &ok);
+  if (!ok) key.clear();
+  // A key typed into the file by hand is taken, and stored obfuscated from then on.
+  const char* plain = doc["key"] | "";
+  if (key.empty() && *plain) {
+    key = plain;
+    requestResave();
+  }
+  minedTo = (doc["minedTo"] | 0) == 1 ? MinedTo::Migaku : MinedTo::Anki;
+  return true;
+}
+
+namespace {
+const std::string NO_SERVER;
+}  // namespace
+
+const std::string& SyncServiceStore::serverUrl() const {
+  if (server != Server::Shared) return url;
+  return FLASHCARD_SYNC_STORE.isEnabled() ? FLASHCARD_SYNC_STORE.getUrl() : NO_SERVER;
+}
+
+const std::string& SyncServiceStore::serverKey() const {
+  if (server != Server::Shared) return key;
+  return FLASHCARD_SYNC_STORE.isEnabled() ? FLASHCARD_SYNC_STORE.getKey() : NO_SERVER;
+}
+
 std::string SyncServiceStore::endpoint() const {
-  std::string base = url;
+  std::string base = serverUrl();
   while (!base.empty() && base.back() == '/') base.pop_back();
   if (base.find("://") == std::string::npos) base = "http://" + base;
   return base + apiPath;
 }
 
 void SyncServiceStore::writeJson(JsonDocument& doc) const {
+  doc["server"] = static_cast<uint8_t>(server);
   doc["url"] = url;
   doc["key_obf"] = obfuscation::obfuscateToBase64(key);
   JsonArray syncedJson = doc["synced"].to<JsonArray>();
@@ -56,6 +95,10 @@ void SyncServiceStore::writeJson(JsonDocument& doc) const {
 void SyncServiceStore::readJson(JsonVariantConst doc, bool& upgraded) {
   upgraded = false;
   url = doc["url"] | "";
+  const JsonVariantConst serverJson = doc["server"];
+  if (serverJson.is<uint8_t>() && serverJson.as<uint8_t>() <= static_cast<uint8_t>(Server::Own)) {
+    server = static_cast<Server>(serverJson.as<uint8_t>());
+  }
   bool ok = true;
   key = obfuscation::deobfuscateFromBase64(doc["key_obf"] | "", &ok);
   if (!ok) key.clear();
@@ -84,28 +127,33 @@ void SyncServiceStore::setSyncedDecks(std::vector<SyncedDeck> decks) {
   synced = std::move(decks);
 }
 
-void AnkiSyncStore::toJson(JsonDocument& doc) const {
-  writeJson(doc);
-  doc["syncAnkiWeb"] = syncAnkiWeb;
-}
+void AnkiSyncStore::toJson(JsonDocument& doc) const { writeJson(doc); }
 
 bool AnkiSyncStore::fromJson(JsonVariantConst doc) {
   bool upgraded = false;
   readJson(doc, upgraded);
-  syncAnkiWeb = doc["syncAnkiWeb"] | true;
   if (upgraded) requestResave();
   return true;
 }
 
-void MigakuSyncStore::toJson(JsonDocument& doc) const {
-  writeJson(doc);
-  doc["takesMined"] = takesMined;
-}
+void MigakuSyncStore::toJson(JsonDocument& doc) const { writeJson(doc); }
 
 bool MigakuSyncStore::fromJson(JsonVariantConst doc) {
   bool upgraded = false;
   readJson(doc, upgraded);
-  takesMined = doc["takesMined"] | false;
   if (upgraded) requestResave();
   return true;
 }
+
+namespace ankisync {
+void loadSyncStores() {
+  FLASHCARD_SYNC_STORE.loadFromFile();
+  ANKI_STORE.loadFromFile();
+  MIGAKU_STORE.loadFromFile();
+}
+
+bool minedGoToMigaku() {
+  return MIGAKU_STORE.isConfigured() &&
+         (FLASHCARD_SYNC_STORE.getMinedTo() == FlashcardSyncStore::MinedTo::Migaku || !ANKI_STORE.isConfigured());
+}
+}  // namespace ankisync

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 #include "JsonValueSkipper.h"
 
@@ -70,6 +71,8 @@ class AnkiClient {
   }
 
   const Error& error() const { return error_; }
+  // The last reply as far as it fit (all of it after BadReply), kept until the next call.
+  std::string_view replyHead() const { return buffer ? std::string_view(buffer.get(), length) : std::string_view(); }
   // The response buffer begin() got: no reply, and so no card side, is longer.
   size_t capacity() const { return capacity_; }
   // The last reply's raw text, valid until the next call; callers may decode strings in place.

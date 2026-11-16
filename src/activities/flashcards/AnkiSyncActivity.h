@@ -11,11 +11,11 @@ struct Service;
 }
 
 // Brings Wi-Fi up, then either syncs the decks of every service set up, Anki first, then Migaku
-// (Flashcards > Sync with ...), or only checks one service's connection (Settings > Connectivity >
-// Anki Sync or Migaku Sync > Test Connection). Wi-Fi goes down on exit.
+// (Flashcards > Sync with ...), or only checks each one's connection (Settings > Connectivity >
+// Flashcards Sync > Test Connection). Wi-Fi goes down on exit.
 class AnkiSyncActivity final : public Activity {
  public:
-  enum class Mode : uint8_t { Sync, TestAnki, TestMigaku };
+  enum class Mode : uint8_t { Sync, Test };
   // The Flashcards row's label for the services set up; nullptr when none is.
   static const char* syncLabel();
   AnkiSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, Mode mode);
@@ -38,7 +38,7 @@ class AnkiSyncActivity final : public Activity {
   enum class State : uint8_t { Connecting, Working, Done, Failed, Cancelled };
   void onWifi(bool connected);
   void run();
-  void test(const ankisync::Service& service);
+  void test();
   void setStatus(State state, std::string message);
   // Keeps the outcome on SD for the sync after the restart; false when it could not.
   static bool stashOutcome(const Outcome& outcome);

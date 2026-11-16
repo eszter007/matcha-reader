@@ -40,8 +40,8 @@ SettingRowEditor::EditResult SettingRowEditor::editValue(const SettingInfo& sett
     return EditResult::Opened;
   }
 
-  // An Anki or Migaku Sync text row (address, key, decks) opens the keyboard on its current value.
-  if (setting.type == SettingType::STRING && isSyncServicePage(setting.category) && setting.stringGetter &&
+  // A Flashcards Sync text row (address, key, decks) opens the keyboard on its current value.
+  if (setting.type == SettingType::STRING && isFlashcardSyncPage(setting.category) && setting.stringGetter &&
       setting.stringSetter) {
     auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, I18N.get(setting.nameId),
                                                              setting.stringGetter(), 255, InputType::Text);
@@ -72,27 +72,32 @@ SettingRowEditor::EditResult SettingRowEditor::editValue(const SettingInfo& sett
       return EditResult::Opened;
     }
   } else if (setting.type == SettingType::ENUM && setting.valueGetter && setting.valueSetter) {
+    // StrId labels honour enumOrder (the values offered, in order); string labels are all offered.
+    const auto labels = setting.orderedEnumLabels();
     const uint8_t totalValues = setting.enumStringValues.empty()
-                                    ? static_cast<uint8_t>(setting.enumLabels().size())
+                                    ? static_cast<uint8_t>(labels.size())
                                     : static_cast<uint8_t>(setting.enumStringValues.size());
     const uint8_t cur = setting.valueGetter();
+    const auto order = setting.enumStringValues.empty() ? setting.enumOrder : std::vector<uint8_t>();
+    const uint8_t curSlot = SettingInfo::slotFromStored(order, cur);
     if (totalValues > 2) {
       const auto valueSetter = setting.valueSetter;
-      auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
-        valueSetter(idx);
+      auto onSelect = [this, valueSetter, order, sleepScreenChanged, quickResumeTimeoutChanged](int slot) {
+        valueSetter(SettingInfo::storedFromSlot(order, static_cast<uint8_t>(slot)));
         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
         host.commitSettingChange(nullptr);
       };
       if (!setting.enumStringValues.empty()) {
         popup.show(setting.nameId, setting.enumStringValues, cur, std::move(onSelect));
       } else {
-        const auto enumLabels = setting.enumLabels();
-        popup.show(setting.nameId, enumLabels.data(), static_cast<int>(enumLabels.size()), cur, std::move(onSelect));
+        popup.show(setting.nameId, labels.data(), static_cast<int>(labels.size()), curSlot, std::move(onSelect));
       }
       activity.requestUpdate();
       return EditResult::Opened;
     }
-    setting.valueSetter((cur + 1) % totalValues);
+    if (totalValues > 0) {
+      setting.valueSetter(SettingInfo::storedFromSlot(order, static_cast<uint8_t>((curSlot + 1) % totalValues)));
+    }
   } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
     const int8_t currentValue = SETTINGS.*(setting.valuePtr);
     if (currentValue + setting.valueRange.step > setting.valueRange.max) {
@@ -309,7 +314,7 @@ std::string SettingRowEditor::valueText(const SettingInfo& setting) {
     }
     return std::to_string(SETTINGS.*(setting.valuePtr));
   }
-  if (setting.type == SettingType::STRING && isSyncServicePage(setting.category) && setting.stringGetter) {
+  if (setting.type == SettingType::STRING && isFlashcardSyncPage(setting.category) && setting.stringGetter) {
     const std::string value = setting.stringGetter();
     if (value.empty()) return tr(STR_NOT_SET);
     // A key shows only its last four characters.

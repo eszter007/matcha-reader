@@ -27,6 +27,9 @@
 #include "network/WifiPowerSaveGuard.h"
 
 namespace {
+// Between a service's name and its test result in the message.
+constexpr char RESULT_SEPARATOR = '\x1F';
+
 // The outcome carried across the restart between services: three lines.
 std::string stashPath() { return sdsystem::path("flashcard_sync_pending.txt"); }
 
@@ -77,13 +80,11 @@ void AnkiSyncActivity::setStatus(const State next, std::string text) {
 
 void AnkiSyncActivity::onEnter() {
   Activity::onEnter();
-  const bool configured = mode == Mode::TestAnki     ? ANKI_STORE.isConfigured()
-                          : mode == Mode::TestMigaku ? MIGAKU_STORE.isConfigured()
-                                                     : syncLabel() != nullptr;
-  if (!configured) {
+  if (syncLabel() == nullptr) {
     state = State::Failed;
-    message = I18n::getInstance().get(mode == Mode::TestMigaku ? ankisync::migakuService().noAddress
-                                                               : ankisync::ankiService().noAddress);
+    const bool bothOff = ANKI_STORE.getServer() == SyncServiceStore::Server::Off &&
+                         MIGAKU_STORE.getServer() == SyncServiceStore::Server::Off;
+    message = bothOff ? tr(STR_SYNC_NO_SERVICE) : tr(STR_SYNC_NO_SERVER);
     requestUpdate();
     return;
   }
@@ -174,27 +175,36 @@ void AnkiSyncActivity::pollCancel(void* ctx) {
   self->requestUpdate(true);
 }
 
-void AnkiSyncActivity::test(const ankisync::Service& service) {
+// One block per service that is on: its name, then the result. Blocks are separated by '\n', and
+// the name from the result by RESULT_SEPARATOR.
+void AnkiSyncActivity::test() {
   WifiPowerSaveGuard psGuard;
-  AnkiClient client;
-  if (!client.begin(service.store.endpoint(), service.store.getKey())) {
-    setStatus(State::Failed, errorText(client.error(), service));
-    return;
+  std::string text;
+  bool failed = false;
+  for (const ankisync::Service& service : {ankisync::ankiService(), ankisync::migakuService()}) {
+    if (!service.store.isConfigured()) continue;
+    AnkiClient client;
+    std::string version;
+    char line[160];
+    if (client.begin(service.store.endpoint(), service.store.serverKey()) &&
+        ankisync::testConnection(client, version)) {
+      snprintf(line, sizeof(line), I18n::getInstance().get(service.connected), version.c_str());
+    } else {
+      snprintf(line, sizeof(line), "%s", errorText(client.error(), service));
+      failed = true;
+    }
+    client.end();
+    if (!text.empty()) text += '\n';
+    text += service.name;
+    text += RESULT_SEPARATOR;
+    text += line;
   }
-  std::string version;
-  if (ankisync::testConnection(client, version)) {
-    char text[128];
-    snprintf(text, sizeof(text), I18n::getInstance().get(service.connected), version.c_str());
-    setStatus(State::Done, text);
-  } else {
-    setStatus(State::Failed, errorText(client.error(), service));
-  }
-  client.end();
+  setStatus(failed ? State::Failed : State::Done, text);
 }
 
 void AnkiSyncActivity::run() {
-  if (mode != Mode::Sync) {
-    test(mode == Mode::TestMigaku ? ankisync::migakuService() : ankisync::ankiService());
+  if (mode == Mode::Test) {
+    test();
     return;
   }
   WifiPowerSaveGuard psGuard;
@@ -253,7 +263,7 @@ void AnkiSyncActivity::run() {
     first = false;
     const char* name = service.name;
     ankisync::Result result;
-    if (client.begin(service.store.endpoint(), service.store.getKey())) {
+    if (client.begin(service.store.endpoint(), service.store.serverKey())) {
       client.setPoll(pollCancel, this);
       result = ankisync::syncAll(client, service, progress, nowMs);
       client.end();
@@ -266,10 +276,14 @@ void AnkiSyncActivity::run() {
                static_cast<int>(result.reviewsPulled), static_cast<int>(result.reviewsPushed));
       if (!outcome.summary.empty()) outcome.summary += "; ";
       outcome.summary += text;
+      if (result.remoteSkipped) {
+        outcome.summary += ". ";
+        outcome.summary += tr(STR_ANKIWEB_NOT_SYNCED);
+      }
     } else {
       LOG_ERR("ANKI", "%s sync stopped at %s", name, result.failedDeck.c_str());
       if (outcome.failure.empty()) {
-        outcome.failure = errorText(result.error, service);
+        outcome.failure = result.remoteBlocked ? tr(STR_ANKIWEB_NEEDS_ANKI) : errorText(result.error, service);
         outcome.failedAt =
             both ? std::string(name) + (result.failedDeck.empty() ? "" : ": " + result.failedDeck) : result.failedDeck;
       }
@@ -376,8 +390,33 @@ void AnkiSyncActivity::render(RenderLock&&) {
     UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID, top - 40, tr(STR_ANKI_SYNC_FAILED), true,
                               EpdFontFamily::BOLD);
   }
-  UITheme::drawCenteredWrappedText(renderer, Rect{screen.x + 30, top, screen.width - 60, 120}, UI_10_FONT_ID,
-                                   message.c_str(), 4);
+  if (message.find(RESULT_SEPARATOR) == std::string::npos) {
+    UITheme::drawCenteredWrappedText(renderer, Rect{screen.x + 30, top, screen.width - 60, 120}, UI_10_FONT_ID,
+                                     message.c_str(), 4);
+  } else {
+    // The test's blocks, one per service: the name in bold, the result wrapped below it.
+    const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+    const int block = 5 * lineHeight;
+    int y = top - block / 2;
+    size_t start = 0;
+    while (start < message.size()) {
+      size_t end = message.find('\n', start);
+      if (end == std::string::npos) end = message.size();
+      const size_t split = message.find(RESULT_SEPARATOR, start);
+      const bool named = split != std::string::npos && split < end;
+      const std::string name = named ? message.substr(start, split - start) : std::string();
+      const std::string result = message.substr(named ? split + 1 : start, end - (named ? split + 1 : start));
+      int textTop = y;
+      if (named) {
+        UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, y, name.c_str(), true, EpdFontFamily::BOLD);
+        textTop += lineHeight;
+      }
+      UITheme::drawCenteredWrappedText(renderer, Rect{screen.x + 30, textTop, screen.width - 60, 4 * lineHeight},
+                                       UI_10_FONT_ID, result.c_str(), 4);
+      y += block + 10;
+      start = end + 1;
+    }
+  }
   if (!detail.empty()) {
     UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top + 110, detail.c_str(), true);
   }
