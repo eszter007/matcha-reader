@@ -1503,11 +1503,7 @@ void CoverLibraryActivity::drawShelfRow(const int shelfIdx, const int itemY, con
   renderer.drawText(UI_10_FONT_ID, textX, nameY, shelf.folderName.c_str(), true, EpdFontFamily::BOLD);
 
   char countBuf[32];
-  if (shelf.bookCount == 1) {
-    snprintf(countBuf, sizeof(countBuf), "%s", tr(STR_SHELF_BOOK_COUNT_1));
-  } else {
-    snprintf(countBuf, sizeof(countBuf), tr(STR_SHELF_BOOK_COUNT_N), shelf.bookCount);
-  }
+  I18N.formatCount(countBuf, sizeof(countBuf), StrId::STR_SHELF_BOOK_COUNT, shelf.bookCount);
   renderer.drawText(SMALL_FONT_ID, textX, nameY + smallLH + 1, countBuf, true);
 
   const int chevronSize = 6;

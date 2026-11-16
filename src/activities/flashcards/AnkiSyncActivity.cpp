@@ -30,19 +30,12 @@ namespace {
 // Between a service's name and its test result in the message.
 constexpr char RESULT_SEPARATOR = '\x1F';
 
-// "1 new card" or "3 new cards": a count with its noun in the right number.
-void countText(char* out, const size_t size, const int count, const StrId one, const StrId many) {
-  snprintf(out, size, I18n::getInstance().get(count == 1 ? one : many), count);
-}
-
 // Adds "Anki: 1 new card, 2 reviews received, 0 sent". Not inlined, so its buffers are not part
 // of the caller's stack frame during the sync itself.
 __attribute__((noinline)) void appendSummary(std::string& summary, const char* name, const ankisync::Result& result) {
   char added[48], pulled[64], text[128];  // room for longer translations than "1234 new cards"
-  countText(added, sizeof(added), static_cast<int>(result.cardsAdded), StrId::STR_SYNC_NEW_CARDS_1,
-            StrId::STR_SYNC_NEW_CARDS_N);
-  countText(pulled, sizeof(pulled), static_cast<int>(result.reviewsPulled), StrId::STR_SYNC_REVIEWS_RECEIVED_1,
-            StrId::STR_SYNC_REVIEWS_RECEIVED_N);
+  I18N.formatCount(added, sizeof(added), StrId::STR_SYNC_NEW_CARDS, static_cast<int>(result.cardsAdded));
+  I18N.formatCount(pulled, sizeof(pulled), StrId::STR_SYNC_REVIEWS_RECEIVED, static_cast<int>(result.reviewsPulled));
   snprintf(text, sizeof(text), I18n::getInstance().get(StrId::STR_SYNC_SERVICE_DONE), name, added, pulled,
            static_cast<int>(result.reviewsPushed));
   if (!summary.empty()) summary += "; ";

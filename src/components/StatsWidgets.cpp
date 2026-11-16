@@ -210,8 +210,7 @@ int drawMonthCalendar(const GfxRenderer& renderer, const int x, const int y, con
   // Days read count
   const int daysReadMonth = source.daysReadInMonth(source.ctx, calYear, calMonth);
   char daysReadBuf[64];
-  snprintf(daysReadBuf, sizeof(daysReadBuf),
-           daysReadMonth == 1 ? tr(STR_DAYS_READ_IN_MONTH_FORMAT_1) : tr(STR_DAYS_READ_IN_MONTH_FORMAT), daysReadMonth);
+  I18N.formatCount(daysReadBuf, sizeof(daysReadBuf), StrId::STR_DAYS_READ_IN_MONTH_FORMAT, daysReadMonth);
   const int drW = renderer.getTextWidth(SMALL_FONT_ID, daysReadBuf);
   renderer.drawText(SMALL_FONT_ID, x + (w - drW) / 2, monthY + calTitleH + 2, daysReadBuf, true);
 
