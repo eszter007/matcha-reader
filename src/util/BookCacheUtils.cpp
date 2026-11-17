@@ -32,6 +32,11 @@ void clearBookCache(const std::string& path) {
   LOG_DBG("BookCache", "Done checking metadata cache for: %s", path.c_str());
 }
 
+void clearBookContentCache(const std::string& path) {
+  if (!FsHelpers::hasReflowableBookExtension(path)) return clearBookCache(path);
+  Epub(path, "/.crosspoint").clearContentCache();
+}
+
 bool removeBookFile(const std::string& path) {
   if (!Storage.remove(path.c_str())) return false;
   clearBookCache(path);

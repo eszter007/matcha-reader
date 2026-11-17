@@ -404,7 +404,7 @@ void WebDAVHandler::handlePut(WebServer& s) {
     return;
   }
 
-  clearBookCache(path.c_str());
+  clearBookContentCache(path.c_str());
   if (library::isLibraryBookFile(path.c_str())) library::markLibraryIndexDirty();
   s.send(_putExisted ? 204 : 201);
   LOG_DBG("DAV", "PUT complete: %s", path.c_str());
@@ -659,7 +659,7 @@ void WebDAVHandler::handleCopy(WebServer& s) {
   dstFile.close();
 
   if (copyOk) {
-    if (dstExists) clearBookCache(dstPath.c_str());  // the old book's cache does not match the new content
+    if (dstExists) clearBookCache(dstPath.c_str());  // a copy of another file: a different book
     if (library::isLibraryBookFile(dstPath.c_str())) library::markLibraryIndexDirty();
     s.send(dstExists ? 204 : 201);
   } else {

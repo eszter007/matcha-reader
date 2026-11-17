@@ -578,7 +578,7 @@ bool OpdsBookBrowserActivity::verifyAndRegisterEpub(const std::string& filename)
     fail(StrId::STR_OPDS_NOT_A_BOOK);
     return false;
   }
-  clearBookCache(filename);
+  clearBookContentCache(filename);
   library::markLibraryIndexDirty();
   return true;
 }
