@@ -1432,7 +1432,7 @@ HttpDownloader::DownloadError PluginCatalogActivity::downloadBook(const Item& it
     result = fetchFile();
   }
   if (result != HttpDownloader::OK) return result;
-  clearBookCache(dest);
+  clearBookContentCache(dest);
   if (library::isLibraryBookFile(dest)) library::markLibraryIndexDirty();
 
   // Optional per-book sidecar (e.g. a service book id keyed by the file's

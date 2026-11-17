@@ -77,6 +77,9 @@ class Epub {
   bool loadMetadata(std::string& title, std::string& author);
   bool loadSyncMetadata(SyncMetadata& metadata);
   bool clearCache() const;
+  // clearCache() that keeps the reading state (position, per-book settings), for a book whose
+  // file was replaced by a newer version: everything else in the cache is derived from the file.
+  bool clearContentCache() const;
   void setupCacheDir() const;
   const std::string& getCachePath() const;
   const std::string& getPath() const;

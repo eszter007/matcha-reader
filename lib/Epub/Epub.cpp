@@ -24,6 +24,7 @@
 #include <string_view>
 #include <vector>
 
+#include "Epub/ContentCache.h"
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/FontObfuscationProbe.h"
@@ -637,6 +638,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, BmpConvert
 
   // Before any parsing: a protected book's entries are only readable through the accessor.
   if (!openProtection()) return false;
+  content_cache::checkSource(filepath, cachePath);
 
   // Initialize spine/TOC cache
   bookMetadataCache = makeUniqueNoThrow<BookMetadataCache>(cachePath);
@@ -831,6 +833,7 @@ bool Epub::loadMetadata(std::string& title, std::string& author) {
     return true;
   }
 
+  content_cache::checkSource(filepath, cachePath);  // the Library must not list a replaced file's old title
   auto metadataCache = makeUniqueNoThrow<BookMetadataCache>(cachePath);
   if (metadataCache && metadataCache->load()) {
     title = metadataCache->coreMetadata.title;
@@ -914,12 +917,15 @@ bool Epub::clearCache() const {
   return true;
 }
 
+bool Epub::clearContentCache() const { return content_cache::clear(cachePath); }
+
 void Epub::setupCacheDir() const {
   if (Storage.exists(cachePath.c_str())) {
     return;
   }
 
   Storage.mkdir(cachePath.c_str());
+  content_cache::stamp(filepath, cachePath);
 }
 
 const std::string& Epub::getCachePath() const { return cachePath; }

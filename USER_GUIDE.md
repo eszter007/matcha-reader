@@ -250,6 +250,7 @@ For the Wi-Fi modes, the device starts a small web server and shows an address. 
 * The web page lets you download files from the device, e.g. books or screenshots, without a cable.
 * The web server also supports **WebDAV**, so you can open the device as a network drive in your computer's file manager.
 * When you have joined a network, the screen shows Wi-Fi signal bars.
+* To update an EPUB, TXT or Markdown book, upload the new version with the same file name, or copy it over the old one by USB or on the SD card. Your reading position, bookmarks and the book's own settings are kept; the book is prepared again the next time you open it. If chapters were added or removed before your place, the position can land in a different chapter.
 
 > [!TIP]
 > You can also manage files from the command line with `curl`. See the [web server docs](./docs/webserver.md).
