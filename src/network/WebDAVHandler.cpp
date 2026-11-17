@@ -9,6 +9,7 @@
 #include "ClippingStore.h"
 #include "ProtectedPaths.h"
 #include "util/BookCacheUtils.h"
+#include "util/BookInsights.h"
 #include "util/DeleteUtils.h"
 #include "util/TaskWatchdog.h"
 
@@ -562,6 +563,7 @@ void WebDAVHandler::handleMove(WebServer& s) {
   const bool success = ClippingStore::moveBook(srcPath.c_str(), dstPath.c_str());
 
   if (success) {
+    bookinsights::followMove(srcPath.c_str(), dstPath.c_str());
     s.send(dstExists ? 204 : 201);
   } else {
     s.send(500, "text/plain", "Move failed");

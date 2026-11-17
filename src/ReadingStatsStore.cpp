@@ -1345,6 +1345,29 @@ bool ReadingStatsStore::compact() {
   return ok;
 }
 
+bool ReadingStatsStore::renameBooks(const std::vector<std::pair<std::string, std::string>>& moves) {
+  if (moves.empty()) return true;
+  const Loaded loaded;
+  if (!loaded.loaded()) return false;
+  ReadingStatsStore& store = getInstance();
+  bool changed = false;
+  for (const auto& [from, to] : moves) {
+    for (BookReading& book : store.books) {
+      if (book.path == from) {
+        book.path = to;
+        changed = true;
+      }
+    }
+    for (std::string& finishedPath : store.finishedBookPaths) {
+      if (finishedPath == from) {
+        finishedPath = to;
+        changed = true;
+      }
+    }
+  }
+  return !changed || store.saveToFile();
+}
+
 bool ReadingStatsStore::isFinished(const std::string& bookPath) const {
   return std::find(finishedBookPaths.begin(), finishedBookPaths.end(), bookPath) != finishedBookPaths.end();
 }

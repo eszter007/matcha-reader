@@ -65,6 +65,7 @@
 #include "html/js/plugin_hostJs.generated.h"
 #include "stats/StatsEditor.h"
 #include "util/BookCacheUtils.h"
+#include "util/BookInsights.h"
 #include "util/DeleteUtils.h"
 #include "util/DictionaryRegistry.h"
 #include "util/FirmwareIdentity.h"
@@ -1595,6 +1596,7 @@ void CrossPointWebServer::handleMove() const {
   const bool success = ClippingStore::moveBook(itemPath.c_str(), newPath.c_str());
 
   if (success) {
+    bookinsights::followMove(itemPath.c_str(), newPath.c_str());
     LOG_DBG("WEB", "Moved file: %s -> %s", itemPath.c_str(), newPath.c_str());
     server->send(200, "text/plain", "Moved successfully");
   } else {

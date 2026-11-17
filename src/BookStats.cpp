@@ -65,6 +65,79 @@ std::string BookStats::filePathFor(const char* path) {
   return std::string(buf);
 }
 
+namespace {
+std::string_view baseName(const std::string_view path) {
+  const size_t slash = path.rfind('/');
+  return slash == std::string_view::npos ? path : path.substr(slash + 1);
+}
+
+// The book path a history file records, from its header; false for a file that is not one.
+bool readRecordedPath(HalFile& f, std::string& out) {
+  uint8_t head[HEADER_BYTES];
+  if (f.read(head, V2_HEADER_BYTES) != V2_HEADER_BYTES) return false;
+  if (memcmp(head, MAGIC, 4) != 0 || head[4] < 2 || head[4] > BOOKSTATS_VERSION) return false;
+  if (head[4] >= 3 &&
+      f.read(head + V2_HEADER_BYTES, HEADER_BYTES - V2_HEADER_BYTES) != HEADER_BYTES - V2_HEADER_BYTES) {
+    return false;
+  }
+  const uint16_t pathLen = getU16(head + 13);
+  if (pathLen == 0 || pathLen > MAX_PATH_LEN) return false;
+  out.assign(pathLen, '\0');
+  return f.read(reinterpret_cast<uint8_t*>(&out[0]), pathLen) == pathLen;
+}
+}  // namespace
+
+bool BookStats::movePath(const char* fromPath, const char* toPath) {
+  std::lock_guard<std::mutex> lock(fileMutex());
+  return movePathLocked(fromPath, toPath);
+}
+
+bool BookStats::movePathLocked(const char* fromPath, const char* toPath) {
+  if (!fromPath || !toPath || !*fromPath || !*toPath) return false;
+  const std::string oldFile = filePathFor(fromPath);
+  const std::string newFile = filePathFor(toPath);
+  if (oldFile == newFile) return true;  // the same key (a .matcha volume and its folder)
+  if (!Storage.exists(oldFile.c_str())) return true;
+  {
+    HalFile f;
+    std::string recorded;
+    // Only this book's history: a hash collision leaves another book's file where it is.
+    if (!Storage.openFileForRead("BSTAT", oldFile.c_str(), f) || !readRecordedPath(f, recorded) ||
+        statsKey(recorded) != statsKey(fromPath)) {
+      return false;
+    }
+  }
+  if (Storage.exists(newFile.c_str())) {
+    LOG_ERR("BSTAT", "not moving %s: %s has history already", fromPath, toPath);
+    return false;
+  }
+  BookStats b;
+  if (!b.loadLocal(fromPath)) return false;
+  b.bookPath = toPath;
+  if (!b.save()) return false;
+  if (!Storage.remove(oldFile.c_str())) LOG_ERR("BSTAT", "could not remove %s", oldFile.c_str());
+  LOG_INF("BSTAT", "history moved: %s -> %s", fromPath, toPath);
+  return true;
+}
+
+std::string BookStats::findMovedHistory(const char* bookPath) {
+  const std::string_view name = baseName(statsKey(bookPath));
+  if (name.empty()) return "";
+  HalFile dir = Storage.open(statsDir().c_str());
+  if (!dir || !dir.isDirectory()) return "";
+  std::string found;
+  std::string recorded;
+  for (HalFile entry = dir.openNextFile(); entry; entry = dir.openNextFile()) {
+    if (entry.isDirectory() || !readRecordedPath(entry, recorded)) continue;
+    entry.close();
+    if (baseName(statsKey(recorded)) != name || statsKey(recorded) == statsKey(bookPath)) continue;
+    if (Storage.exists(recorded.c_str())) continue;  // still there: a copy, not a move
+    if (!found.empty()) return "";                   // two books of that name are gone: not ours to pick
+    found = recorded;
+  }
+  return found;
+}
+
 bool BookStats::load(const char* path, const bool withServerCopy) {
   restoredFinished = false;
   if (!loadLocal(path)) return false;
@@ -280,6 +353,13 @@ bool BookStats::setDayMinutes(const char* path, const uint16_t year, const uint8
 bool BookStats::recordOpen(const char* path) {
   if (!path || !*path) return false;
   std::lock_guard<std::mutex> lock(fileMutex());
+  // A book with no history yet may have been moved outside the reader: its insights come along.
+  if (!Storage.exists(filePathFor(path).c_str())) {
+    const std::string movedFrom = findMovedHistory(path);
+    if (!movedFrom.empty() && movePathLocked(movedFrom.c_str(), path)) {
+      ReadingStatsStore::renameBooks({{movedFrom, path}});
+    }
+  }
   BookStats b;
   if (!b.load(path, /*withServerCopy=*/true)) return false;
   // A book the server knows as finished, opened here for the first time since: finished here too.
