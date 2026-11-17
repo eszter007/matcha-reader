@@ -2179,6 +2179,23 @@ void EpubReaderActivity::applyProgressChange(const ProgressChangeResult& sync) {
   if (sync.hasVisibleTextOffset && sync.spineIndex >= 0 && sync.spineIndex < epub->getSpineItemsCount()) {
     RenderLock lock(*this);
     clearDeferredReposition();
+    if (useVerticalText()) {
+      if (verticalSection && currentSpineIndex == sync.spineIndex) {
+        const auto page = verticalSection->getPageForVisibleTextOffset(sync.visibleTextOffset);
+        verticalSection->currentPage = page.value_or(std::max(0, sync.page));
+      } else {
+        // Another chapter: the vertical load resolves the offset as it does a saved position.
+        currentSpineIndex = sync.spineIndex;
+        cachedSpineIndex = sync.spineIndex;
+        cachedVisibleTextOffset = sync.visibleTextOffset;
+        cachedChapterTotalPageCount = sync.totalPages;
+        nextPageNumber = std::max(0, sync.page);  // hint until the offset resolves
+        section.reset();
+        verticalSection.reset();
+      }
+      requestUpdate();
+      return;
+    }
     if (section && currentSpineIndex == sync.spineIndex) {
       // Already in this chapter and laid out: resolve straight away, no reload.
       const auto page = section->getPageForVisibleTextOffset(sync.visibleTextOffset);
@@ -4312,11 +4329,7 @@ void EpubReaderActivity::runPostRenderTail(const uint16_t viewportWidth, const u
   const int page = vertical ? verticalSection->currentPage : section->currentPage;
   const int pageCount = vertical ? verticalSection->pageCount : section->estimatedTotalPages();
   if (currentSpineIndex != lastSavedSpineIndex || page != lastSavedPage || pageCount != lastSavedPageCount) {
-    if (saveProgress(currentSpineIndex, page, pageCount, verticalOverride, furiganaOverride)) {
-      lastSavedSpineIndex = currentSpineIndex;
-      lastSavedPage = page;
-      lastSavedPageCount = pageCount;
-    }
+    saveProgress(currentSpineIndex, page, pageCount, verticalOverride, furiganaOverride);
   }
 }
 
@@ -4575,8 +4588,18 @@ bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
   if (spineIndex >= 0 && spineIndex < epub->getSpineItemsCount()) {
     noteRecentPage(spineIndex, currentPage, pageCount, percent, offset);
   }
-  return EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, vertOverride, furiOverride, percent,
-                                       offset);
+  if (!EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, vertOverride, furiOverride, percent,
+                                     offset)) {
+    return false;
+  }
+  // Every path that saves records it, so the render's "position unchanged" check compares against
+  // what is really on the card. Otherwise a page saved by another path (the early-rendered page)
+  // left the record behind, and returning to the page recorded there -- Jump Back, Recent Pages --
+  // was taken for no change and not saved.
+  lastSavedSpineIndex = spineIndex;
+  lastSavedPage = currentPage;
+  lastSavedPageCount = pageCount;
+  return true;
 }
 
 void EpubReaderActivity::rememberCurrentContentOffset() {
@@ -7901,7 +7924,7 @@ void EpubReaderActivity::jumpBack() {
   target.page = jumpOrigin->page;
   target.totalPages = jumpOrigin->totalPages;
   // applyProgressChange() resolves content offsets only for the horizontal layout.
-  target.hasVisibleTextOffset = jumpOrigin->visibleTextOffset.has_value() && !useVerticalText();
+  target.hasVisibleTextOffset = jumpOrigin->visibleTextOffset.has_value();
   target.visibleTextOffset = jumpOrigin->visibleTextOffset.value_or(0);
   // Records the current page as the new origin, so Jump Back toggles between the two.
   applyProgressChange(target);
@@ -7934,11 +7957,12 @@ void EpubReaderActivity::saveJumpOrigin() const {
 void EpubReaderActivity::loadJumpOrigin() {
   const std::string path = epub->getCachePath() + "/jump.bin";
   if (!Storage.exists(path.c_str())) return;
+  bool readable = false;
   {
     HalFile f;
     uint8_t data[JUMP_FILE_SIZE];
-    if (Storage.openFileForRead("ERS", path, f) && f.read(data, sizeof(data)) == static_cast<int>(sizeof(data)) &&
-        data[0] == JUMP_FILE_VERSION) {
+    readable = Storage.openFileForRead("ERS", path, f) && f.read(data, sizeof(data)) == static_cast<int>(sizeof(data));
+    if (readable && data[0] == JUMP_FILE_VERSION) {
       JumpOrigin origin;
       origin.spineIndex = data[1] | (data[2] << 8);
       origin.page = data[3] | (data[4] << 8);
@@ -7952,7 +7976,8 @@ void EpubReaderActivity::loadJumpOrigin() {
     }
   }
   // Consumed once: a later exit rewrites it, and an unclean shutdown must not resurrect a stale one.
-  Storage.remove(path.c_str());
+  // A read that failed now keeps the file for the next open.
+  if (readable) Storage.remove(path.c_str());
 }
 
 void EpubReaderActivity::noteRecentPage(const int spineIndex, const int page, const int pageCount,
@@ -7993,27 +8018,46 @@ std::vector<std::string> EpubReaderActivity::recentPageLabels() const {
   const int today = haveNow ? RecentPages::dayNumber(now.tm_year + 1900, now.tm_mon + 1, now.tm_mday) : 0;
   const bool use12Hour = SETTINGS.clockFormat == 1;
 
-  std::lock_guard<std::mutex> lock(recentPagesMutex);
+  // Copied out first: the table-of-contents lookups below read book.bin, which the render task also
+  // reads, so they run under the render lock -- never inside recentPagesMutex, which the render task
+  // takes (saveProgress -> noteRecentPage) while it holds the render lock.
+  std::vector<RecentPages::Place> places;  // off the stack: a few dozen bytes, only while a menu opens
+  {
+    std::lock_guard<std::mutex> lock(recentPagesMutex);
+    places.reserve(RecentPages::MAX_PLACES);
+    // Place 0 is the page on screen.
+    for (int i = 1; i < recentPages.count(); i++) places.push_back(recentPages.at(i));
+  }
+  const int count = static_cast<int>(places.size());
   std::vector<std::string> labels;
-  if (recentPages.count() < 2) return labels;
-  // At most five short strings, built only while the popup's menu is open.
-  labels.reserve(recentPages.count() - 1);
-  // Place 0 is the page on screen.
-  for (int i = 1; i < recentPages.count(); i++) {
-    const RecentPages::Place& place = recentPages.at(i);
-    // "Chapter · Page 14 · 21:14": a place is recognised by where in the story it is first.
+  if (count == 0) return labels;
+  // At most five short strings, built only while a menu is open.
+  labels.reserve(count);
+  RenderLock renderLock;
+  for (int i = 0; i < count; i++) {
+    const RecentPages::Place& place = places[i];
+    // "Chapter · Page 3 · 21:14". A long chapter name is shortened, so the page and time after it
+    // stay on the dialog's one line.
     std::string label;
     const int tocIndex = epub ? epub->getTocIndexForSpineIndex(place.spineIndex) : -1;
     if (tocIndex != -1) {
-      label = epub->getTocItem(tocIndex).title;
+      const std::string title = epub->getTocItem(tocIndex).title;
+      constexpr int kMaxTitleChars = 16;
+      size_t end = 0;
+      int chars = 0;
+      while (end < title.size() && chars < kMaxTitleChars) {
+        end++;
+        while (end < title.size() && (static_cast<unsigned char>(title[end]) & 0xC0) == 0x80) end++;
+        chars++;
+      }
+      label = title.substr(0, end);
+      if (end < title.size()) label += "\u2026";
       if (!label.empty()) label += " \u00b7 ";
     }
-    char part[32];
-    if (place.bookPage > 0) {
-      snprintf(part, sizeof(part), tr(STR_PAGE_NUMBER_FORMAT), place.bookPage);
-    } else {
-      snprintf(part, sizeof(part), "%d%%", static_cast<int>(place.percent));
-    }
+    // The page within the chapter, as the status bar counts it. Without its total: a chapter still
+    // being laid out when the place was recorded had fewer pages than it ends up with.
+    char part[64];
+    snprintf(part, sizeof(part), tr(STR_PAGE_NUMBER_FORMAT), place.page + 1);
     label += part;
     if (place.year != 0) {
       // Same format as the status bar clock (HalClock::formatTime()).
@@ -8053,7 +8097,7 @@ void EpubReaderActivity::goToRecentPage(const int index) {
     target.page = place.page;
     target.totalPages = place.totalPages;
     // applyProgressChange() resolves content offsets only for the horizontal layout.
-    target.hasVisibleTextOffset = place.hasOffset && !useVerticalText();
+    target.hasVisibleTextOffset = place.hasOffset;
     target.visibleTextOffset = place.offset;
   }
   // Also records the page left as Jump Back's origin.

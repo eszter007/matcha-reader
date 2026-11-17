@@ -25,8 +25,8 @@
 #include "WordSelectionScan.h"
 #include "components/OptionPopup.h"
 #include "util/CjkScript.h"
-#include "util/SentenceMining.h"
 #include "util/RecentPages.h"
+#include "util/SentenceMining.h"
 
 class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
@@ -645,13 +645,13 @@ class EpubReaderActivity final : public ReaderActivity {
   // Kept in jump.bin across sleep and reopening, consumed on load like links.bin.
   void saveJumpOrigin() const;
   void loadJumpOrigin();
-  // Last 5 pages read: written by saveProgress() on the render task, read on the loop task.
+  // Recent Pages: written by saveProgress() on the render task, read on the loop task.
   RecentPages recentPages;
   mutable std::mutex recentPagesMutex;
-  // The place picked in the Last 5 pages read popup, for onReaderMenuConfirm(); 0 is the newest.
+  // The place picked in the Recent Pages popup, for onReaderMenuConfirm(); 0 is the newest.
   int pendingRecentPageIndex = -1;
   void noteRecentPage(int spineIndex, int page, int pageCount, uint8_t percent, std::optional<uint32_t> offset);
-  // Places before the page on screen, as "Page 396 - 12:32 PM"; empty when there are none.
+  // Places before the page on screen, as "Chapter · Page 3 · 21:14"; empty when there are none.
   std::vector<std::string> recentPageLabels() const;
   bool hasRecentPages() const;
   void goToRecentPage(int index);

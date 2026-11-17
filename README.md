@@ -161,7 +161,7 @@ A wallpaper over the page you were reading. The book shows through. See [Guide �
 
 ### Also in this fork
 
-- Jump Back and Recent Pages: after a jump (to a chapter, a percentage, a bookmark or a clipping, or with Chapter Skip), the reader menu shows **Jump Back** under Select Chapter, with the percentage it leads to; choose it again to undo. **Recent Pages** lists the last places you read, as "Chapter · Page 14 · 21:14". In the full-screen menu and the toolbar's More panel; kept through sleep. Books, not manga or XTC
+- Jump Back and Recent Pages: after a jump (to a chapter, a percentage, a bookmark or a clipping, or with Chapter Skip), the reader menu shows **Jump Back** under Select Chapter, with the percentage it leads to; choose it again to undo. **Recent Pages** lists the last places you read, as "Chapter · Page 3 · 21:14" (the page within the chapter). In the full-screen menu and the toolbar's More panel; kept through sleep. Books, not manga or XTC
 - Clippings and highlights work in vertical text too
 - Translate the selected text from the touch selection bar
 - Optimize EPUB on upload: splits single-file novels into chapters and fits images to the screen

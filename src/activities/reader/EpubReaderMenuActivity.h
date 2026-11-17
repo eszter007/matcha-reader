@@ -78,7 +78,7 @@ class EpubReaderMenuActivity final : public UiListActivity {
   // only refreshes the rows whose value reflects live state (rotation,
   // page-turn interval, night mode, Bluetooth, frontlight).
   // 23 rows at most in the fork's buildMenuItems() (Word Lookup, Translate Page, Panels Only,
-  // Reader Settings, Jump Back and Last 5 pages read on top of upstream's set, plus upstream's Night
+  // Reader Settings, Jump Back and Recent Pages on top of upstream's set, plus upstream's Night
   // Mode, Bluetooth and Frontlight, plus Create/View Clippings); 24 leaves headroom for one more
   // without a silent truncation, which a fixed-capacity array cannot report.
   static constexpr size_t MAX_MENU_ITEMS = 24;
@@ -108,7 +108,7 @@ class EpubReaderMenuActivity final : public UiListActivity {
   bool hasPageText = true;
   // Jump Back's value: where it leads (e.g. "Page 300" or "42%").
   char jumpBackTarget[24] = {};
-  // The Last 5 pages read popup's rows, newest first; the row is listed only when there are some.
+  // The Recent Pages popup's rows, newest first; the row is listed only when there are some.
   std::vector<std::string> recentPageLabels;
 
   OptionPopup optionPopup;
