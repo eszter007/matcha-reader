@@ -7,16 +7,23 @@ input order and asserts the sequence the reader should walk them in.
 """
 
 from convert_manga import (
+    drop_blank_panels,
     PANEL_RETRY_COVER_FRAC,
     _panel_cover_frac,
+    _detect_panels_grid,
     _webtoon_cut_points,
     assign_blocks_to_panels,
     build_panel_ocr_prompt,
     expand_panels_over_text,
     mokuro_text_blocks,
+    scale_panel_boxes,
+    split_spread_image,
+    split_spread_pages,
+    fill_uncovered_art,
     sort_panels_reading_order,
     split_frames_over_subpanels,
     text_pad_px,
+    yonkoma_reading_order,
 )
 
 
@@ -383,6 +390,181 @@ def test_block_outside_every_panel_goes_to_the_nearest():
     panels = [[0, 0, 100, 100], [400, 400, 500, 500]]
     stray = {"box": [380, 380, 390, 390]}
     assert assign_blocks_to_panels([stray], panels) == [[], [stray]]
+
+
+def test_tall_panel_between_two_columns():
+    """Vol 3 p38 of The Promised Neverland: under a full-width strip, a right column of two,
+    a tall panel, then a left column of two. Pairwise rules alone form a cycle here."""
+    named = {
+        "strip": [27, 413, 695, 656],
+        "right_top": [483, 673, 762, 892], "right_bottom": [484, 911, 763, 1111],
+        "tall": [352, 668, 474, 1198],
+        "left_top": [26, 674, 347, 878], "left_bottom": [26, 894, 347, 1110],
+    }
+    assert order(list(named.values()), named) == [
+        "strip", "right_top", "right_bottom", "tall", "left_top", "left_bottom"]
+
+
+def test_slanted_middle_panel_overlapping_both_columns():
+    """Vol 3 p22: the tall middle panel's box overlaps both columns by ~50px (slanted borders)."""
+    named = {
+        "right_1": [476, 713, 764, 831], "right_2": [488, 849, 764, 980], "right_3": [503, 997, 763, 1110],
+        "middle": [254, 713, 527, 1199],
+        "left_1": [26, 714, 301, 884], "left_2": [25, 901, 288, 1200],
+    }
+    assert order(list(named.values()), named) == [
+        "right_1", "right_2", "right_3", "middle", "left_1", "left_2"]
+
+
+# A 4-koma page as the detector returns it: two strips of four, 300 wide, on a 760 page.
+_RIGHT = [[420, 170 + 235 * i, 710, 390 + 235 * i] for i in range(4)]
+_LEFT = [[100, 170 + 235 * i, 390, 390 + 235 * i] for i in range(4)]
+
+
+def test_yonkoma_page_is_read_down_each_strip():
+    shuffled = [b for pair in zip(_RIGHT, _LEFT) for b in pair]  # row-major, as detected
+    assert yonkoma_reading_order(shuffled, 760) == _RIGHT + _LEFT
+    assert yonkoma_reading_order(shuffled, 760, rtl=False) == _LEFT + _RIGHT
+
+
+def test_yonkoma_fragments_merge_back_into_their_panel():
+    """One strip panel cut in two by the detector comes back whole, in place."""
+    cut = [_LEFT[2][:2] + [240, _LEFT[2][3]], [200, _LEFT[2][1]] + _LEFT[2][2:]]
+    panels = _RIGHT + _LEFT[:2] + cut + _LEFT[3:]
+    assert yonkoma_reading_order(panels, 760) == _RIGHT + _LEFT
+
+
+def test_yonkoma_title_panel_beside_the_strips():
+    title = [720, 170, 760, 1090]
+    narrow_r = [[400, b[1], 690, b[3]] for b in _RIGHT]
+    narrow_l = [[60, b[1], 350, b[3]] for b in _LEFT]
+    assert yonkoma_reading_order(narrow_l + [title] + narrow_r, 760) == [title] + narrow_r + narrow_l
+
+
+def test_ordinary_pages_are_not_yonkoma():
+    # Rows of differing heights: a regular page that happens to line its columns up.
+    rows = [(0, 100), (110, 500), (510, 600)]
+    grid = [[x1, y1, x2, y2] for y1, y2 in rows for x1, x2 in ((0, 370), (390, 760))]
+    assert yonkoma_reading_order(grid, 760) is None
+    # A full-width panel crossing both columns.
+    assert yonkoma_reading_order(_RIGHT + _LEFT + [[0, 1100, 760, 1200]], 760) is None
+    # Two loose panels stacked beside the strips: not a title panel.
+    extra = [[0, 100, 60, 500], [0, 600, 60, 1000]]
+    assert yonkoma_reading_order(_RIGHT + _LEFT + extra, 760) is None
+    # Wide strips: a stack of full-width rows is an ordinary page.
+    assert yonkoma_reading_order([[0, y, 760, y + 200] for y in (0, 250, 500, 750)], 760) is None
+
+
+def _page_with_art(*boxes):
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (760, 1200), "white")
+    draw = ImageDraw.Draw(img)
+    for b in boxes:
+        draw.rectangle(b, fill="black")
+    return img
+
+
+def test_uncovered_art_becomes_a_panel():
+    kept, missed = [40, 40, 720, 500], [40, 560, 720, 1160]
+    out = fill_uncovered_art([kept], [], _page_with_art(kept, missed))
+    assert len(out) == 2 and out[0] == kept
+    assert _panel_cover_frac([out[1]], 760, 1200) > 0.9 * _panel_cover_frac([missed], 760, 1200)
+
+
+def test_a_weak_proposal_is_preferred_over_the_ink_outline():
+    kept, missed = [40, 40, 720, 500], [40, 560, 720, 1160]
+    proposal = [30, 550, 730, 1170]
+    out = fill_uncovered_art([kept], [(proposal, 0.3)], _page_with_art(kept, missed))
+    assert out == [kept, proposal]
+
+
+def test_small_or_stray_ink_is_not_a_panel():
+    kept = [40, 40, 720, 1100]
+    page_number = [360, 1150, 400, 1180]
+    bleed = [0, 1110, 760, 1150]  # art running past the frame's bottom edge: a strip
+    assert fill_uncovered_art([kept], [], _page_with_art(kept, page_number, bleed)) == [kept]
+
+
+def test_blank_and_margin_panels_are_dropped():
+    art, blank = [40, 40, 720, 600], [40, 640, 720, 900]
+    page_number = [500, 1120, 760, 1200]  # thin strip at the bottom edge, a few marks of ink
+    img = _page_with_art(art, [700, 1150, 730, 1180])
+    kept, _ = drop_blank_panels([art, blank, page_number], [], img)
+    assert kept == [art]
+
+
+def test_a_text_only_panel_is_kept():
+    bubble = [40, 640, 720, 900]  # all white, but the model found text in it
+    kept, _ = drop_blank_panels([bubble], [[300, 700, 400, 850]], _page_with_art())
+    assert kept == [bubble]
+
+
+def test_a_page_of_blank_panels_keeps_its_frames():
+    frames = [[0, 0, 380, 600], [380, 0, 760, 600]]
+    assert drop_blank_panels(frames, [], _page_with_art())[0] == frames
+
+
+# --- Recursive gutter grid, full-resolution detection and spreads (after FortyX5) ---------------
+
+def _page(w, h, panels, paper=255, ink=0):
+    from PIL import Image, ImageDraw
+    img = Image.new("L", (w, h), paper)
+    draw = ImageDraw.Draw(img)
+    for box in panels:
+        draw.rectangle(box, fill=ink)
+        # some interior texture so a panel is not mistaken for a dark gutter
+        draw.line((box[0] + 5, box[1] + 5, box[2] - 5, box[3] - 5), fill=128, width=7)
+    return img
+
+
+def _centres(cells):
+    return sorted(((x1 + x2) // 2, (y1 + y2) // 2) for x1, y1, x2, y2 in cells)
+
+
+def test_grid_finds_tall_panel_beside_stacked_pair():
+    # left: one tall panel; right: two stacked -- a row-first split finds no full-width gutter
+    img = _page(1000, 1400, [(40, 40, 470, 1360), (530, 40, 960, 670), (530, 730, 960, 1360)])
+    cells = _detect_panels_grid(img)
+    assert len(cells) == 3, cells
+
+
+def test_grid_splits_on_dark_gutters():
+    img = _page(1000, 1400, [(40, 40, 960, 670), (40, 730, 960, 1360)], paper=0, ink=255)
+    cells = _detect_panels_grid(img)
+    assert len(cells) == 2, cells
+
+
+def test_scale_panel_boxes_maps_and_clamps():
+    assert scale_panel_boxes([[0, 0, 2000, 3000], [1000, 1500, 1500, 2250]], (2000, 3000), (480, 720)) == [
+        [0, 0, 480, 720], [240, 360, 360, 540]]
+
+
+def test_spread_halves_follow_reading_order():
+    from PIL import Image
+    spread = Image.new("L", (2000, 1400), 255)
+    spread.paste(0, (0, 0, 1000, 1400))  # left half black
+    rtl = split_spread_image(spread, rtl=True)
+    ltr = split_spread_image(spread, rtl=False)
+    assert [h.getpixel((10, 10)) for h in rtl] == [255, 0]  # right page first in manga
+    assert [h.getpixel((10, 10)) for h in ltr] == [0, 255]
+    portrait = Image.new("L", (1000, 1400), 255)
+    assert split_spread_image(portrait) == [portrait]
+
+
+def test_spread_pages_keep_toc_indices():
+    import pathlib
+    import tempfile
+    from PIL import Image
+    tmp_path = pathlib.Path(tempfile.mkdtemp())
+    paths = []
+    for i, size in enumerate([(1000, 1400), (2000, 1400), (1000, 1400)]):
+        p = tmp_path / f"{i}.png"
+        Image.new("L", size, 255).save(p)
+        paths.append(str(p))
+    pages, first = split_spread_pages(paths, str(tmp_path), rtl=True)
+    assert len(pages) == 4
+    assert first == [0, 1, 3]  # page 2 of the source is output page 3
 
 
 if __name__ == "__main__":
