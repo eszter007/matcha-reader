@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <string>
+#include <vector>
 
 #include "ContentOpfParser.h"
 #include "Epub/BookMetadataCache.h"
@@ -291,4 +292,62 @@ TEST(ContentOpfParserCover, ReadingParserStillOpensManifestCache) {
   }
   EXPECT_EQ(Storage.writeOpens, 1);
   EXPECT_EQ(Storage.readOpens, 1);
+}
+
+namespace {
+
+// A package whose manifest lists `items` documents in order and whose spine lists `spineOrder`.
+std::string packageXml(const int items, const std::vector<int>& spineOrder) {
+  std::string xml = "<package><metadata/><manifest>";
+  for (int i = 0; i < items; i++) {
+    xml += "<item id=\"p" + std::to_string(i) + "\" href=\"p" + std::to_string(i) +
+           ".xhtml\" media-type=\"application/xhtml+xml\"/>";
+  }
+  xml += "</manifest><spine>";
+  for (const int i : spineOrder) xml += "<itemref idref=\"p" + std::to_string(i) + "\"/>";
+  return xml + "</spine></package>";
+}
+
+std::vector<std::string> spineHrefs(const int items, const std::vector<int>& spineOrder) {
+  const std::string xml = packageXml(items, spineOrder);
+  BookMetadataCache cache;
+  Storage = {};
+  ContentOpfParser parser("/cache", "OPS/", xml.size(), &cache);
+  parse(parser, xml);
+  return cache.spineHrefs;
+}
+
+std::vector<std::string> expectedHrefs(const std::vector<int>& spineOrder, const int items) {
+  std::vector<std::string> hrefs;
+  for (const int i : spineOrder) {
+    if (i < items) hrefs.push_back("OPS/p" + std::to_string(i) + ".xhtml");
+  }
+  return hrefs;
+}
+
+}  // namespace
+
+TEST(ContentOpfParserSpine, ResolvesSmallManifestOutOfOrder) {
+  const std::vector<int> order = {9, 0, 4, 4, 12, 1};
+  EXPECT_EQ(spineHrefs(10, order), expectedHrefs(order, 10));
+}
+
+// Past the index limit the spine is resolved by scanning the item store from the previous match.
+TEST(ContentOpfParserSpine, ResolvesLargeManifestInOrder) {
+  std::vector<int> order;
+  for (int i = 0; i < 3000; i++) order.push_back(i);
+  EXPECT_EQ(spineHrefs(3000, order), expectedHrefs(order, 3000));
+}
+
+TEST(ContentOpfParserSpine, ResolvesLargeManifestOutOfOrderAndMissingIds) {
+  std::vector<int> order = {2999, 0, 1500, 1500, 5000, 1499, 7};
+  for (int i = 2998; i >= 2000; i -= 97) order.push_back(i);
+  EXPECT_EQ(spineHrefs(3000, order), expectedHrefs(order, 3000));
+}
+
+TEST(ContentOpfParserSpine, ResolvesAtTheIndexLimit) {
+  for (const int items : {512, 513}) {
+    const std::vector<int> order = {items - 1, 0, items / 2, items + 4, 1};
+    EXPECT_EQ(spineHrefs(items, order), expectedHrefs(order, items)) << items << " items";
+  }
 }

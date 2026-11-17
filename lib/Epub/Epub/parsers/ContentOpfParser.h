@@ -67,6 +67,10 @@ class ContentOpfParser final : public Print {
   };
   std::deque<ItemIndexEntry> itemIndex;
   bool useItemIndex = false;
+  bool itemIndexOverflowed = false;
+  // 12 bytes per item. Novels stay far below this; generated books (one page per document)
+  // can list thousands of items, and a deque growth failure aborts under -fno-exceptions.
+  static constexpr size_t MAX_ITEM_INDEX_ENTRIES = 512;
 
   // FNV-1a hash function
   static uint32_t fnvHash(const std::string& s) {
@@ -81,6 +85,7 @@ class ContentOpfParser final : public Print {
   static void startElement(void* userData, const XML_Char* name, const XML_Char** atts);
   static void characterData(void* userData, const XML_Char* s, int len);
   static void endElement(void* userData, const XML_Char* name);
+  bool findItemHrefSequential(const std::string& idref, std::string& href);
 
  public:
   std::string title;

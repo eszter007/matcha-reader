@@ -113,13 +113,17 @@ bool BookMetadataCache::beginTocPass() {
   }
 
   spineHrefIndex.reset();
-  if (spineCount >= TOC_HREF_INDEX_THRESHOLD) {
+  sequentialSpineCursor = 0;
+  lastTocMatch = {0, 0, -1};
+  if (spineCount >= TOC_HREF_INDEX_THRESHOLD && spineCount <= MAX_SPINE_HREF_INDEX_ENTRIES) {
     spineHrefIndex = makeUniqueNoThrow<std::deque<SpineHrefIndexEntry>>();
     if (!spineHrefIndex) {
       // createTocEntry then scans the spine file for every TOC entry.
       LOG_ERR("BMC", "Failed to allocate %u B spine href index; scanning %d spine items per TOC entry",
               static_cast<unsigned>(sizeof(std::deque<SpineHrefIndexEntry>)), spineCount);
     }
+  } else if (spineCount > MAX_SPINE_HREF_INDEX_ENTRIES) {
+    LOG_INF("BMC", "Spine has %d items; scanning it in order for TOC hrefs", spineCount);
   }
   if (spineHrefIndex) {
     spineHrefIndex->resize(spineCount);
@@ -434,14 +438,32 @@ void BookMetadataCache::createTocEntry(const std::string& title, const std::stri
       LOG_DBG("BMC", "createTocEntry: Could not find spine item for TOC href %s", href.c_str());
     }
   } else {
-    spineFile.seek(0);
-    for (int i = 0; i < spineCount; i++) {
-      auto spineEntry = readSpineEntry(spineFile);
-      if (spineEntry.href == href) {
-        spineIndex = static_cast<int16_t>(i);
-        break;
+    // TOCs normally follow spine order: continue from the previous match and wrap once.
+    // An href that is in no spine item costs one full read of the spine file.
+    const uint64_t targetHash = fnvHash64(href);
+    const auto targetLen = static_cast<uint16_t>(href.size());
+    if (lastTocMatch.spineIndex >= 0 && lastTocMatch.hrefHash == targetHash && lastTocMatch.hrefLen == targetLen) {
+      spineIndex = lastTocMatch.spineIndex;
+    }
+    const int startIndex = sequentialSpineCursor;
+    for (int pass = 0; pass < 2 && spineIndex == -1; pass++) {
+      if (pass == 1) {
+        if (startIndex == 0) break;
+        spineFile.seek(0);
+      }
+      const int first = pass == 0 ? startIndex : 0;
+      const int last = pass == 0 ? spineCount : startIndex;
+      for (int i = first; i < last; i++) {
+        if (readSpineEntry(spineFile).href == href) {
+          spineIndex = static_cast<int16_t>(i);
+          sequentialSpineCursor = static_cast<uint16_t>(i + 1);
+          lastTocMatch = {targetHash, targetLen, spineIndex};
+          break;
+        }
       }
     }
+    // A miss read up to startIndex again, or to the end when it started at 0.
+    if (spineIndex == -1 && startIndex == 0) spineFile.seek(0);
     if (spineIndex == -1) {
       LOG_DBG("BMC", "createTocEntry: Could not find spine item for TOC href %s", href.c_str());
     }
