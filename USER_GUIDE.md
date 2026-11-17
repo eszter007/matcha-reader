@@ -1937,7 +1937,8 @@ With the CrossPoint sync server, **Sync Progress** also uploads these insights; 
 ### 7.1 Insights
 
 Go to Home → **Insights**. It shows your current streak, minutes this week, books finished, days read, total
-reading time, your longest streak and a calendar of the days you read.
+reading time, your longest streak and a calendar of the days you read. If you have not read yet today, the current streak counts up
+to yesterday; it only ends after a whole day with no reading.
 
 The tabs at the top split these numbers by language. **All** covers everything. After it comes one tab for each
 language you have read. Each tab has its own streak, calendar and totals, so reading an English book does not

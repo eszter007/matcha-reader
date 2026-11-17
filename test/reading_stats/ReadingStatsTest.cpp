@@ -61,11 +61,31 @@ TEST_F(StatsTest, GapBreaksCurrentStreakButNotLongest) {
   EXPECT_EQ(s.getLongestStreak(), 6);
 }
 
-TEST_F(StatsTest, NotReadTodayMeansNoCurrentStreak) {
+// Until today is read the streak runs to yesterday; a whole missed day ends it.
+TEST_F(StatsTest, NotReadTodayKeepsYesterdaysStreak) {
   auto& s = READING_STATS_STORE;
   for (uint8_t d = 1; d <= 7; d++) s.addMinutes(Y, M, d, 10);
-  EXPECT_EQ(s.getStreak(Y, M, 8), 0);
+  EXPECT_EQ(s.getStreak(Y, M, 8), 7);
+  EXPECT_EQ(s.getStreak(Y, M, 9), 0);
   EXPECT_EQ(s.getLongestStreak(), 7);
+
+  for (uint8_t d = 5; d <= 7; d++) s.addLanguageMinutes("ja", 10, Y, M, d);
+  EXPECT_EQ(s.getStreak("ja", Y, M, 8), 3);
+  EXPECT_EQ(s.getStreak("ja", Y, M, 9), 0);
+
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  EXPECT_EQ(s.summarize(Y, M, 8, nullptr).streak, 7);
+  EXPECT_EQ(s.summarize(Y, M, 9, nullptr).streak, 0);
+}
+
+// A day after today (a forward clock jump) neither counts nor stands in for today.
+TEST_F(StatsTest, NotReadTodayIgnoresFutureDays) {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(Y, M, 6, 10);
+  s.addMinutes(Y, M, 7, 10);
+  s.addMinutes(Y, M, 10, 10);
+  EXPECT_EQ(s.getStreak(Y, M, 8), 2);
 }
 
 TEST_F(StatsTest, StreakCrossesMonthYearAndLeapDay) {
