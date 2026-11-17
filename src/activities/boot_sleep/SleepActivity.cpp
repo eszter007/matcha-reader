@@ -1332,14 +1332,18 @@ void SleepActivity::renderDeparturesSleepScreen() const {
   const Rect content = UITheme::getContentArea(renderer);
   const int corner = BoardConfig::ACTIVE.bottomCornerRadius != 0 ? BoardConfig::ACTIVE.bottomCornerRadius
                                                                  : BoardConfig::ACTIVE.cornerRadius;
-  const int catRight = std::max(10, pageWidth - content.x - content.width + corner * 3 / 10);
+  const int bezelRight = pageWidth - content.x - content.width;
+  const int catRight = std::max(10, bezelRight + corner * 3 / 10);
   const int catBottom = std::max(10, pageHeight - content.y - content.height + corner * 3 / 10);
   const DepartureCat* cat = nullptr;
   int catX = 0;
   int catY = 0;
   int rowStep = 0;
   for (const DepartureCat& candidate : DEP_CATS) {
-    const int x = pageWidth - candidate.width - catRight;
+    // Where the corner inset alone would push the cat into the rows' column, it gives way down to
+    // the bezel: the rows would otherwise have to clear the cat's top, leaving room only for a small cat.
+    int x = pageWidth - candidate.width - catRight;
+    if (x < rowsRight + 8) x = std::min(rowsRight + 8, pageWidth - candidate.width - std::max(10, bezelRight + 2));
     const int top = pageHeight - candidate.height - catBottom;
     int limit = top + candidate.height / 2 - blockH / 2 - 16;
     if (rowsRight + 8 > x) limit = std::min(limit, top + 8);
