@@ -94,10 +94,10 @@ size_t RecentPages::serialize(uint8_t* out, const size_t size) const {
 bool RecentPages::deserialize(const uint8_t* data, const size_t size, const int spineCount) {
   count_ = 0;
   if (size < 2 || data[0] != FILE_VERSION) return false;
-  const int count = data[1];
-  if (count < 1 || count > MAX_PLACES || size != 2 + count * PLACE_BYTES) return false;
+  const int stored = data[1];
+  if (stored < 1 || stored > MAX_PLACES || size != 2 + stored * PLACE_BYTES) return false;
   Place loaded[MAX_PLACES];
-  for (int i = 0; i < count; i++) {
+  for (int i = 0; i < stored; i++) {
     const uint8_t* r = data + 2 + i * PLACE_BYTES;
     Place& p = loaded[i];
     p.spineIndex = get16(r);
@@ -116,8 +116,8 @@ bool RecentPages::deserialize(const uint8_t* data, const size_t size, const int 
     // A date that cannot be shown is dropped, not the place.
     if (p.month < 1 || p.month > 12 || p.day < 1 || p.day > 31 || p.hour > 23 || p.minute > 59) p.year = 0;
   }
-  for (int i = 0; i < count; i++) places_[i] = loaded[i];
-  count_ = static_cast<uint8_t>(count);
+  for (int i = 0; i < stored; i++) places_[i] = loaded[i];
+  count_ = static_cast<uint8_t>(stored);
   // Places from an earlier session were read, not passed through.
   newestTurned_ = true;
   return true;
