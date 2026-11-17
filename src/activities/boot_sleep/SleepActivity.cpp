@@ -1234,11 +1234,15 @@ struct DepartureCat {
   GrayLogo::Size size;
   int width;
   int height;
+  // The built-in cat draws nothing in the leftmost openLeft columns of its top openRows rows, so a
+  // row's label may reach into that corner.
+  int openLeft;
+  int openRows;
 };
 
 // Largest first: the screen uses the biggest cat that leaves the rows room.
-constexpr DepartureCat DEP_CATS[] = {{GrayLogo::Size::Regular, GrayLogo::WIDTH, GrayLogo::HEIGHT},
-                                     {GrayLogo::Size::Small, GrayLogo::SMALL_WIDTH, GrayLogo::SMALL_HEIGHT}};
+constexpr DepartureCat DEP_CATS[] = {{GrayLogo::Size::Regular, GrayLogo::WIDTH, GrayLogo::HEIGHT, 24, 72},
+                                     {GrayLogo::Size::Small, GrayLogo::SMALL_WIDTH, GrayLogo::SMALL_HEIGHT, 0, 0}};
 
 // Draws one bitmap from the inflated lettering, a horizontal run of ink at a time.
 void drawDepartureBitmap(const GfxRenderer& renderer, const uint8_t* type, const DepartureBitmap& bitmap, const int x,
@@ -1328,21 +1332,26 @@ void SleepActivity::renderDeparturesSleepScreen() const {
       DEP_MARGIN + std::max<int>(DEP_TILES * (layout.tileW + layout.tileGap), DepWordMinutesThisWeek.width + 2);
   // Clear of the bezel and of a rounded bottom corner: on the EEGO A4 the bezel covers 8 px at the
   // right and 16 at the bottom, and the corner curves in over 40 px; the cat's box keeps its corner
-  // inside that curve (about 30% of the radius in from each edge). 10 px wherever that is less.
+  // inside that curve (about 30% of the radius in from each edge), the same distance from the right
+  // as from the bottom. 10 px wherever that is less.
   const Rect content = UITheme::getContentArea(renderer);
   const int corner = BoardConfig::ACTIVE.bottomCornerRadius != 0 ? BoardConfig::ACTIVE.bottomCornerRadius
                                                                  : BoardConfig::ACTIVE.cornerRadius;
-  const int catRight = std::max(10, pageWidth - content.x - content.width + corner * 3 / 10);
-  const int catBottom = std::max(10, pageHeight - content.y - content.height + corner * 3 / 10);
+  const int bezel = std::max(pageWidth - content.x - content.width, pageHeight - content.y - content.height);
+  const int catInset = std::max(10, bezel + corner * 3 / 10);
+  const bool builtinCat = !GrayLogo::customLogoPresent();
   const DepartureCat* cat = nullptr;
   int catX = 0;
   int catY = 0;
   int rowStep = 0;
   for (const DepartureCat& candidate : DEP_CATS) {
-    const int x = pageWidth - candidate.width - catRight;
-    const int top = pageHeight - candidate.height - catBottom;
+    const int x = pageWidth - candidate.width - catInset;
+    const int top = pageHeight - candidate.height - catInset;
     int limit = top + candidate.height / 2 - blockH / 2 - 16;
-    if (rowsRight + 8 > x) limit = std::min(limit, top + 8);
+    if (rowsRight + 8 > x) {
+      const bool besideOpenCorner = builtinCat && rowsRight + 8 <= x + candidate.openLeft;
+      limit = std::min(limit, top + (besideOpenCorner ? candidate.openRows : 8));
+    }
     const int step = (limit - layout.firstRow - layout.tileH - labelH) / 2;
     if (step >= minRowStep) {
       cat = &candidate;

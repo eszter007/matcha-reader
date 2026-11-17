@@ -226,6 +226,11 @@ BaseArt baseArt;
 
 namespace GrayLogo {
 
+bool customLogoPresent() {
+  std::string path;
+  return sdsystem::findExistingUserFile(CUSTOM_LOGO_NAME, path);
+}
+
 void drawBase(const GfxRenderer& renderer, const int x, const int y, const bool invertedScreen, const Size size) {
   baseArt = BaseArt{};
   Art& art = baseArt.art;

@@ -45,6 +45,8 @@ constexpr int top(const int pageHeight) {
   return centred < lowest ? centred : (lowest > 0 ? lowest : 0);
 }
 
+// True when the SD card holds a logo.bmp, which drawBase shows in place of the cat.
+bool customLogoPresent();
 void drawBase(const GfxRenderer& renderer, int x, int y, bool invertedScreen, Size size = Size::Regular);
 // Plain 1-bit rendering (dark gray -> black, light gray -> white), no gray passes needed.
 // Used on the boot screen: wake-from-sleep reboots through it, so it must stay fast, and its
