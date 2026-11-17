@@ -324,9 +324,9 @@ int ReadingStatsStore::getStreak(const char* language, const uint16_t todayYear,
   if (const auto* g = accountFor(language)) return accountStreak(language, *g, todayYear, todayMonth, todayDay);
   char lang[4];
   normalizeLanguage(language, lang);
-  if (getMinutesForDay(language, todayYear, todayMonth, todayDay) == 0) return 0;
-
   int expected = daysSinceEpoch(todayYear, todayMonth, todayDay);
+  // Until today is read the streak runs to yesterday, as accountStreak() counts it.
+  if (getMinutesForDay(language, todayYear, todayMonth, todayDay) == 0) expected--;
   int streak = 0;
   for (auto it = languageDays.rbegin(); it != languageDays.rend(); ++it) {
     if (memcmp(it->language, lang, sizeof(lang)) != 0 || it->minutesRead == 0) continue;
@@ -461,7 +461,8 @@ int ReadingStatsStore::getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t
   // Backwards through the sorted history, rather than probing one candidate date per day.
   if (days.empty()) return 0;
   int expected = daysSinceEpoch(todayYear, todayMonth, todayDay);
-  if (getMinutesForDay(todayYear, todayMonth, todayDay) == 0) return 0;
+  // Until today is read the streak runs to yesterday, as accountStreak() counts it.
+  if (getMinutesForDay(todayYear, todayMonth, todayDay) == 0) expected--;
 
   int streak = 0;
   for (auto it = days.rbegin(); it != days.rend(); ++it) {
@@ -1155,7 +1156,8 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
     return fromTables();
   }
 
-  // Days, file and journal merged in date order; the run of read days ending today is the streak.
+  // Days, file and journal merged in date order; the run of read days ending today (or yesterday, until
+  // today is read) is the streak.
   int prev = INT32_MIN, run = 0, lastFileDay = INT32_MIN;
   size_t jd = 0;
   const auto takeDay = [&](const int e, const uint32_t minutes) {
@@ -1184,7 +1186,7 @@ ReadingStatsStore::Summary ReadingStatsStore::summarize(const uint16_t todayYear
     takeDay(e, minutes);
   }
   for (; jd < journalDays.size(); jd++) takeDay(journalDays[jd].first, journalDays[jd].second);
-  out.streak = prev == today ? run : 0;
+  out.streak = prev >= today - 1 ? run : 0;
 
   // Finished books: hashes of their paths, then their languages from the per-book block.
   std::vector<uint32_t> finished;
