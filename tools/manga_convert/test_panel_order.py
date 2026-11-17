@@ -390,6 +390,8 @@ def test_block_outside_every_panel_goes_to_the_nearest():
     panels = [[0, 0, 100, 100], [400, 400, 500, 500]]
     stray = {"box": [380, 380, 390, 390]}
     assert assign_blocks_to_panels([stray], panels) == [[], [stray]]
+
+
 def test_tall_panel_between_two_columns():
     """Vol 3 p38 of The Promised Neverland: under a full-width strip, a right column of two,
     a tall panel, then a left column of two. Pairwise rules alone form a cycle here."""
@@ -503,14 +505,6 @@ def test_a_page_of_blank_panels_keeps_its_frames():
     assert drop_blank_panels(frames, [], _page_with_art())[0] == frames
 
 
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("All panel-order checks passed.")
-
-
 # --- Recursive gutter grid, full-resolution detection and spreads (after FortyX5) ---------------
 
 def _page(w, h, panels, paper=255, ink=0):
@@ -558,8 +552,11 @@ def test_spread_halves_follow_reading_order():
     assert split_spread_image(portrait) == [portrait]
 
 
-def test_spread_pages_keep_toc_indices(tmp_path):
+def test_spread_pages_keep_toc_indices():
+    import pathlib
+    import tempfile
     from PIL import Image
+    tmp_path = pathlib.Path(tempfile.mkdtemp())
     paths = []
     for i, size in enumerate([(1000, 1400), (2000, 1400), (1000, 1400)]):
         p = tmp_path / f"{i}.png"
@@ -568,3 +565,11 @@ def test_spread_pages_keep_toc_indices(tmp_path):
     pages, first = split_spread_pages(paths, str(tmp_path), rtl=True)
     assert len(pages) == 4
     assert first == [0, 1, 3]  # page 2 of the source is output page 3
+
+
+if __name__ == "__main__":
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_"):
+            fn()
+            print(f"ok  {name}")
+    print("All panel-order checks passed.")
