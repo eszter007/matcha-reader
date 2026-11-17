@@ -16,6 +16,7 @@
 namespace heap {
 bool counting = false;
 size_t live = 0;
+size_t peak = 0;
 
 struct alignas(std::max_align_t) Header {
   size_t size;
@@ -27,7 +28,10 @@ void* allocate(const size_t size) {
   if (!header) return nullptr;
   header->size = size;
   header->counted = counting;
-  if (counting) live += size;
+  if (counting) {
+    live += size;
+    if (live > peak) peak = live;
+  }
   return header + 1;
 }
 
@@ -148,5 +152,83 @@ TEST(BookMetadataCacheSizes, SpineIndexForSizeMatchesLinearScan) {
       EXPECT_EQ(cache.getSpineIndexForSize(size), expected) << spineCount << " items, size " << size;
       EXPECT_LE(Storage.readOpens - opens, 1) << spineCount << " items, size " << size;
     }
+  }
+}
+
+namespace {
+
+// Builds a book whose TOC lists `tocOrder` hrefs; returns the peak heap of the TOC pass.
+size_t buildBookWithToc(const std::string& dir, const int spineCount, const std::vector<int>& tocOrder) {
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  zipEntrySizes.clear();
+  for (int i = 0; i < spineCount; i++) zipEntrySizes[chapterHref(i)] = chapterBytes(i);
+  BookMetadataCache cache(dir);
+  EXPECT_TRUE(cache.beginWrite() && cache.beginContentOpfPass());
+  for (int i = 0; i < spineCount; i++) cache.createSpineEntry(chapterHref(i));
+  EXPECT_TRUE(cache.endContentOpfPass());
+  heap::live = 0;
+  heap::peak = 0;
+  heap::counting = true;
+  EXPECT_TRUE(cache.beginTocPass());
+  for (const int i : tocOrder) cache.createTocEntry("Chapter " + std::to_string(i), chapterHref(i), "", 1);
+  EXPECT_TRUE(cache.endTocPass());
+  heap::counting = false;
+  EXPECT_TRUE(cache.endWrite());
+  EXPECT_TRUE(cache.buildBookBin("book.epub", {}));
+  EXPECT_TRUE(cache.cleanupTmpFiles());
+  return heap::peak;
+}
+
+void expectTocSpineIndexes(const std::string& dir, const int spineCount, const std::vector<int>& tocOrder) {
+  BookMetadataCache cache(dir);
+  ASSERT_TRUE(cache.load());
+  ASSERT_EQ(cache.getTocCount(), static_cast<int>(tocOrder.size()));
+  for (size_t i = 0; i < tocOrder.size(); i++) {
+    const int expected = tocOrder[i] < spineCount ? tocOrder[i] : -1;
+    EXPECT_EQ(cache.getTocEntry(static_cast<int>(i)).spineIndex, expected) << "toc " << i;
+  }
+}
+
+}  // namespace
+
+// A very large spine must not build a per-item href index: the pass holds its 4 KB write buffer.
+TEST(BookMetadataCacheToc, LargeSpineTocPassHeapIsBounded) {
+  std::vector<int> inOrder;
+  for (int i = 0; i < 5000; i++) inOrder.push_back(i);
+  const size_t peak = buildBookWithToc(cacheDir(), 5000, inOrder);
+  EXPECT_LT(peak, 6u * 1024) << peak << " B";
+  expectTocSpineIndexes(cacheDir(), 5000, inOrder);
+}
+
+TEST(BookMetadataCacheToc, LargeSpineResolvesOutOfOrderAndMissingHrefs) {
+  std::vector<int> order = {4999, 0, 2500, 2500, 7000, 2499, 3};
+  for (int i = 4998; i >= 4000; i -= 113) order.push_back(i);
+  buildBookWithToc(cacheDir(), 5000, order);
+  expectTocSpineIndexes(cacheDir(), 5000, order);
+}
+
+TEST(BookMetadataCacheToc, IndexedSpineResolvesOutOfOrderAndMissingHrefs) {
+  const std::vector<int> order = {199, 0, 100, 100, 700, 99, 3};
+  buildBookWithToc(cacheDir(), 200, order);
+  expectTocSpineIndexes(cacheDir(), 200, order);
+}
+
+// Several TOC entries point at anchors in one chapter; each repeat resolves to that chapter.
+TEST(BookMetadataCacheToc, LargeSpineResolvesRepeatedHrefs) {
+  std::vector<int> order;
+  for (int i = 0; i < 2000; i++) {
+    order.push_back(i);
+    if (i % 3 == 0) order.push_back(i);
+  }
+  buildBookWithToc(cacheDir(), 2000, order);
+  expectTocSpineIndexes(cacheDir(), 2000, order);
+}
+
+TEST(BookMetadataCacheToc, ResolvesAtTheIndexLimit) {
+  for (const int spineCount : {512, 513}) {
+    std::vector<int> order = {spineCount - 1, 0, spineCount / 2, spineCount + 4, 1};
+    buildBookWithToc(cacheDir(), spineCount, order);
+    expectTocSpineIndexes(cacheDir(), spineCount, order);
   }
 }

@@ -80,12 +80,19 @@ class BookMetadataCache {
     int16_t spineIndex;
   };
   std::unique_ptr<std::deque<SpineHrefIndexEntry>> spineHrefIndex;
+  // Without the index: the spine entry the file is positioned at, and the last match, which
+  // TOC entries for several anchors in one document repeat.
+  uint16_t sequentialSpineCursor = 0;
+  SpineHrefIndexEntry lastTocMatch{0, 0, -1};
 
   static constexpr uint16_t LARGE_SPINE_THRESHOLD = 400;
   // The TOC pass resolves every entry's href to a spine index. Without the hash index each entry
   // re-reads the spine from SD: 194 entries x 196 spine items took 17.5s of a 29s first open. The
   // index costs 16 bytes per spine item for the pass alone, so only a tiny spine skips it.
   static constexpr uint16_t TOC_HREF_INDEX_THRESHOLD = 16;
+  // Caps the index at 8 KB. Above it createTocEntry scans the spine file from the previous match;
+  // an uncapped index took 86 KB for 5,000 items, and a deque growth failure aborts the device.
+  static constexpr uint16_t MAX_SPINE_HREF_INDEX_ENTRIES = 512;
 
   // FNV-1a 64-bit hash function
   static uint64_t fnvHash64(const std::string& s) {
