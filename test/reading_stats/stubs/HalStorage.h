@@ -1,12 +1,14 @@
 #pragma once
 // Host stand-in for the SD-backed HalStorage, sufficient for the stats stores: the same call
 // surface, backed by real files under the test's working directory.
+#include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <utility>
 
 // Settable because ctest runs each test as its own parallel process from a shared working
 // directory; a fixed root would have them deleting each other's files mid-run.
@@ -18,16 +20,39 @@ inline std::string testRootPath(const char* p) { return testRoot() + p; }
 
 class HalFile {
   FILE* f = nullptr;
+  DIR* d = nullptr;  // a folder opened with HalStorage::open()
+  std::string dirPath;
 
  public:
   HalFile() = default;
   explicit HalFile(FILE* h) : f(h) {}
-  HalFile(HalFile&& o) noexcept : f(o.f) { o.f = nullptr; }
-  HalFile& operator=(HalFile&& o) noexcept {
-    if (f) fclose(f);
-    f = o.f;
+  HalFile(DIR* dir, std::string path) : d(dir), dirPath(std::move(path)) {}
+  HalFile(HalFile&& o) noexcept : f(o.f), d(o.d), dirPath(std::move(o.dirPath)) {
     o.f = nullptr;
+    o.d = nullptr;
+  }
+  HalFile& operator=(HalFile&& o) noexcept {
+    close();
+    f = o.f;
+    d = o.d;
+    dirPath = std::move(o.dirPath);
+    o.f = nullptr;
+    o.d = nullptr;
     return *this;
+  }
+  explicit operator bool() const { return f || d; }
+  bool isDirectory() const { return d != nullptr; }
+  // The next file in an opened folder, opened for reading (sub-folders come back as folders).
+  HalFile openNextFile() {
+    if (!d) return HalFile();
+    for (const dirent* e = readdir(d); e; e = readdir(d)) {
+      const std::string name = e->d_name;
+      if (name == "." || name == "..") continue;
+      const std::string full = dirPath + "/" + name;
+      if (DIR* sub = opendir(full.c_str())) return HalFile(sub, full);
+      if (FILE* h = fopen(full.c_str(), "rb")) return HalFile(h);
+    }
+    return HalFile();
   }
   HalFile(const HalFile&) = delete;
   HalFile& operator=(const HalFile&) = delete;
@@ -46,6 +71,8 @@ class HalFile {
   bool close() {
     const bool ok = !f || fclose(f) == 0;
     f = nullptr;
+    if (d) closedir(d);
+    d = nullptr;
     return ok;
   }
   bool seek(size_t pos) { return f && fseek(f, static_cast<long>(pos), SEEK_SET) == 0; }
@@ -74,6 +101,12 @@ class HalStorage {
     return true;
   }
   bool remove(const char* p) { return ::remove(testRootPath(p).c_str()) == 0; }
+  HalFile open(const char* p) {
+    const std::string full = testRootPath(p);
+    if (DIR* dir = opendir(full.c_str())) return HalFile(dir, full);
+    if (FILE* h = fopen(full.c_str(), "rb")) return HalFile(h);
+    return HalFile();
+  }
   bool rename(const char* from, const char* to) {
     return ::rename(testRootPath(from).c_str(), testRootPath(to).c_str()) == 0;
   }

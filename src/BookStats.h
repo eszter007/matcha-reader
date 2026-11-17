@@ -106,11 +106,21 @@ class BookStats {
 
   static std::string filePathFor(const char* bookPath);
 
+  // Files a book's history under its new path, after the book was moved or renamed on the card.
+  // Nothing to do for a book without history; false when it could not be moved, or when the new
+  // path already has history of its own (kept).
+  static bool movePath(const char* fromPath, const char* toPath);
+
  private:
   // Takes in what the sync server has for this book (bookdownload): the larger value per day and the
   // larger session count. True when that changed anything.
   bool mergeDownloaded(bool& finishedOnServer);
   bool loadLocal(const char* bookPath);
+  // movePath() for a caller that holds the file mutex already (recordOpen()).
+  static bool movePathLocked(const char* fromPath, const char* toPath);
+  // A book moved outside the reader (over USB, on a computer) arrives with no history under its new
+  // path; returns the old path of its history: the only one whose book has the same name and is gone.
+  static std::string findMovedHistory(const char* bookPath);
   // Set by load(): the server's copy changed this book and calls it finished.
   bool restoredFinished = false;
   bool everyDevice = false;  // showEveryDevice() ran: not this card's history any more

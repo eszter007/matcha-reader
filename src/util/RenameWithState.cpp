@@ -9,6 +9,7 @@
 
 #include "ClippingStore.h"
 #include "RecentBooksStore.h"
+#include "util/BookInsights.h"
 #include "util/BookWalk.h"
 #include "util/BookmarkUtil.h"
 
@@ -120,6 +121,8 @@ bool renamePathWithState(const std::string& oldPath, const std::string& newPath,
     RECENT_BOOKS.updatePath(oldBookPath, newBookPath, bookCachePath(oldBookPath), bookCachePath(newBookPath));
     return true;
   });
+  // Pass 4: insights, which are filed under the book path too.
+  bookinsights::followMove(oldPath, newPath);
   return true;
 }
 

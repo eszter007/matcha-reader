@@ -1942,6 +1942,10 @@ Go to Home → **Insights**. It shows your current streak, minutes this week, bo
 reading time, your longest streak and a calendar of the days you read. If you have not read yet today, the current streak counts up
 to yesterday; it only ends after a whole day with no reading.
 
+A book keeps its insights when you move or rename it, on the reader (including **Move Finished Books
+to Read Folder**) or on a computer: a book that opens with no history takes over the history of the
+book with the same file name that is no longer on the card.
+
 The tabs at the top split these numbers by language. **All** covers everything. After it comes one tab for each
 language you have read. Each tab has its own streak, calendar and totals, so reading an English book does not
 break your Japanese streak.

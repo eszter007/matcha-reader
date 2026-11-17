@@ -198,6 +198,9 @@ class ReadingStatsStore {
   uint32_t getTotalMinutes() const;
   uint16_t getBooksFinished() const;
   bool isFinished(const std::string& bookPath) const;
+  // Moves books' reading time and finished marks to their new paths (books moved or renamed on the
+  // card): pairs of old and new path. Loads, changes and saves the tables.
+  static bool renameBooks(const std::vector<std::pair<std::string, std::string>>& moves);
   const std::vector<DailyReading>& getDays() const { return days; }
   uint32_t getTimeOfDayMinutes(const uint8_t bucket) const { return timeOfDayMinutes[bucket]; }
   uint32_t getTimeOfDayBase(const uint8_t bucket) const { return timeOfDayBase[bucket]; }

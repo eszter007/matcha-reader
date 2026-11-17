@@ -81,6 +81,7 @@
 #include "clippings/ClippingsManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookInsights.h"
 #include "util/BookProgress.h"
 #include "util/BookmarkUtil.h"
 #include "util/DictionaryRegistry.h"
@@ -357,6 +358,13 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
   }
 
   RECENT_BOOKS.updatePath(srcPath, dstPath, oldCachePath, cacheMoved ? newCachePath : oldCachePath);
+  // Bookmarks and insights are filed under the book path as well.
+  const std::string oldMarks = BookmarkUtil::getBookmarkPath(srcPath);
+  if (Storage.exists(oldMarks.c_str()) &&
+      !Storage.rename(oldMarks.c_str(), BookmarkUtil::getBookmarkPath(dstPath).c_str())) {
+    LOG_ERR("ERS", "Failed to move bookmarks of %s (non-fatal)", srcPath.c_str());
+  }
+  bookinsights::followMove(srcPath, dstPath);
   if (APP_STATE.openEpubPath == srcPath) {
     APP_STATE.openEpubPath = dstPath;
     APP_STATE.saveToFile();
