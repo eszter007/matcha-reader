@@ -71,10 +71,14 @@ TEST(LibraryBookFileTest, RejectsOtherFilesAndHiddenNames) {
   EXPECT_FALSE(isLibraryBookFile("._book.epub"));
 }
 
-TEST(LibraryBookFileTest, RejectsTheTextFilesTheDeviceWrites) {
+TEST(LibraryBookFileTest, RejectsFirmwareWrittenTextFiles) {
   EXPECT_FALSE(isLibraryBookFile("/crash_report.txt"));
   EXPECT_FALSE(isLibraryBookFile("/My Clippings.txt"));
   EXPECT_FALSE(isLibraryBookFile("My Clippings.txt"));
+  EXPECT_FALSE(isLibraryBookFile("/MY CLIPPINGS.TXT"));
+  EXPECT_FALSE(isLibraryBookFile("/Books/My Clippings.txt"));
+  EXPECT_TRUE(isLibraryBookFile("/My Clippings.txt/book.epub"));
+  EXPECT_TRUE(isLibraryBookFile("/Not My Clippings.txt"));
   // Only those exact names: a book that merely mentions them stays a book.
   EXPECT_TRUE(isLibraryBookFile("/Books/My Clippings from Kyoto.txt"));
   EXPECT_TRUE(isLibraryBookFile("/Books/crash_report_novel.txt"));

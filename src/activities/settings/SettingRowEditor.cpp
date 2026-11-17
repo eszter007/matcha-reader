@@ -30,6 +30,7 @@
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/OptionPopup.h"
 #include "components/UITheme.h"
+#include "util/TaskWatchdog.h"
 
 SettingRowEditor::EditResult SettingRowEditor::editValue(const SettingInfo& setting) {
   const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen;
@@ -177,6 +178,25 @@ bool SettingRowEditor::launchSharedAction(const SettingAction action) {
     case SettingAction::ClearCache:
       activity.startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput), resultHandler);
       return true;
+    case SettingAction::DisplayRefresh: {
+      // Alternate full black and white refreshes to clear image retention.
+      // Back stops after the next white pass, so the screen always ends white.
+      constexpr int kCycles = 10;
+      {
+        RenderLock lock(activity);
+        for (int cycle = 0; cycle < kCycles; ++cycle) {
+          renderer.clearScreen(0x00);
+          renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+          renderer.clearScreen(0xFF);
+          renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+          resetTaskWatchdogIfSubscribed();
+          mappedInput.update(true);
+          if (mappedInput.wasPressed(MappedInputManager::Button::Back)) break;
+        }
+      }
+      activity.requestUpdate();
+      return true;
+    }
     case SettingAction::CheckForUpdates:
       activity.startActivityForResult(std::make_unique<OtaUpdateActivity>(renderer, mappedInput), resultHandler);
       return true;

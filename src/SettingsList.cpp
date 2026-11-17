@@ -234,9 +234,8 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   emit(SettingInfo::Enum(StrId::STR_POWER_UP_ACTION, &CrossPointSettings::powerUpAction, sideButtonActionLabels(),
                          "powerUpAction", StrId::STR_CAT_SHORTCUTS)
            .withEnumOrder(sideButtonOrder(/*powerUp=*/true)));
-  // Erased below unless the board is an X4 Pro.
-  // Double-click power frontlight shortcut only exists on the X4 Pro.
-  if (BoardConfig::isX4Pro()) emit(buildDoublePowerButtonSetting());
+  // Power double click: every board whose power button is not also its Confirm.
+  if (CrossPointSettings::hasPowerDoubleClick()) emit(buildDoublePowerButtonSetting());
   // Word Lookup keeps index 5 on every board -- it is Matcha's and already persisted.
   // Confirm is appended at 6 (upstream put it at 5); Previous Page at 7; Save Clipping at 8.
   // The indices are identical on touch and button boards so a stored value keeps its
@@ -288,6 +287,9 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   emit(SettingInfo::Enum(StrId::STR_LIBRARY_VIEW, &CrossPointSettings::libraryView,
                          {StrId::STR_LIBRARY_VIEW_COVERS, StrId::STR_LIBRARY_VIEW_LIST}, "libraryView",
                          StrId::STR_CAT_LIBRARY));
+  // The list view's Recent tab (CrossPoint List): only books opened, not the by-arrival list below.
+  emit(SettingInfo::Toggle(StrId::STR_LIBRARY_RECENT_OPENED_ONLY, &CrossPointSettings::libraryRecentOpenedOnly,
+                           "libraryRecentOpenedOnly", StrId::STR_CAT_LIBRARY));
   emit(SettingInfo::Toggle(StrId::STR_REMOVE_READ_FROM_RECENTS, &CrossPointSettings::removeReadBooksFromRecents,
                            "removeReadBooksFromRecents", StrId::STR_CAT_LIBRARY));
   emit(SettingInfo::Toggle(StrId::STR_MOVE_FINISHED_TO_READ, &CrossPointSettings::moveFinishedToReadFolder,

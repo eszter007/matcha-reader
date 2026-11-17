@@ -309,7 +309,8 @@ inline std::vector<uint8_t> shortPowerButtonOrder() {
       CrossPointSettings::WORD_LOOKUP,   CrossPointSettings::CREATE_CLIPPING, CrossPointSettings::PWR_SYNC_STATS_CLOCK,
       CrossPointSettings::PWR_SYNC_CLOCK};
   if (BoardConfig::hasTouch()) order.push_back(CrossPointSettings::PWR_CONFIRM);
-  if (BoardConfig::hasTouch() && !BoardConfig::hasHomeKey()) {
+  // The EEGO A4 offers them on the power button as well.
+  if (BoardConfig::hasTouch() && (!BoardConfig::hasHomeKey() || BoardConfig::isEegoA4())) {
     order.insert(order.end(),
                  {CrossPointSettings::PWR_BOOKMARK, CrossPointSettings::PWR_SYNC, CrossPointSettings::PWR_READER_MENU});
   }
@@ -324,10 +325,11 @@ inline std::vector<StrId> shortPowerButtonLabels() {
           StrId::STR_SYNC_STATS_CLOCK, StrId::STR_CLOCK_SYNC,      StrId::STR_FRONTLIGHT};
 }
 
-// X4 Pro double click: the short-click actions plus Frontlight, its default.
+// Power double click (hasPowerDoubleClick()): the short-click actions plus Frontlight where there is one.
 inline SettingInfo buildDoublePowerButtonSetting() {
   auto order = shortPowerButtonOrder();
-  order.insert(order.begin() + 1, CrossPointSettings::PWR_FRONTLIGHT);
+  // Offered on every board with double click now: only those with a frontlight get its toggle.
+  if (Frontlight.present()) order.insert(order.begin() + 1, CrossPointSettings::PWR_FRONTLIGHT);
   return SettingInfo::Enum(StrId::STR_POWER_DOUBLE_CLICK, &CrossPointSettings::doublePwrBtn, shortPowerButtonLabels(),
                            "doublePwrBtn", StrId::STR_CAT_SHORTCUTS)
       .withEnumOrder(std::move(order));

@@ -422,12 +422,14 @@ void FileBrowserActivity::activateSelected() {
   // buildScreen() runs on the render task and reads basepath plus `files`
   // through the row provider; mutate only under the render lock.
   RenderLock lock(*this);
-  if (basepath.back() != '/') basepath += "/";
+  // A file open can fail and leave this screen up, so only a directory change edits basepath.
+  std::string dir = basepath;
+  if (dir.back() != '/') dir += "/";
 
   if (isDirectory) {
     // A manga book IS a directory (page images + panels.idx), so it must open as a book rather
     // than be navigated into. Upstream has no manga and navigates every directory.
-    const std::string dirPath = basepath + entry.substr(0, entry.length() - 1);
+    const std::string dirPath = dir + entry.substr(0, entry.length() - 1);
     if (manga::MangaBook::isMangaFolder(dirPath)) {
       lock.unlock();  // onSelectBook launches an activity; don't hold the lock across it
       onSelectBook(dirPath);
@@ -440,7 +442,7 @@ void FileBrowserActivity::activateSelected() {
     lock.unlock();
     requestUpdate();
   } else {
-    const std::string fullPath = basepath + entry;
+    const std::string fullPath = dir + entry;
     lock.unlock();  // onSelectBook launches an activity; don't hold the lock across it
     onSelectBook(fullPath);
   }

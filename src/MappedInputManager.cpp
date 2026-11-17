@@ -60,7 +60,8 @@ void MappedInputManager::update(const bool deferHomeButtonAction) const {
   powerSleepFrame = false;
   powerSingleClickFrame = false;
   powerClickAction = CrossPointSettings::IGNORE;
-  const bool classifyPower = BoardConfig::isX4Pro() && SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE;
+  const bool classifyPower =
+      CrossPointSettings::hasPowerDoubleClick() && SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE;
   if (classifyPower && !gpio.isPressed(HalGPIO::BTN_DOWN) && !powerButtonInput.suppressesHold() &&
       !wasPowerReleaseConsumed()) {
     const auto click = powerButtonClickInput.update(millis(), gpio.isPressed(HalGPIO::BTN_POWER),
@@ -537,7 +538,7 @@ bool MappedInputManager::wasLightPanelGesture() const { return wasTopEdgeDownSwi
 #if FREEINK_CAP_TOUCH
 bool MappedInputManager::wasPowerConfirmClick() const {
   if (!gpio.hasTouch() || SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::PWR_CONFIRM) return false;
-  if (BoardConfig::isX4Pro() && SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE) return false;
+  if (CrossPointSettings::hasPowerDoubleClick() && SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE) return false;
   return wasShortPowerReleased();
 }
 #endif
@@ -563,12 +564,15 @@ bool MappedInputManager::wasPressed(const Button button) const {
 }
 
 bool MappedInputManager::wasPowerAction(const uint8_t action) const {
-  if (BoardConfig::isX4Pro() && SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE) return powerClickAction == action;
+  if (CrossPointSettings::hasPowerDoubleClick() && SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE) {
+    return powerClickAction == action;
+  }
   return SETTINGS.shortPwrBtn == action && wasPowerSingleClick() && !gpio.wasReleased(HalGPIO::BTN_DOWN);
 }
 
 bool MappedInputManager::wasReleased(const Button button) const {
-  if (button == Button::Power && BoardConfig::isX4Pro() && SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE) {
+  if (button == Button::Power && CrossPointSettings::hasPowerDoubleClick() &&
+      SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE) {
     return false;  // Classified clicks are dispatched once through homeAction.
   }
   if (button == Button::Confirm && remoteInput.button == RemoteButton::Confirm) return true;

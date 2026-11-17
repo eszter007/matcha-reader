@@ -47,6 +47,7 @@
 #include "flashcards/FlashcardStore.h"
 #include "fontIds.h"
 #include "util/PluginEvents.h"
+#include "util/TaskWatchdog.h"
 
 namespace fui = freeink::ui;
 
@@ -142,7 +143,7 @@ bool showOnDevice(const SettingInfo& setting) {
   if (setting.category == StrId::STR_CAT_READER && setting.inTextSettings) return false;
   if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
       SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES &&
-      !(BoardConfig::isX4Pro() && SETTINGS.doublePwrBtn == CrossPointSettings::FOOTNOTES)) {
+      !(CrossPointSettings::hasPowerDoubleClick() && SETTINGS.doublePwrBtn == CrossPointSettings::FOOTNOTES)) {
     return false;
   }
   // The per-direction gestures only apply while Touch Reader Controls is on.
@@ -153,10 +154,11 @@ bool showOnDevice(const SettingInfo& setting) {
   }
   // Only the language tabs have an Unknown one to hide.
   if (setting.valuePtr == &CrossPointSettings::hideUnknownLanguages && !SETTINGS.showLanguageStats) return false;
-  // Both only feed the CrossPoint list view: the cover grid keeps its own index and lists every
+  // These only feed the CrossPoint list view: the cover grid keeps its own index and lists every
   // book the card scan finds, so a book dropped from recents is simply found again.
   if ((setting.valuePtr == &CrossPointSettings::libraryUseMetadata ||
-       setting.valuePtr == &CrossPointSettings::removeReadBooksFromRecents) &&
+       setting.valuePtr == &CrossPointSettings::removeReadBooksFromRecents ||
+       setting.valuePtr == &CrossPointSettings::libraryRecentOpenedOnly) &&
       SETTINGS.libraryView != CrossPointSettings::LIBRARY_VIEW_LIST) {
     return false;
   }
@@ -351,6 +353,7 @@ void SettingsActivity::rebuildSettings() {
   // reading-stats day boundaries.
   addAction(SettingsSection::System, StrId::STR_CLOCK, SettingAction::ClockSettings);
   addAction(SettingsSection::System, StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache);
+  addAction(SettingsSection::System, StrId::STR_DISPLAY_REFRESH, SettingAction::DisplayRefresh);
   addAction(SettingsSection::System, StrId::STR_LANGUAGE, SettingAction::Language);
   addAction(SettingsSection::System, StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts);
   addAction(SettingsSection::System, StrId::STR_PLUGINS, SettingAction::Plugins);
