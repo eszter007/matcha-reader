@@ -38,12 +38,13 @@ Set `--language` on every book. It splits your reading time by language, and it 
 | `--webtoon` | Vertical-scroll manhwa or webcomic. Re-cuts the strip into screen-shaped pages. |
 | `--yonkoma` | 4-koma strips: read each column top to bottom, then the column to its left. |
 | `--no-yonkoma-detect` | Don't recognize 4-koma pages on their own (see below). |
+| `--split-spreads` | Cut every landscape page (a scanned two-page spread) into its two pages, in reading order. Not with Mokuro input or `--webtoon`. |
 | `--max-pages N` | Convert the first N pages as a cheap test. |
 | `--title` / `--author` | Override metadata. |
 | `--language` | Book language tag. See above. |
 | `--series` / `--series-index` | Series name and volume number. Read from a CBZ's ComicInfo (`<Series>`, `<Number>`) or an EPUB's series metadata when present. Sent with your progress to sync servers set to **Other**. |
 
-Panels are found with a YOLO model trained on Manga109 ([leoxs22/manga-panel-detector-yolo26n](https://huggingface.co/leoxs22/manga-panel-detector-yolo26n)), falling back to a white-gutter heuristic without `ultralytics`. Gemini then reads and translates each panel.
+Panels are found with a YOLO model trained on Manga109 ([leoxs22/manga-panel-detector-yolo26n](https://huggingface.co/leoxs22/manga-panel-detector-yolo26n)), falling back to a gutter heuristic without `ultralytics`: it cuts the page along its white or black gutters, one region at a time, so a tall panel beside two stacked ones is found too. The model looks at each page at full resolution, before it is reduced to your screen, so thin gutters are not lost. Gemini then reads and translates each panel.
 
 ### Manga already read by Mokuro
 

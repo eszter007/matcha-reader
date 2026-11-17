@@ -1232,79 +1232,85 @@ def _merge_small_gaps(splits: list[int], min_size: int) -> list[int]:
     return merged
 
 
-def _detect_panels_grid(img) -> list[list[int]]:
-    """Detect panel rectangles by finding solid white gutter bands.
+def scale_panel_boxes(boxes: list[list[int]], source_size: tuple[int, int],
+                      target_size: tuple[int, int]) -> list[list[int]]:
+    """Map boxes from one image size to another (detection at full size, pages stored smaller)."""
+    sw, sh = source_size
+    tw, th = target_size
+    kx, ky = tw / sw, th / sh
+    scaled = []
+    for x1, y1, x2, y2 in boxes:
+        nx1 = min(tw - 1, max(0, round(x1 * kx)))
+        ny1 = min(th - 1, max(0, round(y1 * ky)))
+        scaled.append([nx1, ny1, min(tw, max(nx1 + 1, round(x2 * kx))), min(th, max(ny1 + 1, round(y2 * ky)))])
+    return scaled
 
-    Pure-Pillow grid detection: scans for rows/columns that are almost
-    perfectly white (background gutters between panels), splitting the page
-    into bands and then columns within each band. Requires near-total
-    whiteness and a substantial minimum gutter/segment size so that
-    incidental white space around a speech bubble -- which sits *inside* a
-    panel, not between panels -- doesn't get mistaken for a panel boundary;
-    candidate splits too close together are merged into their neighbor
-    rather than dropped, so no page content is silently lost. Degrades
-    gracefully (whole page as one panel) for free-form/borderless layouts.
+
+def _detect_panels_grid(img) -> list[list[int]]:
+    """Detect panel rectangles by recursively cutting the page along its gutters.
+
+    Each region is cut along the widest gutter that spans it from edge to edge, light (paper) or
+    dark (a black page), and each half is cut again on its own. A tall panel beside two stacked
+    ones is found that way: the vertical gutter isolates it before the stacked pair is split.
+    Art that crosses a gutter, insets and borderless pages have no clean full-span gutter and stay
+    one region. (Recursive grid and dark gutters after FortyX5/matcha-reader.)
     """
     gray = img.convert("L")
     w, h = gray.size
     pixels = gray.load()
 
-    threshold = 215
-    purity = 0.95
-    min_gutter = max(6, int(h * 0.013))
-    min_band_h = max(int(h * 0.05), 60)
-    min_band_w = max(int(w * 0.06), 60)
+    light, dark, purity = 215, 40, 0.97
+    min_gutter = max(6, int(min(w, h) * 0.013))
+    min_panel_w = max(40, int(w * 0.06))
+    min_panel_h = max(40, int(h * 0.05))
 
-    def is_white_row(y: int) -> bool:
-        white = sum(1 for x in range(0, w, 2) if pixels[x, y] > threshold)
-        return white > (w // 2) * purity
+    def gutter_fraction(values) -> float:
+        values = list(values)
+        if not values:
+            return 0.0
+        lights = sum(1 for v in values if v > light)
+        darks = sum(1 for v in values if v < dark)
+        return max(lights, darks) / len(values)
 
-    h_splits = [0]
-    in_gutter = False
-    gutter_start = 0
-    for y in range(h):
-        white_row = is_white_row(y)
-        if white_row and not in_gutter:
-            in_gutter = True
-            gutter_start = y
-        elif not white_row and in_gutter:
-            if y - gutter_start >= min_gutter:
-                h_splits.append((gutter_start + y) // 2)
-            in_gutter = False
-    h_splits.append(h)
-    h_splits = _merge_small_gaps(h_splits, min_band_h)
+    def interior_gutters(start: int, end: int, is_gutter) -> list[tuple[int, int]]:
+        gutters, run = [], None
+        for pos in range(start, end):
+            if is_gutter(pos):
+                if run is None:
+                    run = pos
+            elif run is not None:
+                if pos - run >= min_gutter and run > start:
+                    gutters.append((run, pos))
+                run = None
+        return gutters  # a run reaching the region's edge is margin, not a gutter
 
-    panels = []
-    for band_idx in range(len(h_splits) - 1):
-        y1, y2 = h_splits[band_idx], h_splits[band_idx + 1]
+    def split_region(box: list[int], depth: int = 0) -> list[list[int]]:
+        x1, y1, x2, y2 = box
+        if depth >= 12 or x2 - x1 < min_panel_w * 2 or y2 - y1 < min_panel_h * 2:
+            return [box]
+        vertical = interior_gutters(
+            x1, x2, lambda x: gutter_fraction(pixels[x, y] for y in range(y1, y2, 2)) >= purity)
+        horizontal = interior_gutters(
+            y1, y2, lambda y: gutter_fraction(pixels[x, y] for x in range(x1, x2, 2)) >= purity)
+        widest_v = max(vertical, key=lambda g: g[1] - g[0], default=None)
+        widest_h = max(horizontal, key=lambda g: g[1] - g[0], default=None)
+        width_v = widest_v[1] - widest_v[0] if widest_v else 0
+        width_h = widest_h[1] - widest_h[0] if widest_h else 0
+        if width_v == 0 and width_h == 0:
+            return [box]
+        if width_v >= width_h:
+            cut = (widest_v[0] + widest_v[1]) // 2
+            children = ([x1, y1, cut, y2], [cut, y1, x2, y2])
+        else:
+            cut = (widest_h[0] + widest_h[1]) // 2
+            children = ([x1, y1, x2, cut], [x1, cut, x2, y2])
+        result = []
+        for child in children:
+            if child[2] - child[0] >= min_panel_w and child[3] - child[1] >= min_panel_h:
+                result.extend(split_region(child, depth + 1))
+        return result or [box]
 
-        def is_white_col(x: int) -> bool:
-            white = sum(1 for y in range(y1, y2, 2) if pixels[x, y] > threshold)
-            return white > ((y2 - y1) // 2) * purity
-
-        v_splits = [0]
-        in_gutter = False
-        gutter_start = 0
-        for x in range(w):
-            white_col = is_white_col(x)
-            if white_col and not in_gutter:
-                in_gutter = True
-                gutter_start = x
-            elif not white_col and in_gutter:
-                if x - gutter_start >= min_gutter:
-                    v_splits.append((gutter_start + x) // 2)
-                in_gutter = False
-        v_splits.append(w)
-        v_splits = _merge_small_gaps(v_splits, min_band_w)
-
-        for col_idx in range(len(v_splits) - 1):
-            x1, x2 = v_splits[col_idx], v_splits[col_idx + 1]
-            panels.append([x1, y1, x2, y2])
-
-    if not panels:
-        panels.append([0, 0, w, h])
-
-    return panels
+    return split_region([0, 0, w, h])
 
 
 # A panel holding no detected text and next to no ink is page furniture the model boxed: the
@@ -1363,15 +1369,19 @@ def _grid_cell_is_panel(img, cell: list[int]) -> bool:
     return sum(hist[:INK_LEVEL]) >= GRID_FALLBACK_MIN_INK_FRAC * w * h
 
 
-def detect_panels(img) -> tuple[list[list[int]], list[list[int]]]:
+def detect_panels(img, page=None) -> tuple[list[list[int]], list[list[int]]]:
     """Detect panel rectangles -- YOLO model if available, else grid heuristic.
 
-    Returns (frames, text boxes). The frames are the borders as drawn, which is
-    what reading order must be derived from; the text boxes are what
-    expand_panels_over_text() then grows the CROP rectangles over. Keeping the
-    two apart matters: a bubble pulling a panel's box sideways across a gutter
-    would otherwise move its centre and could retier the page. The grid
-    heuristic has no text detection, so it returns no text boxes.
+    Returns (frames, text boxes) in the pixels of `page`, the page as it is stored (default
+    `img`). YOLO looks at `img`, the full-resolution page: thin gutters can vanish once a page
+    is reduced to the device screen. The gutter grid samples pixels one by one, so it runs on
+    the stored page.
+
+    The frames are the borders as drawn, which is what reading order must be derived from; the
+    text boxes are what expand_panels_over_text() then grows the CROP rectangles over. Keeping the
+    two apart matters: a bubble pulling a panel's box sideways across a gutter would otherwise
+    move its centre and could retier the page. The grid heuristic has no text detection, so it
+    returns no text boxes.
 
     A page the manga-trained model doesn't recognize as panelled art at all -- a prose novel
     page, most often -- comes back as a single frame covering the page: real content, but
@@ -1380,15 +1390,18 @@ def detect_panels(img) -> tuple[list[list[int]], list[list[int]]]:
     whitespace between panels), so it gets a try whenever YOLO gives up -- kept only when it
     yields a few panel-sized cells.
     """
+    page = page or img
     detected = _detect_panels_yolo(img)
     if detected is None:
-        return _detect_panels_grid(img), []
+        return _detect_panels_grid(page), []
     frames, texts = drop_blank_panels(*detected, img)
-    if len(frames) == 1 and is_full_page_panel(frames[0], img.width, img.height):
-        grid = _detect_panels_grid(img)
-        page_area = img.width * img.height
+    if img.size != page.size:
+        frames = scale_panel_boxes(frames, img.size, page.size)
+        texts = scale_panel_boxes(texts, img.size, page.size)
+    if len(frames) == 1 and is_full_page_panel(frames[0], page.width, page.height):
+        grid = _detect_panels_grid(page)
         if (1 < len(grid) <= GRID_FALLBACK_MAX_CELLS
-                and all(_grid_cell_is_panel(img, c) for c in grid)):
+                and all(_grid_cell_is_panel(page, c) for c in grid)):
             return grid, []
     return frames, texts
 
@@ -2303,6 +2316,40 @@ def pack_into_matcha(output_dir):
     shutil.rmtree(folder)
 
 
+def split_spread_image(img, rtl: bool = True) -> list:
+    """A landscape page as its two portrait halves, in reading order; a portrait page as itself."""
+    width, height = img.size
+    if width <= height:
+        return [img]
+    mid = width // 2
+    left, right = img.crop((0, 0, mid, height)), img.crop((mid, 0, width, height))
+    return [right, left] if rtl else [left, right]
+
+
+def split_spread_pages(pages: list[str], work_dir: str, rtl: bool = True) -> tuple[list[str], list[int]]:
+    """Splits every landscape page into halves (split_spread_image), written to the work folder.
+
+    Returns the new page list and, per source page, the index of its first output page, so a
+    table of contents can be moved along. (After FortyX5/matcha-reader.)
+    """
+    from PIL import Image
+
+    split_dir = os.path.join(work_dir, "split_spreads")
+    os.makedirs(split_dir, exist_ok=True)
+    expanded, first_output = [], []
+    for index, path in enumerate(pages):
+        first_output.append(len(expanded))
+        with Image.open(path) as opened:
+            if opened.width <= opened.height:
+                expanded.append(path)
+                continue
+            for part, half in enumerate(split_spread_image(normalize_for_output(opened), rtl)):
+                out = os.path.join(split_dir, f"page_{index:06d}_{part}.png")
+                half.save(out, "PNG")
+                expanded.append(out)
+    return expanded, first_output
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Convert manga (image folder / CBZ / EPUB) into CrossPoint Reader format.",
@@ -2346,6 +2393,12 @@ def main():
         action="store_true",
         help="Don't recognize 4-koma pages on their own; read every page row by row unless "
              "--yonkoma is given.",
+    )
+    parser.add_argument(
+        "--split-spreads",
+        action="store_true",
+        help="Cut every landscape page (a scanned two-page spread) into its two halves, in reading "
+             "order, before panels are found.",
     )
     parser.add_argument(
         "--ltr",
@@ -2414,6 +2467,10 @@ def main():
                      else DEVICE_SCREENS[args.device] if args.device else None)
 
     mokuro = load_mokuro(args.input) if Path(args.input).suffix.lower() == ".mokuro" else None
+    if args.split_spreads and (mokuro or args.webtoon):
+        print("Error: --split-spreads changes the page count, which Mokuro's pages and --webtoon "
+              "re-cutting depend on", file=sys.stderr)
+        sys.exit(1)
     if mokuro and args.webtoon:
         print("Error: --webtoon re-cuts pages, which would separate Mokuro's text from its page", file=sys.stderr)
         sys.exit(1)
@@ -2449,6 +2506,11 @@ def main():
             toc_entries = _extract_epub_native_toc(args.input, pages, work_dir)
             if toc_entries:
                 print(f"Found {len(toc_entries)} chapter(s) in the EPUB's table of contents")
+        if args.split_spreads:
+            original_count = len(pages)
+            pages, first_output = split_spread_pages(pages, work_dir, rtl=not args.ltr)
+            toc_entries = [(first_output[i], title) for i, title in toc_entries if 0 <= i < len(first_output)]
+            print(f"Split landscape spreads: {original_count} source pages became {len(pages)} pages")
         if args.toc_file:
             toc_entries = parse_toc_file(args.toc_file)
             print(f"Using {len(toc_entries)} chapter(s) from --toc-file")
@@ -2589,7 +2651,9 @@ def main():
                 # single column can only move boxes away from what the cut established.
                 boxes = detect_webtoon_panels(img)
             else:
-                frames, text_boxes = detect_panels(img)
+                # The model looks at the full-resolution page; the boxes come back in the stored
+                # page's pixels, like everything downstream.
+                frames, text_boxes = detect_panels(source_img, img)
                 if page_text:
                     # Mokuro's blocks mark the bubbles too, so panel crops grow over them.
                     text_boxes = list(text_boxes) + [b["box"] for b in page_text]

@@ -10,11 +10,15 @@ from convert_manga import (
     drop_blank_panels,
     PANEL_RETRY_COVER_FRAC,
     _panel_cover_frac,
+    _detect_panels_grid,
     _webtoon_cut_points,
     assign_blocks_to_panels,
     build_panel_ocr_prompt,
     expand_panels_over_text,
     mokuro_text_blocks,
+    scale_panel_boxes,
+    split_spread_image,
+    split_spread_pages,
     fill_uncovered_art,
     sort_panels_reading_order,
     split_frames_over_subpanels,
@@ -505,3 +509,62 @@ if __name__ == "__main__":
             fn()
             print(f"ok  {name}")
     print("All panel-order checks passed.")
+
+
+# --- Recursive gutter grid, full-resolution detection and spreads (after FortyX5) ---------------
+
+def _page(w, h, panels, paper=255, ink=0):
+    from PIL import Image, ImageDraw
+    img = Image.new("L", (w, h), paper)
+    draw = ImageDraw.Draw(img)
+    for box in panels:
+        draw.rectangle(box, fill=ink)
+        # some interior texture so a panel is not mistaken for a dark gutter
+        draw.line((box[0] + 5, box[1] + 5, box[2] - 5, box[3] - 5), fill=128, width=7)
+    return img
+
+
+def _centres(cells):
+    return sorted(((x1 + x2) // 2, (y1 + y2) // 2) for x1, y1, x2, y2 in cells)
+
+
+def test_grid_finds_tall_panel_beside_stacked_pair():
+    # left: one tall panel; right: two stacked -- a row-first split finds no full-width gutter
+    img = _page(1000, 1400, [(40, 40, 470, 1360), (530, 40, 960, 670), (530, 730, 960, 1360)])
+    cells = _detect_panels_grid(img)
+    assert len(cells) == 3, cells
+
+
+def test_grid_splits_on_dark_gutters():
+    img = _page(1000, 1400, [(40, 40, 960, 670), (40, 730, 960, 1360)], paper=0, ink=255)
+    cells = _detect_panels_grid(img)
+    assert len(cells) == 2, cells
+
+
+def test_scale_panel_boxes_maps_and_clamps():
+    assert scale_panel_boxes([[0, 0, 2000, 3000], [1000, 1500, 1500, 2250]], (2000, 3000), (480, 720)) == [
+        [0, 0, 480, 720], [240, 360, 360, 540]]
+
+
+def test_spread_halves_follow_reading_order():
+    from PIL import Image
+    spread = Image.new("L", (2000, 1400), 255)
+    spread.paste(0, (0, 0, 1000, 1400))  # left half black
+    rtl = split_spread_image(spread, rtl=True)
+    ltr = split_spread_image(spread, rtl=False)
+    assert [h.getpixel((10, 10)) for h in rtl] == [255, 0]  # right page first in manga
+    assert [h.getpixel((10, 10)) for h in ltr] == [0, 255]
+    portrait = Image.new("L", (1000, 1400), 255)
+    assert split_spread_image(portrait) == [portrait]
+
+
+def test_spread_pages_keep_toc_indices(tmp_path):
+    from PIL import Image
+    paths = []
+    for i, size in enumerate([(1000, 1400), (2000, 1400), (1000, 1400)]):
+        p = tmp_path / f"{i}.png"
+        Image.new("L", size, 255).save(p)
+        paths.append(str(p))
+    pages, first = split_spread_pages(paths, str(tmp_path), rtl=True)
+    assert len(pages) == 4
+    assert first == [0, 1, 3]  # page 2 of the source is output page 3
