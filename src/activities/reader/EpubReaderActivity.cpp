@@ -8001,16 +8001,21 @@ std::vector<std::string> EpubReaderActivity::recentPageLabels() const {
   // Place 0 is the page on screen.
   for (int i = 1; i < recentPages.count(); i++) {
     const RecentPages::Place& place = recentPages.at(i);
-    char where[32];
-    if (place.bookPage > 0) {
-      snprintf(where, sizeof(where), tr(STR_PAGE_NUMBER_FORMAT), place.bookPage);
-    } else {
-      snprintf(where, sizeof(where), "%d%%", static_cast<int>(place.percent));
+    // "Chapter · Page 14 · 21:14": a place is recognised by where in the story it is first.
+    std::string label;
+    const int tocIndex = epub ? epub->getTocIndexForSpineIndex(place.spineIndex) : -1;
+    if (tocIndex != -1) {
+      label = epub->getTocItem(tocIndex).title;
+      if (!label.empty()) label += " \u00b7 ";
     }
-    char label[96];
-    if (place.year == 0) {
-      snprintf(label, sizeof(label), "%s", where);
+    char part[32];
+    if (place.bookPage > 0) {
+      snprintf(part, sizeof(part), tr(STR_PAGE_NUMBER_FORMAT), place.bookPage);
     } else {
+      snprintf(part, sizeof(part), "%d%%", static_cast<int>(place.percent));
+    }
+    label += part;
+    if (place.year != 0) {
       // Same format as the status bar clock (HalClock::formatTime()).
       char time[12];
       const int hour = place.hour;
@@ -8022,15 +8027,16 @@ std::vector<std::string> EpubReaderActivity::recentPageLabels() const {
       }
       const int day = RecentPages::dayNumber(place.year, place.month, place.day);
       if (haveNow && day == today) {
-        snprintf(label, sizeof(label), "%s - %s", where, time);
+        snprintf(part, sizeof(part), " \u00b7 %s", time);
       } else if (haveNow && day == today - 1) {
-        snprintf(label, sizeof(label), "%s - %s %s", where, tr(STR_YESTERDAY), time);
+        snprintf(part, sizeof(part), " \u00b7 %s %s", tr(STR_YESTERDAY), time);
       } else {
-        snprintf(label, sizeof(label), "%s - %s %d, %s", where, I18N.get(kMonths[place.month - 1]),
+        snprintf(part, sizeof(part), " \u00b7 %s %d, %s", I18N.get(kMonths[place.month - 1]),
                  static_cast<int>(place.day), time);
       }
+      label += part;
     }
-    labels.emplace_back(label);
+    labels.push_back(std::move(label));
   }
   return labels;
 }

@@ -97,14 +97,14 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     return items;
   }
 
-  // First, so an accidental jump is one press away from being undone.
+  items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
+  // Beside the chapter list, so an accidental jump is one press away from being undone.
   if (hasJumpBack) {
     items.push_back({MenuAction::JUMP_BACK, StrId::STR_JUMP_BACK});
   }
   if (hasRecentPages) {
     items.push_back({MenuAction::RECENT_PAGES, StrId::STR_RECENT_PAGES});
   }
-  items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
   }
