@@ -9,7 +9,10 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "BookmarkEntry.h"
 #include "ChapterPosition.h"
@@ -22,6 +25,7 @@
 #include "WordSelectionScan.h"
 #include "components/OptionPopup.h"
 #include "util/CjkScript.h"
+#include "util/RecentPages.h"
 #include "util/SentenceMining.h"
 
 class EpubReaderActivity final : public ReaderActivity {
@@ -624,6 +628,36 @@ class EpubReaderActivity final : public ReaderActivity {
   // a background section build finishes.
   void clearDeferredReposition();
   void rememberCurrentContentOffset();
+  // Where the last explicit jump (chapter, percent, bookmark, clipping, chapter skip) started.
+  // Jump Back returns there and records the page it leaves, so a second Jump Back undoes it.
+  struct JumpOrigin {
+    int spineIndex = 0;
+    int page = 0;
+    int totalPages = 0;
+    int bookPercent = 0;
+    std::optional<uint32_t> visibleTextOffset;
+  };
+  std::optional<JumpOrigin> jumpOrigin;
+  void rememberJumpOrigin();
+  void jumpBack();
+  // Jump Back's menu value ("42%"); empty without an origin.
+  void formatJumpBackTarget(char* buf, size_t size) const;
+  // Kept in jump.bin across sleep and reopening, consumed on load like links.bin.
+  void saveJumpOrigin() const;
+  void loadJumpOrigin();
+  // Recent Pages: written by saveProgress() on the render task, read on the loop task.
+  RecentPages recentPages;
+  mutable std::mutex recentPagesMutex;
+  // The place picked in the Recent Pages popup, for onReaderMenuConfirm(); 0 is the newest.
+  int pendingRecentPageIndex = -1;
+  void noteRecentPage(int spineIndex, int page, int pageCount, uint8_t percent, std::optional<uint32_t> offset);
+  // Places before the page on screen, as "Chapter · Page 3 · 21:14"; empty when there are none.
+  std::vector<std::string> recentPageLabels() const;
+  bool hasRecentPages() const;
+  void goToRecentPage(int index);
+  // Kept in recent.bin; rewritten when the book closes.
+  void saveRecentPages() const;
+  void loadRecentPages();
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent) override;
   bool writeSyncedPosition() override;
@@ -850,6 +884,8 @@ class EpubReaderActivity final : public ReaderActivity {
   // The status bar's span when a lookup dropped the vertical build; see lookupPage_.
   SectionPageSpan lookupSpan_{1, 1};
   int pageBasedPercent(int spineIndex, int sectionPage) const;  // sectionPage is 1-based
+  // 1-based page in the whole book, 0 while the page model is unavailable. sectionPage is 1-based.
+  int bookPageFor(int spineIndex, int sectionPage) const;
   mutable int chapterSpanSpine = -1;
   mutable int chapterSpanLivePages = -1;
   mutable bool chapterSpanVertical = false;

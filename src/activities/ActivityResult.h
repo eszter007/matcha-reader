@@ -24,6 +24,7 @@ struct MenuResult {
   int8_t verticalOverride = -1;
   int8_t furiganaOverride = -1;
   int8_t languageOverride = -1;  // cjk::LanguageChoice, -1 = untouched
+  int8_t recentPageIndex = -1;   // RECENT_PAGES: the row picked in its popup, 0 = newest
 };
 
 struct ChapterResult {

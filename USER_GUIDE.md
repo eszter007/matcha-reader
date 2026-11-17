@@ -1061,7 +1061,7 @@ The Power button can turn pages too. Set **Short click** in **Settings → Contr
 
 To jump a whole chapter with a long press, open **Settings → Controls → Front buttons** (or **Side buttons**) and set **Page turn long press** to **Chapter Skip**. It is off by default.
 
-With it on, hold **Right** (or **Side Down**) for about a second to go to the next chapter. Hold **Left** (or **Side Up**) to go back to the start of the chapter, and hold again to reach the previous one.
+With it on, hold **Right** (or **Side Down**) for about a second to go to the next chapter. Hold **Left** (or **Side Up**) to go back to the start of the chapter, and hold again to reach the previous one. If you skip by mistake, **Jump Back** in the reader menu returns you, and **Recent Pages** lists the places before that.
 
 You can also pick any chapter from the **[Reader Menu](#5-reader-menu)**.
 
@@ -1144,6 +1144,8 @@ The menu shows these entries, top to bottom. Some only appear when they apply to
 
 | Entry | What it does |
 | ----- | ------------ |
+| **Jump Back** | Shown after you jump: to a chapter, a percentage, a bookmark, a clipping, or with Chapter Skip. Returns to the place you left; the value shows the book percentage it leads to. Choose it again to undo. Kept through sleep and when you reopen the book. |
+| **Recent Pages** | Shown in books once you have read in more than one place. Opens a list of the last places you read, newest first, with the chapter, the page within it and the time you were there: "第二夜 · Page 3 · 21:14", "Yesterday" or a date for older ones (no time when the clock is not set). Turning pages keeps one place; a jump, a link, a sync or reopening the book somewhere else starts a new one, and a place you leave within a few seconds without turning a page is not kept. Choose a place to go back; **Jump Back** then returns to where you were. Kept through sleep and when you reopen the book. Also in the toolbar's **More** panel. |
 | **Select Chapter** | Opens the table of contents (see [5.1](#51-chapter-selection)). |
 | **Links and footnotes** | Opens the footnote panel. Shown when the chapter has footnotes. |
 | **Word Lookup** | Looks up words in Japanese and Chinese books (see [§6](#6-language-learning-features)). |
