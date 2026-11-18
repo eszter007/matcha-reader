@@ -48,6 +48,9 @@ class CrossPointWebServerActivity final : public Activity {
   std::string connectedIP;
   std::string connectedSSID;  // For STA mode: network name, For AP mode: AP name
 
+  // False when mDNS could not claim <hostname>.local, so the screen must not offer that name.
+  bool mdnsActive = false;
+
   // Performance monitoring
   unsigned long lastHandleClientTime = 0;
 

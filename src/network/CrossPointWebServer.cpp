@@ -718,6 +718,7 @@ void CrossPointWebServer::answerDiscovery() const {
   if (strcmp(buffer, "hello") != 0) return;
   const char* hostname = WiFi.getHostname();
   char message[96];
+  // "crosspoint" is the discovery token the Calibre plugin matches, not the device's name; keep it.
   const int messageLen = snprintf(message, sizeof(message), "crosspoint (on %s);%u",
                                   hostname && hostname[0] ? hostname : "crosspoint", static_cast<unsigned>(wsPort));
   if (messageLen <= 0) return;
