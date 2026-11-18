@@ -11,6 +11,7 @@ struct Rect;
 class Page;
 
 #include <atomic>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -178,6 +179,27 @@ class EpubReaderWordLookupActivity final : public Activity {
   // inverted debris on the page.
   HighlightBox drawnBoxes[kMaxHighlightBoxes];
   int drawnBoxCount = 0;
+
+  // Mark Dictionary Words: a line under (horizontal) or beside (vertical) every selectable word.
+  // Built on the main task as the scan finds words, drawn by the render task. Entries below the
+  // published markCount never change until resetMarks(), which runs under the render lock.
+  static constexpr int kMaxMarks = 512;
+  static constexpr int16_t kMarkInset = 2;  // pixels trimmed from each end of a mark
+  // Contiguous heap the scan keeps for itself before the marks may take theirs.
+  static constexpr uint32_t kMarksHeapFloor = 16 * 1024;
+  std::unique_ptr<HighlightBox[]> marks;  // allocated on first use, and only with the setting on
+  int marksCapacity = 0;
+  bool marksUnavailable = false;  // no room for them: no marks for this panel
+  int marksBuilt = 0;             // main task: entries written
+  int markCount = 0;              // published under boxMux
+  int marksRequested = 0;         // main task: marks a requested redraw already covers
+  size_t markedWords = 0;         // main task: selectable words already turned into marks
+  // Main task: turn newly found words into marks.
+  void refreshMarks();
+  // Main task, under the render lock: the selectable list was rebuilt, so the marks start over.
+  void resetMarks();
+  // Render task: draw every published mark.
+  void drawMarks();
 
   // The reader opens the panel on a long press, so the Confirm release that follows belongs to
   // that press, not to a selection. Ignore it until a fresh press is seen.

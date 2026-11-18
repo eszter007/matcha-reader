@@ -573,6 +573,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     WORD_LOOKUP_FONT_SIZE_COUNT
   };
   uint8_t wordLookupFontSize = WORD_LOOKUP_FONT_SMALL;
+  // Japanese/Chinese word lookup: a line under (horizontal) or beside (vertical) every word the
+  // dictionary knows, while picking a word.
+  uint8_t lookupWordMarks = 0;
   // Page translation's target language: an index into gemini::TARGET_LANGUAGES (0 = English).
   uint8_t translationTarget = 0;
   // Flashcards from the sentence-mining export (Settings > Flashcards). The tab is opt-in.

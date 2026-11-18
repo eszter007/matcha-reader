@@ -207,14 +207,16 @@ int dictionaryRowOrder(const SettingInfo& setting) {
   switch (setting.nameId) {
     case StrId::STR_WORD_LOOKUP_FONT_SIZE:
       return 0;
-    case StrId::STR_DICT_STATUS_JA:
+    case StrId::STR_LOOKUP_WORD_MARKS:
       return 1;
-    case StrId::STR_DICT_STATUS_ZH:
+    case StrId::STR_DICT_STATUS_JA:
       return 2;
-    case StrId::STR_DICT_STATUS_YUE:
+    case StrId::STR_DICT_STATUS_ZH:
       return 3;
-    case StrId::STR_FALLBACK_DICTIONARY:
+    case StrId::STR_DICT_STATUS_YUE:
       return 4;
+    case StrId::STR_FALLBACK_DICTIONARY:
+      return 5;
     default:
       return -1;
   }
