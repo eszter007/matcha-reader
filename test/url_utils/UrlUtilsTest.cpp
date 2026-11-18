@@ -44,8 +44,8 @@ TEST(IsForeignHost, CaptivePortalChecksAreForeign) {
 TEST(IsForeignHost, ReaderAddressesAreNotForeign) {
   EXPECT_FALSE(isForeignHost("192.168.4.1"));
   EXPECT_FALSE(isForeignHost("192.168.4.1:80"));
-  EXPECT_FALSE(isForeignHost("crosspoint.local"));
-  EXPECT_FALSE(isForeignHost("CrossPoint.LOCAL:8080"));
+  EXPECT_FALSE(isForeignHost("matcha.local"));
+  EXPECT_FALSE(isForeignHost("Matcha.LOCAL:8080"));
   EXPECT_FALSE(isForeignHost("[fe80::1]:80"));
 }
 
@@ -56,8 +56,8 @@ TEST(IsForeignHost, MissingHostIsNotForeign) {
 }
 
 TEST(IsForeignHost, SingleLabelNamesAreTheReader) {
-  EXPECT_FALSE(isForeignHost("crosspoint"));
-  EXPECT_FALSE(isForeignHost("crosspoint:80"));
+  EXPECT_FALSE(isForeignHost("matcha"));
+  EXPECT_FALSE(isForeignHost("matcha:80"));
 }
 
 TEST(IsForeignHost, LocalSuffixMustBeWhole) {

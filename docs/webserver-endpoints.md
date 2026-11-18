@@ -8,7 +8,7 @@ available while CrossPoint Reader is in File Transfer or Calibre Wireless mode.
 - UDP discovery listener: port 8134
 - WebDAV: port 80, handled by the same HTTP server
 
-Examples use `crosspoint.local`. If mDNS does not resolve on your network, use
+Examples use `matcha.local`. If mDNS does not resolve on your network, use
 the IP address shown on the device screen.
 
 ## HTTP Pages
@@ -33,7 +33,7 @@ Plugins link.
 ### `GET /api/status`
 
 ```bash
-curl http://crosspoint.local/api/status
+curl http://matcha.local/api/status
 ```
 
 Response:
@@ -74,7 +74,7 @@ Response:
 Lists files and folders under a directory.
 
 ```bash
-curl "http://crosspoint.local/api/files?path=/Books"
+curl "http://matcha.local/api/files?path=/Books"
 ```
 
 Query parameters:
@@ -105,7 +105,7 @@ written by a plugin over the network, however the path is spelled.
 Downloads a file from the SD card.
 
 ```bash
-curl -OJ "http://crosspoint.local/download?path=/Books/MyBook.epub"
+curl -OJ "http://matcha.local/download?path=/Books/MyBook.epub"
 ```
 
 Query parameters:
@@ -123,7 +123,7 @@ stores cannot be downloaded. EPUB files are served as `application/epub+zip`; ot
 Uploads a file with HTTP multipart form data.
 
 ```bash
-curl -X POST -F "file=@mybook.epub" "http://crosspoint.local/upload?path=/Books"
+curl -X POST -F "file=@mybook.epub" "http://matcha.local/upload?path=/Books"
 ```
 
 Query parameters:
@@ -160,7 +160,7 @@ Notes:
 Creates a folder.
 
 ```bash
-curl -X POST -d "name=NewFolder&path=/" http://crosspoint.local/mkdir
+curl -X POST -d "name=NewFolder&path=/" http://matcha.local/mkdir
 ```
 
 Form parameters:
@@ -175,7 +175,7 @@ Form parameters:
 Renames a file.
 
 ```bash
-curl -X POST -d "path=/Books/old.epub&name=new.epub" http://crosspoint.local/rename
+curl -X POST -d "path=/Books/old.epub&name=new.epub" http://matcha.local/rename
 ```
 
 Form parameters:
@@ -193,7 +193,7 @@ cleared before the rename.
 Moves a file into an existing folder.
 
 ```bash
-curl -X POST -d "path=/Books/mybook.epub&dest=/Read" http://crosspoint.local/move
+curl -X POST -d "path=/Books/mybook.epub&dest=/Read" http://matcha.local/move
 ```
 
 Form parameters:
@@ -212,8 +212,8 @@ Deletes one or more files or folders. A folder is removed with everything
 inside it.
 
 ```bash
-curl -X POST -d "path=/Books/mybook.epub" http://crosspoint.local/delete
-curl -X POST -d 'paths=["/Books/old.epub","/OldFolder"]' http://crosspoint.local/delete
+curl -X POST -d "path=/Books/mybook.epub" http://matcha.local/delete
+curl -X POST -d 'paths=["/Books/old.epub","/OldFolder"]' http://matcha.local/delete
 ```
 
 Form parameters:
@@ -234,7 +234,7 @@ Returns a streamed JSON array of editable settings. Each item contains common
 fields plus type-specific fields.
 
 ```bash
-curl http://crosspoint.local/api/settings
+curl http://matcha.local/api/settings
 ```
 
 `?keys=` takes a comma-separated list of setting keys, without spaces, and
@@ -243,7 +243,7 @@ Unknown keys are ignored. A plugin that needs one or two settings should use it
 instead of reading the whole list.
 
 ```bash
-curl 'http://crosspoint.local/api/settings?keys=koServerUrl,dictionaryName'
+curl 'http://matcha.local/api/settings?keys=koServerUrl,dictionaryName'
 ```
 
 Example item:
@@ -284,7 +284,7 @@ Applies a partial settings update from a JSON object.
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"fontSize":2,"showHiddenFiles":1}' \
-  http://crosspoint.local/api/settings
+  http://matcha.local/api/settings
 ```
 
 Successful response:
@@ -302,7 +302,7 @@ these families appear with `sizes: [0]`. The `0` means that the font file has
 no fixed point size; the reader offers 12, 14, 16, and 18 pt.
 
 ```bash
-curl http://crosspoint.local/api/fonts
+curl http://matcha.local/api/fonts
 ```
 
 Response:
@@ -332,7 +332,7 @@ with external RAM (`vectorFonts: true` in `GET /api/fonts`).
 curl -X POST \
   -F "family=Literata" \
   -F "file=@Literata_12.cpfont" \
-  http://crosspoint.local/api/fonts/upload
+  http://matcha.local/api/fonts/upload
 ```
 
 The handler validates the family name, filename extension, and magic bytes
@@ -356,7 +356,7 @@ from a font root, delete the file from the SD card instead.
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"family":"Literata"}' \
-  http://crosspoint.local/api/fonts/delete
+  http://matcha.local/api/fonts/delete
 ```
 
 Successful response:
@@ -372,7 +372,7 @@ Successful response:
 Lists saved OPDS servers. Passwords are never returned.
 
 ```bash
-curl http://crosspoint.local/api/opds
+curl http://matcha.local/api/opds
 ```
 
 Response:
@@ -398,7 +398,7 @@ If `password` is omitted during an update, the existing password is preserved.
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"name":"My Catalog","url":"http://calibre.local:8080/opds","username":"reader","password":"secret"}' \
-  http://crosspoint.local/api/opds
+  http://matcha.local/api/opds
 ```
 
 ### `POST /api/opds/delete`
@@ -409,7 +409,7 @@ Deletes an OPDS server by index.
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"index":0}' \
-  http://crosspoint.local/api/opds/delete
+  http://matcha.local/api/opds/delete
 ```
 
 ## Wi-Fi Credential API
@@ -419,7 +419,7 @@ curl -X POST \
 Lists saved Wi-Fi networks. Passwords are never returned.
 
 ```bash
-curl http://crosspoint.local/api/wifi
+curl http://matcha.local/api/wifi
 ```
 
 Response:
@@ -445,7 +445,7 @@ preserved.
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"ssid":"HomeWiFi","password":"secret"}' \
-  http://crosspoint.local/api/wifi
+  http://matcha.local/api/wifi
 ```
 
 ### `POST /api/wifi/delete`
@@ -456,7 +456,7 @@ Deletes a saved Wi-Fi network by index.
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"index":0}' \
-  http://crosspoint.local/api/wifi/delete
+  http://matcha.local/api/wifi/delete
 ```
 
 ## WebSocket Upload
@@ -469,7 +469,7 @@ Calibre plugin workflows.
 Connection:
 
 ```text
-ws://crosspoint.local:81/
+ws://matcha.local:81/
 ```
 
 Protocol:
@@ -543,13 +543,14 @@ The final field is the WebSocket upload port.
 ### Station Mode (STA)
 
 - Device joins an existing 2.4 GHz Wi-Fi network.
-- `crosspoint.local` is advertised with mDNS when available.
+- `matcha.local` is advertised with mDNS when available.
 - `/api/status` returns `"mode": "STA"` and RSSI in dBm.
 
 ### Access Point Mode (AP)
 
-- Device creates an open hotspot named `CrossPoint-Reader`.
-- The device shows a Wi-Fi QR code and URL QR code.
+- Device creates an open hotspot named `Matcha-Reader`.
+- The device shows a Wi-Fi QR code and URL QR code. The URL QR code uses
+  `http://matcha.local/`, or the IP address when mDNS could not start.
 - The fallback IP is typically `192.168.4.1`.
 - `/api/status` returns `"mode": "AP"` and `"rssi": 0`.
 - The hotspot's DNS answers every name with the device's IP. A `GET` or `HEAD`
@@ -714,7 +715,7 @@ stores opaque `{plugin, action, args}` blobs (fixed 6-slot pool; args/result
 ### `POST /api/plugin-jobs`
 
 ```bash
-curl -X POST http://crosspoint.local/api/plugin-jobs \
+curl -X POST http://matcha.local/api/plugin-jobs \
   -d '{"plugin":"<name>","action":"<action>","args":{"path":"/Books/somefile"}}'
 # -> {"id":3}         (503 {"error":"job queue full"} when all slots busy,
 #                      or {"error":"out of memory"} if the queue cannot be allocated)
@@ -735,7 +736,7 @@ executor re-claimed the job) gets `409 {"error":"stale claim"}` and changes noth
 ### `GET /api/plugin-jobs/status?id=<n>`
 
 ```bash
-curl "http://crosspoint.local/api/plugin-jobs/status?id=3"
+curl "http://matcha.local/api/plugin-jobs/status?id=3"
 # -> {"id":3,"state":"done","result":{"title":"...","dest":"/Books/Book.epub"}}
 ```
 

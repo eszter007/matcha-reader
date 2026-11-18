@@ -278,6 +278,9 @@ Use File Transfer to put books on the device and manage its files over Wi-Fi. Wh
 
 For the Wi-Fi modes, the device starts a small web server and shows an address. Open that address in a browser on your computer or phone. The [web server docs](./docs/webserver.md) explain how to connect and upload files.
 
+> [!NOTE]
+> Older versions used `http://crosspoint.local/` and a hotspot named `CrossPoint-Reader`. Now they are `http://matcha.local/` and `Matcha-Reader`: update your bookmarks and scripts, and you can forget the old network on your phone or computer. Upload options saved on the Files page start from their defaults once.
+
 * The web page lets you download files from the device, e.g. books or screenshots, without a cable.
 * The web server also supports **WebDAV**, so you can open the device as a network drive in your computer's file manager.
 * When you have joined a network, the screen shows Wi-Fi signal bars.
@@ -792,7 +795,7 @@ You can also manage servers from a computer or phone. See [Web Settings (Wi-Fi +
 The device's web page lets you manage saved Wi-Fi networks and OPDS servers from a browser.
 
 1. On the device, open **File Transfer** and choose **Join a Network** or **Create Hotspot**.
-2. On your computer or phone, open `http://<device-ip>/settings` (the address shown on the device screen) or `http://crosspoint.local/settings`.
+2. On your computer or phone, open `http://<device-ip>/settings` (the address shown on the device screen) or `http://matcha.local/settings` if the device shows that address.
 3. In the **Wi-Fi Networks** card, add, edit or delete networks (network name, called SSID, plus an optional password).
 4. In the **OPDS Servers** card, add, edit or delete catalogs.
 
