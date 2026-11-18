@@ -66,6 +66,16 @@ python3 tools/manga_convert/convert_manga.py \
 
 The text, its boxes and every printed column come from Mokuro, so word lookup in the speech bubbles works as with the other options. Panels are still found on your computer, so panel zoom works too. There are no translations. The title comes from the `.mokuro` file (series name and volume), and the language is set to Japanese.
 
+A whole Mokuro library converts in one go with `convert_mokuro_library.py`. A library is a folder of series, each a folder or a `.zip`/`.cbz` holding its volumes (`vol1.mokuro` beside `vol1/`; `vol1.mo.mokuro` with `vol1/` works too). Every volume becomes `<output-dir>/<series>/<volume>.matcha`:
+
+```bash
+python3 tools/manga_convert/convert_mokuro_library.py --library ~/Mokuro --list
+python3 tools/manga_convert/convert_mokuro_library.py --library ~/Mokuro \
+  --output-dir /path/to/sd/manga --series "yotsuba" --device x4 -- --mono
+```
+
+`--list` shows the series it found and how many volumes each has. `--series` picks series by part of their name or a glob, and can be repeated. Volumes that already have a `.matcha` are skipped, so a run that stopped picks up where it left off; `--force` converts them again. Each book is written under a hidden name and renamed only when it is complete, so the reader never sees half a book, even when the output is the SD card itself. Several volumes convert at once (`--jobs`). Anything after `--` goes to `convert_manga.py` as it is. An archive that cannot be opened, usually an unfinished download, is named at the start and skipped.
+
 Western comics work too. Pass `--ltr` so panels within a row are walked left-to-right. The panel detector was trained on manga but handles strip layouts well; page turn direction is a device setting (Reversed page turn), not a conversion one.
 
 With `--ocr gemini`, OCR follows `--language`, so it works on any of them. The prompt names the language it should expect, which is what stops the model hallucinating Japanese out of a German speech bubble, and a book already in English gets transcription without a pointless English-to-English translation. Set the tag even if you don't care about reading stats.

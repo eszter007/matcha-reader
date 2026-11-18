@@ -1672,7 +1672,7 @@ lookup in its speech bubbles is not supported yet.
 
 Convert the book with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) and pick the X3 or
 X4 target, so the pages are sized for your screen. Manga that was already read with [Mokuro](https://github.com/kha-white/mokuro)
-converts with the script instead, keeping Mokuro's text (see [docs/manga-conversion.md](docs/manga-conversion.md#manga-already-read-by-mokuro)). Then copy the `.matcha` file (or, for older firmware, the
+converts with the script instead, keeping Mokuro's text; a whole Mokuro library converts in one run (see [docs/manga-conversion.md](docs/manga-conversion.md#manga-already-read-by-mokuro)). Then copy the `.matcha` file (or, for older firmware, the
 folder; see below) anywhere on the SD card. Any name and depth works. The book shows up in the Library grid, on shelves and in Continue Reading with its cover, title,
 author and progress.
 

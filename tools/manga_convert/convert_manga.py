@@ -354,7 +354,10 @@ def load_mokuro(mokuro_path: str) -> dict:
     if not isinstance(pages, list) or not pages:
         print(f"Error: {p} lists no pages", file=sys.stderr)
         sys.exit(1)
-    image_dir = p.with_suffix("")
+    # <volume>/ beside <volume>.mokuro; some mokuro setups write <volume>.mo.mokuro for the same folder.
+    stem = p.name[: -len(".mokuro")]
+    candidates = [p.parent / stem] + ([p.parent / stem[: -len(".mo")]] if stem.endswith(".mo") else [])
+    image_dir = next((d for d in candidates if d.is_dir()), candidates[0])
     if not image_dir.is_dir():
         print(f"Error: Mokuro image folder not found: {image_dir} (it must sit next to {p.name})", file=sys.stderr)
         sys.exit(1)
