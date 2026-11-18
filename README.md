@@ -168,6 +168,7 @@ A wallpaper over the page you were reading. The book shows through. See [Guide ย
 - Updating an EPUB, TXT or Markdown book keeps your place: upload or copy a new version under the same file name
 - Publisher fonts on boards with PSRAM (X4 Pro and others): a book can be drawn in the fonts it ships, horizontal and vertical
 - Japanese and Chinese interface language support
+- Light Schedule (X4 Pro and other devices with a frontlight): the light turns on dim and warm at night, at set times or from sunset to sunrise in your city, and turns off in the morning. See [Guide ยง1](USER_GUIDE.md#light-schedule)
 
 ## Setup
 

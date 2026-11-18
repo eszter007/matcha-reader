@@ -1,5 +1,6 @@
 #include "SettingRowEditor.h"
 
+#include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <LibraryBuilder.h>
 #include <Logging.h>
@@ -30,6 +31,7 @@
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/OptionPopup.h"
 #include "components/UITheme.h"
+#include "util/NightLight.h"
 #include "util/TaskWatchdog.h"
 
 SettingRowEditor::EditResult SettingRowEditor::editValue(const SettingInfo& setting) {
@@ -40,6 +42,7 @@ SettingRowEditor::EditResult SettingRowEditor::editValue(const SettingInfo& sett
     openSleepTimeoutPicker();
     return EditResult::Opened;
   }
+  if (openLightSchedulePicker(setting)) return EditResult::Opened;
 
   // A Flashcards Sync text row (address, key, decks) opens the keyboard on its current value.
   if (setting.type == SettingType::STRING && isFlashcardSyncPage(setting.category) && setting.stringGetter &&
@@ -301,8 +304,63 @@ void SettingRowEditor::openSleepTimeoutPicker() {
       });
 }
 
+bool SettingRowEditor::openLightSchedulePicker(const SettingInfo& setting) {
+#if FREEINK_CAP_FRONTLIGHT
+  const auto valuePtr = setting.valuePtr;
+  const bool timeRow = valuePtr == &CrossPointSettings::nightLightStart || valuePtr == &CrossPointSettings::nightLightEnd;
+  if (timeRow || valuePtr == &CrossPointSettings::nightLightCity) {
+    // 48 times or CITY_COUNT short names; the popup keeps them until this page closes.
+    const size_t count = timeRow ? nightlight::HALF_HOURS_PER_DAY : nightlight::CITY_COUNT;
+    std::vector<std::string> labels;
+    labels.reserve(count);
+    char time[12];
+    for (size_t i = 0; i < count; i++) {
+      if (timeRow) {
+        nightlight::formatHalfHour(static_cast<uint8_t>(i), time, sizeof(time));
+        labels.emplace_back(time);
+      } else {
+        labels.emplace_back(nightlight::city(static_cast<uint8_t>(i)).name);
+      }
+    }
+    popup.show(setting.nameId, std::move(labels), SETTINGS.*valuePtr, [this, valuePtr](const int index) {
+      SETTINGS.*valuePtr = static_cast<uint8_t>(index);
+      host.commitSettingChange(valuePtr);
+    });
+    activity.requestUpdate();
+    return true;
+  }
+  if (valuePtr == &CrossPointSettings::nightLightBrightness || valuePtr == &CrossPointSettings::nightLightWarmth) {
+    auto picker = makeUniqueNoThrow<IntervalSelectionActivity>(
+        renderer, mappedInput, "NightLightLevel", setting.nameId, SETTINGS.*valuePtr, setting.valueRange.min,
+        setting.valueRange.max, setting.valueRange.step, 10, StrId::STR_PERCENT_VALUE_FORMAT);
+    if (!picker) {
+      LOG_ERR("SET", "OOM: light level picker");
+      return true;
+    }
+    activity.startActivityForResult(std::move(picker), [this, valuePtr](const ActivityResult& result) {
+      if (!result.isCancelled) {
+        SETTINGS.*valuePtr = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
+        host.commitSettingChange(valuePtr);
+      }
+      activity.requestUpdate();
+    });
+    return true;
+  }
+#else
+  (void)setting;
+#endif
+  return false;
+}
+
 std::string SettingRowEditor::valueText(const SettingInfo& setting) {
   if (setting.action == SettingAction::HomeButton) return tr(STR_CONFIGURE);
+#if FREEINK_CAP_FRONTLIGHT
+  if (setting.action == SettingAction::LightSchedule) {
+    char summary[48];
+    nightlight::formatSummary(summary, sizeof(summary));
+    return summary;
+  }
+#endif
   if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     // Guard like the valueGetter branch below: a corrupt/migrated settings
     // byte must not index past the enum table.
@@ -332,7 +390,23 @@ std::string SettingRowEditor::valueText(const SettingInfo& setting) {
                static_cast<unsigned int>(SETTINGS.*(setting.valuePtr)));
       return valueBuffer;
     }
-    return std::to_string(SETTINGS.*(setting.valuePtr));
+    const uint8_t value = SETTINGS.*(setting.valuePtr);
+#if FREEINK_CAP_FRONTLIGHT
+    if (setting.valuePtr == &CrossPointSettings::nightLightStart ||
+        setting.valuePtr == &CrossPointSettings::nightLightEnd) {
+      char time[12];
+      nightlight::formatHalfHour(value, time, sizeof(time));
+      return time;
+    }
+    if (setting.valuePtr == &CrossPointSettings::nightLightCity) return nightlight::city(value).name;
+    if (setting.valuePtr == &CrossPointSettings::nightLightBrightness ||
+        setting.valuePtr == &CrossPointSettings::nightLightWarmth) {
+      char percent[8];
+      snprintf(percent, sizeof(percent), tr(STR_PERCENT_VALUE_FORMAT), static_cast<unsigned int>(value));
+      return percent;
+    }
+#endif
+    return std::to_string(value);
   }
   if (setting.type == SettingType::STRING && isFlashcardSyncPage(setting.category) && setting.stringGetter) {
     const std::string value = setting.stringGetter();

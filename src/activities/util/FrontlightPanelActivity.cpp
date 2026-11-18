@@ -21,6 +21,7 @@
 #include "components/icons/panelIcons.h"
 #include "components/icons/settingsTablerIcons.h"
 #include "fontIds.h"
+#include "util/NightLight.h"
 #include "util/SlideSwitch.h"
 
 namespace fui = freeink::ui;
@@ -73,6 +74,8 @@ void FrontlightPanelActivity::onEnter() {
   warmth = Frontlight.warmth();
   lightOn = Frontlight.isOn();
   lightOnChanged = false;
+  levelsChanged = Frontlight.brightness() < MIN_BRIGHTNESS;
+  editingNightLevels = nightlight::nightActive();
 
   // Seed the touch tile's restore mode from the live setting, so toggling off
   // and back on within this session returns to the mode the user had.
@@ -91,19 +94,13 @@ void FrontlightPanelActivity::onEnter() {
 }
 
 void FrontlightPanelActivity::persistLightSettings() {
-  // brightness/warmth are always restored unconditionally on boot (see
-  // main.cpp), so they never diverge from SETTINGS at onEnter() — comparing
-  // against SETTINGS here only fires on a genuine user change. lightOn has
-  // no such guarantee (see lightOnChanged's declaration), so it's gated on
-  // the user actually having touched it this session instead.
-  const bool changed = SETTINGS.frontlightBrightness != brightness || SETTINGS.frontlightWarmth != warmth ||
-                       (lightOnChanged && SETTINGS.frontlightOn != (lightOn ? 1 : 0));
-  if (changed) {
-    SETTINGS.frontlightBrightness = brightness;
-    SETTINGS.frontlightWarmth = warmth;
-    if (lightOnChanged) SETTINGS.frontlightOn = lightOn ? 1 : 0;
-    SETTINGS.saveToFile();
-  }
+  // Both are gated on the user having touched them this session (see the declarations):
+  // the levels go to the night or the daytime pair, whichever the light is showing now.
+  const bool lightOnSaved = lightOnChanged && SETTINGS.frontlightOn != (lightOn ? 1 : 0);
+  if (!levelsChanged && !lightOnSaved) return;
+  if (levelsChanged) nightlight::saveLevels(brightness, warmth, editingNightLevels);
+  if (lightOnSaved) SETTINGS.frontlightOn = lightOn ? 1 : 0;
+  SETTINGS.saveToFile();
 }
 
 void FrontlightPanelActivity::onExit() {
@@ -115,6 +112,7 @@ void FrontlightPanelActivity::onBrightnessEvent(const fui::ActionEvent& event, v
   auto* self = static_cast<FrontlightPanelActivity*>(user);
   if (event.dragPermille < 0) return;
   self->brightness = std::max(MIN_BRIGHTNESS, percentFromPermille(event.dragPermille));
+  self->levelsChanged = true;
   Frontlight.setBrightness(self->brightness);
   if (!self->lightOn && !slideSwitchOwnsLight()) {
     self->lightOn = true;
@@ -127,6 +125,7 @@ void FrontlightPanelActivity::onWarmthEvent(const fui::ActionEvent& event, void*
   auto* self = static_cast<FrontlightPanelActivity*>(user);
   if (event.dragPermille < 0) return;
   self->warmth = percentFromPermille(event.dragPermille);
+  self->levelsChanged = true;
   Frontlight.setWarmth(self->warmth);
 }
 
@@ -214,6 +213,7 @@ void FrontlightPanelActivity::adjustBrightness(const int delta) {
   if (next > 100) next = 100;
   if (next == brightness) return;
   brightness = static_cast<uint8_t>(next);
+  levelsChanged = true;
   Frontlight.setBrightness(brightness);
   if (!lightOn && !slideSwitchOwnsLight()) {
     lightOn = true;
@@ -229,6 +229,7 @@ void FrontlightPanelActivity::adjustWarmth(const int delta) {
   if (next > 100) next = 100;
   if (next == warmth) return;
   warmth = static_cast<uint8_t>(next);
+  levelsChanged = true;
   Frontlight.setWarmth(warmth);
   requestUpdate();
 }

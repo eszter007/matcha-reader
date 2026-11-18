@@ -58,6 +58,7 @@
 #include "fontIds.h"
 #include "platform/UsbSerialJtagHandoff.h"
 #include "util/ButtonNavigator.h"
+#include "util/NightLight.h"
 #include "util/PluginEvents.h"
 #include "util/ScreenshotUtil.h"
 #include "util/SlideSwitch.h"
@@ -891,7 +892,12 @@ void setup() {
                               : slideSwitchOwnsLight()
                                   ? gpio.isToggleSwitchOn()
                                   : (SETTINGS.frontlightOn != 0 && SETTINGS.frontlightRestoreOnWake != 0);
-  Frontlight.begin(SETTINGS.frontlightBrightness, SETTINGS.frontlightWarmth, restoreLightOn);
+  uint8_t lightBrightness = SETTINGS.frontlightBrightness;
+  uint8_t lightWarmth = SETTINGS.frontlightWarmth;
+  bool lightOn = restoreLightOn;
+  // The light schedule may have opened or closed its window while the device slept.
+  nightlight::adjustBootState(lightBrightness, lightWarmth, lightOn);
+  Frontlight.begin(lightBrightness, lightWarmth, lightOn);
   // No light to toggle: drop the action so single clicks do not wait for a double click.
   if (!Frontlight.present() && SETTINGS.doublePwrBtn == CrossPointSettings::PWR_FRONTLIGHT) {
     SETTINGS.doublePwrBtn = CrossPointSettings::IGNORE;
@@ -1199,8 +1205,9 @@ void loop() {
     return;
   }
 
-  // After the exclusive-storage return: it saves settings to the SD card.
+  // After the exclusive-storage return: both save settings to the SD card.
   handleSlideSwitch();
+  if (nightlight::tick()) activityManager.requestUpdate();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
   // Under the render lock, so a step never overlaps the themes' gauge reads.

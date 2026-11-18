@@ -41,6 +41,7 @@ enum class SettingAction {
   ControlsTouch,
   LibrarySettings,
   SleepSettings,
+  LightSchedule,
   ShortcutsSettings,
   DictionarySettings,
   TranslationSettings,
