@@ -21,6 +21,11 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   uint8_t readerActivityLoadCount = 0;
   bool lastSleepFromReader = false;
   bool showBootScreen = true;
+  // Night light schedule (util/NightLight): the position it last acted on, as
+  // nightschedule::Phase and the UTC epoch of the boundary that began it. Written only when the
+  // window opens or closes, or the schedule changes.
+  uint8_t nightLightPhase = 0;
+  uint32_t nightLightEdge = 0;
 
   static const char* getFilePath() { return "/.crosspoint/state.json"; }
   void toJson(JsonDocument& doc) const;

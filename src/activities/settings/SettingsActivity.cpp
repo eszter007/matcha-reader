@@ -6,6 +6,7 @@
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <HalDisplay.h>
+#include <HalFrontlight.h>
 #include <LibraryBuilder.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -46,6 +47,7 @@
 #include "components/UiAppHelpers.h"
 #include "flashcards/FlashcardStore.h"
 #include "fontIds.h"
+#include "util/NightLight.h"
 #include "util/PluginEvents.h"
 #include "util/TaskWatchdog.h"
 
@@ -152,6 +154,21 @@ bool showOnDevice(const SettingInfo& setting) {
       SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_OFF) {
     return false;
   }
+#if FREEINK_CAP_FRONTLIGHT
+  // Light Schedule: each row only for the mode that uses it.
+  const uint8_t lightMode = SETTINGS.nightLightMode;
+  if (setting.valuePtr == &CrossPointSettings::nightLightStart ||
+      setting.valuePtr == &CrossPointSettings::nightLightEnd) {
+    return lightMode == CrossPointSettings::NIGHT_LIGHT_CUSTOM;
+  }
+  if (setting.valuePtr == &CrossPointSettings::nightLightCity) return lightMode == CrossPointSettings::NIGHT_LIGHT_SUN;
+  if (setting.valuePtr == &CrossPointSettings::nightLightBrightness) {
+    return lightMode != CrossPointSettings::NIGHT_LIGHT_OFF;
+  }
+  if (setting.valuePtr == &CrossPointSettings::nightLightWarmth) {
+    return lightMode != CrossPointSettings::NIGHT_LIGHT_OFF && Frontlight.hasColorTemperature();
+  }
+#endif
   // Only the language tabs have an Unknown one to hide.
   if (setting.valuePtr == &CrossPointSettings::hideUnknownLanguages && !SETTINGS.showLanguageStats) return false;
   // These only feed the CrossPoint list view: the cover grid keeps its own index and lists every
@@ -178,6 +195,8 @@ SettingsSection sectionFor(const SettingInfo& setting) {
   if (setting.category == StrId::STR_STATS) return SettingsSection::Insights;
   if (setting.category == StrId::STR_FLASHCARDS) return SettingsSection::Flashcards;
   if (setting.category == StrId::STR_CAT_SHORTCUTS) return SettingsSection::Controls;
+  // Listed on its own page, opened from the Light Schedule row in Display.
+  if (setting.category == StrId::STR_CAT_LIGHT_SCHEDULE) return SettingsSection::Display;
   return SettingsSection::End;
 }
 
@@ -266,7 +285,7 @@ void SettingsActivity::rebuildSettings() {
     if (sectionFor(setting) != section || dictionaryRowOrder(setting) >= 0) return false;
     // Controls shows its rows by group; in a book, Reader Settings opens the Shortcuts rows alone.
     if (section == SettingsSection::Controls) return belongsToControlsGroup(setting, controlsGroup);
-    return true;
+    return setting.category != StrId::STR_CAT_LIGHT_SCHEDULE;
   };
   const size_t count = std::count_if(all.begin(), all.end(), belongsHere);
   settings.clear();
@@ -344,6 +363,16 @@ void SettingsActivity::rebuildSettings() {
     settings.insert(settings.begin() + 1,
                     SettingInfo::Action(StrId::STR_LIBRARY_REBUILD, SettingAction::RebuildLibraryIndex));
   }
+
+#if FREEINK_CAP_FRONTLIGHT
+  // Light Schedule sits just above Night Mode, the other light-and-dark row.
+  if (section == SettingsSection::Display && subCategory == StrId::STR_NONE_OPT && Frontlight.present()) {
+    const auto nightMode = std::find_if(settings.begin(), settings.end(), [](const SettingInfo& setting) {
+      return setting.valuePtr == &CrossPointSettings::screenInverted;
+    });
+    settings.insert(nightMode, SettingInfo::Action(StrId::STR_CAT_LIGHT_SCHEDULE, SettingAction::LightSchedule));
+  }
+#endif
 
   // No Manage Fonts row: it sits at the bottom of the font list inside Text Settings.
   addAction(SettingsSection::Reader, StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar);
@@ -464,6 +493,8 @@ bool SettingsActivity::handleCustomInput() {
 void SettingsActivity::saveSettings() { SETTINGS.saveToFile(); }
 
 void SettingsActivity::commitSettingChange(uint8_t CrossPointSettings::* valuePtr) {
+  // A schedule edit takes effect now: the light may switch, and its saved on/off state with it.
+  if (subCategory == StrId::STR_CAT_LIGHT_SCHEDULE) nightlight::refresh();
   SETTINGS.saveToFile();
   rebuildSettings();
   applyUiSettingChange(valuePtr);
@@ -521,8 +552,10 @@ void SettingsActivity::toggleSelectedSetting() {
       return;
     }
     case SettingAction::ShortcutsSettings:
-    case SettingAction::DictionarySettings: {
+    case SettingAction::DictionarySettings:
+    case SettingAction::LightSchedule: {
       const StrId page = setting.action == SettingAction::ShortcutsSettings ? StrId::STR_CAT_SHORTCUTS
+                         : setting.action == SettingAction::LightSchedule   ? StrId::STR_CAT_LIGHT_SCHEDULE
                                                                             : StrId::STR_DICTIONARY_SETTINGS;
       auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, section, page);
       if (!activity) {

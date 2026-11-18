@@ -14,7 +14,8 @@ This guide covers the **CrossPoint** firmware as shipped in Matcha Reader: the b
     - [Button Layout](#button-layout)
     - [Taking a Screenshot](#taking-a-screenshot)
     - [Syncing the Clock](#syncing-the-clock)
-    - [Frontlight (X4 Pro and Paper Mono)](#frontlight-x4-pro-and-paper-mono)
+    - [Control Center and Frontlight](#control-center-and-frontlight)
+      - [Light Schedule](#light-schedule)
   - [2. Power \& Startup](#2-power--startup)
     - [Power On / Off](#power-on--off)
     - [First Launch](#first-launch)
@@ -125,9 +126,39 @@ The X4 Pro and the M5Stack Paper Mono have a built-in light. On the X4 Pro you c
 * **Quick on/off (X4 Pro only):** Double-click **Power**. This shortcut is **Double click** in **Settings → Controls → Power button** and is set to **Frontlight** by default.
 
 > [!NOTE]
-> Brightness and warmth are not in **[Display Settings](#362-display)** on purpose. The pull-down panel is the only place to change them.
+> The daytime brightness and warmth are not in **[Display Settings](#362-display)** on purpose. The pull-down panel is the only place to change them. The night levels are also in **Light Schedule** below.
 
-If the light stays off after the device wakes from sleep, check **Restore Light on Wake** in **Settings → Sleep**. It is on by default. Turn it off if you want the light to stay off after waking until you switch it on yourself.
+If the light stays off after the device wakes from sleep, check **Restore Light on Wake** in **Settings → Sleep**. It is on by default. Turn it off if you want the light to stay off after waking until you switch it on yourself. A [Light Schedule](#light-schedule) can still turn it on when a night starts.
+
+#### Light Schedule
+
+**Settings → Display → Light Schedule** turns the light on for the night with its own brightness and warmth, and off
+again in the morning. The row shows tonight's times.
+
+- **Schedule**: **Off** (default), **Set Times**, or **Sunset to Sunrise**.
+- **Light On At** / **Light Off At** (Set Times): when the night starts and ends, in half-hour steps. The defaults are
+  20:00 and 06:00. A start later than the end runs past midnight. If both are the same time, the light does not
+  switch.
+- **City** (Sunset to Sunrise): the city whose sunset and sunrise are used. The default is London. Pick the nearest
+  city on the list; the times are worked out on the device every day, so they follow the seasons. Set the clock's
+  **Time Zone** too (**Settings → System → Clock**) so the times shown match your clock.
+- **Night Brightness**: the light's level at night. The default is 30%.
+- **Night Warmth** (X4 Pro and other lights with warmth): the light's colour at night. The default is fully warm.
+
+When the night starts, the light switches on at the night levels. When it ends, the light switches off and goes back
+to your daytime brightness and warmth. Nothing changes in between, so if you switch the light off at 23:00 it stays
+off until the next evening. While the night is on, the pull-down panel's sliders change the night levels, and outside
+it they change the daytime ones. If the device was asleep when the night started or ended, it catches up when it
+wakes, even after several days asleep.
+
+If the BOOX Picco's slide switch controls the light, the schedule only sets the night levels; the switch still turns
+the light on and off.
+
+The schedule is set on the device only; the web settings page does not show it.
+
+The schedule needs the right time. Devices with a clock chip, such as the X4 Pro, Paper Mono and BOOX Picco, keep it.
+On a device without one, the clock can be wrong until you sync it (see [Syncing the Clock](#syncing-the-clock)), and
+the light then switches at the wrong times.
 
 ---
 
@@ -367,6 +398,9 @@ any profile of **Settings → Reader → Text Settings**.
 
 - **Sunlight Fading Fix** (off by default): Fixes text fading in direct sunlight on some X4 screens. Not shown on
   touch devices, the X4 Pro or the X4 Classic.
+
+- **Light Schedule** (devices with a frontlight): turns the light on dim, and warm where supported, at night, and off
+  in the morning. See [Light Schedule](#light-schedule).
 
 - **Night Mode** (off by default): White text on black, on every screen.
 
