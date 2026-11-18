@@ -42,7 +42,9 @@ SettingRowEditor::EditResult SettingRowEditor::editValue(const SettingInfo& sett
     openSleepTimeoutPicker();
     return EditResult::Opened;
   }
+#if FREEINK_CAP_FRONTLIGHT
   if (openLightSchedulePicker(setting)) return EditResult::Opened;
+#endif
 
   // A Flashcards Sync text row (address, key, decks) opens the keyboard on its current value.
   if (setting.type == SettingType::STRING && isFlashcardSyncPage(setting.category) && setting.stringGetter &&
@@ -304,8 +306,8 @@ void SettingRowEditor::openSleepTimeoutPicker() {
       });
 }
 
-bool SettingRowEditor::openLightSchedulePicker(const SettingInfo& setting) {
 #if FREEINK_CAP_FRONTLIGHT
+bool SettingRowEditor::openLightSchedulePicker(const SettingInfo& setting) {
   const auto valuePtr = setting.valuePtr;
   const bool timeRow =
       valuePtr == &CrossPointSettings::nightLightStart || valuePtr == &CrossPointSettings::nightLightEnd;
@@ -347,11 +349,9 @@ bool SettingRowEditor::openLightSchedulePicker(const SettingInfo& setting) {
     });
     return true;
   }
-#else
-  (void)setting;
-#endif
   return false;
 }
+#endif
 
 std::string SettingRowEditor::valueText(const SettingInfo& setting) {
   if (setting.action == SettingAction::HomeButton) return tr(STR_CONFIGURE);

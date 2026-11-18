@@ -54,6 +54,8 @@ class SettingRowEditor {
 
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
   void openSleepTimeoutPicker();
+#if FREEINK_CAP_FRONTLIGHT
   // Light Schedule rows whose values want a list or slider rather than a step on Confirm.
   bool openLightSchedulePicker(const SettingInfo& setting);
+#endif
 };
