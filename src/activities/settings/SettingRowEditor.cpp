@@ -307,7 +307,8 @@ void SettingRowEditor::openSleepTimeoutPicker() {
 bool SettingRowEditor::openLightSchedulePicker(const SettingInfo& setting) {
 #if FREEINK_CAP_FRONTLIGHT
   const auto valuePtr = setting.valuePtr;
-  const bool timeRow = valuePtr == &CrossPointSettings::nightLightStart || valuePtr == &CrossPointSettings::nightLightEnd;
+  const bool timeRow =
+      valuePtr == &CrossPointSettings::nightLightStart || valuePtr == &CrossPointSettings::nightLightEnd;
   if (timeRow || valuePtr == &CrossPointSettings::nightLightCity) {
     // 48 times or CITY_COUNT short names; the popup keeps them until this page closes.
     const size_t count = timeRow ? nightlight::HALF_HOURS_PER_DAY : nightlight::CITY_COUNT;
