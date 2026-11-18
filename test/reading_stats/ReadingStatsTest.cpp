@@ -1391,3 +1391,30 @@ TEST_F(StatsTest, TwoGoneBooksOfTheSameNameAreNotGuessed) {
   ASSERT_TRUE(b.load("/three/a.epub"));
   EXPECT_EQ(b.getSessions(), 1u);
 }
+
+TEST_F(StatsTest, BestDayIsTheDayWithTheMostMinutes) {
+  auto& s = READING_STATS_STORE;
+  EXPECT_EQ(s.getBestDay(nullptr).minutes, 0);
+  s.addMinutes(2025, 12, 31, 50);
+  s.addMinutes(Y, M, 3, 30);
+  s.addMinutes(Y, M, 3, 40);  // the same day adds up to 70
+  s.addMinutes(Y, M, 5, 70);  // a tie keeps the earlier day
+  s.addMinutes(Y, M, 6, 20);
+  const auto best = s.getBestDay(nullptr);
+  EXPECT_EQ(best.year, Y);
+  EXPECT_EQ(best.month, M);
+  EXPECT_EQ(best.day, 3);
+  EXPECT_EQ(best.minutes, 70);
+}
+
+TEST_F(StatsTest, BestDayPerLanguage) {
+  auto& s = READING_STATS_STORE;
+  s.addLanguageMinutes("ja-JP", 45, Y, M, 2);
+  s.addLanguageMinutes("en", 90, Y, M, 3);
+  s.addLanguageMinutes("ja", 20, Y, M, 4);
+  const auto ja = s.getBestDay("ja");
+  EXPECT_EQ(ja.day, 2);
+  EXPECT_EQ(ja.minutes, 45);
+  EXPECT_EQ(s.getBestDay("en").day, 3);
+  EXPECT_EQ(s.getBestDay("de").minutes, 0);
+}

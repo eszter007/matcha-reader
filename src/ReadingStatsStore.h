@@ -188,6 +188,15 @@ class ReadingStatsStore {
                      bool readDays[7]) const;
   void getMonthStatus(const char* language, uint16_t year, uint8_t month, bool out[32]) const;
   int getDaysReadInMonth(const char* language, uint16_t year, uint8_t month) const;
+  // The day with the most minutes on this card, overall (nullptr) or in one language; the earliest
+  // on a tie. Zero minutes when nothing was read.
+  struct BestDay {
+    uint16_t year = 0;
+    uint8_t month = 0;
+    uint8_t day = 0;
+    uint16_t minutes = 0;
+  };
+  BestDay getBestDay(const char* language) const;
   // Can undercount: language lives in the per-book block, which is capped and LRU-evicted, so a
   // book finished long ago may have lost its tag. Never overcounts.
   uint16_t getBooksFinished(const char* language) const;

@@ -1938,9 +1938,10 @@ With the CrossPoint sync server, **Sync Progress** also uploads these insights; 
 
 ### 7.1 Insights
 
-Go to Home → **Insights**. It shows your current streak, minutes this week, books finished, days read, total
+Go to Home → **Insights**. It shows your current streak, minutes today and this week, books finished, days read, total
 reading time, your longest streak and a calendar of the days you read. If you have not read yet today, the current streak counts up
-to yesterday; it only ends after a whole day with no reading.
+to yesterday; it only ends after a whole day with no reading. Under the month, the calendar names your best day, the day you
+read the most, and rings it when it is in the month shown.
 
 A book keeps its insights when you move or rename it, on the reader (including **Move Finished Books
 to Read Folder**) or on a computer: a book that opens with no history takes over the history of the

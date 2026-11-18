@@ -40,9 +40,10 @@ const char* monthAbbrev(int month, char* out, size_t outSize);
 
 void stepMonth(uint16_t& year, uint8_t& month, int delta);
 
-// Flame + streak, minutes this week, Mon-Sun read/not-read row. Returns height consumed.
-int drawStreakCard(const GfxRenderer& renderer, int x, int y, int w, int streak, uint16_t weekMinutes,
-                   const bool weekDays[7], int todayDow);
+// Flame + streak, minutes today and this week, Mon-Sun read/not-read row. Returns height consumed.
+// Today's minutes are left out while zero, or when the line would not fit.
+int drawStreakCard(const GfxRenderer& renderer, int x, int y, int w, int streak, uint16_t todayMinutes,
+                   uint16_t weekMinutes, const bool weekDays[7], int todayDow);
 
 struct Tile {
   const char* value;
@@ -73,12 +74,16 @@ struct MonthNav {
   Rect next{};
 };
 
-// A book's first reading day and finish day, marked on its calendar. A zero year leaves a mark out.
+// Days marked on a calendar: a book's first reading day (dotted ring) and finish day (ring), or the best
+// reading day (ring). A zero year leaves a mark out. `note` follows the days-read line when it fits.
 struct DayMarks {
   uint16_t startYear = 0;
   uint8_t startMonth = 0, startDay = 0;
   uint16_t finishYear = 0;
   uint8_t finishMonth = 0, finishDay = 0;
+  uint16_t bestYear = 0;
+  uint8_t bestMonth = 0, bestDay = 0;
+  const char* note = nullptr;
 };
 
 // Month card: title with chevrons, subtitle, weekday headers, grid. Returns height consumed.
