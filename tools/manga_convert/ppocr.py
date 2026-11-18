@@ -185,9 +185,70 @@ def _same_bubble(a: dict, b: dict) -> bool:
             and _overlap(ax1, ax2, bx1, bx2) > 0.3 * min(ax2 - ax1, bx2 - bx1))
 
 
-def bubbles(lines: list[dict]) -> list[dict]:
-    """lines: [{"text", "box": [x1, y1, x2, y2], "vertical"}] -> a Mokuro page record's blocks."""
-    kept = [dict(l, text=line_text(l["text"])) for l in lines]
+def _same_column(a: dict, b: dict) -> bool:
+    """Pieces of one printed line, split where the detector lost a mark such as 〝 〟: same
+    orientation and size, one in line with the other, and close along it."""
+    if a["vertical"] != b["vertical"]:
+        return False
+    ta, tb = _thickness(a), _thickness(b)
+    if tb <= 0 or not 0.7 <= ta / tb <= 1.43:
+        return False
+    t = max(ta, tb)
+    ax1, ay1, ax2, ay2 = a["box"]
+    bx1, by1, bx2, by2 = b["box"]
+    if a["vertical"]:
+        return _overlap(ax1, ax2, bx1, bx2) > 0.6 * min(ta, tb) and max(by1 - ay2, ay1 - by2) < 0.6 * t
+    return _overlap(ay1, ay2, by1, by2) > 0.6 * min(ta, tb) and max(bx1 - ax2, ax1 - bx2) < 0.6 * t
+
+
+def join_columns(lines: list[dict]) -> list[dict]:
+    """Merge the pieces of a printed line back into one line, read top to bottom (or left to
+    right)."""
+    lines = [dict(l) for l in lines]
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(lines)):
+            for j in range(i + 1, len(lines)):
+                a, b = lines[i], lines[j]
+                if not _same_column(a, b):
+                    continue
+                axis = 1 if a["vertical"] else 0
+                first, second = (a, b) if a["box"][axis] <= b["box"][axis] else (b, a)
+                lines[i] = {"text": first["text"] + second["text"], "vertical": a["vertical"],
+                            "box": [min(a["box"][0], b["box"][0]), min(a["box"][1], b["box"][1]),
+                                    max(a["box"][2], b["box"][2]), max(a["box"][3], b["box"][3])]}
+                del lines[j]
+                merged = True
+                break
+            if merged:
+                break
+    return lines
+
+
+def reading_order(blocks: list[dict], rtl: bool = True) -> list[dict]:
+    """Blocks in reading order: rows of blocks that sit side by side, top to bottom, each row
+    right to left (left to right when not rtl)."""
+    rows: list[list] = []  # [top, bottom, blocks]
+    for b in sorted(blocks, key=lambda b: b["box"][1]):
+        y1, y2 = b["box"][1], b["box"][3]
+        for row in rows:
+            if _overlap(y1, y2, row[0], row[1]) > 0.5 * min(y2 - y1, row[1] - row[0]):
+                row[0], row[1] = min(row[0], y1), max(row[1], y2)
+                row[2].append(b)
+                break
+        else:
+            rows.append([y1, y2, [b]])
+    out = []
+    for _, _, row in sorted(rows, key=lambda r: r[0]):
+        out.extend(sorted(row, key=(lambda b: -b["box"][2]) if rtl else (lambda b: b["box"][0])))
+    return out
+
+
+def bubbles(lines: list[dict], rtl: bool = True) -> list[dict]:
+    """lines: [{"text", "box": [x1, y1, x2, y2], "vertical"}] -> a Mokuro page record's blocks, in
+    reading order (right to left unless rtl is False)."""
+    kept = join_columns([dict(l, text=line_text(l["text"])) for l in lines])
     kept = [l for l in kept if l["text"] and (_HAS_CJK.search(l["text"]) or len(l["text"]) >= 4)]
     rows = [l for l in kept if not _is_furigana(l, kept)]
     parent = list(range(len(rows)))
@@ -217,7 +278,7 @@ def bubbles(lines: list[dict]) -> list[dict]:
             "lines": [l["text"] for l in group],
             "lines_coords": [[[x1, y1], [x2, y1], [x2, y2], [x1, y2]] for x1, y1, x2, y2 in (l["box"] for l in group)],
         })
-    return blocks
+    return reading_order(blocks, rtl)
 
 
 # ── Models ───────────────────────────────────────────────────────────
@@ -345,6 +406,7 @@ def read_lines(engine: Engine, image) -> list[dict]:
     return lines
 
 
-def read_page(engine: Engine, image) -> dict:
+def read_page(engine: Engine, image, rtl: bool = True) -> dict:
     """One page as a Mokuro page record, measured on the image given."""
-    return {"img_width": image.width, "img_height": image.height, "blocks": bubbles(read_lines(engine, image))}
+    return {"img_width": image.width, "img_height": image.height,
+            "blocks": bubbles(read_lines(engine, image), rtl)}

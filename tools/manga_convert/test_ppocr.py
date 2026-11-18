@@ -57,6 +57,35 @@ check("columns of one bubble merged right to left, page number and furigana drop
 check("blocks carry Mokuro line quads", all(len(b["lines_coords"]) == len(b["lines"]) for b in blocks))
 check("block box covers its lines", blocks[0]["box"] == [347, 110, 390, 200], blocks[0]["box"])
 
+# A column the detector split at a mark (〝穴〟の下の, crop 01 of manga-ocr's examples) is one line.
+joined = ppocr.bubbles([
+    {"text": "立川で見た", "box": [131, 15, 173, 201], "vertical": True},
+    {"text": "穴", "box": [80, 19, 114, 97], "vertical": True},
+    {"text": "の下の", "box": [78, 82, 113, 197], "vertical": True},
+    {"text": "巨大な眼は…", "box": [22, 17, 64, 242], "vertical": True},
+])
+check("pieces of one column joined, top to bottom", [b["lines"] for b in joined]
+      == [["立川で見た", "穴の下の", "巨大な眼は…"]], [b["lines"] for b in joined])
+stacked = ppocr.bubbles([
+    {"text": "上の吹き出し", "box": [100, 10, 120, 130], "vertical": True},
+    {"text": "下の吹き出し", "box": [100, 170, 120, 290], "vertical": True},
+])
+check("columns a bubble apart stay separate", len(stacked) == 2, [b["lines"] for b in stacked])
+
+# Two bubbles side by side (crop 04): the right one is read first, the left one first with rtl off.
+pair = [
+    {"text": "退治してよ!!", "box": [15, 9, 31, 113], "vertical": True},
+    {"text": "早くあいつを", "box": [36, 9, 53, 112], "vertical": True},
+    {"text": "よかったじゃ", "box": [174, 10, 191, 110], "vertical": True},
+    {"text": "ないわよ!!", "box": [151, 10, 168, 96], "vertical": True},
+]
+check("bubbles in a row read right to left", [b["lines"][0] for b in ppocr.bubbles(pair)]
+      == ["よかったじゃ", "早くあいつを"], [b["lines"] for b in ppocr.bubbles(pair)])
+check("left to right with rtl off", [b["lines"][0] for b in ppocr.bubbles(pair, rtl=False)]
+      == ["早くあいつを", "よかったじゃ"])
+rows = ppocr.reading_order([{"box": [0, 300, 50, 400]}, {"box": [200, 0, 250, 100]}, {"box": [0, 10, 50, 90]}])
+check("rows top to bottom", [b["box"][1] for b in rows] == [0, 10, 300], rows)
+
 # The page record goes through the same mapping as a Mokuro page's, line boxes included.
 mapped = mokuro_text_blocks(blocks, lambda x, y: (int(x / 2), int(y / 2)))
 check("blocks map to the page with a box per line",

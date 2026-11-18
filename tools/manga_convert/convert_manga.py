@@ -2646,7 +2646,7 @@ def main():
                 page_text = mokuro_text_blocks(mp["blocks"], to_page)
             elif ppocr_engine:
                 # Read on the full-resolution page, then scaled to the written one like Mokuro's.
-                record = ppocr.read_page(ppocr_engine, source_img)
+                record = ppocr.read_page(ppocr_engine, source_img, rtl=not (args.ltr or args.webtoon))
                 rx, ry = img_w / source_img.width, img_h / source_img.height
 
                 def to_page(x, y, rx=rx, ry=ry):
