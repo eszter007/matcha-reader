@@ -26,6 +26,7 @@
 #include "components/icons/stats_icons.h"
 #include "fontIds.h"
 #include "stats/StatsSync.h"
+#include "util/DateFormat.h"
 
 namespace {
 using StatsWidgets::dayLabel;
@@ -44,6 +45,21 @@ void statsMonthStatus(const void* ctx, const uint16_t year, const uint8_t month,
 int statsDaysReadInMonth(const void* ctx, const uint16_t year, const uint8_t month) {
   return ctx ? READING_STATS_STORE.getDaysReadInMonth(static_cast<const char*>(ctx), year, month)
              : READING_STATS_STORE.getDaysReadInMonth(year, month);
+}
+
+// "best 1h 12m on Nov 8"; the year is shown when it is not this one.
+void formatBestDay(char* out, const size_t size, const ReadingStatsStore::BestDay& best, const uint16_t thisYear) {
+  char duration[16];
+  if (best.minutes >= 60) {
+    snprintf(duration, sizeof(duration), "%uh %um", best.minutes / 60u, best.minutes % 60u);
+  } else {
+    snprintf(duration, sizeof(duration), "%um", static_cast<unsigned>(best.minutes));
+  }
+  char abbrev[16];
+  char date[32];
+  formatDate(date, sizeof(date), best.year == thisYear ? tr(STR_DAY_MONTH_FORMAT) : tr(STR_DATE_FORMAT), best.year,
+             best.month, best.day, StatsWidgets::monthAbbrev(best.month, abbrev, sizeof(abbrev)));
+  snprintf(out, size, tr(STR_BEST_DAY_FORMAT), duration, date);
 }
 }  // namespace
 
@@ -318,7 +334,10 @@ void ReadingStatsActivity::render(RenderLock&&) {
   int y = contentTop + 8;
 
   // ==================== STREAK WIDGET ====================
-  y += StatsWidgets::drawStreakCard(renderer, cardX, y, cardW, streak, weekMinutes, weekDays, today.dow) + 16;
+  const uint16_t todayMinutes = code ? READING_STATS_STORE.getMinutesForDay(code, today.year, today.month, today.day)
+                                     : READING_STATS_STORE.getMinutesForDay(today.year, today.month, today.day);
+  y += StatsWidgets::drawStreakCard(renderer, cardX, y, cardW, streak, todayMinutes, weekMinutes, weekDays, today.dow) +
+       16;
 
   // ==================== 4 STAT CARDS (2x2) ====================
   const int booksFinished =
@@ -346,7 +365,17 @@ void ReadingStatsActivity::render(RenderLock&&) {
 
   // ==================== CALENDAR ====================
   const StatsWidgets::MonthSource source{code, statsMonthStatus, statsDaysReadInMonth};
-  y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source, &monthNav);
+  const auto best = READING_STATS_STORE.getBestDay(code);
+  StatsWidgets::DayMarks marks;
+  char bestNote[64];
+  if (best.minutes > 0) {
+    marks.bestYear = best.year;
+    marks.bestMonth = best.month;
+    marks.bestDay = best.day;
+    formatBestDay(bestNote, sizeof(bestNote), best, today.year);
+    marks.note = bestNote;
+  }
+  y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source, &monthNav, &marks);
 
   // ==================== REFRESH STATS ====================
   // A quiet text action: icon and small text, outlined only while focused.

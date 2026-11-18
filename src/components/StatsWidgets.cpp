@@ -86,7 +86,8 @@ void stepMonth(uint16_t& year, uint8_t& month, const int delta) {
 }
 
 int drawStreakCard(const GfxRenderer& renderer, const int x, const int y, const int w, const int streak,
-                   const uint16_t weekMinutes, const bool weekDays[7], const int todayDow) {
+                   const uint16_t todayMinutes, const uint16_t weekMinutes, const bool weekDays[7],
+                   const int todayDow) {
   const int iconSize = 32;
   const int smallLH = renderer.getLineHeight(SMALL_FONT_ID);
   const int circleSize = 24;
@@ -104,11 +105,22 @@ int drawStreakCard(const GfxRenderer& renderer, const int x, const int y, const 
   renderer.drawText(UI_12_FONT_ID, row1X + iconSize + 8, row1Y + (iconSize - renderer.getLineHeight(UI_12_FONT_ID)) / 2,
                     streakBuf, true, EpdFontFamily::BOLD);
 
-  char weekBuf[96];
-  I18N.formatCount(weekBuf, sizeof(weekBuf), StrId::STR_WEEK_MINUTES_READ_FORMAT, weekMinutes);
-  const int weekTextW = renderer.getTextWidth(SMALL_FONT_ID, weekBuf);
+  // One buffer: today's minutes, then the week's, or the week's alone when that is too wide.
+  char line[152];
+  bool withToday = false;
+  if (todayMinutes > 0) {
+    I18N.formatCount(line, sizeof(line), StrId::STR_TODAY_MINUTES_FORMAT, todayMinutes);
+    const size_t used = strlen(line);
+    const int sep = snprintf(line + used, sizeof(line) - used, " · ");
+    if (sep > 0 && used + sep + 1 < sizeof(line)) {
+      I18N.formatCount(line + used + sep, sizeof(line) - used - sep, StrId::STR_WEEK_MINUTES_READ_FORMAT, weekMinutes);
+      withToday = strlen(line) + 1 < sizeof(line) && renderer.getTextWidth(SMALL_FONT_ID, line) <= w - 2 * CARD_PAD;
+    }
+  }
+  if (!withToday) I18N.formatCount(line, sizeof(line), StrId::STR_WEEK_MINUTES_READ_FORMAT, weekMinutes);
+  const int lineW = renderer.getTextWidth(SMALL_FONT_ID, line);
   const int row2Y = row1Y + iconSize + 4;
-  renderer.drawText(SMALL_FONT_ID, x + (w - weekTextW) / 2, row2Y, weekBuf, true);
+  renderer.drawText(SMALL_FONT_ID, x + (w - lineW) / 2, row2Y, line, true);
 
   const int sepY = row2Y + smallLH + 8;
   renderer.drawLine(x + CARD_PAD, sepY, x + w - CARD_PAD, sepY, true);
@@ -208,10 +220,19 @@ int drawMonthCalendar(const GfxRenderer& renderer, const int x, const int y, con
 
   // Days read count
   const int daysReadMonth = source.daysReadInMonth(source.ctx, calYear, calMonth);
-  char daysReadBuf[64];
-  I18N.formatCount(daysReadBuf, sizeof(daysReadBuf), StrId::STR_DAYS_READ_IN_MONTH_FORMAT, daysReadMonth);
-  const int drW = renderer.getTextWidth(SMALL_FONT_ID, daysReadBuf);
-  renderer.drawText(SMALL_FONT_ID, x + (w - drW) / 2, monthY + calTitleH + 2, daysReadBuf, true);
+  char caption[120];
+  I18N.formatCount(caption, sizeof(caption), StrId::STR_DAYS_READ_IN_MONTH_FORMAT, daysReadMonth);
+  if (marks && marks->note) {
+    const size_t daysLen = strlen(caption);
+    const int n = snprintf(caption + daysLen, sizeof(caption) - daysLen, " · %s", marks->note);
+    // Clear of the chevrons on both sides; otherwise the days-read count alone.
+    if (n <= 0 || daysLen + n >= sizeof(caption) ||
+        renderer.getTextWidth(SMALL_FONT_ID, caption) > w - 2 * (CARD_PAD + chevSz + 10)) {
+      caption[daysLen] = '\0';
+    }
+  }
+  const int drW = renderer.getTextWidth(SMALL_FONT_ID, caption);
+  renderer.drawText(SMALL_FONT_ID, x + (w - drW) / 2, monthY + calTitleH + 2, caption, true);
 
   // Day-of-week headers
   const int headerY = monthY + calTitleH + calSubH + 12;
@@ -254,7 +275,9 @@ int drawMonthCalendar(const GfxRenderer& renderer, const int x, const int y, con
 
     if (!marks) continue;
     const int ringR = circR + 3;
-    if (calYear == marks->finishYear && calMonth == marks->finishMonth && d == marks->finishDay) {
+    const bool finish = calYear == marks->finishYear && calMonth == marks->finishMonth && d == marks->finishDay;
+    const bool best = calYear == marks->bestYear && calMonth == marks->bestMonth && d == marks->bestDay;
+    if (finish || best) {
       renderer.drawRoundedRect(cx - ringR, cy - ringR, ringR * 2, ringR * 2, 2, ringR, true);
     } else if (calYear == marks->startYear && calMonth == marks->startMonth && d == marks->startDay) {
       // Dotted, so the start reads lighter than the finish.

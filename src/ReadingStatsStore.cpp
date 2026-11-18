@@ -413,6 +413,28 @@ int ReadingStatsStore::getDaysReadInMonth(const char* language, const uint16_t y
   return count;
 }
 
+ReadingStatsStore::BestDay ReadingStatsStore::getBestDay(const char* language) const {
+  BestDay best;
+  int32_t bestEpoch = 0;
+  const auto consider = [&](const uint16_t year, const uint8_t month, const uint8_t day, const uint16_t minutes) {
+    if (minutes == 0 || minutes < best.minutes) return;
+    const int32_t epoch = daysSinceEpoch(year, month, day);
+    if (minutes == best.minutes && epoch >= bestEpoch) return;
+    best = {year, month, day, minutes};
+    bestEpoch = epoch;
+  };
+  if (!language) {
+    for (const auto& d : days) consider(d.year, d.month, d.day, d.minutesRead);
+    return best;
+  }
+  char lang[4];
+  normalizeLanguage(language, lang);
+  for (const auto& e : languageDays) {
+    if (memcmp(e.language, lang, sizeof(lang)) == 0) consider(e.year, e.month, e.day, e.minutesRead);
+  }
+  return best;
+}
+
 uint16_t ReadingStatsStore::getBooksFinished(const char* language) const {
   const auto* g = accountFor(language);
   return static_cast<uint16_t>(
