@@ -8,8 +8,9 @@ tool instead:
 
   1. Detects actual panel RECTANGLES geometrically (white-gutter grid
      detection -- no ML model required).
-  2. Crops each panel and sends it to Gemini (gemini-3.8-flash) asking what
-     text/dialogue appears in it, as JSON.
+  2. Reads the page's text: by default on this computer with PP-OCRv6_manga
+     (Japanese and Chinese, see ppocr.py), or with --ocr gemini by sending each
+     panel crop to Gemini (gemini-3.8-flash), which also translates it.
   3. Writes the same panels.idx/panels.dat binary format the device already
      reads, plus page images renamed to a canonical page_NNNN.<ext> sequence
      so the device's natural-sort-based page scan can never misorder pages
@@ -19,23 +20,25 @@ Page images are copied as-is (JPG/PNG) -- the device renders them directly,
 no BMP conversion needed.
 
 Usage:
-    export GEMINI_API_KEY=$(cat ~/path/to/gemini.key)
-    python3 convert_manga.py --input ./manga_pages/ --output-dir /path/to/sd/manga/Book/
+    # Text read on this computer (Japanese or Chinese; needs onnxruntime and numpy), the
+    # default when no Gemini key is given:
+    python3 convert_manga.py --input ./manga_pages/ --output-dir /path/to/sd/manga/Book/ --language ja
 
-    # Or pass the key file directly (key is read at runtime, never embedded):
+    # Text read and translated by Gemini, any language (the key is read at runtime, never embedded):
     python3 convert_manga.py --input ./manga_pages/ --output-dir ./out/ \\
         --gemini-key-file ./gemini.key
+    # or: export GEMINI_API_KEY=$(cat ~/path/to/gemini.key)
 
     # Explicit page order, for sources whose filenames don't sort correctly
     # (one source filename per line, in the order pages should be read):
     python3 convert_manga.py --input ./manga_pages/ --output-dir ./out/ \\
         --page-order-file ./order.txt
 
-    # A volume already OCR'd by Mokuro (vol1.mokuro beside its vol1/ image folder): its text
-    # is used instead of Gemini, so no API key is needed:
+    # A volume already OCR'd by Mokuro (vol1.mokuro beside its vol1/ image folder): its own
+    # text is used, nothing is read again:
     python3 convert_manga.py --input ./Series/vol1.mokuro --output-dir ./out/
 
-    # Skip the Gemini OCR pass entirely (panels only, no text/lookup data):
+    # Skip text recognition entirely (panels only, no text/lookup data):
     python3 convert_manga.py --input ./manga_pages/ --output-dir ./out/ --no-ocr
 
 Output: <output-dir>.matcha, one file holding everything below (see scripts/pack_matcha.py;
@@ -155,6 +158,7 @@ TOC_ENTRY_HEADER = "<IH"  # pageIndex(4) + titleLen(2) = 6 bytes
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".avif", ".bmp"}
 
 GEMINI_MODEL = "gemini-3.8-flash"
+OCR_ENGINES = ("builtin", "gemini", "none")
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 # Language the panel translations are produced in. The device shows them alongside the
@@ -2361,7 +2365,11 @@ def main():
                         "afterwards unless --legacy")
     parser.add_argument("--page-order-file", help="Text file listing source filenames in reading order, one per line")
     parser.add_argument("--gemini-key-file", help="Path to a file containing the Gemini API key")
-    parser.add_argument("--no-ocr", action="store_true", help="Skip Gemini OCR -- panel boxes only, no text")
+    parser.add_argument("--ocr", choices=OCR_ENGINES,
+                        help="How the text is read: builtin (on this computer, Japanese and Chinese; the default), "
+                             "gemini (any language, with translations; the default when a Gemini key is given "
+                             "by --gemini-key-file or GEMINI_API_KEY) or none")
+    parser.add_argument("--no-ocr", action="store_true", help="Same as --ocr none: panel boxes only, no text")
     parser.add_argument("--panel-margin", type=int, default=10, help="Pixels of margin added around cropped panels")
     parser.add_argument("--max-pages", type=int, help="Only process the first N pages (for testing)")
     parser.add_argument(
@@ -2475,8 +2483,29 @@ def main():
         print("Error: --webtoon re-cuts pages, which would separate Mokuro's text from its page", file=sys.stderr)
         sys.exit(1)
 
+    if args.no_ocr and args.ocr not in (None, "none"):
+        print("Error: --no-ocr and --ocr " + args.ocr + " contradict each other", file=sys.stderr)
+        sys.exit(1)
+    has_key = bool(args.gemini_key_file or os.environ.get("GEMINI_API_KEY"))
+    ocr_engine = "none" if args.no_ocr else args.ocr or ("gemini" if has_key else "builtin")
+    if mokuro:
+        ocr_engine = "none"  # the volume brings its own text
+
     api_key = None
-    if not args.no_ocr and not mokuro:
+    ppocr_engine = None
+    if ocr_engine == "builtin":
+        try:
+            import ppocr
+            ppocr_engine = ppocr.load_engine()
+        except ImportError as e:
+            print(f"Error: text recognition needs {e.name}: `pip install onnxruntime numpy`, "
+                  "or pass --ocr gemini or --no-ocr.", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error: text recognition could not load ({e}). Pass --ocr gemini or --no-ocr to convert "
+                  "without it.", file=sys.stderr)
+            sys.exit(1)
+    elif ocr_engine == "gemini":
         if args.gemini_key_file:
             with open(args.gemini_key_file, "r", encoding="utf-8") as f:
                 api_key = f.read().strip()
@@ -2485,7 +2514,7 @@ def main():
         if not api_key:
             print(
                 "Error: no Gemini API key. Pass --gemini-key-file or set GEMINI_API_KEY, "
-                "or pass --no-ocr to skip text extraction.",
+                "or pass --ocr builtin or --no-ocr.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -2550,6 +2579,9 @@ def main():
         if api_key and not meta_language:
             print("Note: no --language set; the OCR prompt will not name a source language. "
                   "Pass --language for better text recognition.", file=sys.stderr)
+        if ppocr_engine and meta_language and meta_language.split("-")[0] not in ("ja", "zh", "yue"):
+            print(f"Warning: built-in text recognition reads Japanese and Chinese, not {meta_language!r}. "
+                  "Use --ocr gemini for this book, or --no-ocr.", file=sys.stderr)
 
         idx_records = []
         dat_chunks = []
@@ -2612,6 +2644,14 @@ def main():
                     py = min(max((y * ky - oy) * sy, 0), img_h)
                     return int(px), int(py)
                 page_text = mokuro_text_blocks(mp["blocks"], to_page)
+            elif ppocr_engine:
+                # Read on the full-resolution page, then scaled to the written one like Mokuro's.
+                record = ppocr.read_page(ppocr_engine, source_img)
+                rx, ry = img_w / source_img.width, img_h / source_img.height
+
+                def to_page(x, y, rx=rx, ry=ry):
+                    return int(min(max(x * rx, 0), img_w)), int(min(max(y * ry, 0), img_h))
+                page_text = mokuro_text_blocks(record["blocks"], to_page)
             # Panel boxes stay in resized page space (panels.idx records the page at that size);
             # only the crop is taken from the original, so map the rect back across.
             panel_scale_x = source_img.width / img_w
@@ -2655,7 +2695,7 @@ def main():
                 # page's pixels, like everything downstream.
                 frames, text_boxes = detect_panels(source_img, img)
                 if page_text:
-                    # Mokuro's blocks mark the bubbles too, so panel crops grow over them.
+                    # Mokuro's or PP-OCR's blocks mark the bubbles too, so panel crops grow over them.
                     text_boxes = list(text_boxes) + [b["box"] for b in page_text]
                 if not frames:
                     frames = [[0, 0, img_w, img_h]]

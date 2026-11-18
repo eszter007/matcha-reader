@@ -6,7 +6,7 @@ This guide covers the **CrossPoint** firmware as shipped in Matcha Reader: the b
 > Japanese and Chinese dictionaries, fonts, and manga or manhua must be converted before the device can use them.
 > [**Matcha Reader Tools**](https://eszter007.github.io/matcha-reader-tools/) does all of this in your web browser
 > and gives you a zip file laid out for the SD card. You do not need to install anything. Your files stay on your
-> computer. The one exception is manga text recognition (OCR), which sends page panels to Google Gemini using your own API key.
+> computer. The one exception is manga text recognition with Gemini, an option that sends page panels to Google using your own API key.
 > ([source](https://github.com/eszter007/matcha-reader-tools))
 
 - [CrossPoint User Guide](#crosspoint-user-guide)
@@ -1672,7 +1672,7 @@ lookup in its speech bubbles is not supported yet.
 
 Convert the book with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) and pick the X3 or
 X4 target, so the pages are sized for your screen. Manga that was already read with [Mokuro](https://github.com/kha-white/mokuro)
-converts with the script instead, without a Gemini key (see [docs/manga-conversion.md](docs/manga-conversion.md#manga-already-read-by-mokuro)). Then copy the `.matcha` file (or, for older firmware, the
+converts with the script instead, keeping Mokuro's text (see [docs/manga-conversion.md](docs/manga-conversion.md#manga-already-read-by-mokuro)). Then copy the `.matcha` file (or, for older firmware, the
 folder; see below) anywhere on the SD card. Any name and depth works. The book shows up in the Library grid, on shelves and in Continue Reading with its cover, title,
 author and progress.
 
