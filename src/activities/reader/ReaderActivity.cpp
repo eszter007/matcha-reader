@@ -156,6 +156,9 @@ void ReaderActivity::onExit() {
   // Read from the saved progress, as on entry, so a book opened without moving compares equal.
   if (hadBook) remoteProgress::readHere(bookPath, enterPercent, loadOwnBookProgress(bookPath));
 
+  // The first page can finish rendering after the last reader loop.
+  rememberBookOnceRendered();
+
   // Keep rebuildable font buffers from pinning the heap between reading sessions.
   if (auto* fontCache = renderer.getFontCacheManager()) {
     fontCache->releaseAllFontMemory();

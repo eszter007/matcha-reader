@@ -85,6 +85,7 @@ class ParsedText {
   bool focusReadingEnabled;
   bool isNaturalAlign;
   bool hasRtlWord;
+  bool hasComplexWord = false;
   // The enlarged first letter, once prepareDropCap() has claimed it. Attached to the first
   // line this ParsedText emits and cleared with blockStyle.dropCapLines once the lines beside
   // it are out, so a soft flush mid-paragraph cannot start a second one.

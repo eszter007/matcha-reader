@@ -174,7 +174,6 @@ class MappedInputManager {
   bool wasTouchActivity() const { return gpio.wasTouchActivity(); }
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;
-  const GfxRenderer& getRenderer() const { return renderer; }
   // The screen-direction pair that currently lands on the two FRONT direction buttons: left/right
   // in portrait and inverted, up/down in either landscape (the rotation puts the horizontal pair on
   // the side buttons there). Lets a caller bind "the front pair" without naming physical buttons --

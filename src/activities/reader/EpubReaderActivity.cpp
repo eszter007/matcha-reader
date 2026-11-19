@@ -2676,6 +2676,7 @@ bool EpubReaderActivity::launchKOReaderSync(const bool withClockAndInsights) {
     saveRecentPages();
     // Exit skips this once epub is gone, which would leave this book's settings in place.
     restoreGlobalReaderSettings();
+    rememberBookOnceRendered();
     epub.reset();
     // Also release the resident font caches (SD font slab + advance tables -- tens of KB on a
     // Japanese book). Freeing the Epub alone leaves those pinned, fragmenting the heap so WiFi +
@@ -3800,6 +3801,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
               // The predictive gates guessed fast but the build blew the silent budget.
               showBuildPopup();
             }
+            // The render lock is held for the whole build, so the main loop
+            // cannot power the EEGO A4 panel down; left powered it fuzzes.
+            if (BoardConfig::isEegoA4()) display.controllerIdle();
             if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
               LOG_ERR("ERS", "Failed during incremental section build");
               failedSectionSpineIndex = currentSpineIndex;
@@ -4689,6 +4693,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   } ditherScope{renderer};
   renderer.setDitherImagesInBw(!imageGrayscale);
   const bool pageHasImages = imageGrayscale && page->hasImages();
+  // Images keep every gray level on panels that otherwise render the text
+  // overlay with fewer.
+  struct FullToneScope {
+    ~FullToneScope() { display.setOverlayFullTone(false); }
+  } fullToneScope;
+  display.setOverlayFullTone(pageHasImages);
   shownPageHasImages_ = pageHasImages;
   // Under the open toolbar the chrome's FAST push follows, and on Xteink panels
   // closing it re-renders the page with grays anyway: skip the gray pass here.
@@ -5582,7 +5592,7 @@ int EpubReaderActivity::clippingAtPoint(const Page& page, const int x, const int
       const char* text = block->wordText(i);
       if (!clippingText::hasVisibleText(text)) continue;
       const auto style = static_cast<EpdFontFamily::Style>(block->wordStyle(i) & ~EpdFontFamily::UNDERLINE);
-      const int width = clippingWordWidth(renderer, clippingWordFont(*block, i, fontId), text, style);
+      const int width = clippingWordWidth(renderer, clippingWordFont(*block, i, fontId), block->laidOutWord(i), style);
       if (width <= 0) continue;
       const uint16_t index = wordIndex++;
       const Rect rect =
@@ -5622,7 +5632,7 @@ void EpubReaderActivity::recordTapLines(const Page& page, const int fontId, cons
     const auto wordRect = [&](const uint16_t i) {
       const auto style = static_cast<EpdFontFamily::Style>(block->wordStyle(i) & ~EpdFontFamily::UNDERLINE);
       const char* text = block->wordText(i);
-      const int width = clippingWordWidth(renderer, clippingWordFont(*block, i, fontId), text, style);
+      const int width = clippingWordWidth(renderer, clippingWordFont(*block, i, fontId), block->laidOutWord(i), style);
       return clippingWordRect(renderer, fontId, line, i, marginTop, marginLeft, std::max(width, 0));
     };
     const Rect a = wordRect(static_cast<uint16_t>(first));
@@ -5702,7 +5712,7 @@ bool EpubReaderActivity::textAtPoint(const int x, const int y, const int reach) 
       const char* text = block->wordText(i);
       if (!clippingText::hasVisibleText(text)) continue;
       const auto style = static_cast<EpdFontFamily::Style>(block->wordStyle(i) & ~EpdFontFamily::UNDERLINE);
-      const int width = clippingWordWidth(renderer, clippingWordFont(*block, i, fontId), text, style);
+      const int width = clippingWordWidth(renderer, clippingWordFont(*block, i, fontId), block->laidOutWord(i), style);
       if (width <= 0) continue;
       const Rect rect =
           clippingWordRect(renderer, fontId, line, i, top + SETTINGS.screenMargin, left + SETTINGS.screenMargin, width);
@@ -5768,7 +5778,7 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
       const char* text = block->wordText(i);
       if (!clippingText::hasVisibleText(text)) continue;
       const auto style = static_cast<EpdFontFamily::Style>(block->wordStyle(i) & ~EpdFontFamily::UNDERLINE);
-      int width = clippingWordWidth(renderer, clippingWordFont(*block, i, fontId), text, style);
+      int width = clippingWordWidth(renderer, clippingWordFont(*block, i, fontId), block->laidOutWord(i), style);
       if (width <= 0) continue;
       const uint16_t wordIndex = pageWordIndex++;
       if (!isHighlighted(wordIndex, block->wordSourceRange(i))) {

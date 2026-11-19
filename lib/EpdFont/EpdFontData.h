@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <string>
 
 // fontconvert.py, fontconvert_sdcard.py and the vector loader rasterize point sizes at this DPI.
 constexpr uint16_t FONT_RASTER_DPI = 150;
@@ -276,6 +277,13 @@ typedef struct {
   /// The search then covers one 256-codepoint page -- a few dozen entries instead of thousands --
   /// which makes the list faster to search than the interval table it replaces.
   const uint16_t* codepointPages;
+
+  /// Complex-script shaping (ComplexShaper). When non-null, the renderer hands
+  /// it any text containing a complex-script run and draws the ShapingTokens.h
+  /// stream written to `out` instead. Returns false to draw the text unshaped.
+  /// Shares glyphMissCtx. nullptr for fonts without shaping data (all fonts
+  /// zero-init this).
+  bool (*shapeHandler)(void* ctx, const char* utf8, std::string* out);
 } EpdFontData;
 
 /// Index of `cp` in `data->glyph`, or -1 when the font's resident tables do not cover it. The one

@@ -20,8 +20,6 @@ class I18n {
   // Get localized string by ID
   const char* get(StrId id) const;
 
-  const char* operator[](StrId id) const { return get(id); }
-
   /// A count message: its forms are separated by '|' in the order of the language's plural
   /// categories (PluralRules.h), each formatted with the count ("%d day read|%d days read").
   /// Writes the form for n into out. A message with fewer forms uses its last; one that falls

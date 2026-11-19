@@ -353,8 +353,8 @@ Some rows only appear on certain devices or while another setting is on. The not
 - **Clear Reading Cache**: Deletes the data the reader saves for each book on the SD card. Your books stay, but
   **reading progress is lost** and each book is prepared again the next time you open it.
 
-- **Display Refresh**: Flashes the screen black and white ten times to clear ghosting left by earlier pages.
-  Press **Back** to stop early; the screen always ends white.
+
+**About** shows hardware and firmware information. On EEGO Reader A4, it also shows the factory UID, matching the stock firmware. If the UID cannot be read, its value shows **Error.**
 
 - **Language**: The menu language. English, Japanese, Spanish, French and German are built in. The other languages
   in the list show **Download**: select one and the device downloads its language pack over Wi-Fi and switches to it; see

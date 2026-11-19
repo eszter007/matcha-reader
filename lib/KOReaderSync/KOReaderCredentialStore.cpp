@@ -161,13 +161,6 @@ std::string KOReaderCredentialStore::getBasicAuthorization() const {
 
 bool KOReaderCredentialStore::hasCredentials() const { return !username.empty() && !password.empty(); }
 
-void KOReaderCredentialStore::clearCredentials() {
-  username.clear();
-  password.clear();
-  saveToFile();
-  LOG_DBG("KRS", "Cleared KOReader credentials");
-}
-
 // A new account or server starts its stats upload from scratch.
 int32_t KOReaderCredentialStore::getStatsUploadedDay() const {
   return statsAccount == username + "@" + getBaseUrl() ? statsUploadedDay : 0;
