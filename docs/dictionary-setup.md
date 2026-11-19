@@ -16,7 +16,7 @@ files are in [dictionary.md](dictionary.md).
 
 **French, English, German and others.** Find a StarDict dictionary (three files: `.ifo`, `.idx`, `.dict` or `.dict.dz`) and copy them into `dictionaries/<lang>/<name>/`, for example `dictionaries/fr/larousse/`. Nothing to convert.
 
-To check it worked, open a book in that language, open the reader menu and choose **Word Lookup**. Reader Settings also shows which dictionary the book reads.
+To check it worked, open a book in that language, open the reader menu and choose **Word Lookup**. **Reader Settings → Dictionary Settings** in the book also shows which dictionary it reads.
 
 ## Folder layout
 
@@ -121,4 +121,4 @@ Every other language uses plain StarDict, with no conversion: put each dictionar
 
 You can put several dictionaries in one language, each in its own folder (`en/collins/`, `en/wiktionary/`). A lookup checks all of them, up to four, and shows every entry it finds one after another: page past the end of one dictionary's entry and the next dictionary's follows, with the footer naming the dictionary and its place (`Collins (1/2)`). The dictionary picked in Settings comes first if it is one of them, then the rest by folder name. Saving a sentence records the dictionary whose entry is on screen.
 
-The dictionary you pick in Settings is also the fallback, used when the book has no language or no folder matches it. Reader Settings shows which dictionary a book reads first.
+The dictionary you pick in Settings is also the fallback, used when the book has no language or no folder matches it. In a book, **Reader Settings → Dictionary Settings** shows which dictionary it reads first.

@@ -24,19 +24,9 @@ class ReaderSettingsActivity final : public UiTabListActivity, private SettingRo
   // The open book's text profile, from the reader that pushed this screen.
   CrossPointSettings::TextProfileId bookTextProfile = CrossPointSettings::TextProfileId::Latin;
   std::string dictionaryLanguage;
-  // Vertical Text / Furigana: per-book overrides that live on the pushing reader activity, not
-  // in CrossPointSettings. showReaderToggles gates whether they appear at all (mirrors the
-  // condition the reader menu used before these moved here: isJapaneseBook() || forced on).
-  // Mutated in place by their DynamicToggle setters; read back on finish() via a MenuResult (see
-  // ActivityResult.h) so the caller can apply them the same way it already applies font/margin
-  // changes made in this screen.
-  bool showReaderToggles = false;
-  bool verticalTextState = false;
-  bool furiganaState = false;
-  // What the toggles showed on entry: a toggle left as it was is reported as untouched (-1), so
-  // a Book Language change in the same visit is not undone by the direction it started with.
-  bool initialVerticalTextState = false;
-  bool initialFuriganaState = false;
+  // The open book's direction and declared page order, for its Text Settings rows.
+  bool bookVerticalText = false;
+  bool bookRtl = false;
   // Book Language: the per-book override (cjk::LanguageChoice) that re-tags a mis-tagged EPUB.
   // Shown for every text book pushed from the reader; -1 when the caller offers no such row.
   int8_t languageState = -1;
@@ -45,8 +35,9 @@ class ReaderSettingsActivity final : public UiTabListActivity, private SettingRo
   // Rotate Panels, Reading Orientation and Customise Status Bar all still apply and stay.
   bool mangaMode = false;
 
-  // Single-category mode. The Library and Sleep rows in Display, and Shortcuts in Controls, open
-  // this same screen showing only their own category, none of which is one of the four tabs.
+  // Single-category mode. The Library and Sleep rows in Display, Shortcuts in Controls and
+  // Dictionary Settings in Reader open this same screen showing only their own rows, none of
+  // which is one of the four tabs.
   // STR_NONE_OPT means the ordinary tabbed screen. Everything else -- row building, value text, the option popup,
   // toggles, actions -- is the usual path, so a sub-screen costs a list rather than an activity.
   StrId submenuCategory = StrId::STR_NONE_OPT;
@@ -127,28 +118,25 @@ class ReaderSettingsActivity final : public UiTabListActivity, private SettingRo
  public:
   // The open book's text profile: Text Settings goes straight to it (finishOnBack screens only).
   void setBookTextProfile(const CrossPointSettings::TextProfileId profile) { bookTextProfile = profile; }
+  void setBookLayout(const bool verticalText, const bool rtl) {
+    bookVerticalText = verticalText;
+    bookRtl = rtl;
+  }
   // initialCategory: category tab to open on (0=Display, 1=Reader, 2=Controls, 3=System).
   // finishOnBack: pop back to the pushing activity (e.g. the reader menu's "Reader Settings")
   // instead of replacing the stack with Home.
-  // showReaderToggles/verticalTextEnabled/furiganaEnabled: see the member comment above.
   // mangaMode hides settings that do not apply to image-based manga books.
   // hideMangaOnlySettings hides Rotate Panels in non-manga embedded Reader Settings.
   explicit ReaderSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialCategory = 0,
                                   const bool finishOnBack = false, const CjkScript bookScript = CjkScript::None,
-                                  std::string dictionaryLanguage = {}, const bool showReaderToggles = false,
-                                  const bool verticalTextEnabled = false, const bool furiganaEnabled = false,
-                                  const bool mangaMode = false, const bool hideMangaOnlySettings = false,
+                                  std::string dictionaryLanguage = {}, const bool mangaMode = false,
+                                  const bool hideMangaOnlySettings = false,
                                   const StrId submenuCategory = StrId::STR_NONE_OPT, const int8_t languageChoice = -1)
       : UiTabListActivity("Settings", renderer, mappedInput),
         initialCategory(initialCategory),
         finishOnBack(finishOnBack),
         bookScript(bookScript),
         dictionaryLanguage(std::move(dictionaryLanguage)),
-        showReaderToggles(showReaderToggles),
-        verticalTextState(verticalTextEnabled),
-        furiganaState(furiganaEnabled),
-        initialVerticalTextState(verticalTextEnabled),
-        initialFuriganaState(furiganaEnabled),
         languageState(languageChoice),
         mangaMode(mangaMode),
         submenuCategory(submenuCategory),

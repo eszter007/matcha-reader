@@ -52,7 +52,10 @@ void ReaderSettingsActivity::saveSettings() {
   // preview can leave less contiguous heap than settings JSON needs, so reclaim
   // renderer-owned font tables before serializing. The reader restores them when
   // the settings activity returns.
+  // Under the render lock: a render in progress reads glyphs from these caches, and freeing them
+  // under it corrupts the heap.
   if (finishOnBack) {
+    RenderLock lock;
     if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
   }
   SETTINGS.saveToFile();
@@ -72,19 +75,23 @@ void ReaderSettingsActivity::rebuildSettingsLists() {
   // Japanese and Chinese books use their own dictionary flow, so omit the regular picker there.
   std::vector<DictionaryEntry> dictionaries;
   const bool cjkBook = bookScript != CjkScript::None;
-  if (!cjkBook && (!finishOnBack || selectedCategoryIndex == 1)) DictionaryRegistry::discover(dictionaries);
+  const bool dictionaryPage = submenuCategory == StrId::STR_DICTIONARY_SETTINGS;
+  if (!cjkBook && dictionaryPage) DictionaryRegistry::discover(dictionaries);
 
   // Reader-launched settings lock the UI to one category while the book remains
   // resident. Avoid materializing every web/device setting in that low-heap path.
   // finishOnBack narrows the build to the one category on screen. The Library sub-screen sets it
   // too (so Back pops to Settings rather than Home), but its category is not a tab, so name it
   // directly instead of indexing categoryNames.
-  const StrId categoryFilter = isSubmenu()    ? submenuCategory
+  const StrId categoryFilter = dictionaryPage ? StrId::STR_CAT_READER
+                               : isSubmenu()  ? submenuCategory
                                : finishOnBack ? categoryNames[selectedCategoryIndex]
                                               : StrId::STR_NONE_OPT;
   auto settings = getSettingsList(&sdFontSystem.registry(), &dictionaries, categoryFilter,
                                   /*includeTextSettingsEntries=*/!finishOnBack, dictionaryLanguage, finishOnBack);
-  if (finishOnBack) {
+  if (dictionaryPage) {
+    submenuSettings.reserve(2);  // Word Lookup Font Size, and the dictionary for a non-CJK book
+  } else if (finishOnBack && !isSubmenu()) {
     switch (selectedCategoryIndex) {
       case 0:
         displaySettings.reserve(settings.size() + 2);
@@ -116,6 +123,10 @@ void ReaderSettingsActivity::rebuildSettingsLists() {
         SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
       continue;
     }
+    if (dictionaryPage) {
+      if (dictionaryRowOrder(setting) >= 0) submenuSettings.push_back(std::move(setting));
+      continue;
+    }
     if (setting.category == StrId::STR_CAT_DISPLAY) {
       // The sunlight fading fix is a grayscale-waveform compensation that does
       // not apply on the X4 Pro / X4 Classic (plain OTP waveform, same panels).
@@ -127,7 +138,7 @@ void ReaderSettingsActivity::rebuildSettingsLists() {
     } else if (setting.category == StrId::STR_CAT_READER) {
       // Settings merged into "Text Settings"
       // (they stay in the shared list for the web settings API)
-      if (setting.inTextSettings) continue;
+      if (setting.inTextSettings || dictionaryRowOrder(setting) >= 0) continue;
       // Manga pages ARE images -- the Display/Placeholder/Suppress image rendering mode has
       // nothing to render for a manga book, so it's hidden along with Text Settings below.
       if (mangaMode && setting.nameId == StrId::STR_IMAGES) continue;
@@ -211,27 +222,6 @@ void ReaderSettingsActivity::rebuildSettingsLists() {
       readerSettings.insert(readerSettings.begin(),
                             SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
     }
-    // Vertical Text / Furigana: per-book overrides that live on the reader activity that pushed
-    // this screen, not in CrossPointSettings -- so they only make sense (and only get injected)
-    // when there IS such a book (finishOnBack) and the book is one they apply to
-    // (showReaderToggles, the same condition the reader's quick menu used before these moved
-    // here). Opening Settings from Home never shows them: there is no book to apply them to.
-    // Also never for manga (mangaMode implies !showReaderToggles in practice, but this makes the
-    // exclusivity explicit rather than relying on the caller never combining the two) -- manga
-    // has no Japanese-vertical-text concept, and the +1/+2 insert positions below assume Text
-    // Settings just landed at index 0, which mangaMode skips.
-    if (!mangaMode && finishOnBack && showReaderToggles) {
-      readerSettings.insert(readerSettings.begin() + 1,
-                            SettingInfo::DynamicToggle(
-                                StrId::STR_VERTICAL_TEXT_LABEL, [this] { return verticalTextState; },
-                                [this](const bool v) { verticalTextState = v; }, StrId::STR_CAT_READER));
-      // The ruby toggle is named for what a Chinese book carries (pinyin or zhuyin), furigana otherwise.
-      readerSettings.insert(
-          readerSettings.begin() + 2,
-          SettingInfo::DynamicToggle(
-              cjk::isChinese(bookScript) ? StrId::STR_PINYIN_LABEL : StrId::STR_FURIGANA_LABEL,
-              [this] { return furiganaState; }, [this](const bool v) { furiganaState = v; }, StrId::STR_CAT_READER));
-    }
     // Book Language: for any text book, since its point is a book whose tag is wrong or missing
     // (a Chinese EPUB tagged en gets no lookup, no CJK font and no vertical text until re-tagged).
     if (!mangaMode && finishOnBack && languageState >= 0) {
@@ -245,10 +235,20 @@ void ReaderSettingsActivity::rebuildSettingsLists() {
               [this](const uint8_t v) { languageState = static_cast<int8_t>(v % cjk::LANGUAGE_CHOICE_COUNT); }, nullptr,
               StrId::STR_CAT_READER));
     }
+    // Below Text Settings and Book Language, as Settings lists it below Text Settings.
+    const int dictionaryAt = (mangaMode ? 0 : 1) + (!mangaMode && finishOnBack && languageState >= 0 ? 1 : 0);
+    readerSettings.insert(readerSettings.begin() + dictionaryAt,
+                          SettingInfo::Action(StrId::STR_DICTIONARY_SETTINGS, SettingAction::DictionarySettings));
     // No STR_MANAGE_FONTS entry here: it lives at the bottom of the font list inside Text
     // Settings, where the pre-1.5.0 picker had it. Upstream moved it up when it replaced
     // FontSelectionActivity; that costs the "this font is missing -> install it" shortcut.
     readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
+  }
+
+  // In the order Settings shows them.
+  if (dictionaryPage) {
+    std::sort(submenuSettings.begin(), submenuSettings.end(),
+              [](const SettingInfo& a, const SettingInfo& b) { return dictionaryRowOrder(a) < dictionaryRowOrder(b); });
   }
 
   // Update currentSettings pointer and count for the active category
@@ -449,22 +449,11 @@ bool ReaderSettingsActivity::handleButtons() {
   if (finishOnBack) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       saveSettings();
-      // The reader's READER_SETTINGS handler only reads verticalOverride/furiganaOverride --
-      // the same two fields the old in-menu toggles rode back on -- via std::get_if<MenuResult>,
-      // so when this screen never showed the toggles (showReaderToggles false) it's fine to set
-      // no result at all: the ActivityResult stays std::monostate, get_if returns null, and the
-      // handler skips applying anything. When it IS set, action/orientation/pageTurnOption are
-      // explicitly -1/0/0 (unused by that handler) rather than MenuResult's own defaults
-      // (action=-1, but orientation/pageTurnOption default to 0 already -- see ActivityResult.h)
-      // -- spelled out here so a value doesn't get silently relied on either way.
-      if (showReaderToggles || languageState >= 0) {
-        // Only a toggle the user flipped is reported; one never shown or left alone stays -1, or a
-        // Book Language change in this visit would be undone by the direction the book had before.
-        const auto toggle = [this](const bool shown, const bool now, const bool initial) {
-          return shown && now != initial ? static_cast<int8_t>(now ? 1 : 0) : int8_t{-1};
-        };
-        setResult(MenuResult{-1, 0, 0, toggle(showReaderToggles, verticalTextState, initialVerticalTextState),
-                             toggle(showReaderToggles, furiganaState, initialFuriganaState), languageState});
+      // The reader reads Book Language back from a MenuResult; with no such row there is none.
+      if (languageState >= 0) {
+        MenuResult result;
+        result.languageOverride = languageState;
+        setResult(result);
       }
       finish();
       return true;
@@ -502,14 +491,6 @@ void ReaderSettingsActivity::toggleCurrentSetting() {
   // Applied dictionary rows in reader settings are informational: they have a getter but no setter.
   if (setting.valueGetter && !setting.valueSetter) return;
 
-  if (setting.type == SettingType::TOGGLE && !setting.valuePtr && setting.valueGetter && setting.valueSetter) {
-    // Backed by state outside CrossPointSettings (SettingInfo::DynamicToggle) -- e.g. the
-    // per-book Vertical Text / Furigana overrides. Not committed: committing saves and rebuilds
-    // CrossPointSettings, and this state isn't part of that singleton -- the caller reads it
-    // back from this screen's finish() result instead.
-    setting.valueSetter(setting.valueGetter() == 0 ? 1 : 0);
-    return;
-  }
   if (setting.type != SettingType::ACTION) {
     if (editor.editValue(setting) == SettingRowEditor::EditResult::Changed) {
       activeNav().selected = std::min(ringPos(), settingsCount);
@@ -521,20 +502,26 @@ void ReaderSettingsActivity::toggleCurrentSetting() {
   switch (setting.action) {
     case SettingAction::LibrarySettings:
     case SettingAction::SleepSettings:
-    case SettingAction::ShortcutsSettings: {
+    case SettingAction::ShortcutsSettings:
+    case SettingAction::DictionarySettings: {
       // Same screen, one category. finishOnBack so Back returns here rather than to Home.
-      const StrId category = setting.action == SettingAction::LibrarySettings ? StrId::STR_CAT_LIBRARY
-                             : setting.action == SettingAction::SleepSettings ? StrId::STR_CAT_SLEEP
-                                                                              : StrId::STR_CAT_SHORTCUTS;
-      startActivityForResult(
-          std::make_unique<ReaderSettingsActivity>(renderer, mappedInput, /*initialCategory=*/0, /*finishOnBack=*/true,
-                                                   CjkScript::None, std::string{}, /*showReaderToggles=*/false,
-                                                   /*verticalTextEnabled=*/false, /*furiganaEnabled=*/false,
-                                                   /*mangaMode=*/false, /*hideMangaOnlySettings=*/false, category),
-          [this](const ActivityResult&) {
-            saveSettings();
-            rebuildSettingsLists();
-          });
+      const StrId category = setting.action == SettingAction::LibrarySettings      ? StrId::STR_CAT_LIBRARY
+                             : setting.action == SettingAction::SleepSettings      ? StrId::STR_CAT_SLEEP
+                             : setting.action == SettingAction::DictionarySettings ? StrId::STR_DICTIONARY_SETTINGS
+                                                                                   : StrId::STR_CAT_SHORTCUTS;
+      // The dictionary rows depend on the book: its script and the dictionary its language picks.
+      const bool dictionary = setting.action == SettingAction::DictionarySettings;
+      // Opened inside a book too, so a failed allocation must not abort.
+      auto next = makeUniqueNoThrow<ReaderSettingsActivity>(
+          renderer, mappedInput, /*initialCategory=*/0, /*finishOnBack=*/true,
+          dictionary ? bookScript : CjkScript::None, dictionary ? dictionaryLanguage : std::string{},
+          /*mangaMode=*/false, /*hideMangaOnlySettings=*/false, category);
+      if (!next) {
+        LOG_ERR("SETTINGS", "OOM: settings sub-screen");
+        break;
+      }
+      // The sub-screen saves on Back.
+      startActivityForResult(std::move(next), [this](const ActivityResult&) { rebuildSettingsLists(); });
       break;
     }
     case SettingAction::TextSettings: {
@@ -542,7 +529,8 @@ void ReaderSettingsActivity::toggleCurrentSetting() {
       auto next =
           finishOnBack
               ? std::unique_ptr<Activity>(std::make_unique<TextSettingsActivity>(
-                    renderer, mappedInput, &sdFontSystem.registry(), bookTextProfile, bookScript, verticalTextState))
+                    renderer, mappedInput, &sdFontSystem.registry(), bookTextProfile, bookScript, bookVerticalText,
+                    /*editStoredProfile=*/false, bookRtl))
               : std::make_unique<TextProfileMenuActivity>(renderer, mappedInput);
       startActivityForResult(std::move(next), [this](const ActivityResult&) {
         saveSettings();

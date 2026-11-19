@@ -50,6 +50,7 @@ CrossPointSettings::TextProfile CrossPointSettings::liveTextProfile() const {
   copyToField(p.sdFontFamilyName, sdFontFamilyName, sizeof(p.sdFontFamilyName));
   p.publisherFonts = publisherFonts;
   p.lookupWordMarks = lookupWordMarks;
+  p.furigana = furigana;
   return p;
 }
 
@@ -62,6 +63,7 @@ void CrossPointSettings::setLiveTextProfile(const TextProfile& p) {
   copyToField(sdFontFamilyName, p.sdFontFamilyName, sizeof(sdFontFamilyName));
   publisherFonts = p.publisherFonts;
   lookupWordMarks = p.lookupWordMarks;
+  furigana = p.furigana;
 }
 
 void CrossPointSettings::holdLatinTextProfile(const TextProfile& latin) {
@@ -187,6 +189,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
     if (p.sdFontFamilyName[0] != '\0') o["sdFontFamilyName"] = p.sdFontFamilyName;
     o["publisherFonts"] = p.publisherFonts;
     o["lookupWordMarks"] = p.lookupWordMarks;
+    o["furigana"] = p.furigana;
   }
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, save manually
   if (dictionaryName[0] != '\0') {
@@ -460,6 +463,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
         copyToField(p.sdFontFamilyName, o["sdFontFamilyName"] | "", sizeof(p.sdFontFamilyName));
         p.publisherFonts = (o["publisherFonts"] | 0) != 0 ? 1 : 0;
         p.lookupWordMarks = (o["lookupWordMarks"] | 0) != 0 ? 1 : 0;
+        p.furigana = (o["furigana"] | 1) != 0 ? 1 : 0;
       }
       scriptTextProfiles[i - 1] = p;
     }

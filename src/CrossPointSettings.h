@@ -402,9 +402,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // copy could never be changed once that book had prefs saved.
   uint8_t reversePageTurn = 0;
   // Whether Japanese (tategaki), Traditional Chinese (zhipai) and Simplified Chinese (zhipaiSimplified)
-  // books open in vertical columns. The per-book
-  // vertical toggle overrides both. AUTOMATIC follows the book's declared page order.
+  // books open in vertical columns. A book's own choice overrides them. AUTOMATIC follows the book's declared page
+  // order.
   enum VERTICAL_MODE : uint8_t { VERTICAL_AUTOMATIC = 0, VERTICAL_ON = 1, VERTICAL_OFF = 2, VERTICAL_MODE_COUNT };
+  // Whether a book with no choice of its own opens vertically under `mode`. rtl: the book
+  // declares right-to-left page order.
+  static constexpr bool verticalFor(const uint8_t mode, const bool rtl) {
+    return mode == VERTICAL_ON || (mode != VERTICAL_OFF && rtl);
+  }
   uint8_t tategaki = VERTICAL_AUTOMATIC;
   uint8_t zhipai = VERTICAL_AUTOMATIC;
   uint8_t zhipaiSimplified = VERTICAL_AUTOMATIC;
@@ -441,6 +446,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Japanese/Chinese word lookup: a line under (horizontal) or beside (vertical) every word the
   // dictionary knows, while picking a word. Per text profile; the Latin value is never used.
   uint8_t lookupWordMarks = 0;
+  // Japanese and Chinese: ruby (furigana, pinyin or zhuyin) over the text. A book's own choice
+  // overrides it. Per text profile; the Latin value is never used.
+  uint8_t furigana = 1;
   // Text profiles: books in each script keep their own font, size and spacing. The live fields
   // (fontFamily, sdFontFamilyName, fontPointSize, lineSpacing, characterSpacing, wordSpacing) hold
   // the Latin profile; a book in another script swaps its profile in while it is open
@@ -456,6 +464,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     char sdFontFamilyName[32] = "";
     uint8_t publisherFonts = 0;   // see CrossPointSettings::publisherFonts
     uint8_t lookupWordMarks = 0;  // see CrossPointSettings::lookupWordMarks
+    uint8_t furigana = 1;         // see CrossPointSettings::furigana
     bool operator==(const TextProfile&) const = default;
   };
   TextProfile liveTextProfile() const;

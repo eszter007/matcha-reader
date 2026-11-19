@@ -236,20 +236,4 @@ struct SettingInfo {
     s.category = category;
     return s;
   }
-
-  // For a toggle backed by state outside CrossPointSettings (e.g. a per-book override that
-  // lives on the reader activity, not the settings singleton). Reuses the existing uint8_t
-  // valueGetter/valueSetter fields -- no struct layout change -- so the TOGGLE branches in
-  // SettingsActivity that already check valueGetter/valueSetter (mirroring the DynamicEnum
-  // path) work unmodified.
-  static SettingInfo DynamicToggle(StrId nameId, std::function<bool()> getter, std::function<void(bool)> setter,
-                                   StrId category = StrId::STR_NONE_OPT) {
-    SettingInfo s;
-    s.nameId = nameId;
-    s.type = SettingType::TOGGLE;
-    s.valueGetter = [g = std::move(getter)]() -> uint8_t { return g() ? 1 : 0; };
-    s.valueSetter = [st = std::move(setter)](const uint8_t v) { st(v != 0); };
-    s.category = category;
-    return s;
-  }
 };

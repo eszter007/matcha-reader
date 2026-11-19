@@ -112,9 +112,7 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     items.push_back({MenuAction::WORD_LOOKUP, StrId::STR_WORD_LOOKUP});
   }
   items.push_back({MenuAction::TRANSLATE_PAGE, StrId::STR_TRANSLATE_PAGE});
-  // Vertical Text and Furigana moved into Reader Settings (SettingInfo::DynamicToggle, gated
-  // there on the same condition this menu used to gate TOGGLE_VERTICAL/TOGGLE_FURIGANA) so they
-  // sit with the rest of the reading-experience settings instead of this per-page action menu.
+  // Vertical text and furigana are text profile settings (Reader Settings -> Text Settings).
   // Reader Settings itself is shown for manga too, filtered down to the settings manga supports.
   if (showPanelsOnlyToggle) {
     items.push_back({MenuAction::TOGGLE_PANELS_ONLY, StrId::STR_PANELS_ONLY});
