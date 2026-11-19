@@ -603,6 +603,9 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   emit(SettingInfo::Enum(StrId::STR_TIME_LEFT, &CrossPointSettings::statusBarTimeLeft,
                          {StrId::STR_CHAPTER, StrId::STR_BOOK, StrId::STR_HIDE}, "statusBarTimeLeft",
                          StrId::STR_CUSTOMISE_STATUS_BAR));
+  emit(SettingInfo::Enum(StrId::STR_CHARACTER_COUNT, &CrossPointSettings::statusBarCharCount,
+                         {StrId::STR_CHAPTER, StrId::STR_BOOK, StrId::STR_HIDE}, "statusBarCharCount",
+                         StrId::STR_CUSTOMISE_STATUS_BAR));
   emit(SettingInfo::Enum(StrId::STR_PROGRESS_BAR, &CrossPointSettings::statusBarProgressBar,
                          {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE}, "statusBarProgressBar",
                          StrId::STR_CUSTOMISE_STATUS_BAR));

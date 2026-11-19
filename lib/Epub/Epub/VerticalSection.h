@@ -98,6 +98,9 @@ class VerticalSection {
  public:
   uint16_t pageCount = 0;
   int currentPage = 0;
+  // Chapter text totals, 0 until the chapter is laid out to its end. See Section.
+  uint32_t visibleChars = 0;
+  uint32_t readableChars = 0;
 
   // Both out of line: BuildContext is only complete in the .cpp. The destructor abandons a build
   // that is still running.

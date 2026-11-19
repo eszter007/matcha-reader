@@ -47,6 +47,7 @@ STR_PLUGIN_UNINSTALL_CONFIRM: "%s deinstallieren und alle seine Dateien löschen
 STR_PLUGIN_UNINSTALL_TITLE: "Plugin deinstallieren"
 STR_TEXT_AA_NO_PREVIEW: "Schriftglättung (ohne Vorschau)"
 STR_TIME_LEFT: "Restzeit"
+STR_CHARACTER_COUNT: "Zeichenanzahl"
 STR_TIME_LEFT_MIN: "%d Min."
 STR_TIME_LEFT_H_MIN: "%d Std. %d Min."
 STR_TIME_LEFT_UNDER_MIN: "< 1 Min."

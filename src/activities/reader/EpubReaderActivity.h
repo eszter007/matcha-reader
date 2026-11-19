@@ -896,6 +896,23 @@ class EpubReaderActivity final : public ReaderActivity {
   mutable bool chapterSpanBuildActive = false;
   mutable int chapterPagesBefore = 0;
   mutable int chapterPagesTotal = 0;
+  // Counted characters per spine file from its cached layout, 0 = not known. Filled only
+  // while the status bar shows the character count.
+  mutable std::vector<uint32_t> spineCharsReal;
+  // Characters in the files ahead of the one on screen and in all files, for the ToC chapter and
+  // for the book. A file with no known count is scaled from its size, which marks it estimated.
+  struct CharTotals {
+    uint32_t chapterBefore = 0;
+    uint32_t chapterTotal = 0;
+    uint32_t bookBefore = 0;
+    uint32_t bookTotal = 0;
+    bool chapterEstimated = false;
+    bool bookEstimated = false;
+    bool valid = false;
+  };
+  mutable CharTotals charTotals;
+  mutable bool chapterSpanChars = false;  // part of the memo key: the count was wanted
+  CharCount statusBarCharCount(uint8_t mode) const;
   mutable float chapterEndProgress = 1.0f;            // book progress (0-1) where the ToC chapter on screen ends
   mutable std::vector<uint16_t> spinePagesReal;       // 0 = not indexed yet
   mutable std::vector<uint16_t> spinePagesEffective;  // real or byte-estimated, never 0

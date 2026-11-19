@@ -312,7 +312,7 @@ namespace {
 // v115: IPA letters, the bullet operator and stars that no reader font has draw from the built-in
 //       symbol face instead of a replacement glyph, so lines holding them move. The framing is
 //       unchanged.
-constexpr uint8_t SECTION_FILE_VERSION = 115;
+constexpr uint8_t SECTION_FILE_VERSION = 116;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -553,6 +553,19 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     serialization::readPod(file, partialTotalBytes_);
     partial_ = true;
     partialPageCount_ = pageCount;
+  }
+
+  visibleChars = 0;
+  readableChars = 0;
+  if (!filePartial) {
+    uint32_t visibleLutOffset = 0;
+    file.seek(HEADER_SIZE - sizeof(uint32_t));
+    serialization::readPod(file, visibleLutOffset);
+    if (visibleLutOffset >= HEADER_SIZE + 2 * sizeof(uint32_t) && visibleLutOffset <= file.size()) {
+      file.seek(visibleLutOffset - 2 * sizeof(uint32_t));
+      serialization::readPod(file, visibleChars);
+      serialization::readPod(file, readableChars);
+    }
   }
 
   // Explicit close() required: member variable persists beyond function scope
@@ -1029,6 +1042,13 @@ bool Section::commitBuildFile(const uint8_t version, const uint32_t bytesConsume
   for (const auto& entry : build_->lut) {
     serialization::writePod(file, entry.listItemIndex);
   }
+
+  // Chapter text totals, read back from the 8 bytes ahead of the visible-offset LUT. A partial
+  // has not seen the chapter's end, so it stores zeros.
+  visibleChars = asPartial ? 0 : build_->parser->getVisibleTextChars();
+  readableChars = asPartial ? 0 : build_->parser->getReadableTextChars();
+  serialization::writePod(file, visibleChars);
+  serialization::writePod(file, readableChars);
 
   const uint32_t visibleLutFileOffset = static_cast<uint32_t>(file.position());
   for (const auto& entry : build_->lut) {
