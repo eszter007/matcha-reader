@@ -28,10 +28,10 @@ namespace fui = freeink::ui;
 namespace {
 // Indexed by LayoutRow / StyleRow; rebuildRowItems() asserts the lengths match.
 constexpr StrId LAYOUT_ROW_NAME_IDS[] = {
-    StrId::STR_LINE_SPACING,     StrId::STR_WORD_SPACING,          StrId::STR_CHARACTER_SPACING,
-    StrId::STR_EXTRA_SPACING,    StrId::STR_PARAGRAPH_INDENTATION, StrId::STR_ALIGNMENT,
-    StrId::STR_SCREEN_MARGIN,    StrId::STR_BOOK_CSS_MARGINS,      StrId::STR_TATEGAKI,
-    StrId::STR_LOOKUP_WORD_MARKS};
+    StrId::STR_LINE_SPACING,   StrId::STR_WORD_SPACING,          StrId::STR_CHARACTER_SPACING,
+    StrId::STR_EXTRA_SPACING,  StrId::STR_PARAGRAPH_INDENTATION, StrId::STR_ALIGNMENT,
+    StrId::STR_SCREEN_MARGIN,  StrId::STR_BOOK_CSS_MARGINS,      StrId::STR_TATEGAKI,
+    StrId::STR_FURIGANA_LABEL, StrId::STR_LOOKUP_WORD_MARKS};
 // Only Focus Reading shows in the preview; the other Style rows say so in their label.
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION_NO_PREVIEW,
                                         StrId::STR_EMBEDDED_STYLE_NO_PREVIEW, StrId::STR_PUBLISHER_FONTS_NO_PREVIEW,
@@ -113,13 +113,14 @@ const char* previewSample(const CrossPointSettings::TextProfileId profile, const
 TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                            const SdCardFontRegistry* registry,
                                            const CrossPointSettings::TextProfileId profile, const CjkScript bookScript,
-                                           const bool verticalText, const bool editStoredProfile)
+                                           const bool verticalText, const bool editStoredProfile, const bool bookRtl)
     : UiListActivity("TextSettings", renderer, mappedInput),
       profile_(profile),
       bookScript_(bookScript),
       cjkBook_(bookScript != CjkScript::None),
       verticalText_(verticalText),
       editStoredProfile_(editStoredProfile),
+      bookRtl_(bookRtl),
       registry_(registry) {}
 
 void TextSettingsActivity::onEnter() {
@@ -131,6 +132,8 @@ void TextSettingsActivity::onEnter() {
     swappedIn_ = true;
     sdFontSystem.ensureLoaded(renderer);
   }
+  // Before UiListActivity::onEnter(), which can render: the row count reads it.
+  if (const uint8_t* setting = verticalTextSetting()) initialVerticalMode_ = *setting;
   UiListActivity::onEnter();
 
   metrics_ = UITheme::getInstance().getMetrics();
@@ -223,9 +226,11 @@ void TextSettingsActivity::rebuildRowItems() {
       // Visible position -> LayoutRow: not every row is shown for every book.
       const int layoutIndex = i - LAYOUT_FIRST_ROW;
       const LayoutRow row = layoutRowAt(layoutIndex);
-      item.label = row == LayoutRow::VerticalText && profile_ != CrossPointSettings::TextProfileId::Japanese
-                       ? tr(STR_ZHIPAI)
-                       : I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(row)]);
+      // Chinese profiles name the vertical and ruby rows for their own script.
+      const bool chinese = profile_ != CrossPointSettings::TextProfileId::Japanese;
+      item.label = row == LayoutRow::VerticalText && chinese ? tr(STR_ZHIPAI)
+                   : row == LayoutRow::Furigana && chinese   ? tr(STR_PINYIN_LABEL)
+                                                             : I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(row)]);
       if (layoutIndex == 0) item.sectionHeading = layoutHeading_.c_str();
     } else {
       const int styleIndex = i - LAYOUT_FIRST_ROW - layoutCount;
@@ -368,7 +373,8 @@ const char* TextSettingsActivity::confirmLabelText() const {
   if (index >= LAYOUT_FIRST_ROW) {
     // The switches toggle in place; every other row opens a picker.
     const LayoutRow row = layoutRowAt(index - LAYOUT_FIRST_ROW);
-    if (row == LayoutRow::ParaSpacing || row == LayoutRow::BookSideMargins || row == LayoutRow::WordMarks) {
+    if (row == LayoutRow::ParaSpacing || row == LayoutRow::BookSideMargins || row == LayoutRow::Furigana ||
+        row == LayoutRow::WordMarks) {
       return tr(STR_TOGGLE);
     }
   }
@@ -468,6 +474,10 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
       SETTINGS.bookCssMargins = !SETTINGS.bookCssMargins;
       requestUpdate();
       break;
+    case LayoutRow::Furigana:
+      SETTINGS.furigana = !SETTINGS.furigana;
+      requestUpdate();
+      break;
     case LayoutRow::WordMarks:
       SETTINGS.lookupWordMarks = !SETTINGS.lookupWordMarks;
       requestUpdate();
@@ -519,8 +529,13 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
       if (!setting) break;
       const StrId title =
           profile_ == CrossPointSettings::TextProfileId::Japanese ? StrId::STR_TATEGAKI : StrId::STR_ZHIPAI;
+      // The Layout rows can change with the direction (verticalLayout()).
       optionPopup_.show(title, VERTICAL_TEXT_IDS, static_cast<int>(std::size(VERTICAL_TEXT_IDS)), *setting,
-                        [setting](int idx) { *setting = static_cast<uint8_t>(idx); });
+                        [this, setting](int idx) {
+                          RenderLock lock;
+                          *setting = static_cast<uint8_t>(idx);
+                          rebuildRowItems();
+                        });
       requestUpdate();
       break;
     }
@@ -547,6 +562,9 @@ bool TextSettingsActivity::layoutRowIsSwitch(const int row, bool& checked) const
       return true;
     case LayoutRow::BookSideMargins:
       checked = SETTINGS.bookCssMargins != 0;
+      return true;
+    case LayoutRow::Furigana:
+      checked = SETTINGS.furigana != 0;
       return true;
     case LayoutRow::WordMarks:
       checked = SETTINGS.lookupWordMarks != 0;
@@ -607,7 +625,7 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
       return I18N.get(VERTICAL_TEXT_IDS[v < std::size(VERTICAL_TEXT_IDS) ? v : 0]);
     }
 
-    // ParaSpacing, BookSideMargins and WordMarks draw switches -- see layoutRowIsSwitch().
+    // ParaSpacing, BookSideMargins, Furigana and WordMarks draw switches -- see layoutRowIsSwitch().
     default:
       return "";
   }
@@ -651,23 +669,35 @@ int TextSettingsActivity::visibleLayoutRows(LayoutRow* out) const {
     count++;
   };
   if (verticalTextSetting()) add(LayoutRow::VerticalText);
-  if (verticalText_) {
+  if (verticalLayout()) {
     for (const LayoutRow row : VERTICAL) add(row);
   } else {
     for (int i = 0; i < static_cast<int>(LayoutRow::VerticalText); i++) add(static_cast<LayoutRow>(i));
   }
-  // The word lookup it changes serves Japanese and Chinese books only.
-  if (profile_ == CrossPointSettings::TextProfileId::Japanese ||
-      profile_ == CrossPointSettings::TextProfileId::TraditionalChinese ||
-      profile_ == CrossPointSettings::TextProfileId::SimplifiedChinese) {
+  if (cjkProfile()) {
+    add(LayoutRow::Furigana);
     add(LayoutRow::WordMarks);
   }
   return count;
 }
 
-// Only from Settings: in a book, a change of direction would need the open chapter laid out again.
+bool TextSettingsActivity::cjkProfile() const {
+  return profile_ == CrossPointSettings::TextProfileId::Japanese ||
+         profile_ == CrossPointSettings::TextProfileId::TraditionalChinese ||
+         profile_ == CrossPointSettings::TextProfileId::SimplifiedChinese;
+}
+
+bool TextSettingsActivity::verticalLayout() const {
+  if (editStoredProfile_) return false;
+  const uint8_t* setting = verticalTextSetting();
+  if (!setting || *setting == initialVerticalMode_) return verticalText_;
+  return CrossPointSettings::verticalFor(*setting, bookRtl_);
+}
+
 uint8_t* TextSettingsActivity::verticalTextSetting() const {
-  if (!editStoredProfile_) return nullptr;
+  // In a book, only while the profile is the book's own: after a Book Language change it is the
+  // old one until the book reopens, and the book follows its new script's setting.
+  if (!editStoredProfile_ && textprofile::script(profile_) != bookScript_) return nullptr;
   if (profile_ == CrossPointSettings::TextProfileId::Japanese) return &SETTINGS.tategaki;
   if (profile_ == CrossPointSettings::TextProfileId::TraditionalChinese) return &SETTINGS.zhipai;
   if (profile_ == CrossPointSettings::TextProfileId::SimplifiedChinese) return &SETTINGS.zhipaiSimplified;

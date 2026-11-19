@@ -444,6 +444,7 @@ void EpubReaderActivity::storeBookTextProfile() {
   if (now.characterSpacing != openTextProfile_.characterSpacing) profile.characterSpacing = now.characterSpacing;
   if (now.wordSpacing != openTextProfile_.wordSpacing) profile.wordSpacing = now.wordSpacing;
   if (now.lookupWordMarks != openTextProfile_.lookupWordMarks) profile.lookupWordMarks = now.lookupWordMarks;
+  if (now.furigana != openTextProfile_.furigana) profile.furigana = now.furigana;
   if (latin) {
     latinTextProfile_ = profile;
   } else {
@@ -718,6 +719,17 @@ void EpubReaderActivity::onReaderExit() {
   if (footnoteDepth > 0 && epub) saveLinkStack();
   if (jumpOrigin && epub) saveJumpOrigin();
   if (epub) saveRecentPages();
+  // Left from Text Settings without coming back (sleep, Home): its result never ran.
+  if (textProfileVisitOpen_ && epub) {
+    const int8_t vertical = verticalOverride;
+    const int8_t furigana = furiganaOverride;
+    followTextProfileChanges();
+    if (verticalOverride != vertical || furiganaOverride != furigana) {
+      // Text Settings freed the layout; the offset recorded then keeps the exact position.
+      saveProgress(currentSpineIndex, shownPage(nextPageNumber), chapterPageTotal(cachedChapterTotalPageCount),
+                   verticalOverride, furiganaOverride, cachedVisibleTextOffset);
+    }
+  }
 
   section.reset();
   verticalSection.reset();
@@ -1968,11 +1980,9 @@ void EpubReaderActivity::openReaderMenu() {
 }
 
 // Shared by the reader menu's own result (menu.verticalOverride/furiganaOverride, always the
-// unchanged state it was opened with -- these toggles no longer live there, see
-// EpubReaderMenuActivity::buildMenuItems) and Reader Settings' result (where they DO change,
-// via SettingInfo::DynamicToggle). -1 means "unset/no book context for this toggle" and is a
-// no-op; each override only applies, and only resets the section, when it actually differs from
-// the book's current effective state.
+// unchanged state it was opened with) and the toolbar panels. -1 means "unset/no book context
+// for this toggle" and is a no-op; each override only applies, and only resets the section, when
+// it actually differs from the book's current effective state.
 void EpubReaderActivity::applyVerticalFuriganaOverride(const int8_t verticalOverrideIn,
                                                        const int8_t furiganaOverrideIn) {
   if (verticalOverrideIn >= 0 && verticalOverrideIn != (useVerticalText() ? 1 : 0)) {
@@ -1986,6 +1996,20 @@ void EpubReaderActivity::applyVerticalFuriganaOverride(const int8_t verticalOver
   if (furiganaOverrideIn >= 0 && furiganaOverrideIn != (useFurigana() ? 1 : 0)) {
     furiganaOverride = furiganaOverrideIn;
   }
+}
+
+void EpubReaderActivity::rememberTextProfile() {
+  verticalModeBefore_ = profileVerticalMode();
+  furiganaBefore_ = SETTINGS.furigana;
+  textProfileVisitOpen_ = true;
+}
+
+void EpubReaderActivity::followTextProfileChanges() {
+  if (!textProfileVisitOpen_) return;
+  textProfileVisitOpen_ = false;
+  RenderLock lock(*this);  // the render task reads both overrides
+  if (profileVerticalMode() != verticalModeBefore_) verticalOverride = -1;
+  if (SETTINGS.furigana != furiganaBefore_) furiganaOverride = -1;
 }
 
 void EpubReaderActivity::dropSectionsKeepingPosition() {
@@ -2285,21 +2309,21 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // Push settings opened on the Reader tab; Back pops straight back into the book. Font or
       // margin changes are picked up on return: the SD font system reloads to the new selection
       // and the next render's section-cache parameter check rebuilds the layout if needed.
-      // Vertical Text / Furigana (moved here from the reader's own quick menu -- see
-      // EpubReaderMenuActivity::buildMenuItems) come back the same way the quick menu used to
-      // carry them: a MenuResult, read via get_if since ReaderSettingsActivity only sets one when
-      // showVerticalToggle() was true here, so std::monostate elsewhere is expected.
+      // Book Language comes back in a MenuResult, read via get_if since ReaderSettingsActivity
+      // sets none when it showed no such row.
       auto readerSettings = std::make_unique<ReaderSettingsActivity>(
           renderer, mappedInput, /*initialCategory=*/1,
-          /*finishOnBack=*/true, bookScript(), effectiveLanguage(), showVerticalToggle(), useVerticalText(),
-          useFurigana(),
+          /*finishOnBack=*/true, bookScript(), effectiveLanguage(),
           /*mangaMode=*/false,
           /*hideMangaOnlySettings=*/true, StrId::STR_NONE_OPT, static_cast<int8_t>(languageOverride));
       readerSettings->setBookTextProfile(bookTextProfile_);
+      readerSettings->setBookLayout(useVerticalText(), epub->pageProgressionRtl());
+      rememberTextProfile();
       startActivityForResult(std::move(readerSettings), [this](const ActivityResult& result) {
+        // Before Book Language, which can switch the book to another script and profile.
+        followTextProfileChanges();
         if (const auto* menu = std::get_if<MenuResult>(&result.data)) {
           applyLanguageOverride(menu->languageOverride);
-          applyVerticalFuriganaOverride(menu->verticalOverride, menu->furiganaOverride);
         }
         // A Tategaki/Zhipai change applies to the open book unless it has its own choice.
         if ((section || verticalSection) && useVerticalText() != (verticalSection != nullptr)) {
@@ -4587,12 +4611,12 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
 }
 
 bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride,
-                                      int8_t furiOverride) {
+                                      int8_t furiOverride, const std::optional<uint32_t> fallbackOffset) {
   const uint8_t percent = static_cast<uint8_t>(pageBasedPercent(spineIndex, currentPage + 1));
   // The content offset lets the position survive re-pagination, and lets progress saved in one
   // layout (vertical or horizontal) resolve exactly in the other.
-  const std::optional<uint32_t> offset =
-      spineIndex == currentSpineIndex ? visibleOffsetForPage(currentPage) : std::nullopt;
+  std::optional<uint32_t> offset = spineIndex == currentSpineIndex ? visibleOffsetForPage(currentPage) : std::nullopt;
+  if (!offset) offset = fallbackOffset;
   // Past the last spine item is the end-of-book screen, not a page.
   if (spineIndex >= 0 && spineIndex < epub->getSpineItemsCount()) {
     noteRecentPage(spineIndex, currentPage, pageCount, percent, offset);
@@ -6905,9 +6929,12 @@ void EpubReaderActivity::openTextSettingsFromPanel() {
     settleOverlayRefresh();
   }
   dropSectionsKeepingPosition();  // room for the picker; reloaded on return
-  startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                                bookTextProfile_, bookScript(), useVerticalText()),
+  rememberTextProfile();
+  startActivityForResult(std::make_unique<TextSettingsActivity>(
+                             renderer, mappedInput, &sdFontSystem.registry(), bookTextProfile_, bookScript(),
+                             useVerticalText(), /*editStoredProfile=*/false, epub->pageProgressionRtl()),
                          [this](const ActivityResult&) {
+                           followTextProfileChanges();
                            applyReaderTextSettings();
                            overlay = Overlay::Text;  // back to the Text panel
                            panelIndex = 0;
@@ -8371,17 +8398,13 @@ bool EpubReaderActivity::useVerticalText() const {
   // No per-book choice: Tategaki (Japanese) or the Zhipai setting of the book's Chinese script
   // decides. Automatic opens a spine declared right-to-left (Japanese novels; Taiwanese novels from
   // Readmoo, Kobo, Books.com.tw) in columns, anything else horizontal.
-  const uint8_t mode = isJapaneseBook()                               ? SETTINGS.tategaki
-                       : bookScript() == CjkScript::SimplifiedChinese ? SETTINGS.zhipaiSimplified
-                                                                      : SETTINGS.zhipai;
-  switch (mode) {
-    case CrossPointSettings::VERTICAL_ON:
-      return true;
-    case CrossPointSettings::VERTICAL_OFF:
-      return false;
-    default:
-      return epub && epub->pageProgressionRtl();
-  }
+  return CrossPointSettings::verticalFor(profileVerticalMode(), epub && epub->pageProgressionRtl());
+}
+
+uint8_t EpubReaderActivity::profileVerticalMode() const {
+  return isJapaneseBook()                               ? SETTINGS.tategaki
+         : bookScript() == CjkScript::SimplifiedChinese ? SETTINGS.zhipaiSimplified
+                                                        : SETTINGS.zhipai;
 }
 
 uint8_t EpubReaderActivity::readerBottomReserve(const bool verticalMode) const {
@@ -8401,5 +8424,5 @@ uint8_t EpubReaderActivity::readerBottomReserve(const bool verticalMode) const {
 bool EpubReaderActivity::useFurigana() const {
   if (furiganaOverride == 0) return false;
   if (furiganaOverride == 1) return true;
-  return true;
+  return SETTINGS.furigana != 0;
 }

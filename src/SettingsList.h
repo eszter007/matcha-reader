@@ -227,6 +227,27 @@ inline SettingInfo buildWordLookupFontSizeSetting() {
                            "wordLookupFontSize", StrId::STR_CAT_READER);
 }
 
+// Position of a row on the Dictionary Settings sub-screen, or -1 for a row it does not show.
+// These Reader rows keep their Reader category, so the web settings page lists them as before.
+// STR_DICTIONARY is the read-only row a book shows in place of the fallback picker.
+inline int dictionaryRowOrder(const SettingInfo& setting) {
+  switch (setting.nameId) {
+    case StrId::STR_WORD_LOOKUP_FONT_SIZE:
+      return 0;
+    case StrId::STR_DICT_STATUS_JA:
+      return 1;
+    case StrId::STR_DICT_STATUS_ZH:
+      return 2;
+    case StrId::STR_DICT_STATUS_YUE:
+      return 3;
+    case StrId::STR_FALLBACK_DICTIONARY:
+    case StrId::STR_DICTIONARY:
+      return 4;
+    default:
+      return -1;
+  }
+}
+
 inline SettingInfo buildVocabularyHistorySetting() {
   return SettingInfo::Toggle(StrId::STR_SAVE_VOCABULARY_LOOKUPS, &CrossPointSettings::vocabularyHistoryEnabled,
                              "vocabularyHistoryEnabled", StrId::STR_CAT_READER);

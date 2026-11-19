@@ -167,7 +167,7 @@ class EpubReaderActivity final : public ReaderActivity {
   bool recentsEntryRemoved = false;
   // Per-book vertical text override: -1 = auto (detect from language), 0 = off, 1 = on
   int8_t verticalOverride = -1;
-  // Per-book furigana override: -1 = auto (on by default), 0 = off, 1 = on
+  // Per-book furigana override: -1 = follow the text profile, 0 = off, 1 = on
   int8_t furiganaOverride = -1;
   // Per-book language (cjk::LanguageChoice): LANG_AUTO follows the tag, else the user's pick for a
   // mis-tagged book. Kept with the sniff result in the book's language.bin.
@@ -507,7 +507,9 @@ class EpubReaderActivity final : public ReaderActivity {
   std::atomic<int> earlyDisplayedPage_{-1};
   bool earlyPageActuallyDisplayed_ = false;
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
-  bool saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride, int8_t furiOverride);
+  // fallbackOffset: the content offset to record when the page has no layout to read one from.
+  bool saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride, int8_t furiOverride,
+                    std::optional<uint32_t> fallbackOffset = std::nullopt);
   // Pages laid out per incremental-build pump: on the render path (catching up to the page
   // being shown) and per loop() tick (background build of a large chapter). Kept small so a
   // background build chunk never noticeably delays input or a pending render.
@@ -951,6 +953,16 @@ class EpubReaderActivity final : public ReaderActivity {
   bool showVerticalToggle() const;
   bool hideGenericLookup() const;
   void applyVerticalFuriganaOverride(int8_t verticalOverrideIn, int8_t furiganaOverrideIn);
+  // The vertical-text setting of the book's script (Tategaki or Zhipai), what a book with no
+  // choice of its own follows.
+  uint8_t profileVerticalMode() const;
+  // Around Text Settings: a vertical text or furigana value changed there applies to this book
+  // too, so the book's own choice for that value is dropped.
+  void rememberTextProfile();
+  void followTextProfileChanges();
+  uint8_t verticalModeBefore_ = 0;
+  uint8_t furiganaBefore_ = 1;
+  bool textProfileVisitOpen_ = false;
   // The language the book is read as: the override, else the EPUB tag when it names a CJK
   // language, else what the content sniff found, else the tag as written (possibly empty).
   std::string effectiveLanguage() const;

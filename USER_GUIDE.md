@@ -495,8 +495,8 @@ to that book only.
   - **LAYOUT**:
     - **Tategaki (vertical Japanese)**, in the **Japanese** profile, and **Zhípái (vertical Chinese)**, in the
       **Traditional Chinese** and **Simplified Chinese** profiles: whether books in that language open in vertical
-      columns. Each profile's setting applies only to its own books. Only listed when Text Settings is opened from
-      **Settings**.
+      columns. Each profile's setting applies only to its own books. A change made inside a book applies to all
+      books of that script, and also replaces that book's own choice from the **Page** panel.
       - **Automatic** (default): follows the book. A book set to read right to left opens vertically, any other
         book horizontally.
       - **On**: always vertical.
@@ -515,6 +515,9 @@ to that book only.
     - **Screen Margin**: the space around the text, 5 to 40 pixels in steps of 5 (default 5).
     - **Use Book Margins** (on by default): keeps the extra side margins a book sets, e.g. for indented quotes and
       letters. When off, those blocks line up with the rest of the text.
+    - **Furigana** (on by default, Japanese profile), called **Pinyin / Zhuyin** in the Chinese profiles: shows the
+      readings a book puts over its text. Each of the three profiles keeps its own setting. A change made inside a
+      book applies to all books of that script, and also replaces that book's own choice from the **Text** panel.
     - **Underline Dictionary Words** (off by default, Japanese and Chinese profiles): while you pick a word to look
       up, every word the dictionary knows gets a line under it, or beside it in vertical text. On a page the device
       is still checking, more lines appear as it finds more words. Each of the three profiles keeps its own setting.
@@ -535,12 +538,13 @@ to that book only.
   - The Japanese and Chinese profiles list only **Embedded Style**, **Publisher Fonts** and **Text Anti-Aliasing**
     under **STYLE**.
   - While a book is shown vertically, **LAYOUT** lists only **Line Spacing**, **Character spacing** and
-    **Screen Margin**, the settings vertical text uses, plus **Underline Dictionary Words**.
+    **Screen Margin**, the settings vertical text uses, plus the vertical text setting, **Furigana** and
+    **Underline Dictionary Words**.
 
 - **Text profiles**: each of the five profiles keeps its own **font**, **Publisher Fonts** choice, **font size**,
-  **line spacing**, **character spacing** and **word spacing** (the Japanese and Chinese profiles also **Underline
-  Dictionary Words**), so a font that suits Japanese leaves your English books alone. A book uses the
-  profile of its language: Japanese, traditional Chinese (Cantonese too), simplified Chinese, or Korean (a book
+  **line spacing**, **character spacing** and **word spacing** (the Japanese and Chinese profiles also their
+  vertical text setting, **Furigana** and **Underline Dictionary Words**), so a font that suits Japanese leaves your
+  English books alone. A book uses the profile of its language: Japanese, traditional Chinese (Cantonese too), simplified Chinese, or Korean (a book
   tagged `ko` or `kor`). Every other book uses **Latin & Others**. Opened from inside a book, **Text Settings** goes
   straight to that book's profile. A size or spacing you change while reading goes to the book's profile too. A font
   you pick while reading stays with that book only: change a profile's font from **Settings → Reader → Text
@@ -569,7 +573,7 @@ to that book only.
   - **Portrait 180°**: upside down.
   - **Landscape CCW**: turned a quarter counter-clockwise.
 
-  The **Vertical Text** switch in a book's Reader Settings overrides this for that book.
+  The **Vertical Text** choice in a book's **Page** panel overrides this for that book.
 
 - **Rotate Panels** (on by default): In manga, turns a panel sideways when that makes it fit the screen better.
 
@@ -1141,7 +1145,7 @@ The panel uses the same buttons as the dictionary panels (see [6.1](#61-word-loo
 You can look up words with an offline dictionary on the SD card. To set it up:
 
 1. Copy a StarDict dictionary into the `/dictionaries/` folder (or `/.dictionaries/`, see [6.7](#67-dictionary-files-and-language-selection)).
-2. Select it in **Settings → Reader → Dictionary Settings → Fallback for other languages**. Inside a book, the same row in **Reader Settings** is called **Dictionary**.
+2. Select it in **Settings → Reader → Dictionary Settings → Fallback for other languages**. Inside a book, **Reader Settings → Dictionary Settings** shows a read-only **Dictionary** row with the dictionary that book uses.
 
 To look up a word with the buttons, choose **Look Up** in the **[Reader Menu](#5-reader-menu)**. Use **Left** and **Right** to highlight a word, then press **Confirm** to see its definition. On button-only devices you can also start a lookup by holding **Confirm**, if **Menu long press** in **Settings → Controls → Front buttons** is set to **Dictionary**.
 
@@ -1212,7 +1216,7 @@ The menu shows these entries, top to bottom. Some only appear when they apply to
 * **Progress row:** drag the knob or tap the line to jump through the book; the buttons at either end go to the previous or next chapter.
 * **Chapter line:** the chapter, the page and the book percentage, and a bookmark you tap to mark or unmark the page.
 * **Contents** lists the chapters. **Translate** translates the page straight away. **More** lists everything else from the full menu.
-* **Text:** the font size (the small and large A step it down and up), the font, **Focus Reading**, and **More text settings** for the full list (word spacing, hyphenation, indents and more). Japanese and Chinese books show **Furigana** (**Pinyin** in Chinese books) instead of Focus Reading.
+* **Text:** the font size (the small and large A step it down and up), the font, **Focus Reading**, and **More text settings** for the full list (word spacing, hyphenation, indents and more). Japanese and Chinese books show **Furigana** (**Pinyin / Zhuyin** in Chinese books) instead of Focus Reading.
 * **Page:** line spacing, margins, alignment and orientation as small page pictures: tap one to choose it. Japanese and Chinese books get **Vertical Text** (lines or columns) instead of alignment.
 
 With buttons, Left and Right move between the dock's controls and Select uses one. In the Text and Page panels, Up and Down choose a row, and Left and Right change it one step at a time, which reaches every value, not just the ones the pictures show. On the Text panel's Font and More text settings rows, Left and Right switch to the next panel instead; on the Page panel, go back to the dock to change panel. Back steps from a panel to the dock, and from the dock to the page.
@@ -1373,7 +1377,7 @@ shows one entry so stepping stays quick.
 
 **Settings**
 
-- **Reader Settings → Word Lookup Font Size**: **Tiny**, **Small** (default), **Medium** or **Large**.
+- **Reader Settings → Dictionary Settings → Word Lookup Font Size**: **Tiny**, **Small** (default), **Medium** or **Large**.
 - **Reader Settings → Text Settings → LAYOUT → Underline Dictionary Words** (off by default, Japanese and Chinese
   profiles): a line under every word the dictionary knows (beside it in vertical text) while you pick a word.
 
@@ -1525,14 +1529,16 @@ Page Translation uses). Gemini reads each word in its sentence, which is needed 
 on the word around it. Furigana the book already has stays as it is. A reading is added only when it fits the word
 as written (in 食べる, た goes over 食 and べる stays bare). Words that do not fit are left without furigana.
 
-**Switches.** For a Japanese book, **Reader Settings** has a **Vertical Text** and a **Furigana** switch. Open
-Reader Settings from the reader menu. Your choice is saved for that book and applies when you return to it.
+**Switches.** **Tategaki (vertical Japanese)** and **Furigana** are in **Settings → Reader → Text Settings →
+Japanese**, for all Japanese books. Inside a book, **Reader Settings → Text Settings** opens the same page. To change
+one book only, use **Vertical Text** in the reader toolbar's **Page** panel and **Furigana** in its **Text** panel
+(set **Reader Settings → Reader Menu Style** to **Toolbar**, see [§5](#5-reader-menu)). That choice is saved with
+the book.
 
 <p align="center">
-  <img src="docs/images/screenshots/reader-settings.png" width="260" alt="Reader settings showing the vertical text and furigana toggles">
   <img src="docs/images/screenshots/vertical-text-furigana.png" width="260" alt="Vertical text with furigana beside the kanji">
 </p>
-<p align="center"><em>The switches, and furigana beside the kanji where the book has them</em></p>
+<p align="center"><em>Furigana beside the kanji where the book has them</em></p>
 
 **Word Lookup in Japanese** (see 6.1):
 
@@ -1634,8 +1640,9 @@ Useful options:
   are likely to need get a reading.
 
 You need Python and the CC-CEDICT file ([docs/dictionary-setup.md](docs/dictionary-setup.md)). Copy the new EPUB to
-the card and open it. **Reader Settings → Pinyin / Zhuyin** shows or hides the readings and is saved per book. It
-is the same switch Japanese books call **Furigana**.
+the card and open it. **Pinyin / Zhuyin** in **Settings → Reader → Text Settings → Traditional Chinese** or
+**Simplified Chinese** shows or hides the readings for all books of that script. The **Text** panel of the reader
+toolbar (**Reader Menu Style** set to **Toolbar**) does it for one book. It is the same setting Japanese books call **Furigana**.
 
 **Why `--ai` helps.** Without it, readings come from the dictionary. Many characters have more than one reading,
 and a character on its own gets the first one listed, which is often wrong (石 comes out as *dàn* instead of
@@ -1651,8 +1658,8 @@ per thousand characters, so a whole novel is a long run.
 The layout follows the publisher. A book set to read right to left (common for novels from Taiwan) opens in
 vertical columns. Every other Chinese book opens horizontally. To open Chinese books one way, set **Zhípái (vertical Chinese)**
 in **Settings → Reader → Text Settings → Traditional Chinese** for Traditional Chinese books, or **Simplified
-Chinese** for Simplified ones, to **On** or **Off**. The **Vertical Text** switch in a book's **Reader
-Settings** overrides both and is saved per book.
+Chinese** for Simplified ones, to **On** or **Off**. **Vertical Text** in the reader toolbar's **Page** panel
+(**Reader Menu Style** set to **Toolbar**) overrides it for one book and is saved with that book.
 
 #### Fonts and the Interface
 
@@ -1859,7 +1866,7 @@ for searching.
 </p>
 
 **Settings → Reader → Dictionary Settings → Fallback for other languages** is used when a book has no language tag, or when no folder under
-`dictionaries/` matches its language. Inside a book, the reader settings show a **Dictionary** row with the
+`dictionaries/` matches its language. Inside a book, **Reader Settings → Dictionary Settings** shows a **Dictionary** row with the
 dictionary that book uses first. Use it to check that the book's language tag was recognised.
 
 You can also name the folder `.dictionaries/`, which hides it from the file browser. Everything above works the

@@ -1862,9 +1862,6 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
       startActivityForResult(std::make_unique<ReaderSettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
                                                                       /*finishOnBack=*/true, mangaScript(book.get()),
                                                                       /*dictionaryLanguage=*/std::string{},
-                                                                      /*showReaderToggles=*/false,
-                                                                      /*verticalTextEnabled=*/false,
-                                                                      /*furiganaEnabled=*/false,
                                                                       /*mangaMode=*/true,
                                                                       /*hideMangaOnlySettings=*/false),
                              [this](const ActivityResult&) {

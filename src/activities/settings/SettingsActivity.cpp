@@ -200,26 +200,6 @@ SettingsSection sectionFor(const SettingInfo& setting) {
   return SettingsSection::End;
 }
 
-// Position of a row on the Dictionary Settings sub-screen, or -1 for a row it does not show.
-// These Reader rows move there from the Reader page but keep their Reader category, so Reader
-// Settings in a book and the web settings page are unchanged.
-int dictionaryRowOrder(const SettingInfo& setting) {
-  switch (setting.nameId) {
-    case StrId::STR_WORD_LOOKUP_FONT_SIZE:
-      return 0;
-    case StrId::STR_DICT_STATUS_JA:
-      return 1;
-    case StrId::STR_DICT_STATUS_ZH:
-      return 2;
-    case StrId::STR_DICT_STATUS_YUE:
-      return 3;
-    case StrId::STR_FALLBACK_DICTIONARY:
-      return 4;
-    default:
-      return -1;
-  }
-}
-
 // The shared long-press setting deliberately appears in both button groups.
 bool belongsToControlsGroup(const SettingInfo& setting, ControlsGroup group) {
   const auto field = setting.valuePtr;
