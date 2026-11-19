@@ -546,9 +546,6 @@ to that book only.
 - **Dictionary Settings**: Opens a page with the word lookup settings:
   - **Word Lookup Font Size**: Text size in the word lookup window: **Tiny**, **Small** (default), **Medium** or
     **Large**.
-  - **Mark Dictionary Words** (off by default): In Japanese and Chinese books, while you pick a word to look up, every
-    word the dictionary knows gets a line under it, or beside it in vertical text. On a page the device is still
-    checking, more lines appear as it finds more words.
   - **Japanese dictionary**, **Mandarin dictionary**, **Cantonese dictionary**: Read-only. They show **Installed**
     when the files for that language were found (`/dictionaries/jp/`, `zh/` or `yue/`), else **Not installed**. These
     dictionaries are used automatically in books of their language, so they are not in the fallback list.
@@ -581,6 +578,10 @@ to that book only.
 
 - **Reader Menu Style**: How the reader menu looks: **List** (default), a full-screen list, or **Toolbar**, a dock
   at the bottom of the page.
+
+- **Underline Dictionary Words** (off by default): In Japanese and Chinese books, while you pick a word to look up,
+  every word the dictionary knows gets a line under it, or beside it in vertical text. On a page the device is still
+  checking, more lines appear as it finds more words.
 
 - **Customise Status Bar**: The line of information at the edge of the page while you read. Set it up one item at a
   time: chapter page count, book progress percentage, progress bar (book, chapter or hidden) and its thickness, title,
@@ -1374,7 +1375,7 @@ shows one entry so stepping stays quick.
 **Settings**
 
 - **Reader Settings → Word Lookup Font Size**: **Tiny**, **Small** (default), **Medium** or **Large**.
-- **Reader Settings → Dictionary Settings → Mark Dictionary Words** (off by default): in Japanese and Chinese books, a
+- **Reader Settings → Underline Dictionary Words** (off by default): in Japanese and Chinese books, a
   line under every word the dictionary knows (beside it in vertical text) while you pick a word.
 
 #### Sentence mining
