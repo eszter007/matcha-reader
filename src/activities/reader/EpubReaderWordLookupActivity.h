@@ -97,6 +97,10 @@ class EpubReaderWordLookupActivity final : public Activity {
   // The book behind the panel reverses its page turns (Reversed Page Turn in a vertical book).
   void setPageTurnReversed(const bool reversed) { pageTurnReversed = reversed; }
   void onEnter() override;
+  bool closeOverPage() override {
+    finishCancelled();
+    return true;
+  }
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;

@@ -1124,8 +1124,19 @@ static void forceScreenRefresh() {
   }
 }
 
+// A sync shortcut pressed over a dictionary panel, held until the panel has closed.
+static uint8_t deferredSyncShortcut = CrossPointSettings::SIDE_BTN_NONE;
+
 // Runs a sync for a shortcut that carries one; false for every other action.
 static bool runSyncShortcut(const uint8_t action) {
+  const bool isSync =
+      action == CrossPointSettings::SIDE_BTN_SYNC_STATS_CLOCK || action == CrossPointSettings::SIDE_BTN_SYNC_CLOCK;
+  // The sync screen would be left under the panel's next redraw, and it releases the fonts the
+  // page behind the panel is drawn with.
+  if (isSync && activityManager.closePanelsOverPage()) {
+    deferredSyncShortcut = action;
+    return true;
+  }
   switch (action) {
     case CrossPointSettings::SIDE_BTN_SYNC_STATS_CLOCK:
       startStatsSyncFromShortcut();
@@ -1424,6 +1435,12 @@ void loop() {
   } else if (mappedInputManager.homeButtonAction() == HomeButtonAction::SyncClock ||
              (inBook && mappedInputManager.sideActionFired(CrossPointSettings::SIDE_BTN_SYNC_CLOCK))) {
     runSyncShortcut(CrossPointSettings::SIDE_BTN_SYNC_CLOCK);
+  }
+
+  if (deferredSyncShortcut != CrossPointSettings::SIDE_BTN_NONE && !activityManager.closePanelsOverPage()) {
+    const uint8_t action = deferredSyncShortcut;
+    deferredSyncShortcut = CrossPointSettings::SIDE_BTN_NONE;
+    runSyncShortcut(action);
   }
 
   // Refresh the battery icon when USB is plugged or unplugged.
