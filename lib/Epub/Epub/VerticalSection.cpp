@@ -138,7 +138,7 @@ namespace {
 // and characters advance down a column by their own size.
 // v161: no format change. A column squeezed to pull a character in no longer takes the half em a
 // line-head opening bracket has already given up; the next characters printed over the bracket.
-constexpr uint8_t VSECTION_FILE_VERSION = 161;
+constexpr uint8_t VSECTION_FILE_VERSION = 162;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -248,6 +248,8 @@ struct TextExtractor {
   //
   // <rt> text IS counted (rp is the excluded one), matching isNonVisibleElement().
   uint32_t visibleTextOffset = 0;
+  // The same without <rt> text and whitespace, for the reader's character count.
+  uint32_t readableTextChars = 0;
   // Element ids met in the chapter, with the visible text offset where each element starts.
   std::vector<std::pair<std::string, uint32_t>>* anchors = nullptr;
   // The chapter's TOC targets: recorded whatever their tag and past the cap, as the horizontal
@@ -1040,9 +1042,15 @@ struct TextExtractor {
       const auto* end = p + len;
       while (p < end) {
         // Advance one UTF-8 sequence: a lead byte plus its continuation bytes.
+        const auto* seq = p;
         p++;
         while (p < end && (*p & 0xC0) == 0x80) p++;
         self->visibleTextOffset++;
+        // The only whitespace the count leaves out: ASCII, U+00A0 and U+3000.
+        const bool whitespace = *seq == ' ' || *seq == '\t' || *seq == '\n' || *seq == '\r' ||
+                                (p - seq == 2 && seq[0] == 0xC2 && seq[1] == 0xA0) ||
+                                (p - seq == 3 && seq[0] == 0xE3 && seq[1] == 0x80 && seq[2] == 0x80);
+        if (!self->inRt && !whitespace) self->readableTextChars++;
       }
     }
     if (self->skipDepth >= 0) return;
@@ -2214,6 +2222,9 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   const uint32_t indexOffsetPlaceholder = 0;
   serialization::writePod(b.out, pageCountPlaceholder);
   serialization::writePod(b.out, indexOffsetPlaceholder);
+  const uint32_t textTotalPlaceholder = 0;
+  serialization::writePod(b.out, textTotalPlaceholder);  // visibleChars
+  serialization::writePod(b.out, textTotalPlaceholder);  // readableChars
 
   b.layout.preallocateStream();
   // Column gap (行間) in EMS -- the unit the constraint is stated in. Ruby is half an em (JLREQ
@@ -2520,6 +2531,10 @@ bool VerticalSection::finishBuild(const bool parseOk) {
   }
   serialization::writePod(file, pageCount);
   serialization::writePod(file, indexOffset);
+  visibleChars = b.extractor.visibleTextOffset;
+  readableChars = b.extractor.readableTextChars;
+  serialization::writePod(file, visibleChars);
+  serialization::writePod(file, readableChars);
   // Styling was skipped but every character is present, so the file stays valid for this and later
   // opens. It is still best-effort: record the headroom like a degraded build, so an open with
   // clearly more room rebuilds it styled. Restamping it stale instead would rebuild on every open,
@@ -2647,6 +2662,8 @@ bool VerticalSection::loadSectionFile(const ReaderRenderSpec& spec, const bool r
   uint32_t indexOffset;
   serialization::readPod(file, cachedPageCount);
   serialization::readPod(file, indexOffset);
+  serialization::readPod(file, visibleChars);
+  serialization::readPod(file, readableChars);
 
   pageOffsets_.clear();
   loadedPageIndex_ = -1;

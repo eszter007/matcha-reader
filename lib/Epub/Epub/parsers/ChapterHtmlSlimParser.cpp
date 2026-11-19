@@ -2899,8 +2899,9 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     const unsigned char* ptr = reinterpret_cast<const unsigned char*>(s);
     const unsigned char* end = ptr + len;
     while (ptr < end) {
-      utf8NextCodepoint(&ptr);
+      const uint32_t cp = utf8NextCodepoint(&ptr);
       self->visibleTextOffset++;
+      if (!self->collectingRubyText && VisibleTextUtils::isReadableCodepoint(cp)) self->readableTextChars++;
     }
   }
 

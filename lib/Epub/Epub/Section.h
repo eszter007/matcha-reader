@@ -97,6 +97,10 @@ class Section {
  public:
   uint16_t pageCount = 0;
   int currentPage = 0;
+  // Chapter text totals, 0 until the chapter is laid out to its end: every visible codepoint
+  // (the unit of the page offsets), and the same without furigana and whitespace.
+  uint32_t visibleChars = 0;
+  uint32_t readableChars = 0;
 
   // Constructor and destructor are out-of-line: BuildContext holds a unique_ptr to the
   // forward-declared ChapterHtmlSlimParser, whose full definition is only visible in the .cpp.

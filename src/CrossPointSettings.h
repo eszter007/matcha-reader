@@ -342,6 +342,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Time left in the status bar, from the reading speed in this book (ReadingPace).
   enum STATUS_BAR_TIME_LEFT : uint8_t { TIME_LEFT_CHAPTER = 0, TIME_LEFT_BOOK = 1, TIME_LEFT_HIDE = 2 };
   uint8_t statusBarTimeLeft = TIME_LEFT_HIDE;
+  // Characters read out of the chapter's or the book's total, in the status bar.
+  enum STATUS_BAR_CHAR_COUNT : uint8_t { CHAR_COUNT_CHAPTER = 0, CHAR_COUNT_BOOK = 1, CHAR_COUNT_HIDE = 2 };
+  uint8_t statusBarCharCount = CHAR_COUNT_HIDE;
   // LEGACY, kept for migration only: quarter-hour UTC offset biased by 48
   // (48 = UTC+0). Superseded by clockTimezone; read once by
   // timezones::activeIndex() when clockTimezone is unset.
@@ -704,6 +707,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     uint8_t progressBarHeightPx = 0;          // (thickness+1)*2; 0 when the bar is hidden
     uint8_t xtcMode = XTC_STATUS_BAR_HIDE;    // XTC_STATUS_BAR_MODE
     uint8_t timeLeftMode = TIME_LEFT_HIDE;    // STATUS_BAR_TIME_LEFT
+    uint8_t charCountMode = CHAR_COUNT_HIDE;  // STATUS_BAR_CHAR_COUNT
 
     bool showsProgressBar() const { return progressBarMode != HIDE_PROGRESS; }
     bool showsTitle() const { return titleMode != HIDE_TITLE; }
@@ -711,8 +715,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     // Visibility of the text lane. Whether a clock can be read is the caller's
     // concern: pass halClock.hasTime(), or true for layout reservation.
     bool textLaneVisible(bool clockAvailable) const {
-      return showChapterPageCount || showBookProgressPercent || timeLeftMode != TIME_LEFT_HIDE || showsTitle() ||
-             showBattery || (showsClock() && clockAvailable);
+      return showChapterPageCount || showBookProgressPercent || timeLeftMode != TIME_LEFT_HIDE ||
+             charCountMode != CHAR_COUNT_HIDE || showsTitle() || showBattery || (showsClock() && clockAvailable);
     }
   };
   StatusBarSpec statusBarSpec() const;

@@ -1010,6 +1010,30 @@ TEST_F(ChapterHtmlSlimParserTest, UppercaseHiddenAttributeIsAlsoSkipped) {
   EXPECT_EQ(parser.visibleTextOffset, 0u);
 }
 
+// The status bar's character count leaves out furigana and whitespace, while the reading
+// position still counts both.
+TEST_F(ChapterHtmlSlimParserTest, ReadableCountSkipsFuriganaAndWhitespace) {
+  parser.beginParse();
+  parser.insideBody = true;
+
+  ChapterHtmlSlimParser::startElement(&parser, "p", nullptr);
+  ChapterHtmlSlimParser::characterData(&parser, "a b\n", 4);
+  ChapterHtmlSlimParser::startElement(&parser, "ruby", nullptr);
+  ChapterHtmlSlimParser::characterData(&parser, "\xE6\xBC\xA2\xE5\xAD\x97", 6);  // 漢字
+  ChapterHtmlSlimParser::startElement(&parser, "rt", nullptr);
+  ChapterHtmlSlimParser::characterData(&parser, "\xE3\x81\x8B\xE3\x82\x93\xE3\x81\x98", 9);  // かんじ
+  ChapterHtmlSlimParser::endElement(&parser, "rt");
+  ChapterHtmlSlimParser::endElement(&parser, "ruby");
+  ChapterHtmlSlimParser::characterData(&parser,
+                                       "\xE3\x80\x80"
+                                       "c",
+                                       4);  // ideographic space, c
+  ChapterHtmlSlimParser::endElement(&parser, "p");
+
+  EXPECT_EQ(parser.getVisibleTextChars(), 11u);
+  EXPECT_EQ(parser.getReadableTextChars(), 5u);  // a, b, 漢, 字, c
+}
+
 TEST_F(ChapterHtmlSlimParserTest, PassesIndentSettingsToNewTextBlock) {
   for (bool extraSpacing : {false, true}) {
     parser.extraParagraphSpacing = extraSpacing;

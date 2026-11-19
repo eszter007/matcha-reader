@@ -23,6 +23,7 @@ enum MenuItem {
   ITEM_CHAPTER_PAGE_COUNT = 0,
   ITEM_BOOK_PROGRESS_PERCENTAGE,
   ITEM_TIME_LEFT,
+  ITEM_CHARACTER_COUNT,
   ITEM_PROGRESS_BAR,
   ITEM_PROGRESS_BAR_THICKNESS,
   ITEM_TITLE,
@@ -41,6 +42,7 @@ const StrId menuNames[FULL_MENU_ITEMS] = {
     StrId::STR_CHAPTER_PAGE_COUNT,
     StrId::STR_BOOK_PROGRESS_PERCENTAGE,
     StrId::STR_TIME_LEFT,
+    StrId::STR_CHARACTER_COUNT,
     StrId::STR_PROGRESS_BAR,
     StrId::STR_PROGRESS_BAR_THICKNESS,
     StrId::STR_TITLE,
@@ -82,6 +84,9 @@ void StatusBarSettingsActivity::onEnter() {
   // Clamp statusBarProgressBar and statusBarTitle in case of corrupt/migrated data
   if (SETTINGS.statusBarTimeLeft >= TIME_LEFT_ITEMS) {
     SETTINGS.statusBarTimeLeft = CrossPointSettings::TIME_LEFT_HIDE;
+  }
+  if (SETTINGS.statusBarCharCount >= TIME_LEFT_ITEMS) {
+    SETTINGS.statusBarCharCount = CrossPointSettings::CHAR_COUNT_HIDE;
   }
   if (SETTINGS.statusBarProgressBar >= PROGRESS_BAR_ITEMS) {
     SETTINGS.statusBarProgressBar = CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
@@ -137,6 +142,14 @@ void StatusBarSettingsActivity::handleSelection() {
       optionPopup.show(StrId::STR_TIME_LEFT, timeLeftNames, TIME_LEFT_ITEMS, SETTINGS.statusBarTimeLeft,
                        [this](int idx) {
                          SETTINGS.statusBarTimeLeft = idx;
+                         SETTINGS.saveToFile();
+                       });
+      return;
+    case ITEM_CHARACTER_COUNT:
+      // Chapter, Book, Hide: the same choices and order as Time Left.
+      optionPopup.show(StrId::STR_CHARACTER_COUNT, timeLeftNames, TIME_LEFT_ITEMS, SETTINGS.statusBarCharCount,
+                       [this](int idx) {
+                         SETTINGS.statusBarCharCount = idx;
                          SETTINGS.saveToFile();
                        });
       return;
@@ -205,6 +218,8 @@ std::string StatusBarSettingsActivity::rowValueText(const int index) {
       return SETTINGS.statusBarBookProgressPercentage ? tr(STR_SHOW) : tr(STR_HIDE);
     case ITEM_TIME_LEFT:
       return I18N.get(timeLeftNames[SETTINGS.statusBarTimeLeft]);
+    case ITEM_CHARACTER_COUNT:
+      return I18N.get(timeLeftNames[SETTINGS.statusBarCharCount]);
     case ITEM_PROGRESS_BAR:
       return I18N.get(progressBarNames[SETTINGS.statusBarProgressBar]);
     case ITEM_PROGRESS_BAR_THICKNESS:
@@ -290,7 +305,11 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
 
   // Anchor the preview as a footer directly above the button hints.
   // A plausible rest of a chapter, so the preview shows the slot.
-  GUI.drawStatusBar(renderer, 75, 8, 32, title, metrics.buttonHintsHeight, 0, false, false, false, 13 * 60);
+  const CharCount exampleChars = SETTINGS.statusBarCharCount == CrossPointSettings::CHAR_COUNT_BOOK
+                                     ? CharCount{45000, 312000, true}
+                                     : CharCount{1240, 8900, false};
+  GUI.drawStatusBar(renderer, 75, 8, 32, title, metrics.buttonHintsHeight, 0, false, false, false, 13 * 60,
+                    exampleChars);
 
   renderer.drawCenteredText(UI_10_FONT_ID,
                             renderer.getScreenHeight() - UITheme::getInstance().getStatusBarHeight() -

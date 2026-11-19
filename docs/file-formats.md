@@ -95,6 +95,14 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 116 (fork numbering)
+
+Two `u32` chapter text totals are written ahead of the visible-offset LUT and read back from
+`visibleLutOffset - 8`: the chapter's visible codepoints (the unit of the page offsets), then the
+same count without furigana (`<rt>`) and whitespace. A partial section stores zeros. The status
+bar's character count is built from them. Completed and partial sections are rebuilt. Book
+metadata and saved progress are kept.
+
 ### Version 115 (fork numbering)
 
 The binary layout is unchanged and completed and partial sections are rebuilt. IPA letters, the
@@ -614,6 +622,12 @@ if (parsedSize != fileSize) {
 
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
+
+### Version 162
+
+The header gains two `u32` chapter text totals after the page index offset: the chapter's visible
+codepoints, then the same count without furigana (`<rt>`) and whitespace. Both are zero until the
+build finishes. Cached chapters are laid out again.
 
 ### Version 161
 

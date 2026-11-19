@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string_view>
 
 namespace VisibleTextUtils {
@@ -32,6 +33,12 @@ inline bool isSkippedSubtreeAttribute(const std::string_view name, const std::st
   if (equalsTag(name, "role") && value == "doc-pagebreak") return true;
   if (equalsTag(name, "epub:type") && value == "pagebreak") return true;
   return false;
+}
+
+// The reader's character count: every visible codepoint except whitespace. Furigana (<rt>) is
+// left out by the callers. Both parsers must apply this alike, as with the offsets above.
+inline bool isReadableCodepoint(const uint32_t cp) {
+  return cp != ' ' && cp != '\t' && cp != '\n' && cp != '\r' && cp != 0x00A0 && cp != 0x3000;
 }
 
 }  // namespace VisibleTextUtils

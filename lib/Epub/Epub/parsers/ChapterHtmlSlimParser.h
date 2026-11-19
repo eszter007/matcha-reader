@@ -302,6 +302,8 @@ class ChapterHtmlSlimParser {
   // <body> text. Token offsets flow through line breaking so every completed page
   // records the first source character it renders.
   uint32_t visibleTextOffset = 0;
+  // Visible codepoints so far without furigana and whitespace, for the reader's character count.
+  uint32_t readableTextChars = 0;
   uint32_t partWordVisibleOffset = 0;
   uint32_t currentPageVisibleOffset = 0;
   bool currentPageVisibleOffsetSet = false;
@@ -464,6 +466,9 @@ class ChapterHtmlSlimParser {
 
   void addLineToPage(std::unique_ptr<TextBlock> line, uint32_t visibleOffset);
   const std::deque<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
+  // Totals of the text parsed so far: the chapter's totals once the parse has finished.
+  uint32_t getVisibleTextChars() const { return visibleTextOffset; }
+  uint32_t getReadableTextChars() const { return readableTextChars; }
   // Every footnote reference in the section with the page it appears on (same page counter as
   // getAnchors), for the section-wide footnote table -- see Section::loadSectionFootnotes().
   const std::vector<std::pair<uint16_t, FootnoteEntry>>& getSectionFootnotes() const { return sectionFootnoteData; }
