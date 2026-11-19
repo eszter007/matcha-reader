@@ -684,6 +684,11 @@ bool ActivityManager::startShortcutSync() {
   return pendingAction == PendingAction::None && currentActivity && currentActivity->startShortcutSync();
 }
 
+bool ActivityManager::closePanelsOverPage() {
+  if (pendingAction != PendingAction::None) return true;
+  return currentActivity && currentActivity->closeOverPage();
+}
+
 bool ActivityManager::skipLoopDelay() const { return currentActivity && currentActivity->skipLoopDelay(); }
 
 ScreenshotInfo ActivityManager::getScreenshotInfo() const {

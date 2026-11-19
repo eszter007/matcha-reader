@@ -55,6 +55,10 @@ class ClipSelectionActivity final : public Activity {
   }
 
   void onEnter() override;
+  bool closeOverPage() override {
+    finishCancelled();
+    return true;
+  }
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;

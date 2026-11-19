@@ -175,6 +175,9 @@ class ActivityManager {
   // that draws outside it (the reader's panels) calls it itself.
   void syncGlyphSlab();
   bool startShortcutSync();
+  // Closes a dictionary panel over a page (Activity::closeOverPage). True while one is closing
+  // or any other screen change is under way: the caller waits and asks again.
+  bool closePanelsOverPage();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;
   void prepareForSleep();

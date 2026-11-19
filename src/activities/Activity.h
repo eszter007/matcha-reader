@@ -60,6 +60,10 @@ class Activity {
   // The Sync Insights & Clock shortcut over this book: starts its progress sync with the clock and
   // Insights added. False when the screen has no book position to sync.
   virtual bool startShortcutSync() { return false; }
+  // A dictionary panel or word selection over a page: closes itself and the panels it was opened
+  // from. They draw on the page left in the framebuffer, with the book's fonts, so they cannot
+  // stay under a screen that takes either. False for every other screen.
+  virtual bool closeOverPage() { return false; }
   // Whether this screen keeps the font decompressor's 24KB glyph slab while it is in front. The
   // slab speeds up redraws of small screens; a screen that needs contiguous heap more (a book page,
   // Word Lookup) answers false. Applied by the render task before each render.
