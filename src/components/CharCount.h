@@ -8,7 +8,7 @@
 // Character count for the reader status bar: characters before the page on screen, out of the
 // chapter's or the book's total. Furigana and whitespace are not counted.
 struct CharCount {
-  int32_t read = -1;       // -1 hides the item
+  int32_t read = -1;  // -1 hides the item
   int32_t total = -1;
   bool estimated = false;  // some files were scaled from their size: drawn with a leading "~"
 
