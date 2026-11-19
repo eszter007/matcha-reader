@@ -52,6 +52,7 @@ class TextSettingsActivity final : public UiListActivity {
     ScreenMargin,
     BookSideMargins,
     VerticalText,  // Japanese and Chinese, from Settings only
+    WordMarks,     // Japanese and Chinese: lines in word lookup
     Count
   };
   enum class StyleRow { FocusReading, Hyphenation, EmbeddedStyle, PublisherFonts, AntiAliasing, Count };

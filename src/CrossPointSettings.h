@@ -438,6 +438,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Draw a book in its own embedded fonts (@font-face) where it ships them; vector-font boards
   // only. Per text profile like the font itself.
   uint8_t publisherFonts = 0;
+  // Japanese/Chinese word lookup: a line under (horizontal) or beside (vertical) every word the
+  // dictionary knows, while picking a word. Per text profile; the Latin value is never used.
+  uint8_t lookupWordMarks = 0;
   // Text profiles: books in each script keep their own font, size and spacing. The live fields
   // (fontFamily, sdFontFamilyName, fontPointSize, lineSpacing, characterSpacing, wordSpacing) hold
   // the Latin profile; a book in another script swaps its profile in while it is open
@@ -451,7 +454,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     uint8_t wordSpacing = 100;
     uint8_t fontFamily = NOTOSERIF;
     char sdFontFamilyName[32] = "";
-    uint8_t publisherFonts = 0;  // see CrossPointSettings::publisherFonts
+    uint8_t publisherFonts = 0;   // see CrossPointSettings::publisherFonts
+    uint8_t lookupWordMarks = 0;  // see CrossPointSettings::lookupWordMarks
     bool operator==(const TextProfile&) const = default;
   };
   TextProfile liveTextProfile() const;

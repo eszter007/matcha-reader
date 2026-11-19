@@ -515,6 +515,9 @@ to that book only.
     - **Screen Margin**: the space around the text, 5 to 40 pixels in steps of 5 (default 5).
     - **Use Book Margins** (on by default): keeps the extra side margins a book sets, e.g. for indented quotes and
       letters. When off, those blocks line up with the rest of the text.
+    - **Underline Dictionary Words** (off by default, Japanese and Chinese profiles): while you pick a word to look
+      up, every word the dictionary knows gets a line under it, or beside it in vertical text. On a page the device
+      is still checking, more lines appear as it finds more words. Each of the three profiles keeps its own setting.
   - **STYLE**:
     - **Focus Reading** (off by default): prints the start of each word in bold to guide the eye, like Bionic
       Reading.
@@ -532,11 +535,11 @@ to that book only.
   - The Japanese and Chinese profiles list only **Embedded Style**, **Publisher Fonts** and **Text Anti-Aliasing**
     under **STYLE**.
   - While a book is shown vertically, **LAYOUT** lists only **Line Spacing**, **Character spacing** and
-    **Screen Margin**, the settings vertical text uses.
+    **Screen Margin**, the settings vertical text uses, plus **Underline Dictionary Words**.
 
 - **Text profiles**: each of the five profiles keeps its own **font**, **Publisher Fonts** choice, **font size**,
-  **line spacing**, **character spacing** and **word spacing**, so a font that suits Japanese leaves your English
-  books alone. A book uses the
+  **line spacing**, **character spacing** and **word spacing** (the Japanese and Chinese profiles also **Underline
+  Dictionary Words**), so a font that suits Japanese leaves your English books alone. A book uses the
   profile of its language: Japanese, traditional Chinese (Cantonese too), simplified Chinese, or Korean (a book
   tagged `ko` or `kor`). Every other book uses **Latin & Others**. Opened from inside a book, **Text Settings** goes
   straight to that book's profile. A size or spacing you change while reading goes to the book's profile too. A font
@@ -1371,6 +1374,8 @@ shows one entry so stepping stays quick.
 **Settings**
 
 - **Reader Settings → Word Lookup Font Size**: **Tiny**, **Small** (default), **Medium** or **Large**.
+- **Reader Settings → Text Settings → LAYOUT → Underline Dictionary Words** (off by default, Japanese and Chinese
+  profiles): a line under every word the dictionary knows (beside it in vertical text) while you pick a word.
 
 #### Sentence mining
 

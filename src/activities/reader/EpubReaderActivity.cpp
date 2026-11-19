@@ -443,6 +443,7 @@ void EpubReaderActivity::storeBookTextProfile() {
   if (now.lineSpacing != openTextProfile_.lineSpacing) profile.lineSpacing = now.lineSpacing;
   if (now.characterSpacing != openTextProfile_.characterSpacing) profile.characterSpacing = now.characterSpacing;
   if (now.wordSpacing != openTextProfile_.wordSpacing) profile.wordSpacing = now.wordSpacing;
+  if (now.lookupWordMarks != openTextProfile_.lookupWordMarks) profile.lookupWordMarks = now.lookupWordMarks;
   if (latin) {
     latinTextProfile_ = profile;
   } else {

@@ -11,6 +11,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <SdCardFontSystem.h>
 #include <Utf8.h>
 #include <WordLookup.h>
@@ -225,6 +226,7 @@ bool EpubReaderWordLookupActivity::stepScan(uint32_t budgetMs) {
       LOG_INF("WLA", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
     }
     scan.restartStepScan();
+    resetMarks();
     return false;  // not done -- caller keeps stepping over the freshly-reset scan
   }
   return done;
@@ -241,6 +243,8 @@ void EpubReaderWordLookupActivity::onEnter() {
   const bool restored = scan.restoredCursorIndex != WordSelectionScan::kNoRestoredCursor &&
                         scan.restoredCursorIndex < scan.selectableGlyphs.size();
   if (restored) cursorIndex = scan.restoredCursorIndex;
+  refreshMarks();
+  marksRequested = marksBuilt;  // the first frame draws them
 
   // Select mode shows the page, not a definition, so opening it reads no dictionary entry at
   // all: the constructor's burst already stopped at the first selectable word, and the cursor is
@@ -822,6 +826,8 @@ void EpubReaderWordLookupActivity::returnToSelect() {
   selectPageDrawn = false;              // the definition overdrew the page; it has to be painted again
   // The definition view has its own word navigation, so the cursor may have moved while it was up.
   refreshCursorBoxes();
+  refreshMarks();
+  marksRequested = marksBuilt;  // the repaint draws them
   initialRenderDone = false;
   fastRefreshCount = 0;
   requestUpdate();
@@ -1153,6 +1159,74 @@ void EpubReaderWordLookupActivity::refreshCursorBoxes() {
   }
 }
 
+void EpubReaderWordLookupActivity::refreshMarks() {
+  if (!SETTINGS.lookupWordMarks || marksUnavailable || mode != Mode::Select || !selectCtx.valid()) return;
+  if (!marks) {
+    // Every mark covers at least one cell of the page, so the page's cell count bounds them.
+    const int capacity = static_cast<int>(std::min<size_t>(scan.onPageGlyphCount(), kMaxMarks));
+    if (capacity == 0) return;
+    const uint32_t bytes = static_cast<uint32_t>(capacity) * sizeof(HighlightBox);
+    if (ESP.getMaxAllocHeap() < bytes + kMarksHeapFloor) {
+      LOG_INF("WLA", "Word marks skipped: maxAlloc=%u", ESP.getMaxAllocHeap());
+      marksUnavailable = true;
+      return;
+    }
+    marks = makeUniqueNoThrow<HighlightBox[]>(static_cast<size_t>(capacity));
+    if (!marks) {
+      LOG_ERR("WLA", "OOM: word marks (%u bytes)", bytes);
+      marksUnavailable = true;
+      return;
+    }
+    marksCapacity = capacity;
+  }
+  const int before = marksBuilt;
+  HighlightBox boxes[kMaxHighlightBoxes];
+  while (markedWords < scan.selectableGlyphs.size() && marksBuilt < marksCapacity) {
+    const int n = buildBoxesFor(static_cast<int>(markedWords), boxes);
+    for (int i = 0; i < n && marksBuilt < marksCapacity; i++) {
+      const HighlightBox& b = boxes[i];
+      HighlightBox& mark = marks[marksBuilt++];
+      // Inset at both ends, so two words side by side keep a gap between their lines.
+      if (selectCtx.lines) {
+        const int16_t inset = b.w > 2 * kMarkInset ? kMarkInset : 0;
+        mark = HighlightBox{static_cast<int16_t>(b.x + inset), static_cast<int16_t>(b.y + b.h + 1),
+                            static_cast<int16_t>(b.w - 2 * inset), 2};
+      } else {
+        // Left of the column: its furigana sits on the right.
+        const int16_t inset = b.h > 2 * kMarkInset ? kMarkInset : 0;
+        mark = HighlightBox{static_cast<int16_t>(b.x - 3), static_cast<int16_t>(b.y + inset), 2,
+                            static_cast<int16_t>(b.h - 2 * inset)};
+      }
+    }
+    markedWords++;
+  }
+  if (marksBuilt == before) return;
+  portENTER_CRITICAL(&boxMux);
+  markCount = marksBuilt;
+  portEXIT_CRITICAL(&boxMux);
+}
+
+void EpubReaderWordLookupActivity::resetMarks() {
+  if (!marks) return;
+  const bool hadMarks = marksBuilt > 0;
+  markedWords = 0;
+  marksBuilt = 0;
+  marksRequested = 0;
+  portENTER_CRITICAL(&boxMux);
+  markCount = 0;
+  portEXIT_CRITICAL(&boxMux);
+  // Marks for words the rescan may not find again are on the page.
+  if (hadMarks) selectPageDrawn = false;
+}
+
+void EpubReaderWordLookupActivity::drawMarks() {
+  if (!marks) return;
+  portENTER_CRITICAL(&boxMux);
+  const int count = markCount;
+  portEXIT_CRITICAL(&boxMux);
+  for (int i = 0; i < count; i++) renderer.fillRect(marks[i].x, marks[i].y, marks[i].w, marks[i].h, true);
+}
+
 void EpubReaderWordLookupActivity::invertBoxes(const HighlightBox* boxes, const int count) const {
   for (int i = 0; i < count; i++) renderer.invertRect(boxes[i].x, boxes[i].y, boxes[i].w, boxes[i].h);
 }
@@ -1178,6 +1252,8 @@ void EpubReaderWordLookupActivity::renderSelect() {
     invertBoxes(drawnBoxes, drawnBoxCount);  // erase: inverting again restores what was under it
     drawnBoxCount = 0;
   }
+  // With no cursor inverted, so a mark never lands inside a box and gets flipped by its erase.
+  drawMarks();
 
   // No hint bar here. Vertical text is full-bleed -- the reader's page already occupies the
   // bottom band -- so painting hints over it hides the last line of every column. The panel is
@@ -2270,6 +2346,15 @@ void EpubReaderWordLookupActivity::loop() {
       DictIndex::logAndResetStats("progressive scan complete");
       // Select mode shows no counter, so a redraw here would cost an e-ink flash for no change.
       if (mode == Mode::Definition) requestUpdate();
+    }
+  }
+  // Once the scan is done, one redraw shows any marks still waiting. Outside the block above: the
+  // scan can also finish under a cursor move or behind the definition panel.
+  if (mode == Mode::Select) {
+    refreshMarks();
+    if (scan.isDone() && marksBuilt > marksRequested) {
+      marksRequested = marksBuilt;
+      requestUpdate();
     }
   }
 
