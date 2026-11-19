@@ -131,10 +131,6 @@ void ReaderSettingsActivity::rebuildSettingsLists() {
       // Manga pages ARE images -- the Display/Placeholder/Suppress image rendering mode has
       // nothing to render for a manga book, so it's hidden along with Text Settings below.
       if (mangaMode && setting.nameId == StrId::STR_IMAGES) continue;
-      // Marks belong to the Japanese/Chinese lookup: in other books there is nothing to mark.
-      if (finishOnBack && (!cjkBook || mangaMode) && setting.valuePtr == &CrossPointSettings::lookupWordMarks) {
-        continue;
-      }
       readerSettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
       controlsSettings.push_back(std::move(setting));

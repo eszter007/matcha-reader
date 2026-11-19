@@ -227,11 +227,6 @@ inline SettingInfo buildWordLookupFontSizeSetting() {
                            "wordLookupFontSize", StrId::STR_CAT_READER);
 }
 
-inline SettingInfo buildLookupWordMarksSetting() {
-  return SettingInfo::Toggle(StrId::STR_LOOKUP_WORD_MARKS, &CrossPointSettings::lookupWordMarks, "lookupWordMarks",
-                             StrId::STR_CAT_READER);
-}
-
 inline SettingInfo buildVocabularyHistorySetting() {
   return SettingInfo::Toggle(StrId::STR_SAVE_VOCABULARY_LOOKUPS, &CrossPointSettings::vocabularyHistoryEnabled,
                              "vocabularyHistoryEnabled", StrId::STR_CAT_READER);
@@ -492,8 +487,6 @@ void forEachSetting(const SdCardFontRegistry* registry, const std::vector<Dictio
     if (readerRows) {
       SettingInfo fontSize = buildWordLookupFontSizeSetting();
       offer(fontSize);
-      SettingInfo wordMarks = buildLookupWordMarksSetting();
-      offer(wordMarks);
       SettingInfo vocabulary = buildVocabularyHistorySetting();
       offer(vocabulary);
     }
@@ -557,6 +550,5 @@ inline void forEachPersistableSetting(Fn&& fn) {
     }
   }
   fn(buildWordLookupFontSizeSetting());
-  fn(buildLookupWordMarksSetting());
   fn(buildVocabularyHistorySetting());
 }

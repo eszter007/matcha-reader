@@ -28,9 +28,10 @@ namespace fui = freeink::ui;
 namespace {
 // Indexed by LayoutRow / StyleRow; rebuildRowItems() asserts the lengths match.
 constexpr StrId LAYOUT_ROW_NAME_IDS[] = {
-    StrId::STR_LINE_SPACING,  StrId::STR_WORD_SPACING,          StrId::STR_CHARACTER_SPACING,
-    StrId::STR_EXTRA_SPACING, StrId::STR_PARAGRAPH_INDENTATION, StrId::STR_ALIGNMENT,
-    StrId::STR_SCREEN_MARGIN, StrId::STR_BOOK_CSS_MARGINS,      StrId::STR_TATEGAKI};
+    StrId::STR_LINE_SPACING,     StrId::STR_WORD_SPACING,          StrId::STR_CHARACTER_SPACING,
+    StrId::STR_EXTRA_SPACING,    StrId::STR_PARAGRAPH_INDENTATION, StrId::STR_ALIGNMENT,
+    StrId::STR_SCREEN_MARGIN,    StrId::STR_BOOK_CSS_MARGINS,      StrId::STR_TATEGAKI,
+    StrId::STR_LOOKUP_WORD_MARKS};
 // Only Focus Reading shows in the preview; the other Style rows say so in their label.
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION_NO_PREVIEW,
                                         StrId::STR_EMBEDDED_STYLE_NO_PREVIEW, StrId::STR_PUBLISHER_FONTS_NO_PREVIEW,
@@ -365,9 +366,11 @@ const char* TextSettingsActivity::confirmLabelText() const {
   const int layoutCount = visibleLayoutRows(nullptr);
   if (index >= LAYOUT_FIRST_ROW + layoutCount) return tr(STR_TOGGLE);
   if (index >= LAYOUT_FIRST_ROW) {
-    // The two booleans toggle in place; every other row opens a picker.
+    // The switches toggle in place; every other row opens a picker.
     const LayoutRow row = layoutRowAt(index - LAYOUT_FIRST_ROW);
-    if (row == LayoutRow::ParaSpacing || row == LayoutRow::BookSideMargins) return tr(STR_TOGGLE);
+    if (row == LayoutRow::ParaSpacing || row == LayoutRow::BookSideMargins || row == LayoutRow::WordMarks) {
+      return tr(STR_TOGGLE);
+    }
   }
   return tr(STR_SELECT);
 }
@@ -465,6 +468,10 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
       SETTINGS.bookCssMargins = !SETTINGS.bookCssMargins;
       requestUpdate();
       break;
+    case LayoutRow::WordMarks:
+      SETTINGS.lookupWordMarks = !SETTINGS.lookupWordMarks;
+      requestUpdate();
+      break;
     case LayoutRow::ParaIndentation: {
       std::vector<std::string> options;
       options.reserve(6);
@@ -541,6 +548,9 @@ bool TextSettingsActivity::layoutRowIsSwitch(const int row, bool& checked) const
     case LayoutRow::BookSideMargins:
       checked = SETTINGS.bookCssMargins != 0;
       return true;
+    case LayoutRow::WordMarks:
+      checked = SETTINGS.lookupWordMarks != 0;
+      return true;
     default:
       return false;
   }
@@ -597,7 +607,7 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
       return I18N.get(VERTICAL_TEXT_IDS[v < std::size(VERTICAL_TEXT_IDS) ? v : 0]);
     }
 
-    // ParaSpacing and BookSideMargins draw switches -- see layoutRowIsSwitch().
+    // ParaSpacing, BookSideMargins and WordMarks draw switches -- see layoutRowIsSwitch().
     default:
       return "";
   }
@@ -645,6 +655,12 @@ int TextSettingsActivity::visibleLayoutRows(LayoutRow* out) const {
     for (const LayoutRow row : VERTICAL) add(row);
   } else {
     for (int i = 0; i < static_cast<int>(LayoutRow::VerticalText); i++) add(static_cast<LayoutRow>(i));
+  }
+  // The word lookup it changes serves Japanese and Chinese books only.
+  if (profile_ == CrossPointSettings::TextProfileId::Japanese ||
+      profile_ == CrossPointSettings::TextProfileId::TraditionalChinese ||
+      profile_ == CrossPointSettings::TextProfileId::SimplifiedChinese) {
+    add(LayoutRow::WordMarks);
   }
   return count;
 }
