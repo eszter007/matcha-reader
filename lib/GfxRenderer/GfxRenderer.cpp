@@ -958,9 +958,11 @@ static inline uint8_t averageGlyphInk(const uint8_t* bitmap, const bool is2Bit, 
 // the desired CJK fallback. Scale its bitmap directly instead of adding another font family.
 // Rotation turns the scaled grid the way renderCharImpl turns the unscaled one.
 template <TextRotation Rotation = TextRotation::None>
-static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::RenderMode renderMode,
+static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::RenderMode requestedMode,
                               const EpdFontFamily& fontFamily, const uint32_t cp, const int cursorX, const int cursorY,
                               const bool pixelState, const EpdFontFamily::Style style, const uint16_t scale) {
+  // Absolute gray planes replace the whole frame, so text draws solid in both, as in renderCharImpl.
+  const auto renderMode = renderer.grayPlanesAreAbsolute() ? GfxRenderer::BW : requestedMode;
   const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
   if (!glyph) return;
   const EpdFontData* fontData = fontFamily.getDataForGlyph(cp, style);
@@ -3545,7 +3547,9 @@ bool GfxRenderer::drawCharUpscaled(const int fontId, const uint32_t cp, const in
   // See renderCharAtScale: from 2x up, the antialias fringe of a 2-bit glyph is coverage to
   // interpolate, not ink to replicate. Reading it as solid is what makes an enlarged letter look
   // heavy and swallows its counters.
-  const bool binarize = renderMode == BW && !(fontData->is2Bit && scale >= 2);
+  // Absolute gray planes replace the whole frame, so the glyph draws solid in both.
+  const RenderMode mode = absoluteGrayPlanes ? BW : renderMode;
+  const bool binarize = mode == BW && !(fontData->is2Bit && scale >= 2);
 
   for (int dstY = 0; dstY < dstH; dstY++) {
     // Destination pixel CENTRE mapped back into the source, less the half texel that puts texel
@@ -3554,7 +3558,7 @@ bool GfxRenderer::drawCharUpscaled(const int fontId, const uint32_t cp, const in
     for (int dstX = 0; dstX < dstW; dstX++) {
       const int32_t sxFP = ((2 * dstX + 1) * stepFP) / 2 - 32768;
       const uint8_t ink = sampleGlyphInk(bitmap, fontData->is2Bit, binarize, srcW, srcH, sxFP, syFP);
-      if (renderMode == BW || !fontData->is2Bit) {
+      if (mode == BW || !fontData->is2Bit) {
         // One bit per pixel on the panel, so the edge cannot be soft -- but at half coverage it
         // lands on the outline instead of on the source grid, and that is what removes the steps.
         if (ink >= 128) drawPixel(inkLeftX + dstX, inkTopY + dstY, black);
@@ -3563,9 +3567,9 @@ bool GfxRenderer::drawCharUpscaled(const int fontId, const uint32_t cp, const in
       // Back to the 4 levels the grayscale planes encode.
       const uint8_t raw = static_cast<uint8_t>((ink * 3 + 127) / 255);
       const uint8_t bmpVal = 3 - raw;
-      if (renderMode == GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
+      if (mode == GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
         drawPixel(inkLeftX + dstX, inkTopY + dstY, false);
-      } else if (renderMode == GRAYSCALE_LSB && bmpVal == 1) {
+      } else if (mode == GRAYSCALE_LSB && bmpVal == 1) {
         drawPixel(inkLeftX + dstX, inkTopY + dstY, false);
       }
     }
