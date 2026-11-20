@@ -483,57 +483,54 @@ void BookMetadataCache::createTocEntry(const std::string& title, const std::stri
 /* ============= READING / LOADING FUNCTIONS ================ */
 
 bool BookMetadataCache::load() {
+  loaded = false;
   if (!Storage.openFileForRead("BMC", cachePath + bookBinFile, bookFile)) {
     return false;
   }
 
-  uint8_t version;
-  serialization::readPod(bookFile, version);
-  if (version != BOOK_CACHE_VERSION) {
-    LOG_DBG("BMC", "Cache version mismatch: expected %d, got %d", BOOK_CACHE_VERSION, version);
+  const auto rejectCache = [&] {
     // Explicit close() required: member variable persists beyond function scope
     bookFile.close();
     return false;
+  };
+  uint8_t version = 0;
+  if (!serialization::tryReadPod(bookFile, version) || version != BOOK_CACHE_VERSION) {
+    LOG_DBG("BMC", "Cache version mismatch: expected %d, got %d", BOOK_CACHE_VERSION, version);
+    return rejectCache();
   }
 
-  // A cache file that cannot be read through is treated as absent, not as a book with empty
-  // metadata: the caller rebuilds it, where a half-loaded cache would be believed and kept.
-  // This is the path that aborted on a device whose SD card was failing mid-read.
   uint8_t pageProgressionRtl = 0;
-  const bool headerOk = serialization::readPod(bookFile, lutOffset) && serialization::readPod(bookFile, spineCount) &&
-                        serialization::readPod(bookFile, tocCount) &&
-                        serialization::readString(bookFile, coreMetadata.title) &&
-                        serialization::readString(bookFile, coreMetadata.author) &&
-                        serialization::readString(bookFile, coreMetadata.language) &&
-                        serialization::readString(bookFile, coreMetadata.coverItemHref) &&
-                        serialization::readString(bookFile, coreMetadata.textReferenceHref) &&
-                        serialization::readPod(bookFile, pageProgressionRtl);
-  coreMetadata.pageProgressionRtl = pageProgressionRtl != 0;
-  if (!headerOk) {
-    LOG_ERR("BMC", "Cache header unreadable or corrupt; discarding");
-    bookFile.close();
-    return false;
+  if (!serialization::tryReadPod(bookFile, lutOffset) || !serialization::tryReadPod(bookFile, spineCount) ||
+      !serialization::tryReadPod(bookFile, tocCount) ||
+      !serialization::tryReadString(bookFile, coreMetadata.title, lutOffset) ||
+      !serialization::tryReadString(bookFile, coreMetadata.author, lutOffset) ||
+      !serialization::tryReadString(bookFile, coreMetadata.language, lutOffset) ||
+      !serialization::tryReadString(bookFile, coreMetadata.coverItemHref, lutOffset) ||
+      !serialization::tryReadString(bookFile, coreMetadata.textReferenceHref, lutOffset) ||
+      !serialization::tryReadPod(bookFile, pageProgressionRtl) || bookFile.position() != lutOffset) {
+    return rejectCache();
   }
+  coreMetadata.pageProgressionRtl = pageProgressionRtl != 0;
 
   // Spine entries follow the LUTs in index order; keep every SIZE_WINDOW-th cumulative size.
+  const size_t fileSize = bookFile.size();
+  const uint32_t lutSize = (static_cast<uint32_t>(spineCount) + tocCount) * sizeof(uint32_t);
+  if (lutOffset > fileSize || lutSize > fileSize - lutOffset || !bookFile.seek(lutOffset + lutSize)) {
+    return rejectCache();
+  }
   windowStarts.clear();
   bookSize = 0;
   windowFirst = -1;
   windowStarts.reserve((spineCount + SIZE_WINDOW - 1) / SIZE_WINDOW);
-  const uint32_t lutSize = (static_cast<uint32_t>(spineCount) + tocCount) * sizeof(uint32_t);
-  bookFile.seek(lutOffset + lutSize);
   for (uint16_t i = 0; i < spineCount; i++) {
     if (i % SIZE_WINDOW == 0) windowStarts.push_back(bookSize);
-    // Read the entry by hand rather than via readSpineEntry(): only cumulativeSize is wanted
-    // here, and the full read would allocate and immediately discard a std::string href per
-    // spine item -- spineCount allocate/free pairs at load, on a heap this code exists to
-    // spare. A string is [u32 length][bytes], so the href is skipped with a seek.
-    uint32_t hrefLen = 0;
-    serialization::readPod(bookFile, hrefLen);
-    bookFile.seekCur(static_cast<int32_t>(hrefLen));
-    serialization::readPod(bookFile, bookSize);
-    int16_t tocIndex = 0;
-    serialization::readPod(bookFile, tocIndex);
+    uint32_t hrefLen;
+    int16_t tocIndex;
+    if (!serialization::tryReadPod(bookFile, hrefLen) || hrefLen > fileSize - bookFile.position() ||
+        !bookFile.seekCur(hrefLen) || !serialization::tryReadPod(bookFile, bookSize) ||
+        !serialization::tryReadPod(bookFile, tocIndex)) {
+      return rejectCache();
+    }
   }
 
   loaded = true;

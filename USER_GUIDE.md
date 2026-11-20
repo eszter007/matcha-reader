@@ -220,6 +220,8 @@ On a device with buttons only, the cursor moves in one loop through the whole sc
 
 A grey outline shows where the cursor is, whether on a cover, a row or a tab.
 
+When saved reading progress is available, Lyra shows the percentage and a progress bar below the book title and author.
+
 ### 3.2 Reading Mode
 
 See [Reading Mode](#4-reading-mode) below.
