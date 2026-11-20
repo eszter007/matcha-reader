@@ -362,7 +362,6 @@ void SettingsActivity::rebuildSettings() {
   // reading-stats day boundaries.
   addAction(SettingsSection::System, StrId::STR_CLOCK, SettingAction::ClockSettings);
   addAction(SettingsSection::System, StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache);
-  addAction(SettingsSection::System, StrId::STR_DISPLAY_REFRESH, SettingAction::DisplayRefresh);
   addAction(SettingsSection::System, StrId::STR_LANGUAGE, SettingAction::Language);
   addAction(SettingsSection::System, StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts);
   addAction(SettingsSection::System, StrId::STR_PLUGINS, SettingAction::Plugins);

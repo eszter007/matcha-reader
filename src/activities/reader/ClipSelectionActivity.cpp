@@ -181,7 +181,7 @@ bool ClipSelectionActivity::extractWords() {
 
         const auto style = static_cast<EpdFontFamily::Style>(block->wordStyle(i) & ~EpdFontFamily::UNDERLINE);
         const ClippingWordFont wordFont = clippingWordFont(*block, i, fontId);
-        int width = clippingWordWidth(renderer, wordFont, text, style);
+        int width = clippingWordWidth(renderer, wordFont, block->laidOutWord(i), style);
         if (width <= 0) continue;
         if (i + 1 < block->wordCount() && block->wordXpos(i + 1) > block->wordXpos(i)) {
           width = std::min(width, static_cast<int>(block->wordXpos(i + 1) - block->wordXpos(i)));
@@ -651,10 +651,6 @@ void ClipSelectionActivity::loop() {
     return;
   } else if (mappedInput.wasScreenTouchPressed(touchX, touchY)) {
     if (rangeStart >= 0) {
-      const Rect actions = actionRect();
-      if (selectionGeometry::actionAt(actions, BaseTheme::selectionActionWidths(renderer),
-                                      BaseTheme::SELECTION_ACTION_SLOT_GAP_PX, touchX, touchY) >= 0)
-        return;
       const int first = std::min(rangeStart, selected);
       const int last = std::max(rangeStart, selected);
       for (int endpoint = 0; endpoint < 2; ++endpoint) {
@@ -675,6 +671,10 @@ void ClipSelectionActivity::loop() {
         touchDragPageEndIndex = -1;
         return;
       }
+      // After the handles: one under the action bar must still be draggable.
+      if (selectionGeometry::actionAt(actionRect(), BaseTheme::selectionActionWidths(renderer),
+                                      BaseTheme::SELECTION_ACTION_SLOT_GAP_PX, touchX, touchY) >= 0)
+        return;
       return;
     }
     const int hit = wordAt(touchX, touchY);

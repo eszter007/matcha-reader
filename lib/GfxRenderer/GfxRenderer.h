@@ -94,7 +94,6 @@ class GfxRenderer {
   // fallback registered for a built-in primary. See the definition for why this matters.
   SdCardFont* sdFontForWarmup(int fontId) const;
   SdCardFont* fallbackSdFont_ = nullptr;
-  mutable std::map<int, uint16_t> sdCardFontScales_;  // fontId -> 8.8 fixed point scale (256=1.0x)
   // TTF (vector) fonts: rebuilt per page by ensureSdCardFontReady(). Mutable for
   // the same reason as sdCardFonts_ (const layout path triggers a rebuild).
   mutable std::map<int, TtfEpdFont*> ttfFonts_;
@@ -209,9 +208,11 @@ class GfxRenderer {
   }
   // One walk for scaled text, drawing it or only measuring it, so the two cannot disagree.
   // scale applies to the font's own glyphs, nonCjkScale to those it takes from its fallback
-  // family. Returns the pen advance in pixels.
+  // family. shapedText: renderedText may hold shaping tokens (ShapingTokens.h). Returns the pen
+  // advance in pixels.
   int layoutTextScaled(int resolvedFontId, int x, int y, const char* renderedText, uint16_t scale, uint16_t nonCjkScale,
-                       bool draw, bool black, EpdFontFamily::Style style, int8_t letterSpacing) const;
+                       bool draw, bool black, EpdFontFamily::Style style, int8_t letterSpacing,
+                       bool shapedText = false) const;
 
   // Batch-load `text`'s glyphs into an SD-card font's resident mini tables
   // before a per-glyph measure/draw loop runs. Called when resolveTextFontId
@@ -255,7 +256,6 @@ class GfxRenderer {
   void removeFont(int fontId) {
     fontMap.erase(fontId);
     sdCardFonts_.erase(fontId);
-    sdCardFontScales_.erase(fontId);
   }
 
   // Prewarm a string through the SAME resolution drawText uses. Prewarming the requested id
@@ -281,7 +281,6 @@ class GfxRenderer {
   using TextGetter = const char* (*)(const void* ctx, uint32_t index);
   void prewarmFallbackText(int fontId, TextGetter getter, const void* ctx, uint32_t textCount,
                            EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
-  void prewarmFallbackText(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   bool isFontCacheScanning() const;
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
   // Point one registered family's glyph fallback at another. Used to give an SD font loaded
@@ -298,17 +297,7 @@ class GfxRenderer {
   // on-demand glyphMissHandler path made indexing do a seek+read per missing glyph.
   void setFallbackSdFont(SdCardFont* font) { fallbackSdFont_ = font; }
   SdCardFont* getFallbackSdFont() const { return fallbackSdFont_; }
-  void unregisterSdCardFont(int fontId) { removeFont(fontId); }
-  void clearSdCardFonts() {
-    sdCardFonts_.clear();
-    sdCardFontScales_.clear();
-  }
-  void registerSdCardFontScale(int fontId, uint16_t scale) { sdCardFontScales_[fontId] = scale; }
-  void clearSdCardFontScales() { sdCardFontScales_.clear(); }
-  uint16_t getSdCardFontScale(int fontId) const {
-    auto it = sdCardFontScales_.find(fontId);
-    return (it != sdCardFontScales_.end()) ? it->second : 256;
-  }
+  void clearSdCardFonts() { sdCardFonts_.clear(); }
   const std::map<int, SdCardFont*>& getSdCardFonts() const { return sdCardFonts_; }
   bool isSdCardFont(int fontId) const { return sdCardFonts_.count(fontId) > 0; }
   // TTF (vector) fonts rendered via TtfEpdFont/FreeInkFont. Registered like an
@@ -431,12 +420,9 @@ class GfxRenderer {
   // fadingFix isn't forcing the blocking path. Callers can skip overlap
   // scaffolding (e.g. whole-plane grayscale buffers) when false.
   bool supportsAsyncRefresh() const;
-  // True when the display can overlap an ordinary B/W refresh with grayscale
-  // composition without bypassing a required grayscale base waveform.
+  // When checking stripUploads, pass the grayscale mode used for the planes.
   HalDisplay::GrayscaleCapabilities grayscaleCapabilities(
       HalDisplay::GrayscaleMode mode = HalDisplay::GrayscaleMode::Overlay) const;
-  // Compatibility queries for Overlay mode.
-  bool supportsAsyncGrayscaleBase() const;
   // EXPERIMENTAL: Windowed update - display only a rectangular region
   // Repaint a B/W rectangle over retained gray pixels; false means the caller must use its normal paint.
   bool displayRetainedGrayscaleOverlay(int x, int y, int width, int height, bool restore = false) const;
@@ -546,6 +532,19 @@ class GfxRenderer {
   void drawText(int fontId, int x, int y, const char* text, bool black = true,
                 EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                 BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO, int8_t letterSpacing = 0) const;
+
+  // A word as layout measured it: `text` is its logical form, which picks the
+  // font as for any string, and `display` the form resolveForDisplay() made
+  // of it, or nullptr when it made none. The overloads taking one draw and
+  // measure a display form without shaping again, so a page turn draws what
+  // layout measured; without one they resolve `text` like any string.
+  struct LaidOutText {
+    const char* text;
+    const char* display;
+  };
+  void drawText(int fontId, int x, int y, const LaidOutText& text, bool black = true,
+                EpdFontFamily::Style style = EpdFontFamily::REGULAR,
+                BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO, int8_t tracking = 0) const;
   void drawTextScaled(int fontId, int x, int y, const char* text, uint16_t scale, bool black = true,
                       EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                       BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO, int8_t letterSpacing = 0) const;
@@ -570,6 +569,42 @@ class GfxRenderer {
   int getRenderAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
   bool getGlyphMetrics(int fontId, uint32_t cp, EpdFontFamily::Style style, int* left, int* width, int* top,
                        int* height) const;
+  int getTextAdvanceX(int fontId, const LaidOutText& text, EpdFontFamily::Style style, int8_t tracking = 0,
+                      BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO,
+                      TextMeasureMode mode = TextMeasureMode::Layout) const;
+
+  // The form getTextAdvanceX measures a complex-script `text` in: shaped
+  // glyph tokens (ShapingTokens.h), or reordered vowel signs when the font
+  // cannot shape. A font that shapes but could not shape `text` just now
+  // (e.g. memory ran short) gets the unshaped form, so the page draws the width
+  // layout measured. Returns false, leaving `out` untouched, when `text`
+  // draws as it is: a font that cannot shape needs no reordering, or the font
+  // does not draw the script. Tied to this font and style; layout stores it
+  // in the page cache as a LaidOutText display form.
+  bool resolveForDisplay(int fontId, const char* text, EpdFontFamily::Style style, std::string& out) const;
+
+  // While one of these is alive, repeated runs shape once (see
+  // ComplexShaper::beginMemo). Scope it to a paragraph's layout.
+  class ShapingMemoScope {
+    const bool enabled;
+
+   public:
+    explicit ShapingMemoScope(bool enabled = true);
+    ~ShapingMemoScope();
+    ShapingMemoScope(const ShapingMemoScope&) = delete;
+    ShapingMemoScope& operator=(const ShapingMemoScope&) = delete;
+  };
+
+ private:
+  // drawText and getTextAdvanceX once `text` is the visual stream (bidi
+  // resolved, complex scripts shaped) and `resolvedFontId` the font it draws in.
+  // `shapedText`: `text` may hold shaping tokens; other text skips token handling.
+  void drawVisualText(int fontId, int resolvedFontId, int x, int y, const char* text, bool shapedText, bool black,
+                      EpdFontFamily::Style style, int8_t tracking) const;
+  int measureVisualText(int resolvedFontId, const char* text, bool shapedText, EpdFontFamily::Style style,
+                        int8_t tracking, TextMeasureMode mode) const;
+
+ public:
   int getFontAscenderSize(int fontId) const;
   // Vertical extent the glyphs actually occupy: ascender above the baseline plus descender below.
   // Distinct from getLineHeight(), which is the font's newline advance -- several of the built-in
@@ -643,12 +678,9 @@ class GfxRenderer {
   // Grayscale functions
   void setRenderMode(RenderMode mode);
   RenderMode getRenderMode() const { return renderMode; }
-  // Grayscale preconditioning settle pass (no-op on X4). The rect overload
-  // takes the gray region in LOGICAL screen coordinates and rotates it to the
-  // panel; the no-arg overload settles the full frame. Call after the BW base
-  // frame is displayed and before the grayscale planes are written.
+  // Settle the full frame after displaying the B/W base and before writing
+  // the grayscale planes (no-op on X4).
   void preconditionGrayscale() const;
-  void preconditionGrayscale(int x, int y, int w, int h) const;
   // Display the framebuffer as the base frame for a grayscale overlay that
   // follows (X3: OEM differential base waveform; others: plain display with
   // `fallback`).
@@ -668,12 +700,10 @@ class GfxRenderer {
 
   // Tiled grayscale (X4): stream one band of a plane straight to controller RAM
   // from `scratch` (panelWidthBytes * numRows, physical rows [yStart, yStart+
-  // numRows)), bypassing the framebuffer. supportsStripGrayscale() gates use.
+  // numRows)), bypassing the framebuffer. Check grayscaleCapabilities(mode).stripUploads
+  // with the same grayscale mode used for the planes.
   void writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch, int yStart, int numRows) const;
   bool supportsStripGrayscale() const;
-  // Paper Mono: the base activation is deferred so base + gray planes go out
-  // as one waveform. Route the base through displayGrayscaleBase() when true.
-  bool combinesGrayscaleBase() const;
   // Returns true if the buffer was stored. `headroom` is free heap that must remain after the copy:
   // an optional snapshot (the reader toolbar) asks for more, so it never starves the next render.
   bool storeBwBuffer(size_t headroom = 4096);

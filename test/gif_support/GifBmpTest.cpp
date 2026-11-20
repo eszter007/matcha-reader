@@ -90,6 +90,40 @@ TEST_F(GifBmpTest, WritesNativeAndScaledThumbnails) {
   }
 }
 
+TEST_F(GifBmpTest, PreservesPixelsAcrossScalingCroppingAndCanvasGaps) {
+  // Reference FNV-1a hashes of complete BMPs, including headers and packed pixels.
+  // The 1-bit thumbnail hashes (modes 4-7) differ from upstream's: this fork's 1-bit ditherer
+  // lifts midtones (liftThumbMidtones).
+  constexpr uint64_t expected[2][8] = {
+      {7685477406190704776ULL, 14498139752244550009ULL, 4189858372662219127ULL, 8170268485886828064ULL,
+       8350232636354198542ULL, 2181186977301060210ULL, 10535019484946652839ULL, 17298418693646924018ULL},
+      {5710073575351826936ULL, 15064723361281102937ULL, 9649742591039960104ULL, 15714721179729549903ULL,
+       17826571621932208560ULL, 10037843795648086482ULL, 12166518939886962171ULL, 1711747941433801266ULL}};
+  for (const bool offsetFrame : {false, true}) {
+    auto bytes = image();
+    if (offsetFrame) {
+      bytes[6] = 12;
+      bytes[8] = 10;
+      bytes[34] = 2;
+      bytes[36] = 3;
+    }
+    open(bytes);
+    for (int mode = 0; mode < 8; ++mode) {
+      Output out;
+      if (mode < 4) {
+        ASSERT_TRUE(GifToBmpConverter::gifFileToBmpStream(file, out, mode & 1, mode & 2));
+      } else {
+        constexpr std::pair<int, int> targets[] = {{8, 4}, {4, 4}, {32, 16}, {3, 5}};
+        const auto [width, height] = targets[mode - 4];
+        ASSERT_TRUE(GifToBmpConverter::gifFileTo1BitBmpStreamWithSize(file, out, width, height));
+      }
+      uint64_t hash = 14695981039346656037ULL;
+      for (const uint8_t byte : out.bytes) hash = (hash ^ byte) * 1099511628211ULL;
+      EXPECT_EQ(hash, expected[offsetFrame][mode]) << "offsetFrame=" << offsetFrame << ", mode=" << mode;
+    }
+  }
+}
+
 TEST_F(GifBmpTest, RejectsEveryShortHeaderWriteAndShortRows) {
   for (const bool oneBit : {false, true}) {
     for (size_t limit = 0; limit <= (oneBit ? 62u : 70u); ++limit) {

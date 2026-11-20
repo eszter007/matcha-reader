@@ -1,8 +1,10 @@
 #include "FontCacheManager.h"
 
+#include <ComplexShaper.h>
 #include <FontDecompressor.h>
 #include <Logging.h>
 #include <SdCardFont.h>
+#include <ShapingTokens.h>
 #include <TtfEpdFont.h>
 #include <Utf8.h>
 
@@ -91,6 +93,8 @@ void FontCacheManager::releaseAllFontMemory() {
     font->clearPersistentCache();
   }
   if (auto* fallback = unregisteredFallback()) fallback->clearPersistentCache();
+  // Shaping state is shared by every font (faces, run cache, glyph buffer).
+  ComplexShaper::releaseAll();
 #if CROSSPOINT_VECTOR_FONTS
   // TTF faces too: byte arenas, glyph tables and the lazy bold/italic FreeType faces all
   // rebuild on demand, so the emergency path surrenders them like the .cpfont caches.
@@ -209,13 +213,6 @@ int FontCacheManager::getIdleLookaheadPages(const int fontId) const {
 #endif
 }
 
-void FontCacheManager::logStats(const char* label) {
-  if (fontDecompressor_) fontDecompressor_->logStats(label);
-  for (auto& [id, font] : sdCardFonts_) {
-    font->logStats(label);
-  }
-}
-
 void FontCacheManager::resetStats() {
   if (fontDecompressor_) fontDecompressor_->resetStats();
   for (auto& [id, font] : sdCardFonts_) {
@@ -262,6 +259,7 @@ void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::S
   while (*cursor) {
     const uint32_t codepoint = utf8NextCodepoint(&cursor);
     if (codepoint == 0) break;
+    if (shaping::isPositionToken(codepoint)) continue;  // modifies the next glyph; has no glyph of its own
 
     const uint32_t packed = (static_cast<uint32_t>(fontSlot) << SCAN_FONT_SHIFT) |
                             (static_cast<uint32_t>(resolvedStyle) << SCAN_STYLE_SHIFT) | codepoint;

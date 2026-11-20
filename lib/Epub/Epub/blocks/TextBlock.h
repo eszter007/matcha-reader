@@ -1,6 +1,7 @@
 #pragma once
 
 #include <EpdFontFamily.h>
+#include <GfxRenderer.h>
 #include <HalStorage.h>
 
 #include <algorithm>
@@ -28,13 +29,21 @@
 //   int32_t  wordFont[wordCount]       present only when fontsPresent (inline font-size)
 //   uint16_t textOff[wordCount]        byte offset of word i's text in text[]
 //   int16_t  xpos[wordCount]
-//   uint16_t focusSplitX[wordCount]   present only when focusPresent
+//   uint16_t focusSplitX[wordCount]    present only when focusPresent
+//   uint16_t displayOff[wordCount]     present only when displayPresent; NO_DISPLAY = none
 //   uint8_t  styles[wordCount]
 //   uint8_t  focusBoundary[wordCount]  present only when focusPresent
 //   char     text[textBytes]           all words back to back, NUL-terminated
+//   char     display[displayBytes]     present only when displayPresent, NUL-terminated
 //
 // Each word is stored NUL-terminated so render() can hand `text + textOff[i]`
 // straight to C APIs (drawText) with no std::string materialization.
+//
+// Display text: complex-script words are stored a second time in the form
+// layout measured them in, usually shaped glyph tokens (see
+// GfxRenderer::resolveForDisplay), so a page turn draws exactly that without
+// running the shaper. wordText() stays the logical text for dictionary lookup
+// and text extraction. Absent entirely when no word on the line needs it.
 //
 // Focus split semantics (unchanged from the vector layout): boundary N > 0
 // means the first N bytes of word i render bold, the remainder in the base
@@ -103,11 +112,19 @@ class TextBlock final : public Block {
   struct RubyDrawInfo;
   void layoutRuby(const GfxRenderer& renderer, int fontId, int x, std::vector<RubyDrawInfo>& rubies) const;
   BlockStyle blockStyle;
+  static constexpr uint16_t NO_DISPLAY = 0xFFFF;
+  // Serialized flags byte.
+  static constexpr uint8_t FLAG_FOCUS = 1;
+  static constexpr uint8_t FLAG_FONTS = 2;    // per-word font ids (inline font-size)
+  static constexpr uint8_t FLAG_DISPLAY = 4;  // upstream's bit 1; bit 1 was taken here
+
   uint16_t numWords = 0;
   uint16_t paragraphStartWord = UINT16_MAX;  // Visual index of the paragraph's first logical word.
   uint16_t textBytes = 0;                    // total size of the text region, including NULs
+  uint16_t displayBytes = 0;                 // total size of the display region, including NULs
   bool focusPresent = false;
   bool fontsPresent = false;  // per-word font ids from inline font-size (0 = block font)
+  bool displayPresent = false;
   bool isValid = true;
   // The ONLY allocation: makeUniqueNoThrow, so OOM yields an invalid block
   // instead of abort() (bare new is not nothrow with -fno-exceptions).
@@ -129,8 +146,14 @@ class TextBlock final : public Block {
   DropCap dropCap;
 
   TextBlock() = default;  // deserialize() fills the fields directly
-  static size_t arenaSize(uint16_t wordCount, bool hasFocus, bool hasFonts, uint16_t textBytes);
+  static size_t arenaSize(uint16_t wordCount, bool hasFocus, bool hasFonts, uint16_t textBytes, bool hasDisplay,
+                          uint16_t displayBytes);
   void bindArenaPointers();
+  // Valid when displayPresent: offsets precede styles, and display text follows logical text.
+  const uint16_t* displayOffsets() const {
+    return reinterpret_cast<const uint16_t*>(stylesArr - static_cast<size_t>(numWords) * sizeof(uint16_t));
+  }
+  const char* displayText() const { return textArr + textBytes; }
 
  public:
   // Flatten-on-construct: copies the layout-time vectors into the arena; the
@@ -138,12 +161,13 @@ class TextBlock final : public Block {
   // is false -- callers must check and fail the line instead of using it.
   // wordFonts: per-word font ids from inline font-size (0 = block font); empty = none on
   // this line (the common case -- no arena cost). When non-empty must match words.size().
+  // displayWords is empty, or sized like words with "" for words that draw as is.
   explicit TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<EpdFontFamily::Style>& wordStyles, const std::vector<uint8_t>& focusBoundary,
                      const std::vector<uint16_t>& focusSplitX, const BlockStyle& blockStyle = BlockStyle(),
                      std::vector<std::string> rubyTexts = {}, const std::vector<int32_t>& wordFonts = {},
                      std::vector<LinkSpan> linkSpans = {}, const std::vector<SourceRange>& ranges = {},
-                     uint16_t paragraphStartWord = UINT16_MAX);
+                     uint16_t paragraphStartWord = UINT16_MAX, const std::vector<std::string>& displayWords = {});
   ~TextBlock() override = default;
   TextBlock(const TextBlock&) = delete;
   TextBlock& operator=(const TextBlock&) = delete;
@@ -155,6 +179,20 @@ class TextBlock final : public Block {
   uint16_t wordCount() const { return numWords; }
   // NUL-terminated by construction; safe to pass to C APIs directly.
   const char* wordText(const uint16_t i) const { return textArr + textOffArr[i]; }
+  // The form layout measured word i in (GfxRenderer::resolveForDisplay), or
+  // nullptr when it measured wordText(i) and needs no stored form, or layout
+  // dropped a form that measured differently.
+  const char* displayForm(const uint16_t i) const {
+    if (!displayPresent) return nullptr;
+    const uint16_t offset = displayOffsets()[i];
+    return offset != NO_DISPLAY ? displayText() + offset : nullptr;
+  }
+  // Word i as layout measured it, for measuring and drawing. A focus boundary
+  // indexes the logical text: ParsedText never splits a word that has a
+  // display form, but a corrupt cache could pair them.
+  GfxRenderer::LaidOutText laidOutWord(const uint16_t i) const {
+    return {wordText(i), focusBoundary(i) > 0 ? nullptr : displayForm(i)};
+  }
   uint16_t wordTextLen(const uint16_t i) const {
     const uint16_t end = (i + 1 < numWords) ? textOffArr[i + 1] : textBytes;
     return end - textOffArr[i] - 1;  // exclude the NUL

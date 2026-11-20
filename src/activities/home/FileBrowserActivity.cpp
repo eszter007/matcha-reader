@@ -558,6 +558,7 @@ void FileBrowserActivity::renameSelectedFile(const std::string& oldPath, const s
   // reading state cannot be preserved on one path and dropped on the other. It carries every
   // book under a folder, and puts everything back if any part fails.
   if (!renamestate::renamePathWithState(oldPath, newPath, "FileBrowser")) return;
+  sleepImageChanged(newPath.c_str());
   if (APP_STATE.openEpubPath == oldPath) {
     APP_STATE.openEpubPath = newPath;
     if (!APP_STATE.saveToFile()) LOG_ERR("FileBrowser", "Failed to save renamed open-book path");

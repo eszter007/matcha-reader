@@ -27,6 +27,7 @@ parser.add_argument("--zopfli", dest="zopfli", action="store_true", help="Use Zo
 parser.add_argument("--bw-threshold", dest="bw_threshold", type=int, default=2, help="1-bit mode: the 4-bit grey level (0-15) from which a pixel is black. Default 2. Higher thins strokes that round up to an extra pixel at small sizes.")
 parser.add_argument("--embolden-x", dest="embolden_x", type=int, default=0, help="Widen each outline horizontally by this many 1/64 px before rasterising; the advance grows by the same amount. Fills out strokes evenly where a threshold change alone would round some up and leave others thin.")
 parser.add_argument("--embolden-y", dest="embolden_y", type=int, default=0, help="Same as --embolden-x, vertically: thickens horizontal strokes and the tops and bottoms of curves.")
+parser.add_argument("--glyph-x-nudge", dest="glyph_x_nudges", action="append", default=[], metavar="CODEPOINT,DX", help="Shift one glyph's outline DX/64 px sideways before rasterising (repeatable). For a stem that straddles a pixel boundary: in 1-bit mode both of its faint edge pixels turn black and the stem comes out a pixel too wide.")
 parser.add_argument("--force-autohint", dest="force_autohint", action="store_true", help="Force FreeType auto-hinter instead of native font hinting. Improves stem width consistency for fonts with weak or no native TrueType hints.")
 parser.add_argument("--pnum", dest="pnum", action="store_true", help="Use proportional numerals (pnum OpenType feature) instead of default tabular figures. Reduces visual gaps between digits in running prose.")
 args = parser.parse_args()
@@ -267,6 +268,11 @@ if args.pnum:
         if count > 0:
             print(f"pnum: {count} glyph substitutions from {font_path}", file=sys.stderr)
 
+glyph_x_nudges = {}
+for spec in args.glyph_x_nudges:
+    cp, dx = spec.split(",")
+    glyph_x_nudges[int(cp, 0)] = int(dx, 0)
+
 def load_glyph(code_point):
     face_index = 0
     while face_index < len(font_stack):
@@ -275,12 +281,22 @@ def load_glyph(code_point):
         if glyph_index is None:
             glyph_index = face.get_char_index(code_point)
         if glyph_index > 0:
-            if args.embolden_x or args.embolden_y:
-                # Load the outline, widen it, then rasterise it the way FT_LOAD_RENDER would.
-                face.load_glyph(glyph_index, load_flags & ~freetype.FT_LOAD_RENDER)
+            nudge = glyph_x_nudges.get(code_point)
+            if nudge or args.embolden_x or args.embolden_y:
+                # Load the outline, change it, then rasterise it the way FT_LOAD_RENDER would.
+                # NO_BITMAP for a nudge: an embedded bitmap strike has no outline to shift.
+                outline_flags = load_flags & ~freetype.FT_LOAD_RENDER
+                if nudge:
+                    outline_flags |= freetype.FT_LOAD_NO_BITMAP
+                face.load_glyph(glyph_index, outline_flags)
                 if face.glyph.format == freetype.FT_GLYPH_FORMAT_OUTLINE:
-                    freetype.FT_Outline_EmboldenXY(
-                        ctypes.byref(face.glyph._FT_GlyphSlot.contents.outline), args.embolden_x, args.embolden_y)
+                    if nudge:
+                        freetype.FT_Outline_Translate(ctypes.byref(face.glyph.outline._FT_Outline), nudge, 0)
+                    if args.embolden_x or args.embolden_y:
+                        freetype.FT_Outline_EmboldenXY(
+                            ctypes.byref(face.glyph._FT_GlyphSlot.contents.outline), args.embolden_x, args.embolden_y)
+                elif nudge:
+                    sys.exit(f"--glyph-x-nudge: U+{code_point:04X} has no outline to shift")
                 face.glyph.render(freetype.FT_RENDER_MODE_NORMAL)
             else:
                 face.load_glyph(glyph_index, load_flags)

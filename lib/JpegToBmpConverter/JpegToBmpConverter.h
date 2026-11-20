@@ -17,8 +17,6 @@ class JpegToBmpConverter {
 
  public:
   static bool jpegFileToBmpStream(HalFile& jpegFile, Print& bmpOut, bool crop = true, bool originalThresholds = false);
-  // Convert with custom target size (for thumbnails)
-  static bool jpegFileToBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut, int targetMaxWidth, int targetMaxHeight);
   // Convert to 1-bit BMP (black and white only, no grays) for fast home screen rendering
   // outUnsupported (optional): set true when the conversion failed for a reason that will NEVER
   // succeed for this file -- currently a source image beyond MAX_IMAGE_WIDTH/HEIGHT. Left alone

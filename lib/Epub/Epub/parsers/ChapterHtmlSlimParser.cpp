@@ -1,5 +1,6 @@
 #include "ChapterHtmlSlimParser.h"
 
+#include <ComplexShaper.h>
 #include <FsHelpers.h>
 #include <GaijiText.h>
 #include <GfxRenderer.h>

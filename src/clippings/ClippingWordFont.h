@@ -29,3 +29,12 @@ inline int clippingWordWidth(const GfxRenderer& renderer, const ClippingWordFont
   return renderer.getTextWidthScaled(font.fontId, text, font.scale, style, BidiUtils::BidiBaseDir::AUTO,
                                      font.letterSpacing);
 }
+
+// A laid-out word: its stored display form (a shaped complex-script word) is measured as is.
+inline int clippingWordWidth(const GfxRenderer& renderer, const ClippingWordFont& font,
+                             const GfxRenderer::LaidOutText& text, const EpdFontFamily::Style style) {
+  if (font.scale == TextBlock::WORD_SCALE_ONE) {
+    return renderer.getTextAdvanceX(font.fontId, text, style, font.letterSpacing);
+  }
+  return clippingWordWidth(renderer, font, text.text, style);
+}

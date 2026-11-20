@@ -33,11 +33,8 @@ HalStorage::HalStorage() {
   assert(storageMutex != nullptr);
 }
 
-// begin() and ready() are only called from setup, no need to acquire mutex for them
-
+// Setup calls begin() before any storage users start.
 bool HalStorage::begin() { return SDCard.begin(); }
-
-bool HalStorage::ready() const { return SDCard.ready(); }
 
 // For the rest of the methods, we acquire the mutex to ensure thread safety
 
@@ -128,18 +125,14 @@ UsbDriveState HalStorage::usbDriveState() const {
 uint64_t HalStorage::sdTotalBytes() { HAL_STORAGE_WRAPPED_CALL(sdTotalBytes); }
 bool HalStorage::sdUsedBytes(uint64_t& usedBytes) { HAL_STORAGE_WRAPPED_CALL(sdUsedBytes, usedBytes); }
 
-std::vector<String> HalStorage::listFiles(const char* path, int maxFiles) {
-  HAL_STORAGE_WRAPPED_CALL(listFiles, path, maxFiles);
-}
-
 String HalStorage::readFile(const char* path) { HAL_STORAGE_WRAPPED_CALL(readFile, path); }
-
-bool HalStorage::readFileToStream(const char* path, Print& out, size_t chunkSize) {
-  HAL_STORAGE_WRAPPED_CALL(readFileToStream, path, out, chunkSize);
-}
 
 size_t HalStorage::readFileToBuffer(const char* path, char* buffer, size_t bufferSize, size_t maxBytes) {
   HAL_STORAGE_WRAPPED_CALL(readFileToBuffer, path, buffer, bufferSize, maxBytes);
+}
+
+bool HalStorage::readFileToStream(const char* path, Print& out, size_t chunkSize) {
+  HAL_STORAGE_WRAPPED_CALL(readFileToStream, path, out, chunkSize);
 }
 
 // Composed of already-locked HalStorage/HalFile operations; needs no
@@ -251,10 +244,6 @@ bool HalStorage::openFileForRead(const char* moduleName, const char* path, HalFi
 }
 
 bool HalStorage::openFileForRead(const char* moduleName, const std::string& path, HalFile& file) {
-  return openFileForRead(moduleName, path.c_str(), file);
-}
-
-bool HalStorage::openFileForRead(const char* moduleName, const String& path, HalFile& file) {
   return openFileForRead(moduleName, path.c_str(), file);
 }
 

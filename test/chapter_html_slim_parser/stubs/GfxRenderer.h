@@ -5,6 +5,7 @@
 
 #include <deque>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace BidiUtils {
@@ -16,6 +17,10 @@ enum Color : uint8_t { Clear = 0x00, White = 0x01, LightGray = 0x05, DarkGray = 
 class GfxRenderer {
  public:
   enum class TextMeasureMode { Layout, Rendered };
+  struct LaidOutText {
+    const char* text;
+    const char* display;
+  };
   // The fixture has no framebuffer to lend; image probes run as without a loan.
   class FrameBufferLoan {
    public:
@@ -42,6 +47,7 @@ class GfxRenderer {
     EpdFontFamily::Style style;
     BidiUtils::BidiBaseDir direction;
   };
+  // Every string drawText received, in order (a laid-out word's display form when it has one).
   mutable std::vector<TextDraw> textDraws;
   void drawText(int, int x, int, const char* text, bool = true, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                 BidiUtils::BidiBaseDir direction = BidiUtils::BidiBaseDir::AUTO, int8_t = 0) const {
@@ -51,6 +57,10 @@ class GfxRenderer {
                       EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                       BidiUtils::BidiBaseDir direction = BidiUtils::BidiBaseDir::AUTO, int8_t spacing = 0) const {
     drawText(font, x, y, text, black, style, direction, spacing);
+  }
+  void drawText(int font, int x, int y, const LaidOutText& text, bool black, EpdFontFamily::Style style,
+                BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO, int8_t tracking = 0) const {
+    drawText(font, x, y, text.display ? text.display : text.text, black, style, baseDir, tracking);
   }
   int getTextWidth(int font, const char* text, EpdFontFamily::Style style,
                    BidiUtils::BidiBaseDir = BidiUtils::BidiBaseDir::AUTO) const {
@@ -88,6 +98,13 @@ class GfxRenderer {
     }
     return width;
   }
+  int getTextAdvanceX(int font, const LaidOutText& text, EpdFontFamily::Style style, int8_t tracking = 0,
+                      BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO,
+                      TextMeasureMode mode = TextMeasureMode::Layout) const {
+    (void)baseDir;
+    (void)mode;
+    return getTextAdvanceX(font, text.display ? text.display : text.text, style, tracking);
+  }
   // The delta the real renderer reports between two glyphs. The stub has no kerning pairs, so
   // tracking (CSS letter-spacing plus the reader's character-spacing setting, which callers
   // combine into this one value) is the whole of it -- returning 0 regardless left every
@@ -115,4 +132,13 @@ class GfxRenderer {
                         int* = nullptr, int* = nullptr) const {
     return true;
   }
+
+  bool resolveForDisplay(int, const char*, EpdFontFamily::Style, std::string&) const { return false; }
+  inline static unsigned shapingMemoStarts = 0;
+  struct ShapingMemoScope {
+    explicit ShapingMemoScope(bool enabled = true) {
+      if (enabled) ++shapingMemoStarts;
+    }
+    ~ShapingMemoScope() {}
+  };
 };
