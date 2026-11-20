@@ -454,9 +454,16 @@ void FileBrowserActivity::showEntryActions() {
     return;
   }
 
+  const std::string& entry = files[nav.selected];
+  const bool isDirectory = entry.back() == '/';
+  const int nameLength = static_cast<int>(isDirectory ? entry.size() - 1 : entry.size());
+  snprintf(fileNameBuffer.get(), NAME_BUFFER_SIZE, "%.*s", nameLength, entry.c_str());
+  utf8ComposeNfcInPlace(fileNameBuffer.get());
+
   // Folders rename too: renamePathWithState() carries the reading state of every book inside.
-  static constexpr StrId FILE_OPTIONS[] = {StrId::STR_OPEN, StrId::STR_DELETE, StrId::STR_RENAME};
-  optionPopup.show(StrId::STR_FILENAME, FILE_OPTIONS, 3, 0, [this](const int index) {
+  const char* fileActionOptions[] = {tr(STR_OPEN), tr(STR_DELETE), tr(STR_RENAME)};
+  RenderLock lock(*this);
+  optionPopup.show("", fileNameBuffer.get(), fileActionOptions, 3, /*currentIndex=*/0, [this](const int index) {
     if (index == 0) {
       activateSelected();
     } else if (index == 1) {
@@ -465,6 +472,7 @@ void FileBrowserActivity::showEntryActions() {
       startRename();
     }
   });
+  lock.unlock();
   requestUpdate();
 }
 
