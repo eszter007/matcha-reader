@@ -24,6 +24,7 @@
 #include "OpdsServerListActivity.h"
 #include "OtaUpdateActivity.h"
 #include "SdFirmwareUpdateActivity.h"
+#include "SettingsList.h"
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -31,6 +32,7 @@
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/OptionPopup.h"
 #include "components/UITheme.h"
+#include "fontIds.h"
 #include "util/NightLight.h"
 #include "util/TaskWatchdog.h"
 
@@ -333,6 +335,22 @@ bool SettingRowEditor::openLightSchedulePicker(const SettingInfo& setting) {
   return false;
 }
 #endif
+
+int SettingRowEditor::helpBandHeight(const GfxRenderer& renderer) {
+  return renderer.getLineHeight(SMALL_FONT_ID) + UITheme::getInstance().getMetrics().verticalSpacing;
+}
+
+void SettingRowEditor::drawHelp(const GfxRenderer& renderer, const std::vector<SettingInfo>& rows,
+                                const int footerHeight) {
+  StrId help = StrId::STR_NONE_OPT;
+  for (size_t i = 0; i < rows.size() && help == StrId::STR_NONE_OPT; i++) help = settingHelp(rows[i]);
+  if (help == StrId::STR_NONE_OPT) return;
+  const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  GUI.drawHelpText(renderer,
+                   Rect{0, renderer.getScreenHeight() - footerHeight - helpBandHeight(renderer),
+                        renderer.getScreenWidth(), lineHeight},
+                   I18N.get(help));
+}
 
 std::string SettingRowEditor::valueText(const SettingInfo& setting) {
   if (setting.action == SettingAction::HomeButton) return tr(STR_CONFIGURE);

@@ -323,6 +323,41 @@ bool GuidFinder::feed(const std::string_view chunk) {
   return false;
 }
 
+WordFinder::WordFinder(const std::string_view word) : needle(csvField(word)) { needle += ','; }
+
+bool WordFinder::feed(const std::string_view chunk) {
+  if (found) return true;
+  for (const char c : chunk) {
+    if (atLineStart && !inQuotes) {
+      atLineStart = false;
+      comment = c == '#';
+      field = 0;
+      matched = 0;
+      candidate = true;
+    }
+    if (comment) {
+      atLineStart = c == '\n';
+      continue;
+    }
+    if (field == 1 && candidate) {
+      if (c != needle[matched]) {
+        candidate = false;
+      } else if (++matched == needle.size()) {
+        found = true;
+        return true;
+      }
+    }
+    if (c == '"') {
+      inQuotes = !inQuotes;
+    } else if (!inQuotes && c == ',') {
+      if (field < 2) ++field;
+    } else if (!inQuotes && c == '\n') {
+      atLineStart = true;
+    }
+  }
+  return false;
+}
+
 std::string formatRow(const Card& card) {
   const std::string guid = makeGuid(card.word, card.sentence);
   const std::string bookTag = tagFromTitle(card.book);

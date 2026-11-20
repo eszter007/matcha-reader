@@ -36,6 +36,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     COVER_TRANSPARENT = 9,
     SLEEP_SCREEN_MODE_COUNT
   };
+  enum MINING_CARDS { MINING_SENTENCE_CARDS = 0, MINING_WORD_CARDS = 1, MINING_CARDS_COUNT };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
   enum SLEEP_SCREEN_COVER_FILTER {
     NO_FILTER = 0,
@@ -597,6 +598,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t flashcardRetention = 2;    // 80/85/90/95 %
   uint8_t flashcardNewPerDay = 1;    // 5/10/20/30/50
   uint8_t flashcardMaxInterval = 3;  // 1 month / 6 months / 1 year / no limit
+  // Sentence mining: a word is saved once per sentence, or once in all (MINING_CARDS).
+  uint8_t miningCards = MINING_SENTENCE_CARDS;
   // Append every successful dictionary lookup to /Vocabulary.txt (default off).
   uint8_t vocabularyHistoryEnabled = 0;
   // Reader menu open gesture (SHOW_READER_MENU: off / center tap / bottom-edge

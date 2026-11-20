@@ -399,8 +399,10 @@ void DictionaryDefinitionActivity::saveSentence() {
   auto& draft = entries[currentEntry].draft;
   if (!draft.valid()) return;
   draft.card.date = sentencemining::today();  // the day of the save, not of the lookup
-  const auto result = miningFeedback_.saved() ? sentencemining::SaveResult::AlreadySaved
-                                              : sentencemining::saveOnce(draft.card, draft.language);
+  const auto result = miningFeedback_.saved()
+                          ? sentencemining::SaveResult::AlreadySaved
+                          : sentencemining::saveOnce(draft.card, draft.language,
+                                                     SETTINGS.miningCards == CrossPointSettings::MINING_WORD_CARDS);
   if (result == sentencemining::SaveResult::Saved) BookStats::addCounts(draft.bookPath.c_str(), 0, 1);
   miningFeedback_.record(result != sentencemining::SaveResult::Failed, millis());
   requestUpdate();

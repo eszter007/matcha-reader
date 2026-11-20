@@ -81,6 +81,26 @@ class GuidFinder {
   bool found = false;
 };
 
+// Finds any row for a word in a sentence file read in chunks of any size: the row's second field
+// is the word as formatRow() writes it. Quoted fields may hold commas and line breaks, so the
+// state carries across chunks.
+class WordFinder {
+ public:
+  explicit WordFinder(std::string_view word);
+  // Feeds the next chunk; true once a row has been seen.
+  bool feed(std::string_view chunk);
+
+ private:
+  std::string needle;  // the word's CSV field and the comma that ends it
+  size_t matched = 0;
+  uint8_t field = 0;  // 0 the GUID, 1 the word, 2 anything later
+  bool atLineStart = true;
+  bool comment = false;
+  bool inQuotes = false;
+  bool candidate = false;  // the word field matches the needle so far
+  bool found = false;
+};
+
 // Anki splits tags on whitespace: a book title becomes one tag with spaces as underscores.
 std::string tagFromTitle(std::string_view title);
 

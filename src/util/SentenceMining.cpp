@@ -108,9 +108,9 @@ bool append(const Card& card, std::string_view language) {
   return true;
 }
 
-// True when the file for `language` already has a row for `card`. A failed check reads as
-// "not saved": a duplicate row is better than a lost save.
-bool hasRow(const Card& card, const std::string_view language) {
+// True when the file for `language` already has a row for `card`, or with `anySentence` a row
+// for its word. A failed check reads as "not saved": a duplicate row is better than a lost save.
+bool hasRow(const Card& card, const std::string_view language, const bool anySentence) {
   const std::string path = exportPath(language);
   if (!Storage.exists(path.c_str())) return false;
   HalFile file;
@@ -122,10 +122,12 @@ bool hasRow(const Card& card, const std::string_view language) {
     LOG_ERR("MINE", "OOM: %u bytes for the duplicate check", static_cast<unsigned>(CHUNK));
     return false;
   }
-  GuidFinder finder(makeGuid(card.word, card.sentence));
+  GuidFinder sameSentence(makeGuid(card.word, card.sentence));
+  WordFinder sameWord(card.word);
   int n;
   while ((n = file.read(buf.get(), CHUNK)) > 0) {
-    if (finder.feed(std::string_view(buf.get(), static_cast<size_t>(n)))) return true;
+    const std::string_view chunk(buf.get(), static_cast<size_t>(n));
+    if (anySentence ? sameWord.feed(chunk) : sameSentence.feed(chunk)) return true;
     resetTaskWatchdogIfSubscribed();  // a long file is many reads
   }
   return false;
@@ -133,9 +135,9 @@ bool hasRow(const Card& card, const std::string_view language) {
 
 }  // namespace
 
-SaveResult saveOnce(const Card& card, const std::string_view language) {
-  if (hasRow(card, language)) {
-    LOG_INF("MINE", "\"%s\" is already saved with this sentence", card.word.c_str());
+SaveResult saveOnce(const Card& card, const std::string_view language, const bool oncePerWord) {
+  if (hasRow(card, language, oncePerWord)) {
+    LOG_INF("MINE", "\"%s\" is already saved%s", card.word.c_str(), oncePerWord ? "" : " with this sentence");
     return SaveResult::AlreadySaved;
   }
   return append(card, language) ? SaveResult::Saved : SaveResult::Failed;

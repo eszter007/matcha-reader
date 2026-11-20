@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 
 #include "CrossPointSettings.h"
 #include "SettingInfo.h"
@@ -42,6 +43,12 @@ class SettingRowEditor {
   void beginQuickResumeSync();
 
   static std::string valueText(const SettingInfo& setting);
+
+  // The help line (settingHelp) of the first row that has one, drawn in a band above the footer.
+  // Shown whatever row is selected: a touch screen selects none. helpBandHeight() is the room a
+  // screen with such a row keeps free under its list.
+  static int helpBandHeight(const GfxRenderer& renderer);
+  static void drawHelp(const GfxRenderer& renderer, const std::vector<SettingInfo>& rows, int footerHeight);
 
  private:
   Activity& activity;

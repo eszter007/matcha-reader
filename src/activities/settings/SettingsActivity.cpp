@@ -611,8 +611,10 @@ void SettingsActivity::toggleSelectedSetting() {
 void SettingsActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Content below the GUI.drawHeader band, above the button hints.
+  // The Dictionary Settings page keeps a band free for the selected row's help line.
+  const int helpBand = subCategory == StrId::STR_DICTIONARY_SETTINGS ? SettingRowEditor::helpBandHeight(renderer) : 0;
   screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
-                                                static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+                                                static_cast<int16_t>(metrics.buttonHintsHeight + helpBand), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   // rowItems_ (label/actionValue) was built by rebuildRowItems(); only the
@@ -679,6 +681,7 @@ void SettingsActivity::drawFooter() {
   const char* confirmLabel = readOnly ? "" : picker ? tr(STR_SELECT) : tr(STR_TOGGLE);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  SettingRowEditor::drawHelp(renderer, settings, UITheme::getInstance().getMetrics().buttonHintsHeight);
 }
 
 void SettingsActivity::render(RenderLock&& lock) {

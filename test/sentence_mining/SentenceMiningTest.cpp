@@ -41,6 +41,48 @@ TEST(SentenceMiningCsv, GuidFinderNeedsTheGuidAsARowsFirstField) {
   EXPECT_FALSE(otherSentence.feed(headerLines() + makeGuid("x", "z") + ",x\n"));
 }
 
+TEST(SentenceMiningCsv, WordFinderSeesAWordInAnySentenceAcrossChunkBoundaries) {
+  Card other;
+  other.word = "見る";
+  other.sentence = "空を<b>見</b>た。";
+  other.definition = "to see,\nto \"look\"\n" + makeGuid("x", "y") + ",漏らす,";
+  Card saved;
+  saved.word = "漏らす";
+  saved.sentence = "秘密を<b>漏らし</b>た。";
+  const std::string file = headerLines() + formatRow(other) + formatRow(saved);
+  for (size_t step = 1; step <= file.size(); ++step) {
+    WordFinder finder("漏らす");
+    bool found = false;
+    for (size_t i = 0; i < file.size(); i += step) found = finder.feed(std::string_view(file).substr(i, step));
+    EXPECT_TRUE(found) << "chunk size " << step;
+  }
+}
+
+TEST(SentenceMiningCsv, WordFinderNeedsTheWholeWordAsARowsSecondField) {
+  Card card;
+  card.word = "漏らす";
+  card.reading = "漏る";
+  card.sentence = "漏,漏ら,";
+  card.definition = "line\n" + makeGuid("x", "y") + ",漏る,";
+  const std::string file = headerLines() + formatRow(card);
+  for (const char* word : {"漏る", "漏", "漏ら", "漏らすす", "GUID", "Word"}) {
+    WordFinder finder(word);
+    EXPECT_FALSE(finder.feed(file)) << word;
+  }
+  WordFinder whole("漏らす");
+  EXPECT_TRUE(whole.feed(file));
+}
+
+TEST(SentenceMiningCsv, WordFinderMatchesAWordThatNeedsQuotes) {
+  Card card;
+  card.word = "a,\"b\"";
+  const std::string file = headerLines() + formatRow(card);
+  WordFinder quoted(card.word);
+  EXPECT_TRUE(quoted.feed(file));
+  WordFinder part("a");
+  EXPECT_FALSE(part.feed(file));
+}
+
 TEST(SentenceMiningCsv, TitleTagHasNoSpaces) {
   EXPECT_EQ(tagFromTitle("The Brothers Karamazov"), "The_Brothers_Karamazov");
   EXPECT_EQ(tagFromTitle("銀河　鉄道 "), "銀河_鉄道");

@@ -243,9 +243,24 @@ inline int dictionaryRowOrder(const SettingInfo& setting) {
     case StrId::STR_FALLBACK_DICTIONARY:
     case StrId::STR_DICTIONARY:
       return 4;
+    case StrId::STR_MINING:
+      return 5;
     default:
       return -1;
   }
+}
+
+inline SettingInfo buildMiningCardsSetting() {
+  return SettingInfo::Enum(StrId::STR_MINING, &CrossPointSettings::miningCards,
+                           {StrId::STR_SENTENCE_CARDS, StrId::STR_WORD_CARDS}, "miningCards", StrId::STR_CAT_READER);
+}
+
+// The line a settings screen shows under its list for `setting`: what the row's current value
+// does. STR_NONE_OPT for a row with nothing to explain.
+inline StrId settingHelp(const SettingInfo& setting) {
+  if (setting.nameId != StrId::STR_MINING) return StrId::STR_NONE_OPT;
+  return SETTINGS.miningCards == CrossPointSettings::MINING_WORD_CARDS ? StrId::STR_WORD_CARDS_HELP
+                                                                       : StrId::STR_SENTENCE_CARDS_HELP;
 }
 
 inline SettingInfo buildVocabularyHistorySetting() {
@@ -508,6 +523,8 @@ void forEachSetting(const SdCardFontRegistry* registry, const std::vector<Dictio
     if (readerRows) {
       SettingInfo fontSize = buildWordLookupFontSizeSetting();
       offer(fontSize);
+      SettingInfo mining = buildMiningCardsSetting();
+      offer(mining);
       SettingInfo vocabulary = buildVocabularyHistorySetting();
       offer(vocabulary);
     }
@@ -571,5 +588,6 @@ inline void forEachPersistableSetting(Fn&& fn) {
     }
   }
   fn(buildWordLookupFontSizeSetting());
+  fn(buildMiningCardsSetting());
   fn(buildVocabularyHistorySetting());
 }
