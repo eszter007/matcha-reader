@@ -463,16 +463,15 @@ void FileBrowserActivity::showEntryActions() {
   // Folders rename too: renamePathWithState() carries the reading state of every book inside.
   const char* fileActionOptions[] = {tr(STR_OPEN), tr(STR_DELETE), tr(STR_RENAME)};
   RenderLock lock(*this);
-  optionPopup.show("", fileNameBuffer.get(), fileActionOptions, 3, /*currentIndex=*/0,
-                   [this](const int index) {
-                     if (index == 0) {
-                       activateSelected();
-                     } else if (index == 1) {
-                       deleteSelected();
-                     } else if (index == 2) {
-                       startRename();
-                     }
-                   });
+  optionPopup.show("", fileNameBuffer.get(), fileActionOptions, 3, /*currentIndex=*/0, [this](const int index) {
+    if (index == 0) {
+      activateSelected();
+    } else if (index == 1) {
+      deleteSelected();
+    } else if (index == 2) {
+      startRename();
+    }
+  });
   lock.unlock();
   requestUpdate();
 }
