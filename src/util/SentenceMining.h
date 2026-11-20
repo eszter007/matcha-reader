@@ -47,9 +47,10 @@ enum class SaveResult : uint8_t { Saved, AlreadySaved, Failed };
 
 // Appends `card` to the file for `language` (the dictionary's language code, e.g. "ja" or "en")
 // unless that file already has a row for the same word and sentence (the GUID); the same word
-// in another sentence is a new card. Anki's header lines go first when the file is new. One file
-// per language, so each imports into its own deck. A file is only ever extended.
-SaveResult saveOnce(const Card& card, std::string_view language);
+// in another sentence is a new card. With `oncePerWord`, a row for the word in any sentence
+// counts as saved. Anki's header lines go first when the file is new. One file per language, so
+// each imports into its own deck. A file is only ever extended.
+SaveResult saveOnce(const Card& card, std::string_view language, bool oncePerWord);
 
 // Brings a sentence file written before the Furigana column to the current layout, in place.
 // True when the file is current (or absent); false when a legacy file could not be rewritten,

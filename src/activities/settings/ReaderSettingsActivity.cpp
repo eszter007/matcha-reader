@@ -90,7 +90,7 @@ void ReaderSettingsActivity::rebuildSettingsLists() {
   auto settings = getSettingsList(&sdFontSystem.registry(), &dictionaries, categoryFilter,
                                   /*includeTextSettingsEntries=*/!finishOnBack, dictionaryLanguage, finishOnBack);
   if (dictionaryPage) {
-    submenuSettings.reserve(2);  // Word Lookup Font Size, and the dictionary for a non-CJK book
+    submenuSettings.reserve(3);  // Word Lookup Font Size, Mining, and the dictionary for a non-CJK book
   } else if (finishOnBack && !isSubmenu()) {
     switch (selectedCategoryIndex) {
       case 0:
@@ -576,8 +576,11 @@ bool ReaderSettingsActivity::settingSwitchState(const SettingInfo& setting) {
 void ReaderSettingsActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Content below the GUI.drawHeader band, above the button hints.
+  // The Dictionary Settings page keeps a band free for the selected row's help line.
+  const int helpBand =
+      submenuCategory == StrId::STR_DICTIONARY_SETTINGS ? SettingRowEditor::helpBandHeight(renderer) : 0;
   screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
-                                                static_cast<int16_t>(HomeTabBar::bottomInset()), 0});
+                                                static_cast<int16_t>(HomeTabBar::bottomInset() + helpBand), 0});
 
   // Embedded single-category mode (opened from the reader menu) hides the tab bar: the other
   // categories are not reachable there, and the locked ring never lands on position 0.
@@ -641,6 +644,7 @@ void ReaderSettingsActivity::drawChrome() {
 }
 
 void ReaderSettingsActivity::drawFooter() {
+  SettingRowEditor::drawHelp(renderer, *currentSettings, HomeTabBar::bottomInset());
   if (hasTabBar()) {
     UiTabListActivity::drawFooter();
     return;

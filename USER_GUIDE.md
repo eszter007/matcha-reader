@@ -561,6 +561,8 @@ to that book only.
   - **Fallback for other languages**: The StarDict dictionary for word lookups, or **None**. Lookups use a dictionary
     that matches the book's language first, then this one. Only shown when a dictionary folder exists under
     `/dictionaries/` or `/.dictionaries/` on the SD card. See [docs/dictionary.md](docs/dictionary.md).
+  - **Mining**: **Sentence cards** (default) saves a word once per sentence. **Word cards** saves a word only once.
+    See [Sentence mining](#sentence-mining).
 - **Plugins** (**Settings → Connectivity**): Enable or disable SD-card plugins. Clean installs start disabled; upgrades with existing plugins are kept enabled automatically. Disabling plugins leaves all plugin files on the SD card but stops plugin discovery and execution until they are enabled again.
   - Enabling plugins immediately adds **Plugins** to the Home screen, even when no plugins are installed yet. Sideloaded SD-card plugins work without Plugin Hub.
   - Open **Home → Plugins** to view installed plugins. Hold **Confirm** on a selected installed plugin for one second (or long-press its row on a touch device) to open an uninstall confirmation. Confirming deletes that plugin's installed folder and files; cancelling leaves it installed. If no usable on-device Plugin Hub is available and its installer has not been hidden, a **Plugin Hub — Download, discover, and update plugins** entry is also shown. A manually sideloaded Hub with a valid `device.json` is recognized without requiring the optional README or browser files.
@@ -1402,6 +1404,11 @@ written, you see **Could not save**.
 
 Each word is saved once per sentence. Saving the same word from the same sentence again adds nothing, even days
 later. The same word in a different sentence makes a new card.
+
+If you study the word alone and want one card per word, set **Settings → Reader → Dictionary Settings → Mining**
+to **Word cards**. A word that is already in the file is then not saved again, whatever sentence it is in. The
+reader checks the file on the SD card, so a word comes back if you delete its row or the file. **Sentence cards** is
+the default.
 
 **Where the cards go:** the **sentence-mining** folder on the SD card, with one file per language, e.g.
 `sentences-ja.csv`, `sentences-zh.csv`, `sentences-yue.csv` or `sentences-en.csv`. That way each language can go
