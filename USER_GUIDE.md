@@ -131,33 +131,37 @@ If the light stays off after the device wakes from sleep, check **Restore Light 
 
 #### Light Schedule
 
-**Settings → Display → Light Schedule** turns the light on for the night with its own brightness and warmth, and off
-again in the morning. The row shows tonight's times.
+**Settings → Display → Light Schedule** gives the light its own brightness and warmth at night. The row shows
+tonight's times.
 
 - **Schedule**: **Off** (default), **Set Times**, or **Sunset to Sunrise**.
 - **Light On At** / **Light Off At** (Set Times): when the night starts and ends, in half-hour steps. The defaults are
-  20:00 and 06:00. A start later than the end runs past midnight. If both are the same time, the light does not
-  switch.
+  20:00 and 06:00. A start later than the end runs past midnight. If both are the same time, there is no night.
 - **Sunset to Sunrise** (Schedule): uses the sunset and sunrise of the clock's **Time Zone** (**Settings → System → Clock**), at
   its first-named city: Berlin for "Berlin / Paris / Madrid / Rome". The times are worked out on the device every day,
   so they follow the seasons. A **UTC** or **UTC±hh:mm** zone names no city, so its times are only a rough guess.
+- **Switch Light On and Off**: also turn the light on when the night starts and off when it ends. Off by default.
 - **Night Brightness**: the light's level at night. The default is 30%.
 - **Night Warmth** (X4 Pro and other lights with warmth): the light's colour at night. The default is fully warm.
 
-When the night starts, the light switches on at the night levels. When it ends, the light switches off and goes back
-to your daytime brightness and warmth. Nothing changes in between, so if you switch the light off at 23:00 it stays
-off until the next evening. While the night is on, the pull-down panel's sliders change the night levels, and outside
-it they change the daytime ones. If the device was asleep when the night started or ended, it catches up when it
-wakes, even after several days asleep.
+Over the hour before the night starts, the light moves gradually from your daytime brightness and warmth to the night
+levels. Over the hour after it ends, it moves back. Whether the light is on stays your choice, unless **Switch Light
+On and Off** is on: then the light switches on when the night starts and off when it ends. Between those moments
+nothing switches, so if you turn the light off at 23:00 it stays off until the next evening. If the device was asleep
+when the night started or ended, it catches up when it wakes.
 
-If the BOOX Picco's slide switch controls the light, the schedule only sets the night levels; the switch still turns
-the light on and off.
+From 30 minutes before the night starts until 30 minutes after it ends, the pull-down panel's sliders change the night
+levels; otherwise they change the daytime ones. The light stays where you leave it, unless that level cannot be
+reached with the other pair as it is.
+
+If the BOOX Picco's slide switch controls the light, the schedule only sets the levels; the switch still turns the
+light on and off.
 
 The schedule is set on the device only; the web settings page does not show it.
 
 The schedule needs the right time. Devices with a clock chip, such as the X4 Pro, Paper Mono and BOOX Picco, keep it.
 On a device without one, the clock can be wrong until you sync it (see [Syncing the Clock](#syncing-the-clock)), and
-the light then switches at the wrong times.
+the levels change at the wrong times.
 
 ---
 

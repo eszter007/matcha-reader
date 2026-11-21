@@ -222,3 +222,99 @@ TEST(Decide, PolarNightOpensOnceOnTheChangeOfPhase) {
 }
 
 }  // namespace
+
+namespace {
+
+// 2026-11-04 local = UTC (London in winter); window 20:00-06:00.
+constexpr int START = 20 * 60;
+constexpr int END = 6 * 60;
+
+int windowAt(int hour, int minute) {
+  const time_t now = utc(2026, 11, 4, hour, minute);
+  return nightschedule::windowNightPermille(now, hour * 60 + minute, 0, START, END);
+}
+
+}  // namespace
+
+TEST(Ramp, WindowFullInsideAndDayOutside) {
+  EXPECT_EQ(windowAt(23, 0), nightschedule::FULL_NIGHT);
+  EXPECT_EQ(windowAt(3, 0), nightschedule::FULL_NIGHT);
+  EXPECT_EQ(windowAt(12, 0), 0);
+  EXPECT_EQ(windowAt(18, 59), 0);
+  EXPECT_EQ(windowAt(7, 0), 0);
+}
+
+TEST(Ramp, WindowRampsBeforeStartAndAfterEnd) {
+  EXPECT_EQ(windowAt(19, 30), 500);
+  EXPECT_EQ(windowAt(19, 45), 750);
+  EXPECT_EQ(windowAt(20, 0), nightschedule::FULL_NIGHT);
+  EXPECT_EQ(windowAt(6, 0), nightschedule::FULL_NIGHT);
+  EXPECT_EQ(windowAt(6, 30), 500);
+}
+
+TEST(Ramp, EmptyWindowIsDay) {
+  const time_t now = utc(2026, 11, 4, 20, 0);
+  EXPECT_EQ(nightschedule::windowNightPermille(now, 20 * 60, 0, START, START), 0);
+}
+
+TEST(Ramp, DaytimeWindowDoesNotWrap) {
+  // 13:00-15:00: full at 14:00, half at 15:30, day at 23:00.
+  const auto at = [](int h, int m) {
+    return nightschedule::windowNightPermille(utc(2026, 11, 4, h, m), h * 60 + m, 0, 13 * 60, 15 * 60);
+  };
+  EXPECT_EQ(at(14, 0), nightschedule::FULL_NIGHT);
+  EXPECT_EQ(at(15, 30), 500);
+  EXPECT_EQ(at(23, 0), 0);
+}
+
+TEST(Ramp, SunFollowsSunsetAndSunrise) {
+  // London, 2026-11-04: sunset ~16:29, sunrise ~06:58 UTC.
+  EXPECT_EQ(nightschedule::sunNightPermille(utc(2026, 11, 4, 12, 0), LONDON_LAT, LONDON_LON), 0);
+  EXPECT_EQ(nightschedule::sunNightPermille(utc(2026, 11, 4, 22, 0), LONDON_LAT, LONDON_LON),
+            nightschedule::FULL_NIGHT);
+  EXPECT_EQ(nightschedule::sunNightPermille(utc(2026, 11, 5, 3, 0), LONDON_LAT, LONDON_LON), nightschedule::FULL_NIGHT);
+  const int beforeSunset = nightschedule::sunNightPermille(utc(2026, 11, 4, 16, 0), LONDON_LAT, LONDON_LON);
+  EXPECT_GT(beforeSunset, 400);
+  EXPECT_LT(beforeSunset, 600);
+  const int afterSunrise = nightschedule::sunNightPermille(utc(2026, 11, 5, 7, 30), LONDON_LAT, LONDON_LON);
+  EXPECT_GT(afterSunrise, 400);
+  EXPECT_LT(afterSunrise, 600);
+}
+
+TEST(Ramp, PolarNightAndDay) {
+  EXPECT_EQ(nightschedule::sunNightPermille(utc(2026, 12, 21, 12, 0), 78.2f, 15.6f), nightschedule::FULL_NIGHT);
+  EXPECT_EQ(nightschedule::sunNightPermille(utc(2026, 6, 21, 0, 0), 78.2f, 15.6f), 0);
+}
+
+TEST(Blend, EndsAndMiddle) {
+  EXPECT_EQ(nightschedule::blendLevel(80, 30, 0), 80);
+  EXPECT_EQ(nightschedule::blendLevel(80, 30, 1000), 30);
+  EXPECT_EQ(nightschedule::blendLevel(80, 30, 500), 55);
+  EXPECT_EQ(nightschedule::blendLevel(0, 100, 250), 25);
+}
+
+// The panel edits the night pair from halfway to night, the day pair before that.
+TEST(Blend, LevelForShownKeepsTheLightWhereItWasLeft) {
+  for (int p : {500, 700, 1000}) {
+    const uint8_t night = nightschedule::levelForShown(50, 80, p, true);
+    EXPECT_NEAR(nightschedule::blendLevel(80, night, p), 50, 1) << p;
+  }
+  for (int p : {0, 200, 499}) {
+    const uint8_t day = nightschedule::levelForShown(50, 30, p, false);
+    EXPECT_NEAR(nightschedule::blendLevel(day, 30, p), 50, 1) << p;
+  }
+  EXPECT_EQ(nightschedule::levelForShown(10, 90, 600, true), 0);  // out of reach: clamped
+}
+
+// Longyearbyen (78.2N): polar night ends mid-February. On the first days with a sunrise, the hours
+// before it are still night, not day.
+TEST(Ramp, PolarNightEdgesStayNight) {
+  constexpr float LAT = 78.22f;
+  constexpr float LON = 15.65f;
+  time_t t = utc(2027, 2, 10, 0, 0);
+  // Find the first day with a sunrise.
+  while (nightschedule::solarDayAt(t, LAT, LON).kind != DayKind::Normal) t += 86400;
+  const auto first = nightschedule::solarDayAt(t, LAT, LON);
+  ASSERT_EQ(nightschedule::solarDayAt(t - 86400, LAT, LON).kind, DayKind::PolarNight);
+  EXPECT_EQ(nightschedule::sunNightPermille(first.sunrise - 2 * 3600, LAT, LON), nightschedule::FULL_NIGHT);
+}

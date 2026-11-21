@@ -116,7 +116,8 @@ bool showOnDevice(const SettingInfo& setting) {
       setting.valuePtr == &CrossPointSettings::nightLightEnd) {
     return lightMode == CrossPointSettings::NIGHT_LIGHT_CUSTOM;
   }
-  if (setting.valuePtr == &CrossPointSettings::nightLightBrightness) {
+  if (setting.valuePtr == &CrossPointSettings::nightLightBrightness ||
+      setting.valuePtr == &CrossPointSettings::nightLightSwitch) {
     return lightMode != CrossPointSettings::NIGHT_LIGHT_OFF;
   }
   if (setting.valuePtr == &CrossPointSettings::nightLightWarmth) {

@@ -76,6 +76,9 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   emit(SettingInfo::Value(StrId::STR_NIGHT_BRIGHTNESS, &CrossPointSettings::nightLightBrightness, {1, 100, 1},
                           "nightLightBrightness", StrId::STR_CAT_LIGHT_SCHEDULE)
            .withWebHidden());
+  emit(SettingInfo::Toggle(StrId::STR_SWITCH_LIGHT_ON_OFF, &CrossPointSettings::nightLightSwitch, "nightLightSwitch",
+                           StrId::STR_CAT_LIGHT_SCHEDULE)
+           .withWebHidden());
 #if FREEINK_CAP_WARMLIGHT
   emit(SettingInfo::Value(StrId::STR_NIGHT_WARMTH, &CrossPointSettings::nightLightWarmth, {0, 100, 5},
                           "nightLightWarmth", StrId::STR_CAT_LIGHT_SCHEDULE)

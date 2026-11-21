@@ -153,7 +153,7 @@ A wallpaper over the page you were reading. The book shows through. See [Guide �
 - Japanese and Chinese interface language support
 - Hyphenation in 36 languages: English is built in, the other 35 are a small download offered when a book needs one. See [Guide §3.6.6](USER_GUIDE.md#366-reader)
 - Underline Dictionary Words (off by default): in Japanese and Chinese books, Word Lookup draws a line under every word the dictionary knows (beside it in vertical text). It is in Text Settings → LAYOUT for the Japanese and Chinese profiles. See [Guide §6.1](USER_GUIDE.md#61-word-lookup)
-- Light Schedule (X4 Pro and other devices with a frontlight): the light turns on dim and warm at night, at set times or from sunset to sunrise in your time zone, and turns off in the morning. See [Guide §1](USER_GUIDE.md#light-schedule)
+- Light Schedule (X4 Pro and other devices with a frontlight): the light turns gradually dimmer and warmer at night, at set times or from sunset to sunrise in your time zone, and can also switch itself on and off. See [Guide §1](USER_GUIDE.md#light-schedule)
 
 ## Setup
 

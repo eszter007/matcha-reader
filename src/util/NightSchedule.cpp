@@ -25,6 +25,16 @@ time_t lastOccurrence(const time_t now, const int minuteOfDay, const int second,
   return now - static_cast<time_t>(minutesAgo) * 60 - second;
 }
 
+// Night fraction from one night [start, end]: full inside, ramping up before and down after.
+int intervalPermille(const time_t now, const time_t start, const time_t end) {
+  if (now >= start && now <= end) return FULL_NIGHT;
+  const time_t gap = now < start ? start - now : now - end;
+  if (gap >= RAMP_S) return 0;
+  return static_cast<int>((RAMP_S - gap) * FULL_NIGHT / RAMP_S);
+}
+
+int clampLevel(const int value) { return value < 0 ? 0 : value > 100 ? 100 : value; }
+
 }  // namespace
 
 SolarDay solarDayAt(const time_t now, const float latitudeDeg, const float longitudeDeg) {
@@ -89,6 +99,57 @@ Position sunPosition(const time_t now, const float latitudeDeg, const float long
   // Before dawn: the night began at the previous solar day's sunset.
   const SolarDay yesterday = solarDayAt(now - static_cast<time_t>(SECONDS_PER_DAY), latitudeDeg, longitudeDeg);
   return {Phase::Night, yesterday.kind == DayKind::Normal ? yesterday.sunset : 0};
+}
+
+int windowNightPermille(const time_t now, const int minuteOfDay, const int second, const int startMinute,
+                        const int endMinute) {
+  if (startMinute == endMinute) return 0;
+  const time_t midnight = now - static_cast<time_t>(minuteOfDay) * 60 - second;
+  const int lengthMinutes = ((endMinute - startMinute) % MINUTES_PER_DAY + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+  int best = 0;
+  // Yesterday's night can still be ramping down and today's ramping up or running.
+  for (int day = -1; day <= 1; day++) {
+    const time_t start = midnight + static_cast<time_t>(day) * 86400 + static_cast<time_t>(startMinute) * 60;
+    const int p = intervalPermille(now, start, start + static_cast<time_t>(lengthMinutes) * 60);
+    if (p > best) best = p;
+  }
+  return best;
+}
+
+int sunNightPermille(const time_t now, const float latitudeDeg, const float longitudeDeg) {
+  const auto day = static_cast<time_t>(SECONDS_PER_DAY);
+  const SolarDay today = solarDayAt(now, latitudeDeg, longitudeDeg);
+  if (today.kind == DayKind::PolarNight) return FULL_NIGHT;
+  if (today.kind == DayKind::PolarDay) return 0;
+  const SolarDay yesterday = solarDayAt(now - day, latitudeDeg, longitudeDeg);
+  const SolarDay tomorrow = solarDayAt(now + day, latitudeDeg, longitudeDeg);
+  // Next to a polar night, the night on that side has no sunset or sunrise: it runs on.
+  constexpr time_t FAR = 2 * 86400;
+  int best = 0;
+  if (yesterday.kind != DayKind::PolarDay) {
+    const time_t start = yesterday.kind == DayKind::Normal ? yesterday.sunset : today.sunrise - FAR;
+    best = intervalPermille(now, start, today.sunrise);
+  }
+  if (tomorrow.kind != DayKind::PolarDay) {
+    const time_t end = tomorrow.kind == DayKind::Normal ? tomorrow.sunrise : today.sunset + FAR;
+    const int p = intervalPermille(now, today.sunset, end);
+    if (p > best) best = p;
+  }
+  return best;
+}
+
+uint8_t blendLevel(const uint8_t day, const uint8_t night, const int permille) {
+  const int delta = (static_cast<int>(night) - day) * permille;
+  return static_cast<uint8_t>(day + (delta >= 0 ? delta + FULL_NIGHT / 2 : delta - FULL_NIGHT / 2) / FULL_NIGHT);
+}
+
+uint8_t levelForShown(const uint8_t shown, const uint8_t other, const int permille, const bool night) {
+  const int weight = night ? permille : FULL_NIGHT - permille;
+  if (weight <= 0) return shown;
+  // shown = other + (edited - other) * weight / 1000, solved for edited.
+  const int scaled = (static_cast<int>(shown) - other) * FULL_NIGHT;
+  const int edited = other + (scaled >= 0 ? scaled + weight / 2 : scaled - weight / 2) / weight;
+  return static_cast<uint8_t>(clampLevel(edited));
 }
 
 Action decide(const Position now, const Phase lastPhase, const time_t lastSince, const bool edited) {
