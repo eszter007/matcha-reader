@@ -73,6 +73,9 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   emit(SettingInfo::Value(StrId::STR_LIGHT_OFF_AT, &CrossPointSettings::nightLightEnd,
                           {0, nightlight::HALF_HOURS_PER_DAY - 1, 1}, "nightLightEnd", StrId::STR_CAT_LIGHT_SCHEDULE)
            .withWebHidden());
+  emit(SettingInfo::Toggle(StrId::STR_AUTO_ON_OFF, &CrossPointSettings::nightLightSwitch, "nightLightSwitch",
+                           StrId::STR_CAT_LIGHT_SCHEDULE)
+           .withWebHidden());
   emit(SettingInfo::Value(StrId::STR_NIGHT_BRIGHTNESS, &CrossPointSettings::nightLightBrightness, {1, 100, 1},
                           "nightLightBrightness", StrId::STR_CAT_LIGHT_SCHEDULE)
            .withWebHidden());

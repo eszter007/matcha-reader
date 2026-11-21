@@ -76,6 +76,7 @@ void FrontlightPanelActivity::onEnter() {
   lightOnChanged = false;
   levelsChanged = Frontlight.brightness() < MIN_BRIGHTNESS;
   editingNightLevels = nightlight::nightActive();
+  nightlight::holdLevels(true);
 
   // Seed the touch tile's restore mode from the live setting, so toggling off
   // and back on within this session returns to the mode the user had.
@@ -105,6 +106,7 @@ void FrontlightPanelActivity::persistLightSettings() {
 
 void FrontlightPanelActivity::onExit() {
   persistLightSettings();
+  nightlight::holdLevels(false);
   Activity::onExit();
 }
 

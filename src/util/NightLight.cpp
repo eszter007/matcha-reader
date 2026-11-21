@@ -30,6 +30,10 @@ void formatClock(const int hour, const int minute, char* buf, const size_t size)
   }
 }
 
+// How far the levels last applied were toward night, in permille; set by every check.
+int appliedPermille = 0;
+bool levelsHeld = false;
+
 Phase lastPhase() {
   const uint8_t stored = APP_STATE.nightLightPhase;
   return stored <= static_cast<uint8_t>(Phase::Night) ? static_cast<Phase>(stored) : Phase::Off;
@@ -42,11 +46,25 @@ void formatHalfHour(const uint8_t halfHour, char* buf, const size_t size) {
   formatClock(wrapped / 2, (wrapped % 2) * 30, buf, size);
 }
 
-bool nightActive() { return lastPhase() == Phase::Night; }
+bool nightActive() { return appliedPermille >= nightschedule::FULL_NIGHT / 2; }
+
+void holdLevels(const bool hold) { levelsHeld = hold; }
 
 void saveLevels(const uint8_t brightness, const uint8_t warmth, const bool night) {
-  (night ? SETTINGS.nightLightBrightness : SETTINGS.frontlightBrightness) = brightness;
-  (night ? SETTINGS.nightLightWarmth : SETTINGS.frontlightWarmth) = warmth;
+  if (SETTINGS.nightLightMode == CrossPointSettings::NIGHT_LIGHT_OFF) {
+    SETTINGS.frontlightBrightness = brightness;
+    SETTINGS.frontlightWarmth = warmth;
+    return;
+  }
+  // Mid-ramp, store the value that keeps the light where it was left.
+  const int p = appliedPermille;
+  if (night) {
+    SETTINGS.nightLightBrightness = nightschedule::levelForShown(brightness, SETTINGS.frontlightBrightness, p, true);
+    SETTINGS.nightLightWarmth = nightschedule::levelForShown(warmth, SETTINGS.frontlightWarmth, p, true);
+  } else {
+    SETTINGS.frontlightBrightness = nightschedule::levelForShown(brightness, SETTINGS.nightLightBrightness, p, false);
+    SETTINGS.frontlightWarmth = nightschedule::levelForShown(warmth, SETTINGS.nightLightWarmth, p, false);
+  }
 }
 
 #if FREEINK_CAP_FRONTLIGHT
@@ -55,12 +73,17 @@ namespace {
 
 constexpr unsigned long CHECK_INTERVAL_MS = 20000;
 
+struct Reading {
+  Position position;
+  int permille = 0;  // how far the levels are toward night
+};
+
 // Where the schedule stands now. False when the schedule is on but there is no clock to place it
 // by: nothing is decided or recorded then, so the next reading starts from the last real one.
-bool currentPosition(Position& out) {
+bool currentReading(Reading& out) {
   const uint8_t mode = SETTINGS.nightLightMode;
   if (mode != CrossPointSettings::NIGHT_LIGHT_CUSTOM && mode != CrossPointSettings::NIGHT_LIGHT_SUN) {
-    out = {Phase::Off, 0};
+    out = {{Phase::Off, 0}, 0};
     return true;
   }
   struct tm local;
@@ -70,26 +93,37 @@ bool currentPosition(Position& out) {
   // localTime() renders the clock under the active TZ rule, so mktime() gives back its UTC epoch.
   const time_t now = mktime(&local);
   if (mode == CrossPointSettings::NIGHT_LIGHT_CUSTOM) {
-    out =
-        nightschedule::windowPosition(now, minute, second, SETTINGS.nightLightStart * 30, SETTINGS.nightLightEnd * 30);
+    const int start = SETTINGS.nightLightStart * 30;
+    const int end = SETTINGS.nightLightEnd * 30;
+    out.position = nightschedule::windowPosition(now, minute, second, start, end);
+    out.permille = nightschedule::windowNightPermille(now, minute, second, start, end);
   } else {
     float lat;
     float lon;
     timezones::location(timezones::activeIndex(), lat, lon);
-    out = nightschedule::sunPosition(now, lat, lon);
+    out.position = nightschedule::sunPosition(now, lat, lon);
+    out.permille = nightschedule::sunNightPermille(now, lat, lon);
   }
   return true;
 }
 
-void applyLevels(const Phase phase) {
-  if (phase == Phase::Night) {
-    Frontlight.setBrightness(SETTINGS.nightLightBrightness);
-    Frontlight.setWarmth(SETTINGS.nightLightWarmth);
-  } else {
-    Frontlight.setBrightness(SETTINGS.frontlightBrightness);
-    Frontlight.setWarmth(SETTINGS.frontlightWarmth);
-  }
+uint8_t blendedBrightness(const int permille) {
+  return nightschedule::blendLevel(SETTINGS.frontlightBrightness, SETTINGS.nightLightBrightness, permille);
 }
+uint8_t blendedWarmth(const int permille) {
+  return nightschedule::blendLevel(SETTINGS.frontlightWarmth, SETTINGS.nightLightWarmth, permille);
+}
+
+void applyLevels(const int permille) {
+  appliedPermille = permille;
+  const uint8_t brightness = blendedBrightness(permille);
+  const uint8_t warmth = blendedWarmth(permille);
+  if (Frontlight.brightness() != brightness) Frontlight.setBrightness(brightness);
+  if (Frontlight.warmth() != warmth) Frontlight.setWarmth(warmth);
+}
+
+// Switching at the night's edges is optional (Auto On and Off).
+bool scheduleSwitches() { return SETTINGS.nightLightSwitch != 0 && !slideSwitchOwnsLight(); }
 
 void record(const Position now) {
   APP_STATE.nightLightPhase = static_cast<uint8_t>(now.phase);
@@ -110,17 +144,17 @@ struct Outcome {
   bool settingsChanged = false;
 };
 
-// Acts on the current position: levels when the night levels go on or come off (or always, after
-// a setting edit), the light on an edge, then the record.
-Outcome act(const Position now, const bool edited) {
-  const Phase previous = lastPhase();
-  const nightschedule::Action action = nightschedule::decide(now, previous, APP_STATE.nightLightEdge, edited);
-  const bool levelsChange = edited || (action.record && (now.phase == Phase::Night || previous == Phase::Night));
+// Acts on the current reading: the levels (unless the panel holds them), the light on an edge, then
+// the record.
+Outcome act(const Reading& reading, const bool edited) {
+  const Position now = reading.position;
+  const nightschedule::Action action = nightschedule::decide(now, lastPhase(), APP_STATE.nightLightEdge, edited);
   Outcome outcome;
-  outcome.switched = action.switchLight && !slideSwitchOwnsLight();
-  // Off before the levels change and on after, so the other pair never shows.
+  outcome.switched = action.switchLight && scheduleSwitches();
   if (outcome.switched && !action.lightOn) Frontlight.setOn(false);
-  if (levelsChange) applyLevels(now.phase);
+  // With the schedule off, the levels are the panel's; set them only when the schedule changes.
+  const bool scheduled = SETTINGS.nightLightMode != CrossPointSettings::NIGHT_LIGHT_OFF;
+  if (!levelsHeld && (scheduled || edited)) applyLevels(reading.permille);
   if (outcome.switched && action.lightOn) Frontlight.setOn(true);
   if (outcome.switched) {
     outcome.settingsChanged = rememberLight(action.lightOn);
@@ -139,22 +173,22 @@ void formatEpoch(const time_t epoch, char* buf, const size_t size) {
 }  // namespace
 
 void adjustBootState(uint8_t& brightness, uint8_t& warmth, bool& lightOn) {
-  Position now;
-  if (!currentPosition(now)) {
-    // No clock to check against: stay with the levels last applied, so the rest of a night is
-    // not spent at the daytime levels once the clock reads again.
-    if (lastPhase() == Phase::Night) {
-      brightness = SETTINGS.nightLightBrightness;
-      warmth = SETTINGS.nightLightWarmth;
-    }
+  Reading reading;
+  if (!currentReading(reading)) {
+    // No clock to check against: stay at night levels if the last check was in the night, so the
+    // rest of it is not spent at the daytime levels.
+    if (lastPhase() == Phase::Night) reading.permille = nightschedule::FULL_NIGHT;
+    appliedPermille = reading.permille;
+    brightness = blendedBrightness(reading.permille);
+    warmth = blendedWarmth(reading.permille);
     return;
   }
-  if (now.phase == Phase::Night) {
-    brightness = SETTINGS.nightLightBrightness;
-    warmth = SETTINGS.nightLightWarmth;
-  }
+  appliedPermille = reading.permille;
+  brightness = blendedBrightness(reading.permille);
+  warmth = blendedWarmth(reading.permille);
+  const Position now = reading.position;
   const nightschedule::Action action = nightschedule::decide(now, lastPhase(), APP_STATE.nightLightEdge);
-  if (action.switchLight && !slideSwitchOwnsLight()) {
+  if (action.switchLight && scheduleSwitches()) {
     lightOn = action.lightOn;
     if (rememberLight(lightOn)) SETTINGS.saveToFile();
     LOG_INF("NLIGHT", "Night window %s since last check: light %s", lightOn ? "opened" : "closed",
@@ -170,18 +204,18 @@ bool tick() {
   if (nowMs - lastCheckMs < CHECK_INTERVAL_MS) return false;
   lastCheckMs = nowMs;
 
-  Position now;
-  if (!currentPosition(now)) return false;
-  const Outcome outcome = act(now, false);
+  Reading reading;
+  if (!currentReading(reading)) return false;
+  const Outcome outcome = act(reading, false);
   if (outcome.settingsChanged) SETTINGS.saveToFile();
   return outcome.switched;
 }
 
 bool refresh() {
   if (!Frontlight.present()) return false;
-  Position now;
-  if (!currentPosition(now)) return false;
-  return act(now, true).settingsChanged;
+  Reading reading;
+  if (!currentReading(reading)) return false;
+  return act(reading, true).settingsChanged;
 }
 
 void formatSummary(char* buf, const size_t size) {

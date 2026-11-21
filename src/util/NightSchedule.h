@@ -3,9 +3,9 @@
 #include <cstdint>
 #include <ctime>
 
-// The night light schedule's arithmetic and rules: sunrise/sunset, the set-times window, and when
-// the light should switch. Pure functions with no device state, so they run in host tests;
-// util/NightLight applies the results to the frontlight.
+// The night light schedule's arithmetic and rules: sunrise/sunset, the set-times window, how far
+// the levels have moved toward night, and when the light should switch. Pure functions with no device state, so they
+// run in host tests; util/NightLight applies the results to the frontlight.
 namespace nightschedule {
 
 enum class DayKind : uint8_t { Normal, PolarDay, PolarNight };
@@ -42,6 +42,19 @@ Position windowPosition(time_t now, int minuteOfDay, int second, int startMinute
 // Sunset to sunrise at a place.
 Position sunPosition(time_t now, float latitudeDeg, float longitudeDeg);
 
+// The levels reach the night pair by the start of the night and leave it after the end, each over
+// RAMP_S. Night fraction in permille: 0 = day levels, 1000 = night levels.
+inline constexpr time_t RAMP_S = 60 * 60;
+inline constexpr int FULL_NIGHT = 1000;
+int windowNightPermille(time_t now, int minuteOfDay, int second, int startMinute, int endMinute);
+int sunNightPermille(time_t now, float latitudeDeg, float longitudeDeg);
+
+// The level `permille` of the way from `day` to `night`, rounded.
+uint8_t blendLevel(uint8_t day, uint8_t night, int permille);
+// The value for the edited pair that makes blendLevel() give `shown`, the other pair kept: night
+// when `night`, else day. Clamped to 0..100.
+uint8_t levelForShown(uint8_t shown, uint8_t other, int permille, bool night);
+
 struct Action {
   bool record = false;       // the position differs from the one last acted on: store it
   bool switchLight = false;  // turn the light on (lightOn) or off
@@ -54,7 +67,7 @@ struct Action {
 // MIN_EDGE_GAP_S newer than the last one acted on is a new edge even in the same phase: the device
 // slept through a whole night or day. Smaller moves are the same boundary, shifted by a clock
 // change. After a setting edit (`edited`), only a change of phase switches the light: moving the
-// times or the city within the day or night must not undo what the user set by hand.
+// times or the place within the day or night must not undo what the user set by hand.
 inline constexpr time_t MIN_EDGE_GAP_S = 12 * 60 * 60;
 Action decide(Position now, Phase lastPhase, time_t lastSince, bool edited = false);
 
