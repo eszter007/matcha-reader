@@ -612,13 +612,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   enum NIGHT_LIGHT_MODE : uint8_t {
     NIGHT_LIGHT_OFF = 0,
     NIGHT_LIGHT_CUSTOM = 1,  // nightLightStart..nightLightEnd
-    NIGHT_LIGHT_SUN = 2,     // sunset to sunrise at nightLightCity
+    NIGHT_LIGHT_SUN = 2,     // sunset to sunrise in the clock's time zone
     NIGHT_LIGHT_MODE_COUNT
   };
   uint8_t nightLightMode = NIGHT_LIGHT_OFF;
   uint8_t nightLightStart = 40;  // half-hours after midnight: 20:00
   uint8_t nightLightEnd = 12;    // 06:00
-  uint8_t nightLightCity = 0;    // nightlight::city() index; 0 = London
   uint8_t nightLightBrightness = 30;
   uint8_t nightLightWarmth = 100;
   // What the slide switch controls (boards with one): frontlight on/off or
