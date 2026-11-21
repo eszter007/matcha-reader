@@ -30,6 +30,7 @@ void KOReaderCredentialStore::toJson(JsonDocument& doc) const {
   doc["matchMethod"] = static_cast<uint8_t>(getMatchMethod());
   doc["sendMetadata"] = getSendMetadata();
   doc["syncClippings"] = getSyncClippings();
+  doc["syncOnSleep"] = getSyncOnSleep();
   doc["syncBehavior"] = static_cast<uint8_t>(getSyncBehavior());
   doc["statsUploadedDay"] = statsUploadedDay;
   doc["statsBooksDay"] = statsBooksDay;
@@ -105,6 +106,7 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
   JsonArrayConst timeOfDayValue = doc["statsTimeOfDay"].as<JsonArrayConst>();
   statsTimeOfDayKnown = timeOfDayValue.size() == 4;
   for (size_t i = 0; i < 4; i++) statsTimeOfDay[i] = timeOfDayValue[i] | 0u;
+  setSyncOnSleep(doc["syncOnSleep"] | false);
 
   size_t headerIndex = 0;
   for (JsonObjectConst headerObj : doc["headers"].as<JsonArrayConst>()) {

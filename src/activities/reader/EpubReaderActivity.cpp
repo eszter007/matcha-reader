@@ -82,6 +82,7 @@
 #include "clippings/ClippingsManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "sync/SyncEngine.h"
 #include "util/BookInsights.h"
 #include "util/BookProgress.h"
 #include "util/BookmarkUtil.h"
@@ -331,9 +332,10 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
     return;
   }
 
-  // Protected-book sidecars travel with the book; a protected book separated
-  // from its key no longer opens, so a failed move rolls everything back.
-  static constexpr const char* SIDECARS[] = {".key", ".rights"};
+  // Sidecars travel with the book: a protected book separated from its key no
+  // longer opens, and sync reads the plugin metadata next to the book. A failed
+  // move rolls everything back.
+  static constexpr const char* SIDECARS[] = {".key", ".rights", ".meta.json"};
   for (size_t i = 0; i < std::size(SIDECARS); i++) {
     const std::string from = srcPath + SIDECARS[i];
     if (!Storage.exists(from.c_str())) continue;
@@ -359,14 +361,19 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
     }
   }
 
-  RECENT_BOOKS.updatePath(srcPath, dstPath, oldCachePath, cacheMoved ? newCachePath : oldCachePath);
-  // Bookmarks and insights are filed under the book path as well.
-  const std::string oldMarks = BookmarkUtil::getBookmarkPath(srcPath);
-  if (Storage.exists(oldMarks.c_str()) &&
-      !Storage.rename(oldMarks.c_str(), BookmarkUtil::getBookmarkPath(dstPath).c_str())) {
-    LOG_ERR("ERS", "Failed to move bookmarks of %s (non-fatal)", srcPath.c_str());
+  // Bookmarks are stored under the book's path. Like the cache, a failed move
+  // is not fatal: the book is already in place.
+  const std::string oldBookmarkPath = BookmarkUtil::getBookmarkPath(srcPath);
+  const std::string newBookmarkPath = BookmarkUtil::getBookmarkPath(dstPath);
+  if (Storage.exists(oldBookmarkPath.c_str()) &&
+      (Storage.exists(newBookmarkPath.c_str()) || !Storage.rename(oldBookmarkPath.c_str(), newBookmarkPath.c_str()))) {
+    LOG_ERR("ERS", "Failed to move bookmarks %s -> %s (non-fatal)", oldBookmarkPath.c_str(), newBookmarkPath.c_str());
   }
+
+  RECENT_BOOKS.updatePath(srcPath, dstPath, oldCachePath, cacheMoved ? newCachePath : oldCachePath);
+  // Insights are filed under the book path as well.
   bookinsights::followMove(srcPath, dstPath);
+  syncEngine::sleepBookMoved(srcPath, dstPath);
   if (APP_STATE.openEpubPath == srcPath) {
     APP_STATE.openEpubPath = dstPath;
     APP_STATE.saveToFile();
@@ -8289,6 +8296,24 @@ void EpubReaderActivity::loadRecentPages() {
   if (size <= 0 || !recentPages.deserialize(data, static_cast<size_t>(size), epub->getSpineItemsCount())) {
     LOG_ERR("ERS", "Ignoring unreadable recent.bin (%d bytes)", size);
   }
+}
+
+void EpubReaderActivity::prepareForSleep() {
+  ReaderActivity::prepareForSleep();
+  if (!epub || !KOREADER_STORE.getSyncOnSleep() || !KOREADER_STORE.hasCredentials()) return;
+  // Sync On Sleep runs after this activity is gone, so hand over the position now.
+  // ActivityManager already holds the render lock here; taking it again would deadlock.
+  CrossPointPosition position = getCurrentPosition();
+  if (isAtEndOfBook() && epub->getSpineItemsCount() > 0) {
+    // The finished screen sits one past the last chapter, which has no size or XPath.
+    // Hand over the end of the last chapter instead.
+    position = {epub->getSpineItemsCount() - 1, 1, 2};
+    position.hasResolvedSpineIndex = true;
+  } else if (position.pageNumber < 0) {
+    LOG_INF("ERS", "Sync on sleep skipped: chapter still being laid out");
+    return;
+  }
+  syncEngine::noteSleepBook(epub->getPath(), position);
 }
 
 void EpubReaderActivity::loadCachedBookmarks() {

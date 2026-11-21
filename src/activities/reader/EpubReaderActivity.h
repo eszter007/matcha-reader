@@ -1051,6 +1051,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // Defined out of line: it settles a pending overlay refresh and drops the overlay's page
   // snapshot, so the activity cannot be destroyed with the framebuffer half-painted.
   ~EpubReaderActivity() override;
+  void prepareForSleep() override;
   void render(RenderLock&& lock) override;
   // Full CPU speed + fast loop ticks while a section build runs: at the low-power
   // frequency a giant chapter's background rebuild stretches from ~40s to many

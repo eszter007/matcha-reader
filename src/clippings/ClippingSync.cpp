@@ -1,73 +1,19 @@
 #include "ClippingSync.h"
 
 #include <ArduinoJson.h>
-#include <HalMemory.h>
 #include <KOReaderCredentialStore.h>
 #include <Logging.h>
-#include <Memory.h>
-#include <SecureHttpClient.h>
 #include <Utf8.h>
-#include <strings.h>
 
 #include <cstring>
 
 #include "ClippingStore.h"
+#include "sync/SyncRequest.h"
 
 namespace {
-// One item per response: 4 KiB of text is at most 12 KiB as JSON (a 4-byte UTF-8 character
-// escapes to a 12-byte surrogate pair), plus metadata. Reuse one checked heap buffer for requests
-// and responses; it cannot fit on the task stack. An item that still overflows fails the sync cleanly.
-constexpr size_t BUFFER_SIZE = 16 * 1024;
-// Left after the buffer for the TLS handshake; the same floor KOReaderSyncClient applies.
-constexpr size_t MIN_FREE_FOR_TLS = 35000;
-constexpr size_t MIN_BLOCK_FOR_TLS = 20000;
-
-bool request(freeink::SecureHttpClient& http, const std::string& url, char* buffer, JsonDocument& doc,
-             const bool upload = false) {
-  size_t payloadSize = 0;
-  if (upload) {
-    if (doc.overflowed() || measureJson(doc) >= BUFFER_SIZE) {
-      LOG_ERR("CLIP", "Clipping request exceeds buffer");
-      return false;
-    }
-    payloadSize = serializeJson(doc, buffer, BUFFER_SIZE);
-  }
-  doc.clear();
-  if (!http.begin(url)) {
-    LOG_ERR("CLIP", "Invalid sync URL");
-    return false;
-  }
-  // addHeader() appends, so a configured Authorization header replaces Basic auth instead of duplicating it.
-  bool customAuthorization = false;
-  for (const auto& header : KOREADER_STORE.getCustomHeaders()) {
-    if (header.name.empty()) continue;
-    http.addHeader(header.name, header.value);
-    if (strcasecmp(header.name.c_str(), "Authorization") == 0) customAuthorization = true;
-  }
-  http.addHeader("x-auth-user", KOREADER_STORE.getUsername());
-  http.addHeader("x-auth-key", KOREADER_STORE.getMd5Password());
-  if (!customAuthorization) http.addHeader("Authorization", KOREADER_STORE.getBasicAuthorization());
-  http.addHeader("Content-Type", "application/json");
-  size_t received = 0;
-  const int status = http.sendRequest(upload ? "PUT" : "GET", reinterpret_cast<const uint8_t*>(buffer), payloadSize,
-                                      [&](const uint8_t* data, const size_t length) {
-                                        if (length >= BUFFER_SIZE - received) return false;
-                                        memcpy(buffer + received, data, length);
-                                        received += length;
-                                        return true;
-                                      });
-  if (status != 200 || !http.responseComplete()) {
-    LOG_ERR("CLIP", "Clipping sync HTTP %d (complete=%d)", status, http.responseComplete());
-    return false;
-  }
-  buffer[received] = '\0';
-  // Mutable input lets ArduinoJson reference the response buffer without duplicating text.
-  const auto error = deserializeJson(doc, buffer, received, DeserializationOption::NestingLimit(4));
-  if (error) {
-    LOG_ERR("CLIP", "Invalid clipping response: %s", error.c_str());
-    return false;
-  }
-  if (upload && doc["accepted"].as<int>() != 1) {
+bool upload(SyncRequest& sync, const std::string& url, JsonDocument& doc) {
+  if (!sync.send(url, doc, true)) return false;
+  if (doc["accepted"].as<int>() != 1) {
     LOG_ERR("CLIP", "Server did not acknowledge clipping");
     return false;
   }
@@ -140,29 +86,16 @@ bool decode(JsonObjectConst item, Clipping& clipping, std::string& text, bool& d
 }
 }  // namespace
 
-bool clippingSync::run(const std::string& bookPath, const std::string& documentHash) {
-  // Gate before loading files, allocating buffers, or contacting the server.
-  if (!KOREADER_STORE.getSyncClippings()) return true;
-  if (!KOREADER_STORE.hasCredentials()) return false;
+bool clippingSync::run(SyncRequest& sync, const std::string& bookPath, const std::string& documentHash) {
   if (!CLIPPINGS.loadForBook(bookPath, "", "", "epub")) return false;
   struct Unload {
     ~Unload() { CLIPPINGS.unload(); }
   } unload;
 
-  auto buffer = makeUniqueNoThrow<char[]>(BUFFER_SIZE);
-  auto http = makeUniqueNoThrow<freeink::SecureHttpClient>();
-  const auto heap = HalMemory::getDefaultHeap();
-  if (!buffer || !http || heap.freeBytes < MIN_FREE_FOR_TLS || heap.largestBlockBytes < MIN_BLOCK_FOR_TLS) {
-    LOG_ERR("CLIP", "Insufficient heap for clipping sync: %zu free, %zu max block", heap.freeBytes,
-            heap.largestBlockBytes);
-    return false;
-  }
-  http->setInsecure();
   const std::string url = KOREADER_STORE.getBaseUrl() + "/api/v1/clippings/" + documentHash;
   JsonDocument doc;
   // Probe the extension before any upload, even when the user explicitly enabled it.
-  if (!request(*http, url + "?cursor=0&limit=1&format=reader", buffer.get(), doc) ||
-      doc["sync_version"].as<unsigned>() != 2) {
+  if (!sync.supportsDeltaSync(url + "?cursor=0&limit=1&format=reader")) {
     LOG_ERR("CLIP", "Clipping sync requires a compatible crosspoint-sync server");
     return false;
   }
@@ -177,7 +110,7 @@ bool clippingSync::run(const std::string& bookPath, const std::string& documentH
     JsonObject item = doc["items"].to<JsonArray>().add<JsonObject>();
     item["id"] = deletedId;
     item["deleted"] = 1;
-    if (!request(*http, url, buffer.get(), doc, true)) return false;
+    if (!upload(sync, url, doc)) return false;
   }
   if (!CLIPPINGS.finishDeletions()) return false;
 
@@ -188,15 +121,14 @@ bool clippingSync::run(const std::string& bookPath, const std::string& documentH
     if (!CLIPPINGS.readClippingText(i, text)) return false;
     doc.clear();
     encode(doc["items"].to<JsonArray>().add<JsonObject>(), clipping, text);
-    if (!request(*http, url, buffer.get(), doc, true)) return false;
+    if (!upload(sync, url, doc)) return false;
   }
   if (!CLIPPINGS.finishUploads()) return false;
 
   // ponytail: rescan one book per manual sync; persist an account-scoped cursor if histories grow large.
   uint64_t cursor = 0;
   do {
-    if (!request(*http, url + "?limit=1&format=reader&cursor=" + std::to_string(cursor), buffer.get(), doc))
-      return false;
+    if (!sync.send(url + "?limit=1&format=reader&cursor=" + std::to_string(cursor), doc)) return false;
     if (!doc["cursor"].is<uint64_t>() || !doc["more"].is<bool>() || !doc["items"].is<JsonArray>()) return false;
     const uint64_t next = doc["cursor"];
     const JsonArrayConst items = doc["items"].as<JsonArrayConst>();
