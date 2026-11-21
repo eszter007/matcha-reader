@@ -258,6 +258,7 @@ inline SettingInfo buildMiningCardsSetting() {
 // The line a settings screen shows under its list for `setting`: what the row's current value
 // does. STR_NONE_OPT for a row with nothing to explain.
 inline StrId settingHelp(const SettingInfo& setting) {
+  if (setting.nameId == StrId::STR_AUTO_ON_OFF) return StrId::STR_AUTO_ON_OFF_HELP;
   if (setting.nameId != StrId::STR_MINING) return StrId::STR_NONE_OPT;
   return SETTINGS.miningCards == CrossPointSettings::MINING_WORD_CARDS ? StrId::STR_WORD_CARDS_HELP
                                                                        : StrId::STR_SENTENCE_CARDS_HELP;

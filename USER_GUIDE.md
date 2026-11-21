@@ -140,13 +140,13 @@ tonight's times.
 - **Sunset to Sunrise** (Schedule): uses the sunset and sunrise of the clock's **Time Zone** (**Settings → System → Clock**), at
   its first-named city: Berlin for "Berlin / Paris / Madrid / Rome". The times are worked out on the device every day,
   so they follow the seasons. A **UTC** or **UTC±hh:mm** zone names no city, so its times are only a rough guess.
-- **Switch Light On and Off**: also turn the light on when the night starts and off when it ends. Off by default.
+- **Auto On and Off**: also turn the light on when the night starts and off when it ends. Off by default.
 - **Night Brightness**: the light's level at night. The default is 30%.
 - **Night Warmth** (X4 Pro and other lights with warmth): the light's colour at night. The default is fully warm.
 
 Over the hour before the night starts, the light moves gradually from your daytime brightness and warmth to the night
-levels. Over the hour after it ends, it moves back. Whether the light is on stays your choice, unless **Switch Light
-On and Off** is on: then the light switches on when the night starts and off when it ends. Between those moments
+levels. Over the hour after it ends, it moves back. Whether the light is on stays your choice, unless **Auto On and
+Off** is on: then the light switches on when the night starts and off when it ends. Between those moments
 nothing switches, so if you turn the light off at 23:00 it stays off until the next evening. If the device was asleep
 when the night started or ended, it catches up when it wakes.
 

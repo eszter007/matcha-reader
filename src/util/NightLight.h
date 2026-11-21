@@ -7,7 +7,7 @@
 // night pair over the hour before the night starts, and back over the hour after it ends. The
 // night is either two clock times or sunset to sunrise in the clock's time zone
 // (timezones::location). The levels are worked out from the clock on every check, so nothing has
-// to be caught up. With Switch Light On and Off the light also turns on when the night starts and
+// to be caught up. With Auto On and Off the light also turns on when the night starts and
 // off when it ends; the position last acted on is kept in CrossPointState, so an edge passed while
 // the device slept or was off is caught up on the next boot.
 namespace nightlight {

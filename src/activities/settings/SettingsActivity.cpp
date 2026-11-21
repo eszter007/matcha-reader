@@ -528,8 +528,9 @@ void SettingsActivity::toggleSelectedSetting() {
 void SettingsActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Content below the GUI.drawHeader band, above the button hints.
-  // The Dictionary Settings page keeps a band free for the selected row's help line.
-  const int helpBand = subCategory == StrId::STR_DICTIONARY_SETTINGS ? SettingRowEditor::helpBandHeight(renderer) : 0;
+  // Pages with a help line (settingHelp) keep a band free for it.
+  const bool hasHelp = subCategory == StrId::STR_DICTIONARY_SETTINGS || subCategory == StrId::STR_CAT_LIGHT_SCHEDULE;
+  const int helpBand = hasHelp ? SettingRowEditor::helpBandHeight(renderer) : 0;
   screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
                                                 static_cast<int16_t>(metrics.buttonHintsHeight + helpBand), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));

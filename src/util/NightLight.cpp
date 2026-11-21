@@ -122,7 +122,7 @@ void applyLevels(const int permille) {
   if (Frontlight.warmth() != warmth) Frontlight.setWarmth(warmth);
 }
 
-// Switching at the night's edges is optional (Switch Light On and Off).
+// Switching at the night's edges is optional (Auto On and Off).
 bool scheduleSwitches() { return SETTINGS.nightLightSwitch != 0 && !slideSwitchOwnsLight(); }
 
 void record(const Position now) {
