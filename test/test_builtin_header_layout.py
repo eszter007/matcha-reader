@@ -62,7 +62,7 @@ header = rounded.split("void RoundedRaffTheme::drawHeader(", 1)[1].split(
     "void RoundedRaffTheme::drawRecentBookCover(", 1)[0]
 # The delegation must be unconditional: an early return or a conditional
 # before the call would allow a null Home title to suppress the status row.
-delegate = "BaseTheme::drawHeader(renderer, rect, title, subtitle, backButton);"
+delegate = "BaseTheme::drawHeader(renderer, rect, title, subtitle, backButton, underline);"
 assert header.count(delegate) == 1
 before_delegate = re.sub(r"//[^\n]*|/\*.*?\*/", "", header.split(delegate, 1)[0], flags=re.S)
 before_delegate = before_delegate.split("{", 1)[1]
