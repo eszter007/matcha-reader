@@ -82,9 +82,9 @@
 #include "clippings/ClippingsManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "sync/SyncEngine.h"
 #include "util/BookInsights.h"
 #include "util/BookProgress.h"
-#include "sync/SyncEngine.h"
 #include "util/BookmarkUtil.h"
 #include "util/DictionaryRegistry.h"
 #include "util/HyphenationPacks.h"
@@ -8309,6 +8309,9 @@ void EpubReaderActivity::prepareForSleep() {
     // Hand over the end of the last chapter instead.
     position = {epub->getSpineItemsCount() - 1, 1, 2};
     position.hasResolvedSpineIndex = true;
+  } else if (position.pageNumber < 0) {
+    LOG_INF("ERS", "Sync on sleep skipped: chapter still being laid out");
+    return;
   }
   syncEngine::noteSleepBook(epub->getPath(), position);
 }

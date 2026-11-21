@@ -15,8 +15,8 @@
 #include "util/BookmarkUtil.h"
 
 namespace {
-// Ten of the largest items the server stores (512-byte XPath, 256-character summary) fit the buffer.
-constexpr size_t PAGE_SIZE = 5;  // a page of long bookmarks must fit SyncRequest::BUFFER_SIZE
+// Five of the largest items the server stores (512-byte XPath, 256-character summary) fit the buffer.
+constexpr size_t PAGE_SIZE = 5;
 constexpr size_t MAX_XPATH_LENGTH = 512;  // server limit
 // Bound what a remote list can add: the reader keeps the list in RAM, and the
 // bookmark file must stay under the 50,000 bytes the storage layer reads back.

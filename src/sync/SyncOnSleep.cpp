@@ -6,6 +6,7 @@
 #include <ProgressMapper.h>
 
 #include <memory>
+#include <new>
 #include <optional>
 #include <utility>
 
@@ -91,7 +92,12 @@ bool syncEngine::sleepSyncPending() { return sleepBook.has_value(); }
 bool syncEngine::prepareSleepSync() {
   if (!sleepBook) return false;
   // Metadata only, as the manual sync does: no CSS, and no cache rebuild when it is missing.
-  auto epub = std::make_shared<Epub>(sleepBook->path, "/.crosspoint");
+  std::shared_ptr<Epub> epub(new (std::nothrow) Epub(sleepBook->path, "/.crosspoint"));
+  if (!epub) {
+    LOG_ERR("SYNC", "Sync on sleep: OOM loading the book");
+    sleepBook.reset();
+    return false;
+  }
   epub->setupCacheDir();
   if (!epub->load(false, true)) {
     LOG_ERR("SYNC", "Sync on sleep: could not load the book");

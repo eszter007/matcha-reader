@@ -227,7 +227,15 @@ void KOReaderSyncActivity::performSync() {
       statusMessage = KOREADER_STORE.getSyncClippings() ? tr(STR_SYNCING_CLIPPINGS) : tr(STR_FETCH_PROGRESS);
     }
     requestUpdateAndWait();
-    const bool clippingsSynced = syncEngine::syncExtensions(epubPath, documentHash);
+    bool clippingsSynced;
+    {
+#if defined(CONFIG_IDF_TARGET_ESP32C3) && CONFIG_IDF_TARGET_ESP32C3
+      // The loan frees the framebuffer to the heap for the sync buffer and TLS.
+      RenderLock lock;
+      GfxRenderer::FrameBufferLoan loan(renderer);
+#endif
+      clippingsSynced = syncEngine::syncExtensions(epubPath, documentHash);
+    }
     if (!clippingsSynced) {
       {
         RenderLock lock(*this);
