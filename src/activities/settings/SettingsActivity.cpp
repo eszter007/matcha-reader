@@ -25,6 +25,7 @@
 #include "EnumSettingPopup.h"
 #include "FontDownloadActivity.h"
 #include "HomeButtonSettingsActivity.h"
+#include "HyphenationLanguagesActivity.h"
 #include "KOReaderSettingsActivity.h"
 #include "KeyboardLayoutsActivity.h"
 #include "LanguageSelectActivity.h"
@@ -281,6 +282,7 @@ void SettingsActivity::rebuildSettings() {
   addAction(SettingsSection::Reader, StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings);
   addAction(SettingsSection::Reader, StrId::STR_DICTIONARY_SETTINGS, SettingAction::DictionarySettings);
   addAction(SettingsSection::Reader, StrId::STR_TRANSLATION_SETTINGS, SettingAction::TranslationSettings);
+  addAction(SettingsSection::Reader, StrId::STR_HYPHENATION_LANGUAGES, SettingAction::HyphenationLanguages);
   if (section == SettingsSection::Controls && subCategory == StrId::STR_NONE_OPT) {
     if (controlsGroup == ControlsGroup::Root) {
       if (BoardConfig::hasHomeKey()) {
@@ -592,6 +594,13 @@ void SettingsActivity::toggleSelectedSetting() {
     case SettingAction::TextSettings:
       startActivityForResult(std::make_unique<TextProfileMenuActivity>(renderer, mappedInput),
                              [this](const ActivityResult&) { rebuildSettings(); });
+      return;
+    case SettingAction::HyphenationLanguages:
+      if (auto activity = makeUniqueNoThrow<HyphenationLanguagesActivity>(renderer, mappedInput)) {
+        startActivityForResult(std::move(activity), [](const ActivityResult&) {});
+      } else {
+        LOG_ERR("SETTINGS", "OOM: HyphenationLanguagesActivity");
+      }
       return;
     case SettingAction::Plugins:
       // A switch row: flips in place.

@@ -61,6 +61,9 @@ class ReaderActivity : public Activity {
   virtual bool writeSyncedPosition() { return false; }
   // Where that position falls in this book, in percent; -1 when there is none.
   virtual int syncedPositionPercent() { return -1; }
+  // Once per open, after the first page: offers a download the book's hyphenation needs. True when
+  // it showed a question.
+  virtual bool offerHyphenationPack() { return false; }
   // Called when loadBook() failed. Return true to keep the activity alive
   // (e.g. showing a dialog); false finishes it (the default).
   virtual bool handleLoadFailure() { return false; }
@@ -125,4 +128,5 @@ class ReaderActivity : public Activity {
   unsigned long readingSessionStartMs = 0;
   int enterPercent = -1;  // the book's saved progress when it was opened
   bool syncedPositionOffered = false;
+  bool hyphenationPackOffered = false;
 };

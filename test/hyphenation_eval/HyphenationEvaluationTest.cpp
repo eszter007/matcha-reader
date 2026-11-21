@@ -2,13 +2,17 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "lib/Epub/Epub/hyphenation/HyphenationCommon.h"
+#include "lib/Epub/Epub/hyphenation/HyphenationPack.h"
+#include "lib/Epub/Epub/hyphenation/Hyphenator.h"
 #include "lib/Epub/Epub/hyphenation/LanguageHyphenator.h"
 #include "lib/Epub/Epub/hyphenation/LanguageRegistry.h"
 
@@ -180,7 +184,7 @@ EvaluationResult evaluateWord(const TestCase& testCase, const std::vector<size_t
 // is at or above `minF1Percent`. Thresholds are set ~1pp below measured
 // baselines so unrelated tweaks don't fail CI but real regressions still trip.
 void runLanguageEval(const char* langName, const char* primaryTag, const char* resourceFile, double minF1Percent) {
-  const auto* hyphenator = getLanguageHyphenatorForPrimaryTag(primaryTag);
+  const auto* hyphenator = getLanguageHyphenatorForPrimaryTag(primaryTag, /*loadPack=*/true);
   ASSERT_NE(hyphenator, nullptr) << "No hyphenator registered for tag: " << primaryTag;
 
   std::string path = std::string(HYPHENATION_RESOURCES_DIR) + "/" + resourceFile;
@@ -233,3 +237,56 @@ TEST(HyphenationEval, Italian) { runLanguageEval("italian", "it", "italian_hyphe
 TEST(HyphenationEval, Polish) { runLanguageEval("polish", "pl", "polish_hyphenation_tests.txt", 98.92); }
 TEST(HyphenationEval, Swedish) { runLanguageEval("swedish", "sv", "swedish_hyphenation_tests.txt", 94.01); }
 TEST(HyphenationEval, Portuguese) { runLanguageEval("portuguese", "pt", "portuguese_hyphenation_tests.txt", 98.21); }
+
+// The section cache records whether patterns were active, so these must hold exactly.
+TEST(HyphenationPacks, LoadOnlyWhenAllowedAndSwitchWithTheLanguage) {
+  Hyphenator::resetPacks();
+  Hyphenator::setPreferredLanguage("de-DE", /*loadPack=*/false);
+  EXPECT_FALSE(Hyphenator::hasPatterns());
+  Hyphenator::setPreferredLanguage("ger", /*loadPack=*/true);
+  EXPECT_TRUE(Hyphenator::hasPatterns());
+  Hyphenator::setPreferredLanguage("en-GB", /*loadPack=*/false);
+  EXPECT_TRUE(Hyphenator::hasPatterns()) << "English is built in";
+  Hyphenator::setPreferredLanguage("ja", /*loadPack=*/true);
+  EXPECT_FALSE(Hyphenator::hasPatterns()) << "no rules for Japanese";
+  Hyphenator::setPreferredLanguage("ru", /*loadPack=*/true);
+  EXPECT_TRUE(Hyphenator::hasPatterns());
+  // Turning hyphenation off releases the pack: the answer must not depend on what loaded earlier.
+  Hyphenator::setPreferredLanguage("ru", /*loadPack=*/false);
+  EXPECT_FALSE(Hyphenator::hasPatterns());
+  Hyphenator::resetPacks();
+}
+
+TEST(HyphenationPacks, ValidatesTheHeaderAndTheLanguage) {
+  char path[256];
+  ASSERT_TRUE(HyphenationPack::pathFor("de", path, sizeof(path)));
+  EXPECT_TRUE(HyphenationPack::isValid(path, "de"));
+  EXPECT_FALSE(HyphenationPack::isValid(path, "fr")) << "a pack renamed to another language";
+  EXPECT_FALSE(HyphenationPack::isValid("/nonexistent/de.cphyph", "de"));
+  char small[8];
+  EXPECT_FALSE(HyphenationPack::pathFor("de", small, sizeof(small)));
+}
+
+// A corrupt or truncated pack loads no patterns, and loads once it is replaced.
+TEST(HyphenationPacks, RefusesACorruptOrTruncatedPack) {
+  char good[256], bad[256];
+  ASSERT_TRUE(HyphenationPack::pathFor("sv", good, sizeof(good)));
+  std::ifstream in(good, std::ios::binary);
+  std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  ASSERT_GT(bytes.size(), HyphenationPack::HEADER_SIZE + 100);
+  snprintf(bad, sizeof(bad), "%s/../sv-bad.cphyph", HYPHENATION_PACK_DIR);
+
+  SerializedHyphenationPatterns patterns{};
+  std::string flipped = bytes;
+  flipped[HyphenationPack::HEADER_SIZE + 50] ^= 0x5A;
+  std::ofstream(bad, std::ios::binary) << flipped;
+  EXPECT_FALSE(HyphenationPack::load(bad, "sv", patterns));
+  EXPECT_FALSE(HyphenationPack::exists(bad)) << "a damaged pack is removed so it can be downloaded again";
+  std::ofstream(bad, std::ios::binary) << bytes.substr(0, bytes.size() - 1);
+  EXPECT_FALSE(HyphenationPack::isValid(bad, "sv"));
+  EXPECT_FALSE(HyphenationPack::load(bad, "sv", patterns));
+  EXPECT_TRUE(HyphenationPack::load(good, "sv", patterns));
+  EXPECT_EQ(patterns.size, bytes.size() - HyphenationPack::HEADER_SIZE);
+  HyphenationPack::release();
+  Hyphenator::resetPacks();
+}

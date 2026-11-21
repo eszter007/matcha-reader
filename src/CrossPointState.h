@@ -14,6 +14,8 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   static constexpr uint8_t SLEEP_AVOID_REPEAT_LOOKBACK = 5;
 
   std::string openEpubPath;
+  // Hyphenation packs already offered when a book opened, as space-separated language tags.
+  std::string hyphenationPacksOffered;
   uint32_t sleepLcgCount = 0;
   uint32_t sleepLcgState = 0;
   uint32_t sleepOverlayLcgCount = 0;

@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <Memory.h>
 #include <VectorFontSupport.h>
 
 #include <algorithm>
@@ -13,14 +14,17 @@
 
 #include "CrossPointSettings.h"
 #include "FontDownloadActivity.h"
+#include "HyphenationPackDownloadActivity.h"
 #include "MappedInputManager.h"
 #include "ReaderFontSizes.h"
 #include "ReaderLineSpacing.h"
 #include "SdCardFontSystem.h"
 #include "TextSettingsPreview.h"
+#include "activities/ActivityManager.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 #include "fontIds.h"
+#include "util/HyphenationPacks.h"
 #include "util/TextProfiles.h"
 
 namespace fui = freeink::ui;
@@ -123,7 +127,13 @@ TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputMan
       bookRtl_(bookRtl),
       registry_(registry) {}
 
+void TextSettingsActivity::setHyphenationPack(const LanguageEntry* language, std::string bookPath) {
+  hyphenationPack_ = language;
+  bookPath_ = std::move(bookPath);
+}
+
 void TextSettingsActivity::onEnter() {
+  hyphenationPackMissing_ = hyphenationPack_ != nullptr && !hyphpacks::isInstalled(*hyphenationPack_);
   // From Settings, a profile other than Latin is edited in the live fields, as a book would read it.
   if (editStoredProfile_ && profile_ != CrossPointSettings::TextProfileId::Latin) {
     RenderLock lock;
@@ -339,7 +349,9 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
       rowItems_[i].toggle = layoutRowIsSwitch(layoutRow, checked);
       if (!rowItems_[i].toggle) rowValues_[i] = layoutValueText(layoutRow);
     } else {
-      rowItems_[i].toggle = styleRowIsSwitch(static_cast<int>(styleRowAt(i - LAYOUT_FIRST_ROW - layoutCount)), checked);
+      const StyleRow styleRow = styleRowAt(i - LAYOUT_FIRST_ROW - layoutCount);
+      rowItems_[i].toggle = styleRowIsSwitch(static_cast<int>(styleRow), checked);
+      if (styleRow == StyleRow::Hyphenation && hyphenationPackMissing_) rowValues_[i] = tr(STR_DOWNLOAD);
     }
     if (rowItems_[i].toggle) rowItems_[i].toggleChecked = checked;
     rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
@@ -580,6 +592,7 @@ bool TextSettingsActivity::styleRowIsSwitch(const int row, bool& checked) const 
       checked = SETTINGS.focusReadingEnabled != 0;
       return true;
     case StyleRow::Hyphenation:
+      if (hyphenationPackMissing_) return false;  // reads "Download" instead
       checked = SETTINGS.hyphenationEnabled != 0;
       return true;
     case StyleRow::EmbeddedStyle:
@@ -637,6 +650,15 @@ void TextSettingsActivity::confirmStyleRow(int row) {
       SETTINGS.focusReadingEnabled = !SETTINGS.focusReadingEnabled;
       break;
     case StyleRow::Hyphenation:
+      if (hyphenationPackMissing_) {
+        // On, so the reader saves it to this book as it closes for the download.
+        SETTINGS.hyphenationEnabled = 1;
+        if (auto download = makeUniqueNoThrow<HyphenationPackDownloadActivity>(renderer, mappedInput, *hyphenationPack_,
+                                                                               bookPath_)) {
+          activityManager.replaceActivity(std::move(download));
+        }
+        return;
+      }
       SETTINGS.hyphenationEnabled = !SETTINGS.hyphenationEnabled;
       break;
     case StyleRow::EmbeddedStyle:

@@ -36,7 +36,18 @@ class Hyphenator {
   static std::vector<BreakInfo> breakOffsets(const std::string& word, bool includeFallback);
 
   // Provide a publication-level language hint (e.g. "en", "en-US", "ru") used to select hyphenation rules.
-  static void setPreferredLanguage(const std::string& lang);
+  // loadPack: a language that is not built in may load its downloaded pack (see HyphenationPack.h);
+  // otherwise it gets no patterns.
+  static void setPreferredLanguage(const std::string& lang, bool loadPack);
+
+  // Drops the hyphenator in use and the loaded pack; call after a pack is installed or removed.
+  static void resetPacks();
+
+  // The preferred language has patterns: built in, or its pack loaded.
+  static bool hasPatterns() { return cachedHyphenator_ != nullptr; }
+
+  // Lower-case ISO 639-1 primary subtag of a BCP-47 or ISO 639-2 tag ("en-US" -> "en", "ger" -> "de").
+  static std::string primaryTag(const std::string& langTag);
 
  private:
   static const LanguageHyphenator* cachedHyphenator_;

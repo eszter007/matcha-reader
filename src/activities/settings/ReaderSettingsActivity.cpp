@@ -526,12 +526,16 @@ void ReaderSettingsActivity::toggleCurrentSetting() {
     }
     case SettingAction::TextSettings: {
       // In a book, straight to the book's profile; from Settings, the profile menu.
-      auto next =
-          finishOnBack
-              ? std::unique_ptr<Activity>(std::make_unique<TextSettingsActivity>(
-                    renderer, mappedInput, &sdFontSystem.registry(), bookTextProfile, bookScript, bookVerticalText,
-                    /*editStoredProfile=*/false, bookRtl))
-              : std::make_unique<TextProfileMenuActivity>(renderer, mappedInput);
+      std::unique_ptr<Activity> next;
+      if (finishOnBack) {
+        auto textSettings =
+            std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(), bookTextProfile,
+                                                   bookScript, bookVerticalText, /*editStoredProfile=*/false, bookRtl);
+        textSettings->setHyphenationPack(hyphenationPack, hyphenationBookPath);
+        next = std::move(textSettings);
+      } else {
+        next = std::make_unique<TextProfileMenuActivity>(renderer, mappedInput);
+      }
       startActivityForResult(std::move(next), [this](const ActivityResult&) {
         saveSettings();
         rebuildSettingsLists();

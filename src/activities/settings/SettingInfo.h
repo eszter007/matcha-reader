@@ -44,6 +44,7 @@ enum class SettingAction {
   ShortcutsSettings,
   DictionarySettings,
   TranslationSettings,
+  HyphenationLanguages,
   About,
   OpenFlashcards,
   FlashcardSync,
