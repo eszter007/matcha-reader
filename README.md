@@ -31,24 +31,9 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
   <img src="docs/images/screenshots/word-lookup-chinese.png" width="260" alt="Word lookup panel over a page of 紅樓夢: 繁華 with pinyin and zhuyin, both scripts and two senses">
 </p>
 
-**Sentence mining.** Save a word with its sentence to a CSV per language that Anki imports as is. Choose **Sentence cards** (a word is saved once per sentence) or **Word cards** (a word is saved only once) in Dictionary Settings. With Anki sync set up, **Sync Flashcards** sends new words to Anki as notes, one deck per language, with their review progress (or to Migaku instead, if you choose; see [Migaku decks](USER_GUIDE.md#migaku-decks)). Japanese words also get their furigana per kanji, from the book or the dictionary. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
+**Sentence mining.** Save a word with its sentence to a CSV per language that Anki imports as is. Choose **Sentence cards** (a word is saved once per sentence) or **Word cards** (a word is saved only once) in Dictionary Settings. Japanese words also get their furigana per kanji, from the book or the dictionary. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
 
-**Flashcards.** Review the words you saved right on the device, one deck per language, scheduled with FSRS. Each card shows the word on a spine and the sentence you found it in. Japanese cards read vertically, with the reading beside each kanji on the back. Turn it on in Settings → Flashcards. See [Guide §6.8](USER_GUIDE.md#68-flashcards).
-
-**Anki decks.** Review your Anki decks on the device, each card drawn with its own template at your reader font size. You can import an exported `.apkg` in your browser with the [Anki Converter](https://eszter007.github.io/matcha-reader-tools/anki.html), or sync both ways with Anki desktop or the self-hosted [companion server](https://github.com/eszter007/matcha-anki-server), which also runs on a free Google Cloud server. Sync works over your home Wi-Fi without AnkiWeb, so you can review offline and sync when you are back. Sync is optional. Sync follows your Anki deck options (daily limits, learning steps, burying, Easy Days, leeches), and a change to a note type's template or style downloads that deck again. Boards with PSRAM keep larger decks, cards and images. See [Guide §6.8](USER_GUIDE.md#anki-decks).
-
-**Migaku decks.** The companion server can also sync your Migaku decks, next to Anki or instead of it: cards are due when Migaku says so, and your reviews and mined words go back to Migaku. Both share one server setting, under **Settings → Connectivity → Flashcards Sync**. See [Migaku decks](USER_GUIDE.md#migaku-decks).
-
-<p align="center">
-  <img src="docs/images/screenshots/flashcards-anki-decks.png" width="200" alt="The Flashcards tab: Anki decks such as HSK 1, Kaishi 1.5k and the Open Anki JLPT N5 deck next to the reader's own decks, with a Sync Flashcards button under the list">
-  <img src="docs/images/screenshots/flashcard-anki-hsk.png" width="200" alt="Back of a card from an HSK 1 Anki deck, drawn with the deck's own template: 的 with zhuyin and pinyin">
-</p>
-
-<p align="center">
-  <img src="docs/images/screenshots/flashcard-french.png" width="200" alt="Front of a French flashcard: flâner on the spine and the sentence from L'Étranger with the word in bold">
-  <img src="docs/images/screenshots/flashcard-chinese.png" width="200" alt="Back of a Chinese flashcard: 麻煩 with pinyin and zhuyin, two senses and the sentence from 小王子">
-  <img src="docs/images/screenshots/flashcard-japanese.png" width="200" alt="Back of a Japanese flashcard: 木漏れ日 on the spine with こ, も and び beside their kanji, the definition and the sentence from ノルウェイの森">
-</p>
+On-device flashcard review and the Anki/Migaku sync are no longer part of the firmware; they are kept on the `feature/flashcards` branch. Your mining CSV files are not affected. The sync settings files `anki.json`, `migaku.json` and `flashcard_sync.json` in `/.crosspoint/` can be deleted.
 
 **Vocabulary history.** Optionally keep every word you look up, in any language and in manga, in `Vocabulary.txt` on the SD card. See [Guide §6.1](USER_GUIDE.md#vocabulary-history).
 

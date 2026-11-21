@@ -45,14 +45,7 @@ enum class SettingAction {
   DictionarySettings,
   TranslationSettings,
   About,
-  OpenFlashcards,
-  FlashcardSync,
-  FlashcardSyncTest,
 };
-
-// The Flashcards Sync page: the shared server and the Anki and Migaku rows, opened from
-// Connectivity.
-inline bool isFlashcardSyncPage(const StrId category) { return category == StrId::STR_FLASHCARD_SYNC; }
 
 struct SettingInfo {
   StrId nameId;

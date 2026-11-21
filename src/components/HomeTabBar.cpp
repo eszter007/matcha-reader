@@ -5,7 +5,6 @@
 
 #include <algorithm>
 
-#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "UITheme.h"
 #include "activities/Activity.h"
@@ -21,12 +20,8 @@ struct TabIcons {
 
 // Index order must match HomeTab.
 constexpr TabIcons ICONS[HomeTabBar::COUNT] = {
-    {HomeIcon, HomeFilledIcon},
-    {LibraryTabIcon, LibraryTabFilledIcon},
-    {TransferTabIcon, TransferTabFilledIcon},
-    {StatsIcon, StatsFilledIcon},
-    {SettingsTabIcon, SettingsTabFilledIcon},
-    {FlashcardsTabIcon, FlashcardsTabFilledIcon},
+    {HomeIcon, HomeFilledIcon},   {LibraryTabIcon, LibraryTabFilledIcon},   {TransferTabIcon, TransferTabFilledIcon},
+    {StatsIcon, StatsFilledIcon}, {SettingsTabIcon, SettingsTabFilledIcon},
 };
 
 // Horizontal band the slots divide up: the theme's side padding, so the outer icons line up with
@@ -36,27 +31,17 @@ int barLeft() { return UITheme::getInstance().getMetrics().headerSidePadding; }
 int barWidth(const GfxRenderer& renderer) { return renderer.getScreenWidth() - 2 * barLeft(); }
 
 int slotStep(const GfxRenderer& renderer) { return barWidth(renderer) / HomeTabBar::count(); }
-
-bool showsFlashcards() { return SETTINGS.flashcardsTab != 0; }
 }  // namespace
 
 bool HomeTabBar::enabled() { return UITheme::hasCoverGridHome(); }
 
-int HomeTabBar::count() { return showsFlashcards() ? COUNT : COUNT - 1; }
+int HomeTabBar::count() { return COUNT; }
 
-// Flashcards sits before Settings, which stays rightmost.
 HomeTab HomeTabBar::tabAt(const int slot) {
-  if (slot < 0 || slot >= count()) return HomeTab::Count;
-  if (slot < static_cast<int>(HomeTab::Settings)) return static_cast<HomeTab>(slot);
-  if (showsFlashcards() && slot == static_cast<int>(HomeTab::Settings)) return HomeTab::Flashcards;
-  return HomeTab::Settings;
+  return slot >= 0 && slot < count() ? static_cast<HomeTab>(slot) : HomeTab::Count;
 }
 
-int HomeTabBar::slotOf(const HomeTab tab) {
-  if (tab == HomeTab::Flashcards) return showsFlashcards() ? static_cast<int>(HomeTab::Settings) : -1;
-  if (tab == HomeTab::Settings) return count() - 1;
-  return tab < HomeTab::Count ? static_cast<int>(tab) : -1;
-}
+int HomeTabBar::slotOf(const HomeTab tab) { return tab < HomeTab::Count ? static_cast<int>(tab) : -1; }
 
 int HomeTabBar::height() { return UITheme::getInstance().getMetrics().coverGridTabBarHeight; }
 
@@ -158,9 +143,6 @@ void HomeTabBar::activate(const HomeTab tab, const HomeTab current) {
       break;
     case HomeTab::Settings:
       activityManager.goToSettings();
-      break;
-    case HomeTab::Flashcards:
-      activityManager.goToFlashcards();
       break;
     default:
       break;

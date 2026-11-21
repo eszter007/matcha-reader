@@ -1,6 +1,5 @@
 #include "SettingsActivity.h"
 
-#include <AnkiSyncStore.h>
 #include <BlePageTurner.h>
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
@@ -38,14 +37,12 @@
 #include "StatusBarSettingsActivity.h"
 #include "TextProfileMenuActivity.h"
 #include "TranslationSettingsActivity.h"
-#include "activities/flashcards/AnkiSyncActivity.h"
 #include "activities/home/StatsSyncActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
-#include "flashcards/FlashcardStore.h"
 #include "fontIds.h"
 #include "util/NightLight.h"
 #include "util/PluginEvents.h"
@@ -58,24 +55,8 @@ namespace {
 // (it stays in the shared list for the web settings API).
 SettingsSection sectionFor(const SettingInfo& setting);
 
-// The Flashcards Sync group a row starts, or nullptr. Each group's first row is always shown.
-const char* flashcardSyncHeading(const StrId row) {
-  switch (row) {
-    case StrId::STR_SYNC_USE_SERVER:
-      return tr(STR_SYNC_SERVER_HEADING);
-    case StrId::STR_ANKI_SERVER:
-      return tr(STR_ANKI_NAME);
-    case StrId::STR_MIGAKU_SERVER:
-      return tr(STR_MIGAKU_NAME);
-    case StrId::STR_SYNC_MINED_TO:
-      return tr(STR_SYNC_MINED_HEADING);
-    default:
-      return nullptr;
-  }
-}
-
 // A value wider than this share of the screen is cut with an ellipsis, so the row's label stays
-// readable (a long deck list otherwise covers it).
+// readable (a long server address otherwise covers it).
 constexpr int MAX_VALUE_WIDTH_PERCENT = 55;
 
 void fitValueWidth(const fui::DrawTarget& target, const fui::TextStyle& style, const int16_t maxWidth,
@@ -109,33 +90,6 @@ void fitValueWidth(const fui::DrawTarget& target, const fui::TextStyle& style, c
   while (lo > 0 && value[lo - 1] == ' ') lo--;
   value.resize(lo);
   value += ELLIPSIS;
-}
-
-// Flashcards Sync shows only the rows that apply: the shared server's while it is on (Migaku needs
-// it), a service's while it is on, and where mined words go when both are.
-bool flashcardSyncRowShown(const SettingInfo& setting) {
-  using Server = SyncServiceStore::Server;
-  const bool shared = FLASHCARD_SYNC_STORE.isEnabled();
-  const Server anki = ANKI_STORE.getServer();
-  const Server migaku = MIGAKU_STORE.getServer();
-  switch (setting.nameId) {
-    case StrId::STR_SYNC_SERVER_ADDRESS:
-    case StrId::STR_SYNC_SERVER_KEY:
-      return shared;
-    case StrId::STR_MIGAKU_SERVER:
-      return shared;
-    case StrId::STR_ANKI_ADDRESS:
-    case StrId::STR_ANKI_KEY:
-      return anki == Server::Own;
-    case StrId::STR_ANKI_DECKS:
-      return anki != Server::Off;
-    case StrId::STR_MIGAKU_DECKS:
-      return shared && migaku != Server::Off;
-    case StrId::STR_SYNC_MINED_TO:
-      return anki != Server::Off && migaku != Server::Off;
-    default:
-      return true;
-  }
 }
 
 bool showOnDevice(const SettingInfo& setting) {
@@ -193,7 +147,6 @@ SettingsSection sectionFor(const SettingInfo& setting) {
   if (setting.category == StrId::STR_CAT_LIBRARY) return SettingsSection::Library;
   if (setting.category == StrId::STR_CAT_SLEEP) return SettingsSection::Sleep;
   if (setting.category == StrId::STR_STATS) return SettingsSection::Insights;
-  if (setting.category == StrId::STR_FLASHCARDS) return SettingsSection::Flashcards;
   if (setting.category == StrId::STR_CAT_SHORTCUTS) return SettingsSection::Controls;
   // Listed on its own page, opened from the Light Schedule row in Display.
   if (setting.category == StrId::STR_CAT_LIGHT_SCHEDULE) return SettingsSection::Display;
@@ -254,11 +207,6 @@ void SettingsActivity::rebuildSettings() {
   auto all = getSettingsList(&sdFontSystem.registry(), &dictionaries, category);
 
   const auto belongsHere = [this, dictionaryPage](const SettingInfo& setting) {
-    // Flashcards Sync's rows are kept off the Connectivity list (sectionFor() has no section for
-    // them) and shown on their own page.
-    if (isFlashcardSyncPage(subCategory)) {
-      return setting.category == subCategory && flashcardSyncRowShown(setting);
-    }
     if (!showOnDevice(setting)) return false;
     if (dictionaryPage) return dictionaryRowOrder(setting) >= 0;
     if (subCategory != StrId::STR_NONE_OPT) return setting.category == subCategory;
@@ -313,10 +261,6 @@ void SettingsActivity::rebuildSettings() {
 
   for (auto& setting : all) {
     if (!belongsHere(setting)) continue;
-    // With the sync server off, a service's choices leave it out.
-    if (setting.nameId == StrId::STR_ANKI_SERVER && !FLASHCARD_SYNC_STORE.isEnabled()) {
-      std::erase(setting.enumOrder, static_cast<uint8_t>(SyncServiceStore::Server::Shared));
-    }
     if (section == SettingsSection::Controls && subCategory == StrId::STR_NONE_OPT &&
         setting.valuePtr == &CrossPointSettings::longPressButtonBehavior) {
       setting.nameId = StrId::STR_PAGE_TURN_LONG_PRESS;
@@ -374,22 +318,12 @@ void SettingsActivity::rebuildSettings() {
   }
 
   addAction(SettingsSection::Insights, StrId::STR_SYNC_STATS, SettingAction::SyncStats);
-  // Right under Enable Flashcards: works in every theme, with or without the tab.
-  if (section == SettingsSection::Flashcards) {
-    SettingInfo open = SettingInfo::Action(StrId::STR_FLASH_OPEN, SettingAction::OpenFlashcards);
-    if (settings.empty()) {
-      settings.push_back(std::move(open));
-    } else {
-      settings.insert(settings.begin() + 1, std::move(open));
-    }
-  }
   addAction(SettingsSection::Connectivity, StrId::STR_WIFI_NETWORKS, SettingAction::Network);
   if (bleturner::status().compiledIn) {
     addAction(SettingsSection::Connectivity, StrId::STR_BT_PAGE_TURNER, SettingAction::Bluetooth);
   }
   addAction(SettingsSection::Connectivity, StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync);
   addAction(SettingsSection::Connectivity, StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser);
-  addAction(SettingsSection::Connectivity, StrId::STR_FLASHCARD_SYNC, SettingAction::FlashcardSync);
   rebuildRowItems();
 }
 
@@ -421,7 +355,6 @@ void SettingsActivity::rebuildRowItems() {
     fui::ListItem item;
     item.label = I18N.get(settings[i].nameId);
     item.actionValue = static_cast<int16_t>(i);
-    if (isFlashcardSyncPage(subCategory)) item.sectionHeading = flashcardSyncHeading(settings[i].nameId);
     rowItems_.push_back(item);
   }
 }
@@ -489,9 +422,6 @@ void SettingsActivity::toggleSelectedSetting() {
   const auto& setting = settings[selectedSetting];
   if (setting.type != SettingType::ACTION) {
     if (editor.editValue(setting) == SettingRowEditor::EditResult::Changed) {
-      if (setting.key && std::strcmp(setting.key, "flashcardVacation") == 0) {
-        flashcards::syncVacation();
-      }
       // Rows can appear/disappear with a change (e.g. the footnote-back toggle).
       nav.selected = std::min(selectedSetting, static_cast<int>(settings.size()) - 1);
     }
@@ -553,28 +483,6 @@ void SettingsActivity::toggleSelectedSetting() {
       startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
       return;
     }
-    case SettingAction::FlashcardSync: {
-      auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, SettingsSection::Connectivity,
-                                                          StrId::STR_FLASHCARD_SYNC);
-      if (!activity) {
-        LOG_ERR("SET", "OOM: Flashcards Sync settings");
-        return;
-      }
-      startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
-      return;
-    }
-    case SettingAction::FlashcardSyncTest: {
-      auto test = makeUniqueNoThrow<AnkiSyncActivity>(renderer, mappedInput, AnkiSyncActivity::Mode::Test);
-      if (!test) {
-        LOG_ERR("SET", "OOM: Anki connection test");
-        return;
-      }
-      startActivityForResult(std::move(test), [this](const ActivityResult&) { requestUpdate(); });
-      return;
-    }
-    case SettingAction::OpenFlashcards:
-      activityManager.goToFlashcards();
-      return;
     case SettingAction::SyncStats:
       startActivityForResult(
           std::make_unique<StatsSyncActivity>(renderer, mappedInput, StatsSyncActivity::Origin::Settings),
@@ -655,14 +563,6 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   // maxLines also marks smallText as explicit so the list does not replace it with bodyText.
   props.labelText = mappedInput.hasTouch() ? screen.theme().bodyText : screen.theme().smallText;
   props.labelText.maxLines = 2;
-  if (isFlashcardSyncPage(subCategory)) {
-    // Group headings as in Text Settings: the small UI font, on their first row, with room above.
-    props.headerText = screen.theme().smallText;
-    props.headerText.font = fui::GfxRendererTarget::FONT_LABEL;
-    props.headerUnderline = 0;
-    props.headerRowHeight = static_cast<int16_t>(screen.target().lineHeight(props.headerText.font));
-    props.sectionGap = 28;
-  }
   syncListViewport(screen, props);
   screen.list(props);
 }

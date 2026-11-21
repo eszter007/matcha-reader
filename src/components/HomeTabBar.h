@@ -6,10 +6,10 @@ class GfxRenderer;
 class MappedInputManager;
 
 // The destinations the bottom bar switches between. Values are persisted (silent-restart return),
-// so new ones are appended; the bar's on-screen order is HomeTabBar::tabAt().
+// so new ones are appended; slots on screen follow this order.
 // Files is not here: in this theme the SD browser is one of the Library's tabs, not a
 // destination of its own (see LibraryTabs).
-enum class HomeTab : uint8_t { Home, Library, Transfer, Stats, Settings, Flashcards, Count };
+enum class HomeTab : uint8_t { Home, Library, Transfer, Stats, Settings, Count };
 
 // Bottom tab bar for the Cover Grid theme: one band, drawn as chrome over a strip each screen
 // reserves, shared by the home grid and the five activities the tabs lead to. Deliberately
@@ -22,7 +22,7 @@ enum class HomeTab : uint8_t { Home, Library, Transfer, Stats, Settings, Flashca
 // grows by tabbing around.
 class HomeTabBar {
  public:
-  // Every tab the bar can hold. How many it shows now is count(): Flashcards is opt-in.
+  // Every tab the bar holds.
   static constexpr int COUNT = static_cast<int>(HomeTab::Count);
 
   // Slots are positions on screen, left to right; a screen's cursor `focus` is a slot.

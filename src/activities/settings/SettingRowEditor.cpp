@@ -29,7 +29,6 @@
 #include "StatusBarSettingsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
-#include "activities/util/KeyboardEntryActivity.h"
 #include "components/OptionPopup.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -47,24 +46,6 @@ SettingRowEditor::EditResult SettingRowEditor::editValue(const SettingInfo& sett
 #if FREEINK_CAP_FRONTLIGHT
   if (openLightSchedulePicker(setting)) return EditResult::Opened;
 #endif
-
-  // A Flashcards Sync text row (address, key, decks) opens the keyboard on its current value.
-  if (setting.type == SettingType::STRING && isFlashcardSyncPage(setting.category) && setting.stringGetter &&
-      setting.stringSetter) {
-    auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, I18N.get(setting.nameId),
-                                                             setting.stringGetter(), 255, InputType::Text);
-    if (!keyboard) {
-      LOG_ERR("SET", "OOM: keyboard");
-      return EditResult::NotEditable;
-    }
-    const auto setter = setting.stringSetter;
-    activity.startActivityForResult(std::move(keyboard), [this, setter](const ActivityResult& result) {
-      if (result.isCancelled) return;
-      setter(std::get<KeyboardResult>(result.data).text);
-      host.commitSettingChange(nullptr);
-    });
-    return EditResult::Opened;
-  }
 
   if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
     // Toggle the boolean value using the member pointer
@@ -407,14 +388,6 @@ std::string SettingRowEditor::valueText(const SettingInfo& setting) {
     }
 #endif
     return std::to_string(value);
-  }
-  if (setting.type == SettingType::STRING && isFlashcardSyncPage(setting.category) && setting.stringGetter) {
-    const std::string value = setting.stringGetter();
-    if (value.empty()) return tr(STR_NOT_SET);
-    // A key shows only its last four characters.
-    if (setting.obfuscated)
-      return "\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2" + value.substr(value.size() > 4 ? value.size() - 4 : 0);
-    return value;
   }
   return "";
 }

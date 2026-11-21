@@ -50,7 +50,6 @@ int HomeActivity::getMenuItemCount() const {
   if (slotItem() != HomeMenuItem::NONE && !coverGridUi) {
     count++;
   }
-  if (showsFlashcards() && !coverGridUi) count++;
   return count;
 }
 
@@ -356,10 +355,10 @@ void HomeActivity::onEnter() {
   if (coverGridUi) coverGridUi->begin(recentBooks, hasOpdsServers, hasContinueReading);
 
   const auto base = static_cast<int>(recentBooks.size());
-  selectorIndex = initialMenuItem == HomeMenuItem::NONE
-                      ? 0
-                      : base + (coverGridUi ? tabIndexFor(initialMenuItem)
-                                            : menuItemToIndex(initialMenuItem, slotItem(), showsFlashcards()));
+  selectorIndex =
+      initialMenuItem == HomeMenuItem::NONE
+          ? 0
+          : base + (coverGridUi ? tabIndexFor(initialMenuItem) : menuItemToIndex(initialMenuItem, slotItem()));
 
   // Trigger first update
   requestUpdate();
@@ -463,7 +462,7 @@ void HomeActivity::loop() {
       }
       return;
     }
-    switch (indexToMenuItem(menuIndex, slotItem(), showsFlashcards())) {
+    switch (indexToMenuItem(menuIndex, slotItem())) {
       case HomeMenuItem::FILE_BROWSER:
         onFileBrowserOpen();
         break;
@@ -481,9 +480,6 @@ void HomeActivity::loop() {
         break;
       case HomeMenuItem::READING_STATS:
         onStatsOpen();
-        break;
-      case HomeMenuItem::FLASHCARDS:
-        activityManager.goToFlashcards();
         break;
       case HomeMenuItem::SETTINGS_MENU:
         onSettingsOpen();
@@ -648,10 +644,6 @@ void HomeActivity::render(RenderLock&&) {
   std::vector<const char*> menuItems = {tr(STR_MENU_RECENT_BOOKS), tr(STR_BROWSE_FILES), tr(STR_FILE_TRANSFER),
                                         tr(STR_STATS), tr(STR_SETTINGS_TITLE)};
   std::vector<UIIcon> menuIcons = {Library, Folder, Transfer, Stats, Settings};
-  if (showsFlashcards()) {
-    menuItems.insert(menuItems.end() - 1, tr(STR_FLASHCARDS));
-    menuIcons.insert(menuIcons.end() - 1, UIIcon::Flashcards);
-  }
 
   // Plugins while the plugin system is on, else the OPDS browser when a server is set (see slotItem).
   if (slotItem() != HomeMenuItem::NONE) {
@@ -769,7 +761,5 @@ void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 void HomeActivity::onStatsOpen() { activityManager.goToReadingStats(); }
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
-
-bool HomeActivity::showsFlashcards() { return SETTINGS.flashcardsTab != 0; }
 
 void HomeActivity::onPluginsOpen() { activityManager.goToPlugins(); }
