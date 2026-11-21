@@ -111,7 +111,7 @@ Set **Power + Up** in **Settings → Controls → Power button** to **Sync Clock
 
 Some devices, such as the X4, have no clock chip. Their clock drifts during sleep and resets on a restart, which makes the reading insights wrong. A sync fixes it.
 
-**Settings → System → Clock → Show in Header** shows the time at the top of menu screens, on the opposite side from the battery. Some themes have no room for it. The time updates whenever the screen redraws. On the X4 it shows the device's own time even when that time has drifted, so a wrong time there means you should sync.
+**Settings → System → Clock → Show in Header** shows the time in the top-left corner of menu screens, opposite the battery. The time updates whenever the screen redraws. On the X4 it shows the device's own time even when that time has drifted, so a wrong time there means you should sync.
 
 ### Control Center and Frontlight
 
