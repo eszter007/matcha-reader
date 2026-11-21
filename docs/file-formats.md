@@ -95,6 +95,14 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 118 (fork numbering)
+
+A `u8 hyphenationPatterns` follows `wordSpacingPercent`: 1 when the book's language had
+hyphenation patterns while the section was laid out (built in, or its `.cphyph` pack loaded).
+Patterns change where words break, so a pack installed, removed or failing to load after a
+build makes the section rebuild. Completed and partial sections are rebuilt. Book metadata and
+saved progress are kept.
+
 ### Version 117 (fork numbering)
 
 Upstream's version 76, merged. Indic text (Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil,
@@ -598,6 +606,7 @@ struct SectionBin {
     bool focusReadingEnabled;
     s8 characterSpacing;
     u8 wordSpacingPercent;
+    u8 hyphenationPatterns;
 
     u16 pageCount;
     u32 pageLutOffset;
@@ -982,6 +991,28 @@ Then, for GSUB and then GPOS: `stageCount` and `lookupCount` (`u16` each),
 `stageCount` stages (`u16` lookups before the stage ends, `u8` `ot::Pause`
 run after it, `u8` reserved) and `lookupCount` lookups (`u16` lookup index,
 `u8` lookup flags, `u8` reserved, `u32` mask).
+
+## `.cphyph` hyphenation pack (`/.crosspoint/hyph/<tag>.cphyph`)
+
+Liang hyphenation patterns for one language that is not built into the firmware, written by
+`scripts/build_hyphenation_packs.py` from `lib/Epub/Epub/hyphenation/generated/hyph-<tag>.trie.h`
+and read by `HyphenationPack.cpp`. Little-endian.
+
+| Field | Type | Meaning |
+|---|---|---|
+| magic | `char[4]` | `CPHY` |
+| version | `u8` | 1; the download URL names it (`hyphenation-1`) |
+| reserved | `u8[3]` | 0 |
+| tag | `char[4]` | primary language tag, NUL-padded (`de`) |
+| rootOffset | `u32` | offset of the trie root within the data |
+| dataLength | `u32` | bytes of trie data after the header |
+| dataKey | `u32` | FNV-1a of the trie data, OR 1 |
+
+The 24-byte header is followed by the serialized trie, the same bytes the built-in English
+trie holds. The loader rejects a file whose header, tag or size does not match, and verifies the
+data against `dataKey` before use. Boards without PSRAM copy the data into the `spiffs` flash
+partition through `FlashBlobCache` (a pack larger than one 128 KB slot takes two adjacent slots)
+and read it memory-mapped; other boards read it into PSRAM.
 
 ## Clipping store (`/.crosspoint/clippings/epub_<path-hash>.bin`)
 

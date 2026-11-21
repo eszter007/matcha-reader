@@ -73,6 +73,7 @@
 #include "SilentRestart.h"
 #include "VerticalClipCells.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "activities/settings/HyphenationPackDownloadActivity.h"
 #include "activities/settings/ReaderSettingsActivity.h"
 #include "activities/settings/TextSettingsActivity.h"
 #include "activities/util/ConfirmationActivity.h"
@@ -85,6 +86,7 @@
 #include "util/BookProgress.h"
 #include "util/BookmarkUtil.h"
 #include "util/DictionaryRegistry.h"
+#include "util/HyphenationPacks.h"
 #include "util/PluginEvents.h"
 #include "util/RemoteProgress.h"
 #include "util/ScreenshotUtil.h"
@@ -2318,6 +2320,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           /*hideMangaOnlySettings=*/true, StrId::STR_NONE_OPT, static_cast<int8_t>(languageOverride));
       readerSettings->setBookTextProfile(bookTextProfile_);
       readerSettings->setBookLayout(useVerticalText(), epub->pageProgressionRtl());
+      readerSettings->setHyphenationPack(hyphpacks::packFor(epub->getLanguage()), epub->getPath());
       rememberTextProfile();
       startActivityForResult(std::move(readerSettings), [this](const ActivityResult& result) {
         // Before Book Language, which can switch the book to another script and profile.
@@ -2570,6 +2573,34 @@ bool EpubReaderActivity::mapSyncedPosition(CrossPointPosition& out, int& percent
     syncedPosition::dismiss(epub->getPath());
     return false;
   }
+  return true;
+}
+
+// A book whose language has hyphenation rules only as a download, read with hyphenation on.
+bool EpubReaderActivity::offerHyphenationPack() {
+  if (!epub || !SETTINGS.hyphenationEnabled) return false;
+  const LanguageEntry* pack = hyphpacks::packFor(epub->getLanguage());
+  if (pack == nullptr || hyphpacks::isInstalled(*pack) || hyphpacks::wasOffered(*pack)) return false;
+  const std::string name = hyphpacks::displayName(*pack);
+  char heading[64];
+  snprintf(heading, sizeof(heading), tr(STR_HYPHENATION_PACK_TITLE_FORMAT), name.c_str());
+  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(
+      renderer, mappedInput, heading, tr(STR_HYPHENATION_PACK_PROMPT), tr(STR_NOT_NOW), tr(STR_DOWNLOAD));
+  if (!confirmation) {
+    LOG_ERR("ERS", "OOM: hyphenation pack prompt");
+    return false;
+  }
+  hyphpacks::markOffered(*pack);
+  startActivityForResult(std::move(confirmation), [this, pack](const ActivityResult& result) {
+    if (result.isCancelled || !epub) return;  // still offered on the Hyphenation row
+    // The reader closes, saving its position, and the download screen reopens the book.
+    auto download = makeUniqueNoThrow<HyphenationPackDownloadActivity>(renderer, mappedInput, *pack, epub->getPath());
+    if (!download) {
+      LOG_ERR("ERS", "OOM: hyphenation pack download");
+      return;
+    }
+    activityManager.replaceActivity(std::move(download));
+  });
   return true;
 }
 
@@ -7023,17 +7054,18 @@ void EpubReaderActivity::openTextSettingsFromPanel() {
   }
   dropSectionsKeepingPosition();  // room for the picker; reloaded on return
   rememberTextProfile();
-  startActivityForResult(std::make_unique<TextSettingsActivity>(
-                             renderer, mappedInput, &sdFontSystem.registry(), bookTextProfile_, bookScript(),
-                             useVerticalText(), /*editStoredProfile=*/false, epub->pageProgressionRtl()),
-                         [this](const ActivityResult&) {
-                           followTextProfileChanges();
-                           applyReaderTextSettings();
-                           overlay = Overlay::Text;  // back to the Text panel
-                           panelIndex = 0;
-                           if (toolbarUi) toolbarUi->begin();  // the picker drew its own FUI screen
-                           requestUpdate();                    // re-render page + Text panel
-                         });
+  auto textSettings = std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
+                                                             bookTextProfile_, bookScript(), useVerticalText(),
+                                                             /*editStoredProfile=*/false, epub->pageProgressionRtl());
+  textSettings->setHyphenationPack(hyphpacks::packFor(epub->getLanguage()), epub->getPath());
+  startActivityForResult(std::move(textSettings), [this](const ActivityResult&) {
+    followTextProfileChanges();
+    applyReaderTextSettings();
+    overlay = Overlay::Text;  // back to the Text panel
+    panelIndex = 0;
+    if (toolbarUi) toolbarUi->begin();  // the picker drew its own FUI screen
+    requestUpdate();                    // re-render page + Text panel
+  });
 }
 
 void EpubReaderActivity::discardOverlayPage() {

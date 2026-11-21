@@ -220,6 +220,10 @@ void ReaderActivity::loop() {
       return;
     }
   }
+  if (!hyphenationPackOffered && pageRendered.load(std::memory_order_acquire) && !isAtEndOfBook()) {
+    hyphenationPackOffered = true;
+    if (offerHyphenationPack()) return;
+  }
   readerLoop();
 }
 

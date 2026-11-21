@@ -35,15 +35,24 @@ uint32_t toLowerLatinImpl(const uint32_t cp) {
   }
 }
 
-// Convert Cyrillic uppercase letters to lowercase
-// Cyrillic uppercase range 0x0410-0x042F maps to lowercase by adding 0x20
-// Special case: Cyrillic capital IO (0x0401) maps to lowercase io (0x0451)
+// Cyrillic uppercase to lowercase: А-Я (+0x20), Ѐ-Џ (+0x50, e.g. Ј Љ Њ Є І Ї), and the paired
+// letters of U+0460-U+04FF (e.g. Ґ, Ү, Ө), where the lowercase follows its uppercase.
 uint32_t toLowerCyrillicImpl(const uint32_t cp) {
   if (cp >= 0x0410 && cp <= 0x042F) {
     return cp + 0x20;
   }
-  if (cp == 0x0401) {
-    return 0x0451;
+  if (cp >= 0x0400 && cp <= 0x040F) {
+    return cp + 0x50;
+  }
+  if (((cp >= 0x0460 && cp <= 0x0481) || (cp >= 0x048A && cp <= 0x04BF) || (cp >= 0x04D0 && cp <= 0x04FF)) &&
+      cp % 2 == 0) {
+    return cp + 1;
+  }
+  if (cp >= 0x04C1 && cp <= 0x04CE && cp % 2 == 1) {
+    return cp + 1;
+  }
+  if (cp == 0x04C0) {
+    return 0x04CF;
   }
   return cp;
 }
@@ -82,7 +91,39 @@ bool isLatinLetter(const uint32_t cp) {
 
 bool isCyrillicLetter(const uint32_t cp) { return (cp >= 0x0400 && cp <= 0x052F); }
 
-bool isAlphabetic(const uint32_t cp) { return isLatinLetter(cp) || isCyrillicLetter(cp); }
+// Greek and Coptic letters (not the ';' and '·' punctuation in that block) and extended Greek.
+bool isGreekLetter(const uint32_t cp) {
+  return (cp >= 0x0386 && cp <= 0x03FF && cp != 0x0387) || (cp >= 0x1F00 && cp <= 0x1FFF);
+}
+
+// Monotonic Greek: Α-Ω (+0x20) and the accented capitals.
+uint32_t toLowerGreek(const uint32_t cp) {
+  if (cp >= 0x0391 && cp <= 0x03AB && cp != 0x03A2) return cp + 0x20;
+  switch (cp) {
+    case 0x0386:
+      return 0x03AC;  // Ά
+    case 0x0388:
+    case 0x0389:
+    case 0x038A:
+      return cp + 0x25;  // Έ Ή Ί
+    case 0x038C:
+      return 0x03CC;  // Ό
+    case 0x038E:
+    case 0x038F:
+      return cp + 0x3F;  // Ύ Ώ
+    default:
+      return cp;
+  }
+}
+
+// Mkhedruli, the script Georgian books use; Mtavruli capitals map onto it.
+bool isGeorgianLetter(const uint32_t cp) { return (cp >= 0x10D0 && cp <= 0x10FF) || (cp >= 0x1C90 && cp <= 0x1CBF); }
+
+uint32_t toLowerGeorgian(const uint32_t cp) { return cp >= 0x1C90 && cp <= 0x1CBF ? cp - 0x1C90 + 0x10D0 : cp; }
+
+bool isAlphabetic(const uint32_t cp) {
+  return isLatinLetter(cp) || isCyrillicLetter(cp) || isGreekLetter(cp) || isGeorgianLetter(cp);
+}
 
 bool isPunctuation(const uint32_t cp) {
   switch (cp) {

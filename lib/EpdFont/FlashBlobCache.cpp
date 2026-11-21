@@ -68,7 +68,7 @@ namespace FlashBlobCache {
 namespace {
 
 constexpr uint32_t kMagic = 0x32465043;  // "CPF2": 128 KB slots (a "CPFB" directory had 64 KB slots)
-constexpr uint32_t kSlotSize = MAX_BLOB_BYTES;
+constexpr uint32_t kSlotSize = SLOT_BYTES;
 constexpr uint32_t kSlots = 8;  // at most this many slots; the directory always has this many entries
 // ComplexShaper keeps two faces live (regular and bold) without PSRAM; fewer
 // slots would rewrite flash on every style change.
@@ -76,6 +76,8 @@ constexpr uint32_t kMinSlots = 2;
 constexpr uint32_t kDirSector = 4096;  // directory at offset 0; slot i at (i + 1) * kSlotSize
 constexpr uint32_t kCopyChunk = 4096;
 
+// A blob spanning several slots lists its length in its first slot; each
+// following slot holds the same key with length 0, which no lookup matches.
 struct DirEntry {
   uint32_t magic;
   uint32_t key;
@@ -87,6 +89,7 @@ struct Mapping {
   const uint8_t* data;
   uint32_t handle;
   uint8_t slot;
+  uint8_t span;
 };
 
 Mapping gMappings[kSlots] = {};
@@ -115,6 +118,7 @@ void rememberRejected(const uint32_t key) {
 }
 
 uint32_t slotOffset(const uint32_t slot) { return (slot + 1) * kSlotSize; }
+uint32_t spanOf(const uint32_t length) { return (length + kSlotSize - 1) / kSlotSize; }
 
 bool usable() {
   if (gUsable < 0) {
@@ -136,12 +140,19 @@ uint32_t contentKey(const uint8_t* data, const uint32_t length) { return fnv1a::
 
 bool slotMapped(const uint32_t slot) {
   for (uint8_t i = 0; i < gMappingCount; i++) {
-    if (gMappings[i].slot == slot) return true;
+    if (slot >= gMappings[i].slot && slot < gMappings[i].slot + gMappings[i].span) return true;
   }
   return false;
 }
 
-// Maps a slot and checks it still holds the blob; unmaps on mismatch.
+bool runMapped(const uint32_t first, const uint32_t span) {
+  for (uint32_t slot = first; slot < first + span; slot++) {
+    if (slotMapped(slot)) return true;
+  }
+  return false;
+}
+
+// Maps a run of slots and checks it still holds the blob; unmaps on mismatch.
 const uint8_t* mapVerified(const uint32_t slot, const uint32_t key, const uint32_t length) {
   if (gMappingCount >= kSlots) return nullptr;
   uint32_t handle = 0;
@@ -151,13 +162,13 @@ const uint8_t* mapVerified(const uint32_t slot, const uint32_t key, const uint32
     backend::unmap(handle);
     return nullptr;
   }
-  gMappings[gMappingCount++] = Mapping{data, handle, static_cast<uint8_t>(slot)};
+  gMappings[gMappingCount++] = Mapping{data, handle, static_cast<uint8_t>(slot), static_cast<uint8_t>(spanOf(length))};
   return data;
 }
 
 // `chunk` holds kCopyChunk bytes.
 bool copyIn(const uint32_t slot, const uint32_t length, const Reader read, void* ctx, uint8_t* chunk) {
-  if (!backend::erase(slotOffset(slot), kSlotSize)) return false;
+  if (!backend::erase(slotOffset(slot), spanOf(length) * kSlotSize)) return false;
   for (uint32_t done = 0; done < length;) {
     const uint32_t n = length - done < kCopyChunk ? length - done : kCopyChunk;
     if (!read(ctx, done, chunk, n) || !backend::write(slotOffset(slot) + done, chunk, n)) return false;
@@ -174,24 +185,30 @@ const uint8_t* acquire(const uint32_t key, const uint32_t length, const Reader r
   DirEntry dir[kSlots];
   if (!backend::read(0, dir, sizeof(dir))) return nullptr;
 
+  const uint32_t span = spanOf(length);
   uint32_t newest = 0;
   for (uint32_t slot = 0; slot < gSlotCount; slot++) {
     if (dir[slot].magic != kMagic) continue;
     if (dir[slot].sequence > newest) newest = dir[slot].sequence;
-    if (dir[slot].key == key && dir[slot].length == length && !slotMapped(slot)) {
+    if (dir[slot].key == key && dir[slot].length == length && slot + span <= gSlotCount && !runMapped(slot, span)) {
       if (const uint8_t* data = mapVerified(slot, key, length)) return data;
     }
   }
 
-  // Not cached (or the copy went bad): recycle an empty slot, else the oldest idle one.
+  // Not cached (or the copy went bad): recycle the idle run whose newest entry
+  // is oldest. Empty slots count as oldest, so they are used first.
   int32_t victim = -1;
-  for (uint32_t slot = 0; slot < gSlotCount; slot++) {
-    if (slotMapped(slot)) continue;
-    if (dir[slot].magic != kMagic) {
-      victim = static_cast<int32_t>(slot);
-      break;
+  uint32_t victimAge = 0;
+  for (uint32_t first = 0; first + span <= gSlotCount; first++) {
+    if (runMapped(first, span)) continue;
+    uint32_t age = 0;
+    for (uint32_t slot = first; slot < first + span; slot++) {
+      if (dir[slot].magic == kMagic && dir[slot].sequence > age) age = dir[slot].sequence;
     }
-    if (victim < 0 || dir[slot].sequence < dir[victim].sequence) victim = static_cast<int32_t>(slot);
+    if (victim < 0 || age < victimAge) {
+      victim = static_cast<int32_t>(first);
+      victimAge = age;
+    }
   }
   if (victim < 0) return nullptr;
 
@@ -201,7 +218,7 @@ const uint8_t* acquire(const uint32_t key, const uint32_t length, const Reader r
     return nullptr;
   }
   const auto slot = static_cast<uint32_t>(victim);
-  LOG_DBG("FBC", "Copying %u-byte layout font to flash slot %u", length, slot);
+  LOG_DBG("FBC", "Copying %u-byte blob to flash slot %u", length, slot);
   if (!copyIn(slot, length, read, ctx, chunk.get())) {
     // Not retried this session: every attempt erases a slot first.
     LOG_ERR("FBC", "Flash copy to slot %u failed", slot);
@@ -216,7 +233,16 @@ const uint8_t* acquire(const uint32_t key, const uint32_t length, const Reader r
   }
   // The entry is recorded only after the data verified, so an interrupted
   // copy leaves the slot unlisted and it is simply rewritten next time.
+  // Drop blobs the copy overwrote, including their slots outside the run.
+  for (uint32_t s = slot; s < slot + span; s++) {
+    if (dir[s].magic != kMagic) continue;
+    const uint32_t lostKey = dir[s].key;
+    for (auto& entry : dir) {
+      if (entry.magic == kMagic && entry.key == lostKey) entry.magic = 0;
+    }
+  }
   dir[slot] = DirEntry{kMagic, key, length, newest + 1};
+  for (uint32_t s = slot + 1; s < slot + span; s++) dir[s] = DirEntry{kMagic, key, 0, newest + 1};
   if (!backend::erase(0, kDirSector) || !backend::write(0, dir, sizeof(dir))) {
     LOG_ERR("FBC", "Flash directory update failed");
   }
@@ -224,7 +250,8 @@ const uint8_t* acquire(const uint32_t key, const uint32_t length, const Reader r
 }
 
 bool canHold(const uint32_t key, const uint32_t length) {
-  return key != 0 && length != 0 && length <= kSlotSize && !isRejected(key) && usable();
+  return key != 0 && length != 0 && length <= MAX_BLOB_BYTES && !isRejected(key) && usable() &&
+         spanOf(length) <= gSlotCount;
 }
 
 void release(void* data) {

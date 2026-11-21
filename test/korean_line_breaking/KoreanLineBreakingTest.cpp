@@ -46,7 +46,7 @@ std::vector<std::vector<std::string>> wordsOf(const std::vector<Line>& lines) {
 }  // namespace
 
 TEST(KoreanLineBreaking, HyphenationOffWrapsAtSpacesOnly) {
-  Hyphenator::setPreferredLanguage("ko");
+  Hyphenator::setPreferredLanguage("ko", false);
   // 가나 다라마바 needs 52 px; with hyphenation off the Hangul word moves down whole.
   const auto lines = layout({"가나", "다라마바", "사"}, false, 50);
   const std::vector<std::vector<std::string>> expected{{"가나"}, {"다라마바", "사"}};
@@ -54,7 +54,7 @@ TEST(KoreanLineBreaking, HyphenationOffWrapsAtSpacesOnly) {
 }
 
 TEST(KoreanLineBreaking, HyphenationOnSplitsBetweenSyllablesWithoutHyphen) {
-  Hyphenator::setPreferredLanguage("ko");
+  Hyphenator::setPreferredLanguage("ko", false);
   // 가나 + space leaves 30 px: the widest syllable prefix that fits is 다라마 (24 px).
   const auto lines = layout({"가나", "다라마바사아", "자"}, true, 50);
   const std::vector<std::vector<std::string>> expected{{"가나", "다라마"}, {"바사아", "자"}};
@@ -64,7 +64,7 @@ TEST(KoreanLineBreaking, HyphenationOnSplitsBetweenSyllablesWithoutHyphen) {
 }
 
 TEST(KoreanLineBreaking, HyphenationOnKeepsTrailingPunctuationWithSyllable) {
-  Hyphenator::setPreferredLanguage("ko");
+  Hyphenator::setPreferredLanguage("ko", false);
   // 가나다 + space leaves 36 px. 라마바사 (32 px) would fit, but 사. stays together, so 라마바 is used.
   const auto lines = layout({"가나다", "라마바사.", "자"}, true, 64);
   const std::vector<std::vector<std::string>> expected{{"가나다", "라마바"}, {"사.", "자"}};
@@ -72,7 +72,7 @@ TEST(KoreanLineBreaking, HyphenationOnKeepsTrailingPunctuationWithSyllable) {
 }
 
 TEST(KoreanLineBreaking, HyphenationOnSplitsShortWords) {
-  Hyphenator::setPreferredLanguage("ko");
+  Hyphenator::setPreferredLanguage("ko", false);
   // 가나다 + space leaves 22 px, so the three-syllable word splits after 라마 (16 px).
   const auto lines = layout({"가나다", "라마바", "자"}, true, 50);
   const std::vector<std::vector<std::string>> expected{{"가나다", "라마"}, {"바", "자"}};
@@ -80,7 +80,7 @@ TEST(KoreanLineBreaking, HyphenationOnSplitsShortWords) {
 }
 
 TEST(KoreanLineBreaking, HyphenationOnSplitsWhereHangulMeetsOtherScriptsOrBrackets) {
-  Hyphenator::setPreferredLanguage("ko");
+  Hyphenator::setPreferredLanguage("ko", false);
   // 가 + space leaves 52 px. 소신(ab) (48 px) fits; the split may fall before "(" or after ")",
   // never inside the brackets.
   const auto lines = layout({"가", "소신(ab)이"}, true, 64);
@@ -89,7 +89,7 @@ TEST(KoreanLineBreaking, HyphenationOnSplitsWhereHangulMeetsOtherScriptsOrBracke
 }
 
 TEST(KoreanLineBreaking, HyphenationOnSplitsBetweenDigitAndHangul) {
-  Hyphenator::setPreferredLanguage("ko");
+  Hyphenator::setPreferredLanguage("ko", false);
   // 가나다 + space leaves 22 px: 12 (16 px) fits, 12월 (24 px) does not.
   const auto lines = layout({"가나다", "12월부터", "자"}, true, 50);
   const std::vector<std::vector<std::string>> expected{{"가나다", "12"}, {"월부터", "자"}};
@@ -121,7 +121,7 @@ TEST(KoreanLineBreaking, CombiningMarksAndCjkPunctuationStayAttached) {
 }
 
 TEST(ClippingAnchors, SourceCoverageSurvivesWrappingAndHyphenation) {
-  Hyphenator::setPreferredLanguage("ko");
+  Hyphenator::setPreferredLanguage("ko", false);
   GfxRenderer renderer;
   for (const int width : {50, 180}) {
     for (const bool hyphenation : {false, true}) {
@@ -150,7 +150,7 @@ TEST(ClippingAnchors, SourceCoverageSurvivesWrappingAndHyphenation) {
 }
 
 TEST(ClippingAnchors, NfcSourceCoverageSurvivesSplitsAndPartialExtraction) {
-  Hyphenator::setPreferredLanguage("ko");
+  Hyphenator::setPreferredLanguage("ko", false);
   GfxRenderer renderer;
   for (const bool focus : {false, true}) {
     BlockStyle style;
@@ -195,7 +195,7 @@ TEST(ClippingAnchors, NfcFocusSegmentsKeepOriginalOffsets) {
 }
 
 TEST(ClippingAnchors, NfcHyphenationMarksSurviveCacheRoundTrip) {
-  Hyphenator::setPreferredLanguage("en");
+  Hyphenator::setPreferredLanguage("en", false);
   GfxRenderer renderer;
   const ScopedTempDir tempDir;
   const auto path = tempDir.path() / "nfc-hyphens.bin";
@@ -231,7 +231,7 @@ TEST(ClippingAnchors, NfcHyphenationMarksSurviveCacheRoundTrip) {
 }
 
 TEST(ClippingAnchors, DenseNfdHangulSurvivesChunkRetirement) {
-  Hyphenator::setPreferredLanguage("ko");
+  Hyphenator::setPreferredLanguage("ko", false);
   GfxRenderer renderer;
   ParsedText text(true);
   std::string word;

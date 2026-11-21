@@ -373,7 +373,8 @@ void FlashcardReviewActivity::onEnter() {
   script = cjk::scriptForLanguage(language);
   if (opened && ankideck::isAnkiKey(language) && session.current(card)) script = detectScript(card.frontPath);
   sdFontSystem.setCjkFallbackNeeded(renderer, script);
-  Hyphenator::setPreferredLanguage(language);
+  // Cards only split words too wide for the card, so a downloaded pack is not loaded for them.
+  Hyphenator::setPreferredLanguage(language, /*loadPack=*/false);
   loadCard();
   requestUpdate();
 }
