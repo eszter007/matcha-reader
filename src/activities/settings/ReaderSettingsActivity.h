@@ -15,6 +15,8 @@
 #include "components/OptionPopup.h"
 #include "util/CjkScript.h"
 
+struct LanguageEntry;
+
 class ReaderSettingsActivity final : public UiTabListActivity, private SettingRowEditor::Host {
   int initialCategory = 0;
   bool finishOnBack = false;
@@ -27,6 +29,8 @@ class ReaderSettingsActivity final : public UiTabListActivity, private SettingRo
   // The open book's direction and declared page order, for its Text Settings rows.
   bool bookVerticalText = false;
   bool bookRtl = false;
+  const LanguageEntry* hyphenationPack = nullptr;
+  std::string hyphenationBookPath;
   // Book Language: the per-book override (cjk::LanguageChoice) that re-tags a mis-tagged EPUB.
   // Shown for every text book pushed from the reader; -1 when the caller offers no such row.
   int8_t languageState = -1;
@@ -118,6 +122,11 @@ class ReaderSettingsActivity final : public UiTabListActivity, private SettingRo
  public:
   // The open book's text profile: Text Settings goes straight to it (finishOnBack screens only).
   void setBookTextProfile(const CrossPointSettings::TextProfileId profile) { bookTextProfile = profile; }
+  // Passed to Text Settings: see TextSettingsActivity::setHyphenationPack().
+  void setHyphenationPack(const LanguageEntry* language, std::string bookPath) {
+    hyphenationPack = language;
+    hyphenationBookPath = std::move(bookPath);
+  }
   void setBookLayout(const bool verticalText, const bool rtl) {
     bookVerticalText = verticalText;
     bookRtl = rtl;

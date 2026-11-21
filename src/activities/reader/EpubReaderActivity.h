@@ -664,6 +664,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void jumpToPercent(int percent) override;
   bool writeSyncedPosition() override;
   int syncedPositionPercent() override;
+  bool offerHyphenationPack() override;
   // The book position an Insights-synced position maps to, and its percent here; false when the book has
   // none, or has been read past it here (then it is dismissed).
   bool mapSyncedPosition(CrossPointPosition& out, int& percent);

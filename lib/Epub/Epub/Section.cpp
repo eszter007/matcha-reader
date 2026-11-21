@@ -317,7 +317,7 @@ namespace {
 //      reph, positioned marks, in the book's language; reordered vowel signs for fonts without
 //      shaping data), and TextBlocks store each complex-script word's drawn form so page turns
 //      never shape. The display-text flag is bit 2 here: bit 1 is the per-word font array.
-constexpr uint8_t SECTION_FILE_VERSION = 117;
+constexpr uint8_t SECTION_FILE_VERSION = 118;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -335,11 +335,11 @@ constexpr uint8_t SECTION_FILE_INCOMPLETE_VERSION = 0;
 // only fails (noisily, via the block-decode error path) when a page is loaded.
 // Derived so the pairing can't be forgotten: 0xFE for v28, 0xFD for v29, ...
 constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xFE - (SECTION_FILE_VERSION - 28);
-constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
-                                 sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
-                                 sizeof(uint8_t) + sizeof(bool) + sizeof(bool) + sizeof(bool) + sizeof(uint32_t) +
-                                 sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
-                                 sizeof(int8_t) + sizeof(uint8_t) + sizeof(uint8_t) + sizeof(uint32_t);
+constexpr uint32_t HEADER_SIZE =
+    sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) +
+    sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(bool) + sizeof(bool) +
+    sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
+    sizeof(int8_t) + sizeof(uint8_t) + sizeof(uint8_t) + sizeof(uint8_t) + sizeof(uint32_t);
 }  // namespace
 
 // Out-of-line so the unique_ptr<ChapterHtmlSlimParser> in BuildContext can be
@@ -389,8 +389,8 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
                          sizeof(pageCount) + sizeof(spec.hyphenationEnabled) + sizeof(spec.embeddedStyle) +
                          sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) + sizeof(spec.honorBookInsets) +
                          sizeof(spec.furiganaEnabled) + sizeof(spec.characterSpacing) +
-                         sizeof(spec.wordSpacingPercent) + sizeof(spec.bookFontsSignature) + sizeof(uint32_t) +
-                         sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
+                         sizeof(spec.wordSpacingPercent) + sizeof(uint8_t) + sizeof(spec.bookFontsSignature) +
+                         sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
       "Header size mismatch");
   // Written as the incomplete sentinel; finalizeBuild() patches it to
   // SECTION_FILE_VERSION as the last step, committing the file.
@@ -410,6 +410,8 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   serialization::writePod(file, spec.furiganaEnabled);
   serialization::writePod(file, spec.characterSpacing);
   serialization::writePod(file, spec.wordSpacingPercent);
+  // Patterns change the layout, and a pack can be installed (or fail to load) after a build.
+  serialization::writePod(file, static_cast<uint8_t>(Hyphenator::hasPatterns()));
   serialization::writePod(file, spec.bookFontsSignature);
   serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
@@ -455,6 +457,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     bool fileFuriganaEnabled;
     int8_t fileCharacterSpacing;
     uint8_t fileWordSpacingPercent;
+    uint8_t fileHyphenationPatterns;
     uint32_t fileBookFontsSignature;
     serialization::readPod(file, fileFontId);
     serialization::readPod(file, fileLineCompression);
@@ -471,7 +474,10 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     serialization::readPod(file, fileFuriganaEnabled);
     serialization::readPod(file, fileCharacterSpacing);
     serialization::readPod(file, fileWordSpacingPercent);
+    serialization::readPod(file, fileHyphenationPatterns);
     serialization::readPod(file, fileBookFontsSignature);
+    Hyphenator::setPreferredLanguage(epub->getLanguage(), spec.hyphenationEnabled);
+    const uint8_t hyphenationPatterns = Hyphenator::hasPatterns() ? 1 : 0;
 
     if (spec.fontId != fileFontId || spec.lineCompression != fileLineCompression ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing ||
@@ -481,7 +487,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
         spec.honorBookInsets != fileHonorBookInsets || spec.furiganaEnabled != fileFuriganaEnabled ||
         spec.characterSpacing != fileCharacterSpacing || spec.wordSpacingPercent != fileWordSpacingPercent ||
-        spec.bookFontsSignature != fileBookFontsSignature) {
+        spec.bookFontsSignature != fileBookFontsSignature || hyphenationPatterns != fileHyphenationPatterns) {
       // Name the field(s). A mismatch here throws the whole chapter away and rebuilds it, and on a
       // build long enough to be SUSPENDED (which persists a partial) an unexplained rejection is
       // indistinguishable from an infinite rebuild loop -- reported in #209 as the orientation
@@ -524,6 +530,8 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         note("wordSpacing", spec.wordSpacingPercent, fileWordSpacingPercent);
       if (spec.bookFontsSignature != fileBookFontsSignature)
         note("bookFonts", spec.bookFontsSignature, fileBookFontsSignature);
+      if (hyphenationPatterns != fileHyphenationPatterns)
+        note("hyphenationPatterns", hyphenationPatterns, fileHyphenationPatterns);
       why[at] = '\0';
       file.close();
       LOG_ERR("SCT", "Cache rejected (%s): want!=file %s", filePartial ? "partial" : "complete", why);
@@ -727,6 +735,8 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
     if (!reusedHtml) Storage.remove(tmpHtmlPath.c_str());
     return false;
   }
+  // Before the header, which records whether the language's patterns loaded.
+  Hyphenator::setPreferredLanguage(epub->getLanguage(), spec.hyphenationEnabled);
   // Header is written with the incomplete-version sentinel; finalizeBuild() commits it.
   writeSectionFileHeader(spec);
 
@@ -838,7 +848,6 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
 
   ctx->parser->setTextSpacing(spec.characterSpacing, spec.wordSpacingPercent);
   ctx->parser->setParagraphIndentSpaces(spec.paragraphIndentSpaces);
-  Hyphenator::setPreferredLanguage(epub->getLanguage());
   ComplexShaper::setDocumentLanguage(epub->getLanguage().c_str());
   build_ = std::move(ctx);
 

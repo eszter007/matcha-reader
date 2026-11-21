@@ -524,8 +524,20 @@ to that book only.
   - **STYLE**:
     - **Focus Reading** (off by default): prints the start of each word in bold to guide the eye, like Bionic
       Reading.
-    - **Hyphenation** (off by default): splits long words at the end of a line. With it on, Korean text may also
-      break between syllables, without a hyphen. With it off, Korean breaks only at spaces.
+    - **Hyphenation** (off by default): splits long words at the end of a line. With it on, Korean text may also break
+      between syllables, without a hyphen. With it off, Korean breaks only at spaces. English rules are built in.
+      Rules for 35 more languages can each be downloaded as a small file: Afrikaans, Albanian, Belarusian, Bulgarian,
+      Catalan, Croatian, Czech, Danish, Dutch, Estonian, Finnish, French, Galician, Georgian, German, Greek,
+      Hungarian, Icelandic, Italian, Kurdish (Kurmanji), Latin, Lithuanian, Mongolian, Norwegian, Polish, Portuguese,
+      Russian, Serbian (Cyrillic), Slovak, Slovenian, Spanish, Swedish, Turkish, Turkmen and Ukrainian. In a book in
+      one of these languages without its rules, this row reads **Download**. Select it to download the rules over
+      Wi-Fi; the book reopens with hyphenation on. The first time such a book opens with hyphenation on, a question
+      offers the same download (**Download** or **Not now**). Manage the downloads in **Settings → Reader →
+      Hyphenation Languages**, where each language shows in its own name (Deutsch, Français, Русский; Greek and
+      Georgian appear in Latin letters: Ellinika, Kartuli). Earlier versions had the French, German, Spanish, Italian,
+      Polish, Portuguese, Swedish, Finnish, Russian and Ukrainian rules built in: after updating, books in these
+      languages have no hyphenation until you download the rules, and each book's pages are laid out again the first
+      time you open it.
     - **Embedded Style** (on by default): uses the book's own formatting (its CSS).
     - **Publisher Fonts** (off by default, X4 Pro and other boards with PSRAM): draws a book in the fonts it
       ships, in horizontal and vertical text. Up to two of a book's font families are used, usually the body
@@ -549,6 +561,10 @@ to that book only.
   straight to that book's profile. A size or spacing you change while reading goes to the book's profile too. A font
   you pick while reading stays with that book only: change a profile's font from **Settings → Reader → Text
   Settings**.
+
+- **Hyphenation Languages**: The languages whose hyphenation rules are a download, with **Download** or
+  **Installed**. Select a language to download its rules over Wi-Fi, or an installed one to remove them. The rules
+  are saved in `/.crosspoint/hyph/` on the SD card and keep working after firmware updates.
 
 - **Dictionary Settings**: Opens a page with the word lookup settings:
   - **Word Lookup Font Size**: Text size in the word lookup window: **Tiny**, **Small** (default), **Medium** or

@@ -218,8 +218,8 @@ TEST_F(FlashBlobCacheTest, DeclinesWhatItCannotHold) {
   const auto tooLarge = makeBlob(FlashBlobCache::MAX_BLOB_BYTES + 1, 4);
   EXPECT_TRUE(FlashBlobCache::canHold(keyOf(fits), static_cast<uint32_t>(fits.size())));
   EXPECT_FALSE(FlashBlobCache::canHold(keyOf(tooLarge), static_cast<uint32_t>(tooLarge.size())));
-  EXPECT_NE(acquire(fits), nullptr);      // fills a slot exactly
-  EXPECT_EQ(acquire(tooLarge), nullptr);  // larger than a slot
+  EXPECT_NE(acquire(fits), nullptr);      // fills its slots exactly
+  EXPECT_EQ(acquire(tooLarge), nullptr);  // larger than the widest span
 
   const auto blob = makeBlob(2000, 5);
   gFailReads = true;
@@ -234,6 +234,52 @@ TEST_F(FlashBlobCacheTest, DeclinesWhatItCannotHold) {
   EXPECT_EQ(fake::erases, erases);
   // Other blobs still copy.
   EXPECT_NE(acquire(makeBlob(2000, 7)), nullptr);
+}
+
+// A blob larger than a slot (a German hyphenation trie) takes adjacent slots.
+TEST_F(FlashBlobCacheTest, SpansAdjacentSlotsAndMapsTheCopyAfterwards) {
+  const auto large = makeBlob(FlashBlobCache::SLOT_BYTES + 70000, 8);
+  const uint8_t* p = acquire(large);
+  ASSERT_NE(p, nullptr);
+  EXPECT_EQ(std::memcmp(p, large.data(), large.size()), 0);
+  release(p);
+
+  gReads = 0;
+  const int writes = fake::writes;
+  const uint8_t* again = acquire(large);
+  ASSERT_NE(again, nullptr);
+  EXPECT_EQ(again, p);
+  EXPECT_EQ(gReads, 0);
+  EXPECT_EQ(fake::writes, writes);
+}
+
+// While a spanning blob is mapped, no other blob may be copied into its second slot.
+TEST_F(FlashBlobCacheTest, NeverRecyclesAnySlotOfAMappedSpan) {
+  const auto large = makeBlob(FlashBlobCache::SLOT_BYTES + 1000, 9);
+  const uint8_t* pinned = acquire(large);
+  ASSERT_NE(pinned, nullptr);
+  for (int i = 0; i < 3 * EXPECTED_SLOTS; i++) {
+    const auto small = makeBlob(3000 + i, static_cast<uint8_t>(40 + i));
+    const uint8_t* p = acquire(small);
+    if (p != nullptr) release(p);
+  }
+  EXPECT_EQ(std::memcmp(pinned, large.data(), large.size()), 0);
+}
+
+// Copying over half of a spanning blob drops it, so it is copied whole the next time.
+TEST_F(FlashBlobCacheTest, RecopiesASpanWhosePartWasRecycled) {
+  const auto large = makeBlob(FlashBlobCache::SLOT_BYTES + 5000, 11);
+  release(acquire(large));
+  for (int i = 0; i < 2 * EXPECTED_SLOTS; i++) {
+    const uint8_t* p = acquire(makeBlob(2000 + i, static_cast<uint8_t>(60 + i)));
+    ASSERT_NE(p, nullptr);
+    release(p);
+  }
+  gReads = 0;
+  const uint8_t* p = acquire(large);
+  ASSERT_NE(p, nullptr);
+  EXPECT_GT(gReads, 0);
+  EXPECT_EQ(std::memcmp(p, large.data(), large.size()), 0);
 }
 
 #endif

@@ -13,6 +13,8 @@
 #include "components/themes/BaseTheme.h"
 #include "util/CjkScript.h"
 
+struct LanguageEntry;
+
 // Reader text settings for one text profile, under a live preview: Font and Size rows, then the
 // Layout and Style rows under their headings. Font and Size open a popup of their choices.
 class TextSettingsActivity final : public UiListActivity {
@@ -36,6 +38,10 @@ class TextSettingsActivity final : public UiListActivity {
   TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const SdCardFontRegistry* registry,
                        CrossPointSettings::TextProfileId profile, CjkScript bookScript = CjkScript::None,
                        bool verticalText = false, bool editStoredProfile = false, bool bookRtl = false);
+
+  // In a book whose hyphenation rules are a download not yet made, the Hyphenation row offers it.
+  // The reader closes for the download and bookPath reopens afterwards.
+  void setHyphenationPack(const LanguageEntry* language, std::string bookPath);
 
   void onEnter() override;
   void onExit() override;
@@ -121,6 +127,9 @@ class TextSettingsActivity final : public UiListActivity {
   const bool verticalText_ = false;
   const bool editStoredProfile_;
   const bool bookRtl_ = false;
+  const LanguageEntry* hyphenationPack_ = nullptr;
+  std::string bookPath_;
+  bool hyphenationPackMissing_ = false;
   // The vertical-text setting on entry: until it changes, the book keeps its own direction.
   uint8_t initialVerticalMode_ = 0;
   // Another profile is swapped into the live fields for editing (Settings holds the Latin ones).

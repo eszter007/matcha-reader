@@ -2,14 +2,15 @@
 
 #include <cstdint>
 
-// Read-only copies of .cpfont layout fonts in internal flash, memory-mapped
-// for the shaper so a complex-script face costs no heap for its tables.
+// Read-only copies of SD data in internal flash, memory-mapped so it costs no
+// heap: .cpfont layout fonts for the shaper and .cphyph hyphenation patterns.
 //
-// No-PSRAM boards only: there an Indic layout font (5-80 KB) would otherwise
-// sit in the same internal DRAM the reader lives in. The "spiffs" data
-// partition, which nothing else uses, is split into as many MAX_BLOB_BYTES
-// slots as it holds (up to 8; the 1 MB partition of a stock Xteink layout
-// holds 7) behind a one-sector directory. A blob is written once, keyed by its content hash, and
+// No-PSRAM boards only: there an Indic layout font (5-80 KB) or a German
+// hyphenation trie (200 KB) would otherwise sit in the same internal DRAM the
+// reader lives in. The "spiffs" data partition, which nothing else uses, is
+// split into as many SLOT_BYTES slots as it holds (up to 8; the 1 MB partition
+// of a stock Xteink layout holds 7) behind a one-sector directory. A blob
+// larger than a slot takes adjacent slots. A blob is written once, keyed by its content hash, and
 // re-verified against that hash every time it is mapped; the oldest-written
 // idle slot is recycled first. Writes happen only when a font is used for the first
 // time (or after its slot was recycled), so flash wear is negligible.
@@ -19,8 +20,11 @@
 // fails, and the caller then decides whether the blob may stay in RAM.
 namespace FlashBlobCache {
 
-// Largest blob a slot holds: Noto Devanagari's layout font is ~77 KB.
-constexpr uint32_t MAX_BLOB_BYTES = 128 * 1024;
+// One slot: Noto Devanagari's layout font is ~77 KB.
+constexpr uint32_t SLOT_BYTES = 128 * 1024;
+// Largest blob, in adjacent slots: the Hungarian hyphenation trie is ~354 KB.
+constexpr uint32_t MAX_SPAN_SLOTS = 3;
+constexpr uint32_t MAX_BLOB_BYTES = SLOT_BYTES * MAX_SPAN_SLOTS;
 
 // Fills buf with `length` bytes of the blob starting at `offset`.
 using Reader = bool (*)(void* ctx, uint32_t offset, uint8_t* buf, uint32_t length);
@@ -34,7 +38,7 @@ const uint8_t* acquire(uint32_t key, uint32_t length, Reader read, void* ctx);
 void release(void* data);
 
 // Whether acquire() could ever map this blob: the partition is usable, the
-// blob fits a slot and its copy has not failed. When true, a failed
+// blob fits its slots and its copy has not failed. When true, a failed
 // acquire() may succeed later (a copy buffer, a mapped slot freeing up).
 bool canHold(uint32_t key, uint32_t length);
 
