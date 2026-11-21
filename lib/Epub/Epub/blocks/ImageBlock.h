@@ -12,10 +12,6 @@ class ImageBlock final : public Block {
   ~ImageBlock() override = default;
 
   const std::string& getImagePath() const { return imagePath; }
-  // Where the decoded pixels are cached; by default next to the image ("x.png" -> "x.pxc"). A
-  // flashcard image sits in a deck folder of thousands of files, where finding that name costs a
-  // quarter second each draw, so cards cache in a folder of their own. Not saved by serialize().
-  void setCachePath(std::string path) { cachePath = std::move(path); }
   int16_t getWidth() const { return width; }
   int16_t getHeight() const { return height; }
 
@@ -99,8 +95,7 @@ class ImageBlock final : public Block {
 
  private:
   std::string imagePath;
-  std::string srcPath;    // book-internal source href; empty once known-extracted
-  std::string cachePath;  // empty: next to the image
+  std::string srcPath;  // book-internal source href; empty once known-extracted
   std::string pixelCachePath() const;
   int16_t width;
   int16_t height;

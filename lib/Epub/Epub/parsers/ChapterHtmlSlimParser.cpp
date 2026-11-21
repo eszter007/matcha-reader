@@ -1149,7 +1149,6 @@ void ChapterHtmlSlimParser::applyDropCap(const char* tagName, const std::string&
   if (!cssParser->resolveFirstLetterFontSize(tagName, classAttr, &cssPath, firstLetterSize)) {
     return;
   }
-  if (cardBasePx > 0.0f) firstLetterSize = cardFontSize(firstLetterSize, cardBasePx);
 
   // Reuse the block ladder's own unit handling (%, em, rem, pt) instead of re-deriving it:
   // `font-size: 300%` means the same multiple of the reader's size on a pseudo-element as it
@@ -1643,9 +1642,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   if (strcasecmp(name, "body") == 0 || strcasecmp(name, "html") == 0) {
     cssStyle.defined.fontSize = 0;
   }
-  if (self->cardBasePx > 0.0f && cssStyle.hasFontSize()) {
-    cssStyle.fontSize = cardFontSize(cssStyle.fontSize, self->cardBasePx);
-  }
 
   if (cssStyle.hasFontFamily() && self->fontFamilyScopeCount < MAX_FONT_FAMILY_SCOPES) {
     self->fontFamilyScopes[self->fontFamilyScopeCount++] = {static_cast<uint16_t>(self->cssPath.depth()),
@@ -1915,7 +1911,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               ext = resolvedPath.substr(extPos);
             }
             std::string cachedImagePath = self->imageBasePath + std::to_string(self->imageCounter++) + ext;
-            std::string pixelCachePath;  // a standalone page's own cache folder, when it has one
 
             {
               // Probe the dimensions from the entry's first bytes (early-aborted
@@ -1925,24 +1920,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               // image-heavy chapter from stalling for seconds per image.
               ImageDimensions dims = {0, 0};
               bool gotDimensions = false;
-              // A standalone page (a flashcard face) has no book: its images are plain files next to
-              // it, used in place, never extracted or removed.
+              // A standalone page (e.g. a dictionary entry) has no book: its images are plain files next
+              // to it, used in place, never extracted or removed.
               const bool standalone = self->epub == nullptr;
               if (standalone) {
                 cachedImagePath = resolvedPath;
-                if (!self->pixelCacheDir.empty()) {
-                  // Named by its path below the page's folder, '/' as '_': "x/a.png" and "a.png" keep
-                  // apart, as they did when each was cached next to itself.
-                  const std::string base = FsHelpers::normalisePath(self->contentBase);
-                  std::string name = resolvedPath.compare(0, base.size(), base) == 0 && !base.empty()
-                                         ? resolvedPath.substr(base.size())
-                                         : resolvedPath;
-                  while (!name.empty() && name[0] == '/') name.erase(0, 1);
-                  std::replace(name.begin(), name.end(), '/', '_');
-                  const size_t dot = name.rfind('.');
-                  if (dot != std::string::npos) name.resize(dot);
-                  pixelCachePath = self->pixelCacheDir + name + ".pxc";
-                }
                 // From the header: a PNG decoder needs a 43 KB block just to read the size.
                 bool opened = false;
                 // normalisePath() drops the leading slash of an absolute card path.
@@ -2229,7 +2211,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                     LOG_ERR("EHP", "Failed to create inline ImageBlock");
                     return;
                   }
-                  if (!pixelCachePath.empty()) inlineBlock->setCachePath(pixelCachePath);
                   const int inlineX = std::max(0, (self->viewportWidth - displayWidth) / 2);
                   auto inlineImage = makeUniqueNoThrow<PageImage>(std::move(inlineBlock), static_cast<int16_t>(inlineX),
                                                                   static_cast<int16_t>(self->currentPageNextY));
@@ -2279,7 +2260,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 // again, check render()'s rotated branch before touching this one.
                 const bool viewportIsPortrait = self->viewportHeight > self->viewportWidth;
                 const bool imageIsLandscape = dims.width > dims.height;
-                // A flashcard face (no book) keeps its pictures upright: its viewport is a box on
+                // A standalone page (no book) keeps its pictures upright: its viewport is a box on
                 // the screen, so the rotated frame's margin would shrink them to a stamp.
                 const bool rotateImage = self->epub != nullptr && dims.width > 0 && dims.height > 0 &&
                                          (viewportIsPortrait == imageIsLandscape);
@@ -2338,7 +2319,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   self->depth += 1;
                   return;
                 }
-                if (!pixelCachePath.empty()) imageBlock->setCachePath(pixelCachePath);
                 auto pageImage = makeUniqueNoThrow<PageImage>(std::move(imageBlock), static_cast<int16_t>(xPos),
                                                               static_cast<int16_t>(yPos));
                 if (!pageImage) {
