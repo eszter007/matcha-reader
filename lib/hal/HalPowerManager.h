@@ -83,6 +83,10 @@ class HalPowerManager {
   // Get battery percentage (range 0-100)
   uint16_t getBatteryPercentage() const;
 
+  // One fresh reading. False when the battery cannot be read, which
+  // getBatteryPercentage() reports as its last value or 0.
+  bool readBatteryPercentage(uint16_t& percent) const;
+
   // RAII helper class to manage power saving locks
   // Usage: create an instance of Lock in a scope to disable power saving, for example when running a task that needs
   // full performance. Locks nest: power saving is re-enabled when the LAST one goes out of scope.

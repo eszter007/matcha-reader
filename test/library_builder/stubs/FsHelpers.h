@@ -10,4 +10,7 @@ inline bool hasXtcExtension(std::string_view path) {
   return checkFileExtension(path, ".xtc") || checkFileExtension(path, ".xtch");
 }
 inline bool hasMatchaExtension(std::string_view path) { return checkFileExtension(path, ".matcha"); }
+inline std::string_view stripMatchaExtension(std::string_view path) {
+  return hasMatchaExtension(path) ? path.substr(0, path.size() - (sizeof(".matcha") - 1)) : path;
+}
 }  // namespace FsHelpers

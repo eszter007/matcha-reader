@@ -14,6 +14,7 @@
 
 #include "BuildScratch.h"
 #include "clippings/ClippingSync.h"
+#include "sync/SyncRequest.h"
 
 namespace {
 constexpr const char* book = "/book.epub";
@@ -33,6 +34,12 @@ void reset() {
   syncCredentials.enabled = true;
   syncCredentials.customHeaders.clear();
 }
+// Mirrors syncEngine::run for clippings alone.
+bool runClippings() {
+  if (!syncCredentials.enabled) return true;
+  SyncRequest sync;
+  return sync.ready() && clippingSync::run(sync, book, "hash");
+}
 void released() {
   auto* scratch = buildscratch::claim(32768);
   assert(scratch == framebuffer.data());
@@ -48,7 +55,10 @@ void maximumTextRoundTrip() {
 #if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3
   fake::syncHeap = 100000;
 #endif
-  const std::string text(CLIPPING_TEXT_MAX, '\t');
+  // The longest JSON a full clipping can take: every character a 4-byte emoji, escaped as a
+  // 12-byte surrogate pair.
+  std::string text;
+  for (size_t i = 0; i < CLIPPING_TEXT_MAX / 4; ++i) text += "\xF0\x9F\x98\x80";
   add(text);
   JsonDocument response;
   response["cursor"] = 1;
@@ -61,16 +71,16 @@ void maximumTextRoundTrip() {
                    "layout_signature"})
     remote[key] = 1;
   std::string escapedText = "\"";
-  for (size_t i = 0; i < CLIPPING_TEXT_MAX; ++i) escapedText += "\\u0009";
+  for (size_t i = 0; i < CLIPPING_TEXT_MAX / 4; ++i) escapedText += "\\ud83d\\ude00";
   escapedText += '"';
   remote["text"] = serialized(escapedText);
   fake::remoteResponse.clear();
   serializeJson(response, fake::remoteResponse);
-  assert(fake::remoteResponse.size() > 24 * 1024);
-  assert(clippingSync::run(book, "hash"));
+  assert(fake::remoteResponse.size() > 12 * 1024 && fake::remoteResponse.size() < SyncRequest::BUFFER_SIZE);
+  assert(runClippings());
   released();
   assert(fake::uploads.size() == 1);
-  assert(fake::uploads.front().size() > 8 * 1024);
+  assert(fake::uploads.front().size() > 4 * 1024);
   JsonDocument upload;
   assert(!deserializeJson(upload, fake::uploads.front()));
   assert(upload["items"][0]["text"].as<std::string>() == text);
@@ -93,13 +103,13 @@ void everyRequestSendsAuthHeaders(const SyncCredentials::Header& custom, const s
 #endif
   add("kept");
   add("removed");
-  assert(clippingSync::run(book, "hash"));  // Probe, two uploads, pull.
+  assert(runClippings());  // Probe, two uploads, pull.
   released();
   assert(CLIPPINGS.loadForBook(book, "", "", "epub"));
   assert(CLIPPINGS.removeClippingAt(1));
   CLIPPINGS.unload();
   fake::uploads.clear();
-  assert(clippingSync::run(book, "hash"));  // Probe, delete, pull.
+  assert(runClippings());  // Probe, delete, pull.
   released();
   assert(fake::uploads.size() == 1);
   assert(fake::uploads.front().find("\"deleted\":1") != std::string::npos);
@@ -134,22 +144,17 @@ int main() {
     if (failure == 0) fake::failHttpAt = 0;
     if (failure == 1) fake::incomplete = true;
     if (failure == 2) fake::remoteResponse.assign(32768, 'x');
-    assert(!clippingSync::run(book, "hash"));
+    assert(!runClippings());
     released();
   }
   reset();
   fake::failAlloc = 0;
-  assert(!clippingSync::run(book, "hash"));
+  assert(!runClippings());
   released();
-#if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3
   reset();
-  assert(!clippingSync::run(book, "hash"));  // Preserve the S3 heap guard.
-#endif
-  buildscratch::reclaim();
-#if defined(CONFIG_IDF_TARGET_ESP32C3) && CONFIG_IDF_TARGET_ESP32C3
-  reset();
-  assert(!clippingSync::run(book, "hash"));  // Missing loan must fail safely.
+  fake::syncHeap = 40000;  // too little left for TLS once the buffer is taken
+  assert(!runClippings());
   assert(fake::requests == 0);
-#endif
+  buildscratch::reclaim();
   std::puts("Clipping sync tests passed");
 }

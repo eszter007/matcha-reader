@@ -17,6 +17,6 @@ template <typename T>
   requires std::is_unbounded_array_v<T>
 std::unique_ptr<T> makeUniqueNoThrow(size_t count) {
   if (fake::fail(fake::failAlloc)) return nullptr;
-  if (count == 32768) fake::syncBufferAllocated = true;
+  if (count == 16384) fake::syncBufferAllocated = true;
   return std::unique_ptr<T>(new (std::nothrow) std::remove_extent_t<T>[count]);
 }

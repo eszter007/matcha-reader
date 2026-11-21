@@ -46,6 +46,7 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   DocumentMatchMethod matchMethod = DocumentMatchMethod::FILENAME;  // Default to filename for compatibility
   bool sendMetadata = true;                                         // Send document metadata with progress sync
   bool syncClippings = false;                                       // Opt-in crosspoint-sync extension
+  bool syncOnSleep = false;                                         // Sync the open book when the device sleeps
   KOReaderSyncBehavior syncBehavior = KOReaderSyncBehavior::SMART;
   KOReaderServerType serverType = KOReaderServerType::CROSSPOINT;
   // Last day (since 2000-01-01) whose reading time reached the server, and the account it went to.
@@ -130,6 +131,9 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   // False when unknown: stats went to another account since the last upload to this one.
   bool getStatsTimeOfDay(uint32_t (&out)[4]) const;
   void setStatsTimeOfDay(const uint32_t (&minutes)[4]);
+
+  void setSyncOnSleep(bool enabled) { syncOnSleep = enabled; }
+  bool getSyncOnSleep() const { return syncOnSleep; }
 
   // Sync behavior
   void setSyncBehavior(KOReaderSyncBehavior behavior);

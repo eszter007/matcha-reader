@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "BuildScratch.h"
+#include "HalMemory.h"
 
 namespace fake {
 using Headers = std::vector<std::pair<std::string, std::string>>;
@@ -29,11 +30,6 @@ class SecureHttpClient {
   void addHeader(const std::string& name, const std::string& value) { fake::headers.back().emplace_back(name, value); }
   template <typename Sink>
   int sendRequest(const char* method, const uint8_t* data, size_t length, Sink sink) {
-#if defined(CONFIG_IDF_TARGET_ESP32C3) && CONFIG_IDF_TARGET_ESP32C3
-    // The transfer must hold the exclusive scratch claim until its response is parsed.
-    assert(buildscratch::claim(32768) == nullptr);
-    assert(!fake::syncBufferAllocated);
-#endif
     if (fake::requests++ == fake::failHttpAt) return 500;
     const bool upload = std::string(method) == "PUT";
     if (upload) fake::uploads.emplace_back(reinterpret_cast<const char*>(data), length);

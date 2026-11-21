@@ -11,7 +11,7 @@ struct HalMemory {
     size_t largestBlockBytes;
   };
   static Heap getDefaultHeap() {
-    const size_t available = fake::syncHeap - (fake::syncBufferAllocated ? 32768 : 0);
+    const size_t available = fake::syncHeap - (fake::syncBufferAllocated ? 16384 : 0);
     return {available, available};
   }
 };

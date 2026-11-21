@@ -24,12 +24,12 @@
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/settings/ClockSyncActivity.h"
-#include "clippings/ClippingSync.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"  // list icons for the compare rows
 #include "fontIds.h"
 #include "network/WifiPowerSaveGuard.h"
 #include "stats/StatsSync.h"
+#include "sync/SyncEngine.h"
 #include "util/BookProgress.h"
 #include "util/PluginEvents.h"
 #include "util/PluginHttp.h"
@@ -220,20 +220,14 @@ void KOReaderSyncActivity::performSync() {
 
   LOG_DBG("KOSync", "Document hash (%s): %s", matchMethodName(primaryMethod), documentHash.c_str());
 
-  if (KOREADER_STORE.getSyncClippings() && !paged) {
+  // Clippings and bookmarks belong to EPUBs.
+  if (!paged && syncEngine::hasExtensions()) {
     {
       RenderLock lock(*this);
-      statusMessage = tr(STR_SYNCING_CLIPPINGS);
+      statusMessage = KOREADER_STORE.getSyncClippings() ? tr(STR_SYNCING_CLIPPINGS) : tr(STR_FETCH_PROGRESS);
     }
     requestUpdateAndWait();
-    bool clippingsSynced;
-    {
-#if defined(CONFIG_IDF_TARGET_ESP32C3) && CONFIG_IDF_TARGET_ESP32C3
-      RenderLock lock;
-      GfxRenderer::FrameBufferLoan loan(renderer);
-#endif
-      clippingsSynced = clippingSync::run(epubPath, documentHash);
-    }
+    const bool clippingsSynced = syncEngine::syncExtensions(epubPath, documentHash);
     if (!clippingsSynced) {
       {
         RenderLock lock(*this);
