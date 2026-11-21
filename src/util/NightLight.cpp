@@ -12,6 +12,7 @@
 #include "CrossPointState.h"
 #include "NightSchedule.h"
 #include "SlideSwitch.h"
+#include "Timezones.h"
 
 namespace nightlight {
 
@@ -52,89 +53,7 @@ void saveLevels(const uint8_t brightness, const uint8_t warmth, const bool night
 
 namespace {
 
-// London first: it is the default. The rest run west to east. APPEND ONLY (see header).
-constexpr City CITIES[] = {
-    {"London", 5151, -13},
-    {"Honolulu", 2131, -15786},
-    {"Anchorage", 6122, -14990},
-    {"Vancouver", 4928, -12312},
-    {"Seattle", 4761, -12233},
-    {"San Francisco", 3777, -12242},
-    {"Los Angeles", 3405, -11824},
-    {"Phoenix", 3345, -11207},
-    {"Denver", 3974, -10499},
-    {"Mexico City", 1943, -9913},
-    {"Dallas", 3278, -9680},
-    {"Chicago", 4188, -8763},
-    {"Atlanta", 3375, -8439},
-    {"Toronto", 4365, -7938},
-    {"Montreal", 4550, -7357},
-    {"New York", 4071, -7401},
-    {"Bogota", 471, -7407},
-    {"Lima", -1205, -7704},
-    {"Halifax", 4465, -6357},
-    {"Santiago", -3345, -7067},
-    {"Buenos Aires", -3460, -5838},
-    {"Sao Paulo", -2355, -4663},
-    {"Rio de Janeiro", -2291, -4317},
-    {"Reykjavik", 6415, -2194},
-    {"Lisbon", 3872, -914},
-    {"Dublin", 5335, -626},
-    {"Edinburgh", 5595, -319},
-    {"Manchester", 5348, -224},
-    {"Madrid", 4042, -370},
-    {"Paris", 4886, 235},
-    {"Brussels", 5085, 435},
-    {"Amsterdam", 5237, 490},
-    {"Zurich", 4738, 854},
-    {"Oslo", 5991, 1075},
-    {"Copenhagen", 5568, 1257},
-    {"Berlin", 5252, 1340},
-    {"Rome", 4190, 1250},
-    {"Vienna", 4821, 1637},
-    {"Stockholm", 5933, 1807},
-    {"Warsaw", 5223, 2101},
-    {"Helsinki", 6017, 2494},
-    {"Athens", 3798, 2373},
-    {"Istanbul", 4101, 2898},
-    {"Kyiv", 5045, 3052},
-    {"Cairo", 3004, 3124},
-    {"Lagos", 652, 338},
-    {"Johannesburg", -2620, 2805},
-    {"Nairobi", -129, 3682},
-    {"Moscow", 5576, 3762},
-    {"Tehran", 3569, 5139},
-    {"Dubai", 2520, 5527},
-    {"Karachi", 2486, 6701},
-    {"Mumbai", 1908, 7288},
-    {"Delhi", 2861, 7721},
-    {"Bangalore", 1297, 7759},
-    {"Dhaka", 2381, 9041},
-    {"Bangkok", 1376, 10050},
-    {"Singapore", 135, 10382},
-    {"Jakarta", -621, 10685},
-    {"Hong Kong", 2232, 11417},
-    {"Manila", 1460, 12098},
-    {"Shanghai", 3123, 12147},
-    {"Beijing", 3990, 11641},
-    {"Taipei", 2503, 12157},
-    {"Seoul", 3757, 12698},
-    {"Fukuoka", 3359, 13040},
-    {"Osaka", 3469, 13550},
-    {"Tokyo", 3568, 13969},
-    {"Sapporo", 4306, 14135},
-    {"Perth", -3195, 11586},
-    {"Adelaide", -3493, 13860},
-    {"Brisbane", -2747, 15303},
-    {"Sydney", -3387, 15121},
-    {"Melbourne", -3781, 14496},
-    {"Auckland", -3685, 17476},
-};
-static_assert(sizeof(CITIES) / sizeof(CITIES[0]) == CITY_COUNT, "update CITY_COUNT with the table");
-
 constexpr unsigned long CHECK_INTERVAL_MS = 20000;
-
-float toDegrees(const int16_t e2) { return static_cast<float>(e2) / 100.0f; }
 
 // Where the schedule stands now. False when the schedule is on but there is no clock to place it
 // by: nothing is decided or recorded then, so the next reading starts from the last real one.
@@ -154,8 +73,10 @@ bool currentPosition(Position& out) {
     out =
         nightschedule::windowPosition(now, minute, second, SETTINGS.nightLightStart * 30, SETTINGS.nightLightEnd * 30);
   } else {
-    const City& c = city(SETTINGS.nightLightCity);
-    out = nightschedule::sunPosition(now, toDegrees(c.latE2), toDegrees(c.lonE2));
+    float lat;
+    float lon;
+    timezones::location(timezones::activeIndex(), lat, lon);
+    out = nightschedule::sunPosition(now, lat, lon);
   }
   return true;
 }
@@ -217,8 +138,6 @@ void formatEpoch(const time_t epoch, char* buf, const size_t size) {
 
 }  // namespace
 
-const City& city(const uint8_t index) { return CITIES[index < CITY_COUNT ? index : DEFAULT_CITY]; }
-
 void adjustBootState(uint8_t& brightness, uint8_t& warmth, bool& lightOn) {
   Position now;
   if (!currentPosition(now)) {
@@ -278,9 +197,9 @@ void formatSummary(char* buf, const size_t size) {
       struct tm local;
       if (halClock.localTime(local)) {
         const time_t now = mktime(&local);
-        const City& c = city(SETTINGS.nightLightCity);
-        const float lat = toDegrees(c.latE2);
-        const float lon = toDegrees(c.lonE2);
+        float lat;
+        float lon;
+        timezones::location(timezones::activeIndex(), lat, lon);
         const nightschedule::SolarDay today = nightschedule::solarDayAt(now, lat, lon);
         if (today.kind == nightschedule::DayKind::Normal) {
           // The night in progress or the next one: before dawn it began at yesterday's sunset.
@@ -306,10 +225,6 @@ void formatSummary(char* buf, const size_t size) {
 
 #else  // No frontlight: the schedule has nothing to drive and its settings rows are not built.
 
-const City& city(uint8_t) {
-  static constexpr City NONE = {"", 0, 0};
-  return NONE;
-}
 void adjustBootState(uint8_t&, uint8_t&, bool&) {}
 bool tick() { return false; }
 bool refresh() { return false; }

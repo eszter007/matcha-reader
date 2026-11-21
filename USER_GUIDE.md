@@ -138,9 +138,9 @@ again in the morning. The row shows tonight's times.
 - **Light On At** / **Light Off At** (Set Times): when the night starts and ends, in half-hour steps. The defaults are
   20:00 and 06:00. A start later than the end runs past midnight. If both are the same time, the light does not
   switch.
-- **City** (Sunset to Sunrise): the city whose sunset and sunrise are used. The default is London. Pick the nearest
-  city on the list; the times are worked out on the device every day, so they follow the seasons. Set the clock's
-  **Time Zone** too (**Settings → System → Clock**) so the times shown match your clock.
+- **Sunset to Sunrise** (Schedule): uses the sunset and sunrise of the clock's **Time Zone** (**Settings → System → Clock**), at
+  its first-named city: Berlin for "Berlin / Paris / Madrid / Rome". The times are worked out on the device every day,
+  so they follow the seasons. A **UTC** or **UTC±hh:mm** zone names no city, so its times are only a rough guess.
 - **Night Brightness**: the light's level at night. The default is 30%.
 - **Night Warmth** (X4 Pro and other lights with warmth): the light's colour at night. The default is fully warm.
 

@@ -275,19 +275,14 @@ bool SettingRowEditor::openLightSchedulePicker(const SettingInfo& setting) {
   const auto valuePtr = setting.valuePtr;
   const bool timeRow =
       valuePtr == &CrossPointSettings::nightLightStart || valuePtr == &CrossPointSettings::nightLightEnd;
-  if (timeRow || valuePtr == &CrossPointSettings::nightLightCity) {
-    // 48 times or CITY_COUNT short names; the popup keeps them until this page closes.
-    const size_t count = timeRow ? nightlight::HALF_HOURS_PER_DAY : nightlight::CITY_COUNT;
+  if (timeRow) {
+    // 48 times; the popup keeps them until this page closes.
     std::vector<std::string> labels;
-    labels.reserve(count);
+    labels.reserve(nightlight::HALF_HOURS_PER_DAY);
     char time[12];
-    for (size_t i = 0; i < count; i++) {
-      if (timeRow) {
-        nightlight::formatHalfHour(static_cast<uint8_t>(i), time, sizeof(time));
-        labels.emplace_back(time);
-      } else {
-        labels.emplace_back(nightlight::city(static_cast<uint8_t>(i)).name);
-      }
+    for (uint8_t i = 0; i < nightlight::HALF_HOURS_PER_DAY; i++) {
+      nightlight::formatHalfHour(i, time, sizeof(time));
+      labels.emplace_back(time);
     }
     popup.show(setting.nameId, std::move(labels), SETTINGS.*valuePtr, [this, valuePtr](const int index) {
       SETTINGS.*valuePtr = static_cast<uint8_t>(index);
@@ -379,7 +374,6 @@ std::string SettingRowEditor::valueText(const SettingInfo& setting) {
       nightlight::formatHalfHour(value, time, sizeof(time));
       return time;
     }
-    if (setting.valuePtr == &CrossPointSettings::nightLightCity) return nightlight::city(value).name;
     if (setting.valuePtr == &CrossPointSettings::nightLightBrightness ||
         setting.valuePtr == &CrossPointSettings::nightLightWarmth) {
       char percent[8];

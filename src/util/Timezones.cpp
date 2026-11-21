@@ -12,55 +12,55 @@ namespace {
 
 // Ordered west to east by standard offset. APPEND ONLY (see header).
 constexpr TimezoneInfo TABLE[] = {
-    {"Midway", "SST11", -44},
-    {"Honolulu", "HST10", -40},
-    {"Anchorage", "AKST9AKDT,M3.2.0,M11.1.0", -36},
-    {"Los Angeles / Vancouver", "PST8PDT,M3.2.0,M11.1.0", -32},
-    {"Denver / Edmonton", "MST7MDT,M3.2.0,M11.1.0", -28},
-    {"Phoenix", "MST7", -28},
-    {"Chicago / Winnipeg", "CST6CDT,M3.2.0,M11.1.0", -24},
-    {"Mexico City", "CST6", -24},
-    {"New York / Toronto", "EST5EDT,M3.2.0,M11.1.0", -20},
-    {"Bogota / Lima", "COT5", -20},
-    {"Halifax", "AST4ADT,M3.2.0,M11.1.0", -16},
-    {"Caracas / La Paz", "VET4", -16},
-    {"Santiago", "CLT4CLST,M9.1.6/24,M4.1.6/24", -16},
-    {"St. John's", "NST3:30NDT,M3.2.0,M11.1.0", -14},
-    {"Buenos Aires / Montevideo", "ART3", -12},
-    {"Sao Paulo", "BRT3", -12},
-    {"Azores", "AZOT1AZOST,M3.5.0/0,M10.5.0/1", -4},
+    {"Midway", "SST11", -44, 2821, -17737},
+    {"Honolulu", "HST10", -40, 2131, -15786},
+    {"Anchorage", "AKST9AKDT,M3.2.0,M11.1.0", -36, 6122, -14990},
+    {"Los Angeles / Vancouver", "PST8PDT,M3.2.0,M11.1.0", -32, 3405, -11824},
+    {"Denver / Edmonton", "MST7MDT,M3.2.0,M11.1.0", -28, 3974, -10499},
+    {"Phoenix", "MST7", -28, 3345, -11207},
+    {"Chicago / Winnipeg", "CST6CDT,M3.2.0,M11.1.0", -24, 4188, -8763},
+    {"Mexico City", "CST6", -24, 1943, -9913},
+    {"New York / Toronto", "EST5EDT,M3.2.0,M11.1.0", -20, 4071, -7401},
+    {"Bogota / Lima", "COT5", -20, 471, -7407},
+    {"Halifax", "AST4ADT,M3.2.0,M11.1.0", -16, 4465, -6357},
+    {"Caracas / La Paz", "VET4", -16, 1049, -6688},
+    {"Santiago", "CLT4CLST,M9.1.6/24,M4.1.6/24", -16, -3345, -7067},
+    {"St. John's", "NST3:30NDT,M3.2.0,M11.1.0", -14, 4756, -5271},
+    {"Buenos Aires / Montevideo", "ART3", -12, -3460, -5838},
+    {"Sao Paulo", "BRT3", -12, -2355, -4663},
+    {"Azores", "AZOT1AZOST,M3.5.0/0,M10.5.0/1", -4, 3774, -2567},
     {"UTC", "UTC0", 0},
-    {"London / Dublin / Lisbon", "GMT0BST,M3.5.0/1,M10.5.0", 0},
-    {"Berlin / Paris / Madrid / Rome", "CET-1CEST,M3.5.0,M10.5.0/3", 4},
-    {"Lagos / Algiers", "WAT-1", 4},
-    {"Athens / Helsinki / Kyiv", "EET-2EEST,M3.5.0/3,M10.5.0/4", 8},
-    {"Cairo", "EET-2EEST,M4.5.5/0,M10.5.4/24", 8},
-    {"Jerusalem", "IST-2IDT,M3.4.4/26,M10.5.0", 8},
-    {"Johannesburg", "SAST-2", 8},
-    {"Moscow / Istanbul / Riyadh", "MSK-3", 12},
-    {"Nairobi", "EAT-3", 12},
-    {"Tehran", "IRST-3:30", 14},
-    {"Dubai / Tbilisi", "GST-4", 16},
-    {"Kabul", "AFT-4:30", 18},
-    {"Karachi / Tashkent", "PKT-5", 20},
-    {"India / Colombo", "IST-5:30", 22},
-    {"Kathmandu", "NPT-5:45", 23},
-    {"Dhaka / Almaty", "BST-6", 24},
-    {"Yangon", "MMT-6:30", 26},
-    {"Bangkok / Jakarta / Hanoi", "ICT-7", 28},
-    {"China / Hong Kong / Taipei", "CST-8", 32},
-    {"Singapore / Manila / Kuala Lumpur", "SGT-8", 32},
-    {"Perth", "AWST-8", 32},
-    {"Tokyo / Seoul", "JST-9", 36},
-    {"Darwin", "ACST-9:30", 38},
-    {"Adelaide", "ACST-9:30ACDT,M10.1.0,M4.1.0/3", 38},
-    {"Brisbane / Guam", "AEST-10", 40},
-    {"Sydney / Melbourne", "AEST-10AEDT,M10.1.0,M4.1.0/3", 40},
-    {"Honiara / Noumea", "SBT-11", 44},
-    {"Auckland", "NZST-12NZDT,M9.5.0,M4.1.0/3", 48},
-    {"Fiji", "FJT-12", 48},
-    {"Nuku'alofa", "TOT-13", 52},
-    {"Kiritimati", "LINT-14", 56},
+    {"London / Dublin / Lisbon", "GMT0BST,M3.5.0/1,M10.5.0", 0, 5151, -13},
+    {"Berlin / Paris / Madrid / Rome", "CET-1CEST,M3.5.0,M10.5.0/3", 4, 5252, 1340},
+    {"Lagos / Algiers", "WAT-1", 4, 652, 338},
+    {"Athens / Helsinki / Kyiv", "EET-2EEST,M3.5.0/3,M10.5.0/4", 8, 3798, 2373},
+    {"Cairo", "EET-2EEST,M4.5.5/0,M10.5.4/24", 8, 3004, 3124},
+    {"Jerusalem", "IST-2IDT,M3.4.4/26,M10.5.0", 8, 3177, 3522},
+    {"Johannesburg", "SAST-2", 8, -2620, 2805},
+    {"Moscow / Istanbul / Riyadh", "MSK-3", 12, 5576, 3762},
+    {"Nairobi", "EAT-3", 12, -129, 3682},
+    {"Tehran", "IRST-3:30", 14, 3569, 5139},
+    {"Dubai / Tbilisi", "GST-4", 16, 2520, 5527},
+    {"Kabul", "AFT-4:30", 18, 3453, 6921},
+    {"Karachi / Tashkent", "PKT-5", 20, 2486, 6701},
+    {"India / Colombo", "IST-5:30", 22, 2861, 7721},
+    {"Kathmandu", "NPT-5:45", 23, 2772, 8532},
+    {"Dhaka / Almaty", "BST-6", 24, 2381, 9041},
+    {"Yangon", "MMT-6:30", 26, 1687, 9620},
+    {"Bangkok / Jakarta / Hanoi", "ICT-7", 28, 1376, 10050},
+    {"China / Hong Kong / Taipei", "CST-8", 32, 3990, 11641},
+    {"Singapore / Manila / Kuala Lumpur", "SGT-8", 32, 135, 10382},
+    {"Perth", "AWST-8", 32, -3195, 11586},
+    {"Tokyo / Seoul", "JST-9", 36, 3568, 13969},
+    {"Darwin", "ACST-9:30", 38, -1246, 13084},
+    {"Adelaide", "ACST-9:30ACDT,M10.1.0,M4.1.0/3", 38, -3493, 13860},
+    {"Brisbane / Guam", "AEST-10", 40, -2747, 15303},
+    {"Sydney / Melbourne", "AEST-10AEDT,M10.1.0,M4.1.0/3", 40, -3387, 15121},
+    {"Honiara / Noumea", "SBT-11", 44, -943, 15997},
+    {"Auckland", "NZST-12NZDT,M9.5.0,M4.1.0/3", 48, -3685, 17476},
+    {"Fiji", "FJT-12", 48, -1814, 17844},
+    {"Nuku'alofa", "TOT-13", 52, -2114, -17520},
+    {"Kiritimati", "LINT-14", 56, 187, -15736},
     // Fixed offsets, no DST — the manual fallback for zones the named list
     // misses. Note the POSIX offset sign is inverted relative to the label.
     {"UTC-12:00", "UTC12", -48},
@@ -162,6 +162,18 @@ void formatOffset(const uint8_t index, char* buf, const size_t bufSize) {
   }
   const int absQ = q < 0 ? -q : q;
   snprintf(buf, bufSize, "UTC%c%d:%02d", q < 0 ? '-' : '+', absQ / 4, (absQ % 4) * 15);
+}
+
+void location(const uint8_t index, float& latDeg, float& lonDeg) {
+  const TimezoneInfo& tz = TABLE[index < TABLE_COUNT ? index : UTC_INDEX];
+  if (tz.latE2 == TimezoneInfo::NO_LOCATION) {
+    // A bare offset names no place: its central meridian, at a mid-northern latitude.
+    latDeg = 45.0f;
+    lonDeg = static_cast<float>(tz.stdOffsetQ) * 3.75f;
+    return;
+  }
+  latDeg = static_cast<float>(tz.latE2) / 100.0f;
+  lonDeg = static_cast<float>(tz.lonE2) / 100.0f;
 }
 
 void applyToClock() {

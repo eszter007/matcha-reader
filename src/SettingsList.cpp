@@ -61,7 +61,7 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
                            StrId::STR_CAT_DISPLAY));
 #if FREEINK_CAP_FRONTLIGHT
   // --- Light Schedule (a sub-screen of Display; see util/NightLight.h) ---
-  // Device-only: the web page would show the times and city as bare numbers, and a schedule
+  // Device-only: the web page would show the times as bare numbers, and a schedule
   // edited there would not take effect until the next check. SettingRowEditor opens the pickers.
   emit(SettingInfo::Enum(StrId::STR_SCHEDULE, &CrossPointSettings::nightLightMode,
                          {StrId::STR_STATE_OFF, StrId::STR_SCHEDULE_CUSTOM_TIMES, StrId::STR_SCHEDULE_SUNSET_SUNRISE},
@@ -72,9 +72,6 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
            .withWebHidden());
   emit(SettingInfo::Value(StrId::STR_LIGHT_OFF_AT, &CrossPointSettings::nightLightEnd,
                           {0, nightlight::HALF_HOURS_PER_DAY - 1, 1}, "nightLightEnd", StrId::STR_CAT_LIGHT_SCHEDULE)
-           .withWebHidden());
-  emit(SettingInfo::Value(StrId::STR_CITY, &CrossPointSettings::nightLightCity, {0, nightlight::CITY_COUNT - 1, 1},
-                          "nightLightCity", StrId::STR_CAT_LIGHT_SCHEDULE)
            .withWebHidden());
   emit(SettingInfo::Value(StrId::STR_NIGHT_BRIGHTNESS, &CrossPointSettings::nightLightBrightness, {1, 100, 1},
                           "nightLightBrightness", StrId::STR_CAT_LIGHT_SCHEDULE)
