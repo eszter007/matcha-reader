@@ -32,7 +32,6 @@
 #include <cstdarg>
 #include <cstring>
 
-#include "AnkiSyncStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
@@ -47,7 +46,6 @@
 #include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
-#include "activities/flashcards/AnkiSyncActivity.h"
 #include "activities/home/StatsSyncActivity.h"
 #include "activities/reader/EpubReaderTranslationActivity.h"
 #include "activities/settings/ClockSyncActivity.h"
@@ -113,7 +111,7 @@ EpdFont cjk8RegularFont(&notosansjp_joyo_8_regular);
 EpdFontFamily cjk8FontFamily(8, &cjk8RegularFont);
 EpdFont cjk12RegularFont(&notosansjp_joyo_12_regular);
 EpdFontFamily cjk12FontFamily(12, &cjk12RegularFont);
-// IPA and stars, for flashcard pronunciations and ratings that the reader fonts lack.
+// IPA and stars, for pronunciations and ratings the reader fonts lack.
 EpdFont symbols14RegularFont(&symbols_14_regular);
 EpdFontFamily symbols14FontFamily(14, &symbols14RegularFont);
 
@@ -143,9 +141,8 @@ constexpr uint32_t SILENT_REBOOT_TARGET_SETTINGS = 3;
 constexpr uint32_t SILENT_REBOOT_TARGET_TAB = 4;
 // File Transfer > Join Network, entered through a reboot for a fresh heap (upstream's 3).
 constexpr uint32_t SILENT_REBOOT_TARGET_JOIN_NETWORK = 5;
-// Between the two services of a flashcard sync; see silentRestartToFlashcardSync().
-constexpr uint32_t SILENT_REBOOT_TARGET_FLASHCARD_SYNC = 6;
-constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_FLASHCARD_SYNC;  // bounds the setup() range check
+// 6 was the flashcard sync; above the max, a device restarted with it lands on Home.
+constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_JOIN_NETWORK;  // bounds the setup() range check
 // Bit in silentRebootPayload, which is a separate word from the target above -- the two
 // never share bits.
 constexpr uint32_t SILENT_REBOOT_LIGHT_ON = 1U << 0;
@@ -274,14 +271,6 @@ void silentRestartToJoinNetwork() {
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   delay(50);
   ESP.restart();
-}
-
-bool silentRestartAvailable() { return !deepSleepInProgress && wifiSessionEndsInRestart(); }
-
-void silentRestartToFlashcardSync() {
-  // First: on a touch board silentRestartTo() would end the Wi-Fi session in place instead.
-  if (!silentRestartAvailable()) return;
-  silentRestartTo(SILENT_REBOOT_TARGET_FLASHCARD_SYNC, "flashcard-sync");
 }
 
 void silentRestartToHomeTab(const int homeTab) {
@@ -816,7 +805,6 @@ void setup() {
   // from there. A missing or stale pack leaves the UI in English rather than failing the boot.
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
-  ankisync::loadSyncStores();
   OPDS_STORE.loadFromFile();
   OPDS_TOKENS.loadFromFile();
   LCP_PASSPHRASES.loadFromFile();
@@ -995,14 +983,6 @@ void setup() {
       HomeTabBar::activate(static_cast<HomeTab>(silentRebootTab), HomeTab::Count);
     } else {
       activityManager.goHome();
-    }
-  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_FLASHCARD_SYNC) {
-    // Restarted between the services of a flashcard sync: the rest syncs on this fresh heap. Its
-    // exit restarts into the Flashcards tab, as any sync does.
-    if (auto sync = AnkiSyncActivity::resumeAfterRestart(renderer, mappedInputManager)) {
-      activityManager.replaceActivity(std::move(sync));
-    } else {
-      HomeTabBar::activate(HomeTab::Flashcards, HomeTab::Count);
     }
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_JOIN_NETWORK) {
     // Rebooted on the way *into* File Transfer > Join Network for a fresh heap;

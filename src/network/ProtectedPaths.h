@@ -8,8 +8,9 @@
 // Credential stores no web request (file manager, plugin endpoints) or plugin
 // manifest may read or write: their passwords are obfuscated with a device
 // key, so the files must stay on the device. Mirrors the getFilePath() of
-// WifiCredentialStore, OpdsServerStore, KOReaderCredentialStore and the
-// flashcard sync stores. Prefix match, so the stores' temp/backup siblings are
+// WifiCredentialStore, OpdsServerStore and KOReaderCredentialStore; the last
+// three hold keys from the flashcard sync of earlier firmware, which may still
+// be on the card. Prefix match, so the stores' temp/backup siblings are
 // covered too.
 namespace protectedpaths {
 

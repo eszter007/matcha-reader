@@ -343,7 +343,7 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
 
 }  // namespace
 
-std::string ImageBlock::pixelCachePath() const { return cachePath.empty() ? getCachePath(imagePath) : cachePath; }
+std::string ImageBlock::pixelCachePath() const { return getCachePath(imagePath); }
 
 bool ImageBlock::hasValidCache() const {
   const auto cachePath = pixelCachePath();

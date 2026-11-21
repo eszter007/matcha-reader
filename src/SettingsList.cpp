@@ -1,7 +1,5 @@
 #include "SettingsList.h"
 
-#include <AnkiSyncStore.h>
-
 #include <algorithm>
 
 #include "util/GeminiConfig.h"
@@ -99,23 +97,6 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   emit(SettingInfo::Enum(StrId::STR_INSIGHTS_DATA, &CrossPointSettings::insightsAllDevices,
                          {StrId::STR_INSIGHTS_THIS_DEVICE, StrId::STR_INSIGHTS_ALL_DEVICES}, "insightsAllDevices",
                          StrId::STR_STATS));
-  // The Flashcards section: review of the sentence-mining export (FlashcardStore.h).
-  emit(SettingInfo::Toggle(StrId::STR_FLASH_SHOW_TAB, &CrossPointSettings::flashcardsTab, "flashcardsTab",
-                           StrId::STR_FLASHCARDS));
-  emit(SettingInfo::Enum(
-      StrId::STR_FLASH_RETENTION, &CrossPointSettings::flashcardRetention,
-      {StrId::STR_FLASH_PCT_80, StrId::STR_FLASH_PCT_85, StrId::STR_FLASH_PCT_90, StrId::STR_FLASH_PCT_95},
-      "flashcardRetention", StrId::STR_FLASHCARDS));
-  emit(SettingInfo::Enum(StrId::STR_FLASH_NEW_PER_DAY, &CrossPointSettings::flashcardNewPerDay,
-                         {StrId::STR_FLASH_N_5, StrId::STR_FLASH_N_10, StrId::STR_FLASH_N_20, StrId::STR_FLASH_N_30,
-                          StrId::STR_FLASH_N_50},
-                         "flashcardNewPerDay", StrId::STR_FLASHCARDS));
-  emit(SettingInfo::Enum(
-      StrId::STR_FLASH_MAX_INTERVAL, &CrossPointSettings::flashcardMaxInterval,
-      {StrId::STR_FLASH_1_MONTH, StrId::STR_FLASH_6_MONTHS, StrId::STR_FLASH_1_YEAR, StrId::STR_FLASH_NO_LIMIT},
-      "flashcardMaxInterval", StrId::STR_FLASHCARDS));
-  emit(SettingInfo::Toggle(StrId::STR_FLASH_VACATION, &CrossPointSettings::flashcardVacation, "flashcardVacation",
-                           StrId::STR_FLASHCARDS));
 
   // --- Reader ---
   // Built-in font-family entry. Replaced per-call with a registry-aware
@@ -381,125 +362,6 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
       StrId::STR_XLAT_CUSTOM_LANGUAGE, [] { return gemini::readCustomLanguage(); },
       [](const std::string& v) { gemini::writeCustomLanguage(v); }, "translationCustomLanguage",
       StrId::STR_TRANSLATION_SETTINGS));
-
-  // --- Flashcards Sync (FlashcardSyncStore, AnkiSyncStore, MigakuSyncStore); its own page under
-  // Connectivity. A web save sends every row, so each setter skips an unchanged value.
-  const auto stringRow = [](StrId name, std::string (*get)(), void (*set)(const std::string&), const char* key) {
-    return SettingInfo::DynamicString(
-        name, get,
-        [get, set](const std::string& v) {
-          if (v != get()) set(v);
-        },
-        key, StrId::STR_FLASHCARD_SYNC);
-  };
-  emit(SettingInfo::DynamicEnum(
-      StrId::STR_SYNC_USE_SERVER, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
-      [] { return static_cast<uint8_t>(FLASHCARD_SYNC_STORE.isEnabled() ? 1 : 0); },
-      [](const uint8_t v) {
-        const bool on = v != 0;
-        if (on == FLASHCARD_SYNC_STORE.isEnabled()) return;
-        FLASHCARD_SYNC_STORE.setEnabled(on);
-        FLASHCARD_SYNC_STORE.saveToFile();
-        if (on) return;
-        // A service left on the shared server would have none: it turns off.
-        for (SyncServiceStore* store :
-             {static_cast<SyncServiceStore*>(&ANKI_STORE), static_cast<SyncServiceStore*>(&MIGAKU_STORE)}) {
-          if (store->getServer() != SyncServiceStore::Server::Shared) continue;
-          store->setServer(SyncServiceStore::Server::Off);
-          store->save();
-        }
-      },
-      "syncEnabled", StrId::STR_FLASHCARD_SYNC));
-  emit(stringRow(
-      StrId::STR_SYNC_SERVER_ADDRESS, [] { return FLASHCARD_SYNC_STORE.getUrl(); },
-      [](const std::string& v) {
-        FLASHCARD_SYNC_STORE.setUrl(v);
-        FLASHCARD_SYNC_STORE.saveToFile();
-      },
-      "syncUrl"));
-  emit(stringRow(
-           StrId::STR_SYNC_SERVER_KEY, [] { return FLASHCARD_SYNC_STORE.getKey(); },
-           [](const std::string& v) {
-             FLASHCARD_SYNC_STORE.setKey(v);
-             FLASHCARD_SYNC_STORE.saveToFile();
-           },
-           "syncKey")
-           .withObfuscated());
-  {
-    SettingInfo test = SettingInfo::Action(StrId::STR_ANKI_TEST, SettingAction::FlashcardSyncTest);
-    test.category = StrId::STR_FLASHCARD_SYNC;
-    test.webHidden = true;  // needs the device's own Wi-Fi
-    emit(std::move(test));
-  }
-
-  // Labels by stored value (Off, Sync Server, the service's own server). Migaku has no own server:
-  // only the companion server serves it. The device also leaves out Sync Server while the switch is
-  // off (SettingsActivity); the web page keeps one fixed list, as it maps choices by position.
-  using Server = SyncServiceStore::Server;
-  const auto serverRow = [](StrId name, SyncServiceStore& store, StrId ownLabel, bool offersOwn, const char* key) {
-    std::vector<uint8_t> offered = {static_cast<uint8_t>(Server::Off), static_cast<uint8_t>(Server::Shared)};
-    if (offersOwn) offered.push_back(static_cast<uint8_t>(Server::Own));
-    return SettingInfo::DynamicEnum(
-               name, {StrId::STR_STATE_OFF, StrId::STR_SYNC_SAME_SERVER, ownLabel},
-               [&store] { return static_cast<uint8_t>(store.getServer()); },
-               [&store](const uint8_t v) {
-                 const auto server = static_cast<Server>(std::min(v, static_cast<uint8_t>(Server::Own)));
-                 if (server == store.getServer()) return;
-                 if (server == Server::Shared && !FLASHCARD_SYNC_STORE.isEnabled()) return;
-                 store.setServer(server);
-                 store.save();
-               },
-               key, StrId::STR_FLASHCARD_SYNC)
-        .withEnumOrder(std::move(offered));
-  };
-
-  emit(serverRow(StrId::STR_ANKI_SERVER, ANKI_STORE, StrId::STR_SYNC_ANKI_DESKTOP, true, "ankiServer"));
-  emit(stringRow(
-      StrId::STR_ANKI_ADDRESS, [] { return ANKI_STORE.getUrl(); },
-      [](const std::string& v) {
-        ANKI_STORE.setUrl(v);
-        ANKI_STORE.saveToFile();
-      },
-      "ankiUrl"));
-  emit(stringRow(
-           StrId::STR_ANKI_KEY, [] { return ANKI_STORE.getKey(); },
-           [](const std::string& v) {
-             ANKI_STORE.setKey(v);
-             ANKI_STORE.saveToFile();
-           },
-           "ankiKey")
-           .withObfuscated());
-  emit(SettingInfo::DynamicString(
-      StrId::STR_ANKI_DECKS, [] { return ankisync::joinDeckNames(ANKI_STORE.getSyncedDecks()); },
-      [](const std::string& v) {
-        auto decks = ankisync::splitDeckNames(v);
-        if (ankisync::joinDeckNames(decks) == ankisync::joinDeckNames(ANKI_STORE.getSyncedDecks())) return;
-        ANKI_STORE.setSyncedDecks(std::move(decks));
-        ANKI_STORE.saveToFile();
-      },
-      "ankiDecks", StrId::STR_FLASHCARD_SYNC));
-
-  emit(serverRow(StrId::STR_MIGAKU_SERVER, MIGAKU_STORE, StrId::STR_SYNC_OWN_SERVER, false, "migakuServer"));
-  emit(SettingInfo::DynamicString(
-      StrId::STR_MIGAKU_DECKS, [] { return ankisync::joinDeckNames(MIGAKU_STORE.getSyncedDecks()); },
-      [](const std::string& v) {
-        auto decks = ankisync::splitDeckNames(v);
-        if (ankisync::joinDeckNames(decks) == ankisync::joinDeckNames(MIGAKU_STORE.getSyncedDecks())) return;
-        MIGAKU_STORE.setSyncedDecks(std::move(decks));
-        MIGAKU_STORE.saveToFile();
-      },
-      "migakuDecks", StrId::STR_FLASHCARD_SYNC));
-
-  emit(SettingInfo::DynamicEnum(
-      StrId::STR_SYNC_MINED_TO, {StrId::STR_ANKI_NAME, StrId::STR_MIGAKU_NAME},
-      [] { return static_cast<uint8_t>(FLASHCARD_SYNC_STORE.getMinedTo()); },
-      [](const uint8_t v) {
-        const auto to = v == 1 ? FlashcardSyncStore::MinedTo::Migaku : FlashcardSyncStore::MinedTo::Anki;
-        if (to == FLASHCARD_SYNC_STORE.getMinedTo()) return;
-        FLASHCARD_SYNC_STORE.setMinedTo(to);
-        FLASHCARD_SYNC_STORE.saveToFile();
-      },
-      "syncMinedTo", StrId::STR_FLASHCARD_SYNC));
 
   // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
   emit(SettingInfo::DynamicString(

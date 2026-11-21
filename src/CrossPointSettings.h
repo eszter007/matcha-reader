@@ -592,12 +592,6 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t wordLookupFontSize = WORD_LOOKUP_FONT_SMALL;
   // Page translation's target language: an index into gemini::TARGET_LANGUAGES (0 = English).
   uint8_t translationTarget = 0;
-  // Flashcards from the sentence-mining export (Settings > Flashcards). The tab is opt-in.
-  uint8_t flashcardsTab = 0;
-  uint8_t flashcardVacation = 0;     // reviews paused; see flashcards::syncVacation
-  uint8_t flashcardRetention = 2;    // 80/85/90/95 %
-  uint8_t flashcardNewPerDay = 1;    // 5/10/20/30/50
-  uint8_t flashcardMaxInterval = 3;  // 1 month / 6 months / 1 year / no limit
   // Sentence mining: a word is saved once per sentence, or once in all (MINING_CARDS).
   uint8_t miningCards = MINING_SENTENCE_CARDS;
   // Append every successful dictionary lookup to /Vocabulary.txt (default off).

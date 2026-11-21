@@ -186,8 +186,6 @@ class ChapterHtmlSlimParser {
   float lineCompression;
   bool extraParagraphSpacing;
   uint8_t paragraphIndentSpaces = 2;
-  float cardBasePx = 0.0f;    // set for a flashcard side; see setCardFontBase
-  std::string pixelCacheDir;  // set for a flashcard side; see setPixelCacheDir
   int8_t characterSpacing = 0;
   uint8_t wordSpacingPercent = 100;
   uint8_t paragraphAlignment;
@@ -443,12 +441,6 @@ class ChapterHtmlSlimParser {
     wordSpacingPercent = wordPercent;
   }
   void setParagraphIndentSpaces(const uint8_t spaces) { paragraphIndentSpaces = spaces; }
-  // Lays out a flashcard side: font sizes are taken against the card's base size (cardBasePx)
-  // and kept near the reader's size (cardFontSize). 0 = a book.
-  void setCardFontBase(const float basePx) { cardBasePx = basePx; }
-  // A standalone page's images cache their decoded pixels here ("<dir><image name>.pxc") instead
-  // of next to the image. With a trailing '/'; the folder must exist.
-  void setPixelCacheDir(std::string dir) { pixelCacheDir = std::move(dir); }
 
   // One-shot parse: builds every page before returning (begin + step* + finish).
   bool parseAndBuildPages();

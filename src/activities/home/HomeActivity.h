@@ -77,7 +77,7 @@ class HomeActivity final : public Activity {
   const bool cleanInitialRefresh;
 
   // Convert HomeMenuItem to menu index (used in onEnter)
-  static int menuItemToIndex(HomeMenuItem item, HomeMenuItem slot, bool flashcards) {
+  static int menuItemToIndex(HomeMenuItem item, HomeMenuItem slot) {
     int i = 0;
     if (item == HomeMenuItem::LIBRARY) return i;
     ++i;
@@ -91,10 +91,6 @@ class HomeActivity final : public Activity {
     ++i;
     if (item == HomeMenuItem::READING_STATS) return i;
     ++i;
-    if (flashcards) {
-      if (item == HomeMenuItem::FLASHCARDS) return i;
-      ++i;
-    }
     if (item == HomeMenuItem::SETTINGS_MENU) return i;
     return 0;
   }
@@ -113,8 +109,6 @@ class HomeActivity final : public Activity {
         return HomeTabBar::slotOf(HomeTab::Transfer);
       case HomeMenuItem::READING_STATS:
         return HomeTabBar::slotOf(HomeTab::Stats);
-      case HomeMenuItem::FLASHCARDS:
-        return HomeTabBar::slotOf(HomeTab::Flashcards);
       case HomeMenuItem::SETTINGS_MENU:
         return HomeTabBar::slotOf(HomeTab::Settings);
       default:
@@ -124,14 +118,13 @@ class HomeActivity final : public Activity {
   }
 
   // Convert menu index to HomeMenuItem (used in loop)
-  static HomeMenuItem indexToMenuItem(int idx, HomeMenuItem slot, bool flashcards) {
+  static HomeMenuItem indexToMenuItem(int idx, HomeMenuItem slot) {
     int i = 0;
     if (idx == i++) return HomeMenuItem::LIBRARY;
     if (idx == i++) return HomeMenuItem::FILE_BROWSER;
     if (slot != HomeMenuItem::NONE && idx == i++) return slot;
     if (idx == i++) return HomeMenuItem::FILE_TRANSFER;
     if (idx == i++) return HomeMenuItem::READING_STATS;
-    if (flashcards && idx == i++) return HomeMenuItem::FLASHCARDS;
     if (idx == i) return HomeMenuItem::SETTINGS_MENU;
     return HomeMenuItem::NONE;
   }
@@ -142,8 +135,6 @@ class HomeActivity final : public Activity {
   void onStatsOpen();
   void onOpdsBrowserOpen();
   void onPluginsOpen();
-  // The Flashcards row of the list home, shown with the same setting as its tab.
-  static bool showsFlashcards();
 
   int getMenuItemCount() const;
   bool storeCoverBuffer();    // Store frame buffer for cover image

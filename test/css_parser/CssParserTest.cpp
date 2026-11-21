@@ -601,29 +601,3 @@ TEST_F(CssParserTest, AutoMarginsAndEndAlignReachTheVerticalEngine) {
   EXPECT_FALSE(styleOf("align-end").alignCenter);
   EXPECT_EQ(styleOf("wrapper").blockAlign, 0) << "a plain auto margin centres a wrapper horizontally, not a block";
 }
-
-// Flashcard sides: the deck's `.card` size is the reader's size, and other sizes keep their ratio
-// to it inside the card band.
-TEST(CardFontSize, BaseComesFromTheCardRule) {
-  EXPECT_FLOAT_EQ(cardBasePx(CssParser::parseInlineStyle("font-size: 20px")), 20.0f);
-  EXPECT_FLOAT_EQ(cardBasePx(CssParser::parseInlineStyle("font-size: 15pt")), 20.0f);
-  EXPECT_FLOAT_EQ(cardBasePx(CssParser::parseInlineStyle("font-size: 1.5em")), 24.0f);
-  EXPECT_FLOAT_EQ(cardBasePx(CssParser::parseInlineStyle("color: red")), 16.0f) << "no size: the CSS initial 16px";
-}
-
-TEST(CardFontSize, SizesAreRelativeToTheCardAndBanded) {
-  const auto size = [](const char* decl, const float base, const CssUnit unit) {
-    const CssLength len = cardFontSize(CssParser::parseInlineStyle(decl).fontSize, base);
-    EXPECT_EQ(len.unit, unit) << decl;
-    return len.value;
-  };
-  EXPECT_FLOAT_EQ(size("font-size: 20px", 20.0f, CssUnit::Rem), 1.0f) << "the card's own size is the reader's size";
-  EXPECT_FLOAT_EQ(size("font-size: 22px", 20.0f, CssUnit::Rem), 1.1f);
-  EXPECT_FLOAT_EQ(size("font-size: 15pt", 20.0f, CssUnit::Rem), 1.0f);
-  EXPECT_FLOAT_EQ(size("font-size: 60px", 20.0f, CssUnit::Rem), CARD_MAX_SCALE) << "a desktop-sized word is capped";
-  EXPECT_FLOAT_EQ(size("font-size: 8px", 20.0f, CssUnit::Rem), CARD_MIN_SCALE) << "small print stays readable";
-  EXPECT_FLOAT_EQ(size("font-size: 1rem", 16.0f, CssUnit::Rem), 1.0f);
-  // em and % stay relative to the parent, so they are not turned into card multiples.
-  EXPECT_FLOAT_EQ(size("font-size: 2em", 20.0f, CssUnit::Em), CARD_MAX_SCALE);
-  EXPECT_FLOAT_EQ(size("font-size: 90%", 20.0f, CssUnit::Em), 0.9f);
-}

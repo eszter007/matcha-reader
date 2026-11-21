@@ -742,27 +742,6 @@ TEST_F(DropCapTest, ScalesABlockFontSizeTheLadderCannotServe) {
   EXPECT_TRUE(bodyFonts.empty() || bodyFonts[0] == 0) << "the heading's scale must not leak past it";
 }
 
-// On a flashcard, px sizes are multiples of the card base: a 20px reading inside a 40px word is
-// back at the base, not 1.25 x 1.0 of it.
-TEST_F(DropCapTest, CardPixelSizesDoNotCompoundInsideASizedParent) {
-  makeParser(".w { font-size: 40px; }\n.r { font-size: 20px; }\n");
-  parser->setCardFontBase(20.0f);
-  parser->insideBody = true;
-  openParagraph();
-  const XML_Char* word[] = {"class", "w", nullptr};
-  const XML_Char* reading[] = {"class", "r", nullptr};
-  ChapterHtmlSlimParser::startElement(parser.get(), "span", word);
-  feedWord("serre");
-  ChapterHtmlSlimParser::startElement(parser.get(), "span", reading);
-  feedWord("ser");
-  ChapterHtmlSlimParser::endElement(parser.get(), "span");
-  ChapterHtmlSlimParser::endElement(parser.get(), "span");
-
-  ASSERT_GE(parser->currentTextBlock->wordFonts.size(), 2u);
-  EXPECT_EQ(parser->currentTextBlock->wordFonts[0], -320) << "the word is capped at 1.25 of the base";
-  EXPECT_EQ(parser->currentTextBlock->wordFonts[1], 0) << "the reading is at the base";
-}
-
 TEST_F(DropCapTest, TheLetterLeavesTheTextFlow) {
   makeParser("p::first-letter { font-size: 300%; }\n");
   openParagraph();

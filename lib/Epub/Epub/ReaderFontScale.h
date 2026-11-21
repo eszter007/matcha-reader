@@ -55,19 +55,6 @@ int32_t cssFontScaleTag(const CssStyle& style);
 // size when the ask snaps back to it, as cssBlockFontId decides. 0 = no scaling.
 int32_t cssBlockFontScaleTag(const CssStyle& style, int baseFontId);
 
-// Flashcard sides use the deck's own CSS, written for a desktop screen. On a card, the card's
-// base size (Anki's `.card` rule, often 20px) is the reader's size, and every other font-size
-// keeps its ratio to it within CARD_MIN_SCALE..CARD_MAX_SCALE.
-constexpr float CARD_MIN_SCALE = 0.75f;
-constexpr float CARD_MAX_SCALE = 1.25f;
-
-// The card's base size in CSS px, from the font-size of its `.card` rule; 16px when it sets none.
-float cardBasePx(const CssStyle& cardStyle);
-
-// A card element's font-size kept within the card band: em and % stay relative to the parent; px,
-// pt and rem become rem, a multiple of the card base.
-CssLength cardFontSize(const CssLength& size, float basePx);
-
 /**
  * CSS line-height -> a PERCENTAGE of the leading the reader would have used anyway.
  *
