@@ -33,8 +33,6 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
 
 **Sentence mining.** Save a word with its sentence to a CSV per language that Anki imports as is. Choose **Sentence cards** (a word is saved once per sentence) or **Word cards** (a word is saved only once) in Dictionary Settings. Japanese words also get their furigana per kanji, from the book or the dictionary. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
 
-On-device flashcard review and the Anki/Migaku sync are no longer part of the firmware; they are kept on the `feature/flashcards` branch. Your mining CSV files are not affected. The sync settings files `anki.json`, `migaku.json` and `flashcard_sync.json` in `/.crosspoint/` can be deleted.
-
 **Vocabulary history.** Optionally keep every word you look up, in any language and in manga, in `Vocabulary.txt` on the SD card. See [Guide §6.1](USER_GUIDE.md#vocabulary-history).
 
 **Page translation.** Translates the page with Gemini, into English or a language you pick in the settings, in the same panel. Needs Wi-Fi and your own API key. See [Guide §6.2](USER_GUIDE.md#62-page-translation).
