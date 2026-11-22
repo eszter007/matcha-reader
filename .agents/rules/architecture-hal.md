@@ -9,7 +9,7 @@ overrides belong in ignored `platformio.local.ini`.
 
 ### Build Environment
 
-C++20 (`-std=c++2a`), no exceptions or RTTI. Use `LOG_INF`, `LOG_DBG`, or
+C++23 (`-std=gnu++2b`), no exceptions or RTTI. Use `LOG_INF`, `LOG_DBG`, or
 `LOG_ERR` from `Logging.h`, not raw Serial output.
 
 Inspect the selected environment and inheritance in `platformio.ini`.

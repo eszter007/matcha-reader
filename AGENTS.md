@@ -129,7 +129,7 @@ This concise handoff checklist is a hard requirement:
 
 ### Build Environment
 
-* **Standard**: C++20 (`-std=c++2a`). No Exceptions, No RTTI.
+* **Standard**: C++23 (`-std=gnu++2b`). No Exceptions, No RTTI.
 * **Logging**: ALWAYS use `LOG_INF`, `LOG_DBG`, or `LOG_ERR` from `Logging.h`. Raw Serial output is deprecated.
 * **Environments** (in `platformio.ini`):
   * `default`: Development (LOG_LEVEL=2, serial enabled)
