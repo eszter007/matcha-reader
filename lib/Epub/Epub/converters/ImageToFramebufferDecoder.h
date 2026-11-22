@@ -14,8 +14,8 @@ struct ImageDimensions {
 };
 
 struct RenderConfig {
-  int x, y;
-  int maxWidth, maxHeight;
+  int x{}, y{};
+  int maxWidth{}, maxHeight{};
   bool useGrayscale = true;
   bool useDithering = true;
   bool performanceMode = false;

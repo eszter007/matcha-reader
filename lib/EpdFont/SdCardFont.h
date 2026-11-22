@@ -355,7 +355,7 @@ class SdCardFont {
   // resident bitmaps, which for a body-text size are tens to a few hundred bytes each.
   static constexpr uint32_t OVERFLOW_CAPACITY = 48;
   struct OverflowEntry {
-    EpdGlyph glyph;
+    EpdGlyph glyph{};
     uint8_t* bitmap = nullptr;
     uint32_t codepoint = 0;
     uint8_t styleIdx = 0;

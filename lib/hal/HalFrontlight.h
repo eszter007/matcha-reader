@@ -10,7 +10,9 @@ class HalFrontlight {
 
   void begin(uint8_t brightness, uint8_t warmth, bool on);
 
+  // cppcheck-suppress knownConditionTrueFalse ; constant only on boards without a frontlight
   bool present() const { return manager.present(); }
+  // cppcheck-suppress knownConditionTrueFalse ; constant only on boards without a frontlight
   bool hasColorTemperature() const { return manager.hasColorTemperature(); }
 
   void setBrightness(uint8_t percent);

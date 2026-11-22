@@ -139,7 +139,7 @@ void HomeActivity::fillCoverGridFromLibrary() {
   // Keep the index and record together off the task stack; reuse for every row.
   struct LibraryReader {
     library::LibraryIndexFile index;
-    library::ClixRecord record;
+    library::ClixRecord record{};
   };
   auto reader = makeUniqueNoThrow<LibraryReader>();
   if (!reader) {

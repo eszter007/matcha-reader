@@ -6,8 +6,8 @@
 #include "DictIndex.h"
 
 struct WordLookupResult {
-  DictEntry entry;
-  size_t matchLength;        // number of UTF-8 bytes from the start position that matched
+  DictEntry entry{};
+  size_t matchLength{};      // number of UTF-8 bytes from the start position that matched
   bool deinflected = false;  // true if the hit came from a deinflection candidate, not the raw window
 };
 

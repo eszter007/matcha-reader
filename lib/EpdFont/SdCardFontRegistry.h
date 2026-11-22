@@ -14,11 +14,11 @@ struct SdCardFontFileInfo {
   // for the canonical name, so downloaded families keep no per-file heap strings
   // and the entry is two pointers wide (8 bytes on the ESP32-C3).
   std::unique_ptr<char[]> name;
-  uint8_t pointSize;  // parsed from filename: 14 (0 for size-free vector fonts)
-  uint8_t style;      // .cpfont: always 0 (all 4 styles bundled in one file).
-                      // Vector family in a folder: the style ROLE of this file —
-                      // 0=regular, 1=bold, 2=italic, 3=bold-italic (parsed from
-                      // the filename). A loose vector file is always role 0.
+  uint8_t pointSize{};  // parsed from filename: 14 (0 for size-free vector fonts)
+  uint8_t style{};      // .cpfont: always 0 (all 4 styles bundled in one file).
+                        // Vector family in a folder: the style ROLE of this file —
+                        // 0=regular, 1=bold, 2=italic, 3=bold-italic (parsed from
+                        // the filename). A loose vector file is always role 0.
 };
 
 struct SdCardFontFamilyInfo {

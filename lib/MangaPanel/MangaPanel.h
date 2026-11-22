@@ -20,7 +20,7 @@ struct LineBox {
 };
 
 struct TextBlock {
-  uint16_t x, y, w, h;  // only meaningful from v3: earlier converters wrote the far corner here
+  uint16_t x{}, y{}, w{}, h{};  // only meaningful from v3: earlier converters wrote the far corner here
   std::string text;
   // v3: one box per '\n'-separated segment of `text`, in order. Empty for v2 volumes, and for a
   // block whose OCR gave no usable line geometry -- lookups then fall back to the whole block.
@@ -29,7 +29,7 @@ struct TextBlock {
 };
 
 struct Panel {
-  uint16_t x, y, w, h;
+  uint16_t x{}, y{}, w{}, h{};
   std::vector<TextBlock> textBlocks;
   std::string translation;  // pre-extracted English translation, may be empty
   // v3: the page region the panel's crop image shows (the panel plus the converter's margin), for
@@ -45,7 +45,7 @@ struct PageInfo {
 };
 
 struct TocEntry {
-  uint32_t pageIndex;
+  uint32_t pageIndex{};
   std::string title;
 };
 
