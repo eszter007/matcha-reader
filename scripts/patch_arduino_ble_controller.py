@@ -49,6 +49,10 @@ def filter_flash_only_bt_linkflags(linkflags):
 
 
 def configure_controller(env):
+    # pio check only dumps include paths and defines; nothing links, and the SDK libraries may
+    # not have been rebuilt for this environment.
+    if env.IsIntegrationDump():
+        return
     if env.BoardConfig().get("build.mcu") != "esp32c3":
         return
     if env.get("ARDUINO_LIB_COMPILE_FLAG") == "Build":
