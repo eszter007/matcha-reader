@@ -1,12 +1,21 @@
 """Work around pioarduino's custom-SDK libc linker configuration gap.
 
-In pioarduino 55.03.311, custom_sdkconfig rebuilds SDK libraries and configuration
+In pioarduino 55.03.3xx, custom_sdkconfig rebuilds SDK libraries and configuration
 headers, but the Arduino application still uses the packaged libc LINKFLAGS from
 esp32c3/pioarduino-build.py. Selecting ROM libc therefore also requires updating
 those flags. Remove this hook once pioarduino derives the application's libc
 linker flags from the rebuilt SDK configuration.
 """
+import importlib.util
 from pathlib import Path
+
+
+def load_built_sdkconfig(env):
+    path = Path(env.subst("$PROJECT_DIR")) / "scripts" / "arduino_built_sdkconfig.py"
+    spec = importlib.util.spec_from_file_location("crosspoint_built_sdkconfig", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def configure_rom_libc(env):
@@ -25,8 +34,8 @@ def configure_rom_libc(env):
         return
 
     libs = Path(env.PioPlatform().get_package_dir("framework-arduinoespressif32-libs")) / "esp32c3"
-    config = (libs / "sdkconfig").read_text(encoding="utf-8").splitlines()
-    if "# CONFIG_LIBC_OPTIMIZED_MISALIGNED_ACCESS is not set" not in config:
+    built = load_built_sdkconfig(env).built_sdkconfig(env, libs)
+    if "CONFIG_LIBC_OPTIMIZED_MISALIGNED_ACCESS" in built:
         raise RuntimeError("C3 framework sdkconfig does not match the requested ROM libc configuration")
     rom = libs / "ld" / "esp32c3.rom.libc-suboptimal_for_misaligned_mem.ld"
     if not rom.is_file():

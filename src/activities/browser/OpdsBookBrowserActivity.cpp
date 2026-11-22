@@ -1034,16 +1034,19 @@ void OpdsBookBrowserActivity::fillDetailInfo(const OpdsPublication& publication,
     if (av.copiesTotal >= 0) {
       char b[64];
       snprintf(b, sizeof(b), tr(STR_OPDS_COPIES), av.copiesAvailable < 0 ? 0 : av.copiesAvailable, av.copiesTotal);
+      // cppcheck-suppress danglingLifetime ; std::string copies the buffer
       spec.copies = b;
     }
     // The reader's own queue position is more useful than the raw holds count.
     if (av.holdsPosition >= 0) {
       char b[48];
       snprintf(b, sizeof(b), tr(STR_OPDS_HOLD_POSITION), av.holdsPosition);
+      // cppcheck-suppress danglingLifetime ; std::string copies the buffer
       spec.holds = b;
     } else if (av.holdsTotal >= 0) {
       char b[48];
       snprintf(b, sizeof(b), tr(STR_OPDS_HOLDS), av.holdsTotal);
+      // cppcheck-suppress danglingLifetime ; std::string copies the buffer
       spec.holds = b;
     }
   }
