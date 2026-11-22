@@ -119,8 +119,6 @@ class UiListActivity : public Activity, protected UiAppHost, public TabRing::Hos
   // activeNav() in shared code; `nav` is the single-list default storage.
   freeink::ui::ListNav nav;
   ButtonNavigator buttonNavigator;
-  // The next render uses a cleanup (HALF) refresh instead of a fast one.
-  bool cleanNextRefresh = false;
 
   // Where the cursor is heading, including a move parked by moveSelectionTo() because the render
   // task held the lock. Navigation must step from THIS, not from nav.selected: while a move is
