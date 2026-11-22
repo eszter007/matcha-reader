@@ -2,6 +2,7 @@
 #include <GfxRenderer.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -334,5 +335,29 @@ TEST(VerticalPageBreak, PunctuationPairsWithSpaceStillCloseUp) {
     ASSERT_NE(outer, nullptr);
     ASSERT_NE(inner, nullptr);
     EXPECT_EQ(inner->y, outer->y + EM / 2) << "「『 is set solid";
+  }
+}
+
+// Room for first-column ruby comes only out of the width left over after whole columns: a wider
+// request than the leftover moves the columns by the leftover and never drops one.
+TEST(VerticalPageBreak, RubyRoomNeverCostsAColumn) {
+  constexpr uint16_t WIDTH = 5 * 20 + 5;  // five 20px columns, 5px left over (no column gap here)
+  struct Case {
+    int paddingPx;
+    int firstColumnX;
+  };
+  for (const Case c : {Case{0, WIDTH - 20}, Case{3, WIDTH - 3 - 20}, Case{12, WIDTH - 5 - 20}}) {
+    GfxRenderer renderer;
+    VerticalParsedText text(renderer, 0, WIDTH, VIEWPORT_H);
+    text.setRightPaddingPx(c.paddingPx);
+    text.addParagraph(std::string(TEN) + TEN + TEN + TEN + TEN + TEN);  // six columns of text
+    const auto pages = text.layoutPages();
+    ASSERT_FALSE(pages.empty());
+    uint16_t lastColumn = 0;
+    for (const auto& g : pages[0].glyphs) {
+      lastColumn = std::max<uint16_t>(lastColumn, g.column);
+      if (g.column == 0 && g.row == 0) EXPECT_EQ(g.x, c.firstColumnX) << "padding " << c.paddingPx;
+    }
+    EXPECT_EQ(lastColumn, 4) << "padding " << c.paddingPx << " keeps all five columns";
   }
 }

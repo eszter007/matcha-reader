@@ -140,7 +140,9 @@ namespace {
 // line-head opening bracket has already given up; the next characters printed over the bracket.
 // v163: no format change. A mark after an opening bracket, as in （．） or （）, keeps its own em
 // instead of closing up into the bracket.
-constexpr uint8_t VSECTION_FILE_VERSION = 163;
+// v164: no format change. First-column ruby room comes from the leftover width and excludes the
+// bezel inset, so columns move and ruby stays visible.
+constexpr uint8_t VSECTION_FILE_VERSION = 164;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -2234,7 +2236,9 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   // an em, and the settings span the half-to-full em Japanese body text conventionally uses. With
   // furigana OFF nothing is drawn there, so every setting tightens by a quarter em. (Line height
   // would be the wrong yardstick: it carries Latin leading, 42px against a 28px em here.)
-  renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2", 0x01);  // 漢
+  // 漢 sets the em; あ the first-column ruby room below. Both must be resident before measuring, or
+  // a not-yet-streamed glyph falls back and the fallback layout is cached.
+  renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2\xe3\x81\x82", 0x01);  // 漢あ
   const int emPx = std::max(1, renderer.getTextAdvanceX(fontId, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0)));
   const int clampedLineSpacing = std::clamp<int>(lineSpacing, 0, 2);
   static constexpr int kGapQuarterEmsWithRuby[] = {2, 3, 4};  // Tight 1/2, Normal 3/4, Wide 1 em
@@ -2244,12 +2248,20 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   b.layout.setColumnGapPx(std::max(2, emPx * gapQuarterEms / 4));
   b.layout.setCharacterSpacingPx(spec.characterSpacing);
   b.layout.setRubyShown(furiganaEnabled);
-  // The first column's ruby sits in the right margin (JLREQ Fig 2.37) and is half an em wide.
-  // Where the margin is narrower than that -- a large font at a small screen margin -- the ruby
-  // would be drawn back over its own base characters, so the text area gives up the shortfall
-  // and no more: at a margin that already holds the ruby, the column stays flush right.
+  // The first column's ruby sits in the right margin (JLREQ Fig 2.37). The bezel inset is part of
+  // that margin but hidden, so only the screen margin counts. Where it is narrower than the ruby's
+  // ink (a wide kana at body size, halved as ruby draws it), the layout moves the columns left by the
+  // shortfall, taken from the width left over after whole columns (see layoutPages).
   if (furiganaEnabled) {
-    b.layout.setRightPaddingPx(std::max(0, (emPx + 1) / 2 - static_cast<int>(spec.rightMarginPx)));
+    int insetTop = 0, insetRight = 0, insetBottom = 0, insetLeft = 0;
+    renderer.getOrientedViewableTRBL(&insetTop, &insetRight, &insetBottom, &insetLeft);
+    const int visibleMarginPx = std::max(0, static_cast<int>(spec.rightMarginPx) - insetRight);
+    int rubyReachPx = (emPx + 1) / 2;
+    GlyphInk ink;
+    if (measureGlyphInk(renderer, fontId, 0x3042, 0, &ink) && ink.width > 0) {  // あ
+      rubyReachPx = (ink.left + ink.width + 1) / 2;
+    }
+    b.layout.setRightPaddingPx(std::max(0, rubyReachPx - visibleMarginPx));
   }
 
   b.sink.earlyRenderFn = earlyRenderFn_;
