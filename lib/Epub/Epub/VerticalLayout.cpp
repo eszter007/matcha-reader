@@ -341,8 +341,11 @@ struct VerticalParsedText::LayoutCursor {
     const int prevHalf = punctEmHalf(prev.codepoint);
     const int thisHalf = punctEmHalf(cp);
     if (prevHalf == 0 || thisHalf == 0) return;
+    // An opening bracket's ink fills the end of its em and 、。，． or a closing bracket fills the
+    // start of theirs: （．）, 「。」, （）, 「」 have no space between them to close up.
+    if (prevHalf == 2 && thisHalf == 1) return;
 
-    // Every pair in the figures closes up by a half em: 、「 and 」「 from a full em to a half
+    // Every other pair in the figures closes up by a half em: 、「 and 」「 from a full em to a half
     // (figures 3, 4); 。」, ）。, 「『, ）」 from a half em to solid (1, 2, 5, 6); 」・「 from three
     // quarters to a quarter each side of the dot (7).
     int reduction = geom.cellPx / 2;

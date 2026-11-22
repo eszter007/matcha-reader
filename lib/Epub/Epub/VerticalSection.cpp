@@ -138,7 +138,9 @@ namespace {
 // and characters advance down a column by their own size.
 // v161: no format change. A column squeezed to pull a character in no longer takes the half em a
 // line-head opening bracket has already given up; the next characters printed over the bracket.
-constexpr uint8_t VSECTION_FILE_VERSION = 162;
+// v163: no format change. A mark after an opening bracket, as in （．） or （）, keeps its own em
+// instead of closing up into the bracket.
+constexpr uint8_t VSECTION_FILE_VERSION = 163;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
