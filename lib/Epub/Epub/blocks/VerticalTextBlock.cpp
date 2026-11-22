@@ -264,6 +264,9 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
   };
 
   size_t segmentEnd = 0;
+  // Ruby beside the first column is clamped to the visible edge, inside the bezel inset.
+  int insetTop = 0, insetRight = 0, insetBottom = 0, insetLeft = 0;
+  renderer.getOrientedViewableTRBL(&insetTop, &insetRight, &insetBottom, &insetLeft);
   for (size_t gi = 0; gi < page_.glyphs.size(); gi++) {
     if (gi < segmentEnd) continue;  // set with the group that starts before it
     const VerticalGlyph& g = page_.glyphs[gi];
@@ -330,8 +333,6 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
     // At the text edge that puts it in the margin, per JLREQ Fig 2.37 -- clamped by its measured
     // ink reach to the visible edge, since the bezel hides the panel's outer pixels.
     const int rubyReach = rubyInkRight > 0 ? rubyInkRight : std::max(1, cellG / 2);
-    int insetTop = 0, insetRight = 0, insetBottom = 0, insetLeft = 0;
-    renderer.getOrientedViewableTRBL(&insetTop, &insetRight, &insetBottom, &insetLeft);
     const int rubyX = std::min(g.x + offsetX + cellG, renderer.getScreenWidth() - insetRight - rubyReach);
 
     // The base the annotation is set against: from the group's first cell to its last.

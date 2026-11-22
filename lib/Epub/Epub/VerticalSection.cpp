@@ -2236,7 +2236,9 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   // an em, and the settings span the half-to-full em Japanese body text conventionally uses. With
   // furigana OFF nothing is drawn there, so every setting tightens by a quarter em. (Line height
   // would be the wrong yardstick: it carries Latin leading, 42px against a 28px em here.)
-  renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2", 0x01);  // 漢
+  // 漢 sets the em; あ the first-column ruby room below. Both must be resident before measuring, or
+  // a not-yet-streamed glyph falls back and the fallback layout is cached.
+  renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2\xe3\x81\x82", 0x01);  // 漢あ
   const int emPx = std::max(1, renderer.getTextAdvanceX(fontId, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0)));
   const int clampedLineSpacing = std::clamp<int>(lineSpacing, 0, 2);
   static constexpr int kGapQuarterEmsWithRuby[] = {2, 3, 4};  // Tight 1/2, Normal 3/4, Wide 1 em
@@ -2248,7 +2250,7 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   b.layout.setRubyShown(furiganaEnabled);
   // The first column's ruby sits in the right margin (JLREQ Fig 2.37). The bezel inset is part of
   // that margin but hidden, so only the screen margin counts. Where it is narrower than the ruby's
-  // ink -- measured on a wide kana at ruby size -- the layout moves the columns left by the
+  // ink (a wide kana at body size, halved as ruby draws it), the layout moves the columns left by the
   // shortfall, taken from the width left over after whole columns (see layoutPages).
   if (furiganaEnabled) {
     int insetTop = 0, insetRight = 0, insetBottom = 0, insetLeft = 0;

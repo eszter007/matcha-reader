@@ -1909,7 +1909,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // never costs a column; where the leftover is smaller, the ruby is clamped at the visible edge.
   const int leftoverPx = std::max(0, viewportWidthPx - (columnsPerPage * columnAdvancePx - columnGapPx_));
   const int usableWidthPx = std::max(cellPx, viewportWidthPx - std::min(rightPaddingPx_, leftoverPx));
-  // The width that does not divide evenly into whole columns is left where it falls: on the LEFT,
+  // The rest of the width that does not divide evenly into whole columns stays on the LEFT,
   // because tategaki starts at the right margin and marches leftwards. It must not be spread into
   // the gaps -- 行間 is set in quarter ems by the line-spacing setting (and by whether furigana
   // needs room in it), so widening it here overrides the rule that chose it; measurably, a 21px
