@@ -14,9 +14,9 @@ namespace fui = freeink::ui;
 
 namespace {
 struct ModeRow {
-  NetworkMode mode;
-  StrId label;
-  StrId desc;
+  NetworkMode mode{};
+  StrId label{};
+  StrId desc{};
   UIIcon icon;
 };
 

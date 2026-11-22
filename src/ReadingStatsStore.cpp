@@ -1704,7 +1704,7 @@ bool ReadingStatsStore::mergeBookDownload(const std::string& list) {
   struct Ctx {
     std::vector<LanguageDay> days;
     std::vector<uint32_t> finished;
-    size_t limit;
+    size_t limit{};
   } ctx;
   // Sized from the list itself, bounded like the tables: a reserve that cannot be served aborts.
   std::vector<BookDay> scratch;

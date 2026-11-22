@@ -44,6 +44,7 @@ void UITheme::reload() {
 // are generated at slot height and drawn 1:1 that costs a few ms against a ~500ms FAST_REFRESH.
 bool UITheme::supportsCoverGrid() { return true; }
 
+// cppcheck-suppress knownConditionTrueFalse ; supportsCoverGrid() is a capability hook, true on every board today
 bool UITheme::hasCoverGridHome() { return SETTINGS.uiTheme == CrossPointSettings::COVER_GRID && supportsCoverGrid(); }
 
 void UITheme::drawCoverGridHome(CoverGridHomeUi& home) { home.renderUi(); }

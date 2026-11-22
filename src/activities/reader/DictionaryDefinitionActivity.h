@@ -138,10 +138,10 @@ class DictionaryDefinitionActivity final : public Activity {
   uint8_t depth = 0;
   // A word of the page on screen, where it is drawn.
   struct PanelWord {
-    int16_t x;
-    int16_t y;
-    int16_t width;
-    int16_t height;
+    int16_t x{};
+    int16_t y{};
+    int16_t width{};
+    int16_t height{};
     std::string text;
   };
   NestedLookupHost nestedHost;

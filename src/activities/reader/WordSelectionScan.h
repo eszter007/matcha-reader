@@ -29,20 +29,20 @@ class Page;
 class WordSelectionScan {
  public:
   struct GlyphRef {
-    uint16_t x;
-    uint16_t y;
-    uint16_t column;
-    uint16_t row;
-    uint32_t codepoint;
-    uint32_t paragraphIndex;
+    uint16_t x{};
+    uint16_t y{};
+    uint16_t column{};
+    uint16_t row{};
+    uint32_t codepoint{};
+    uint32_t paragraphIndex{};
     // Cells this entry's match covers, leading digits included (15人 = 3). Only meaningful in
     // selectableGlyphs, where it is what lets a caller draw a highlight box over the word ON the
     // page without a dictionary read per cursor move -- the scan already knew the length and
     // used to discard it. 0 in allGlyphs; treat 0 as "one cell".
-    uint8_t matchLen;
+    uint8_t matchLen{};
     // Advance in pixels on a page laid out in lines; on a vertical page, the side of the glyph's
     // square cell at the size it is set at. 0 = the caller's cellPx.
-    uint8_t width;
+    uint8_t width{};
     // Index into the scan's furigana list for the ruby printed on this glyph (a group reading sits
     // on its first glyph), kRubyCovered for a glyph under another glyph's ruby, or kNoRuby.
     uint16_t ruby = 0xFFFF;

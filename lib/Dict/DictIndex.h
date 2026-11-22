@@ -25,11 +25,11 @@ struct DictIndexRecord {
   // flagged matches -- text that equals a rare kanji word's reading is morphology, not the word.
   static constexpr uint8_t POS_READING = 0x40;
 
-  char headword[HEADWORD_SIZE];
-  uint32_t offset;
-  uint16_t length;
-  uint8_t priority;
-  uint8_t posFlags;
+  char headword[HEADWORD_SIZE]{};
+  uint32_t offset{};
+  uint16_t length{};
+  uint8_t priority{};
+  uint8_t posFlags{};
 } __attribute__((packed));
 
 static_assert(sizeof(DictIndexRecord) == 40, "DictIndexRecord must be 40 bytes");
@@ -37,7 +37,7 @@ static_assert(sizeof(DictIndexRecord) == 40, "DictIndexRecord must be 40 bytes")
 struct DictEntry {
   std::string headword;
   std::string definition;
-  uint8_t priority;
+  uint8_t priority{};
   uint8_t sourceDict = 0;  // DictIndex::DICT_* constant of the dictionary that answered (0 = unset)
   uint8_t posFlags = 0;    // DictIndexRecord::POS_* flags of the best matched record (0 = none/unset)
 };

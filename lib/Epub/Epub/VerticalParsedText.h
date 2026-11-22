@@ -456,14 +456,14 @@ class VerticalParsedText {
   bool rubyShown_ = false;
 
   struct PendingChar {
-    uint32_t codepoint;
-    uint32_t paragraphIndex : 30;
-    uint32_t fontSlot : 2;  // see VerticalGlyph::fontSlot
-    uint32_t byteOffset;
-    uint8_t style;
-    uint8_t emphasis : 1;
+    uint32_t codepoint{};
+    uint32_t paragraphIndex : 30 = 0;
+    uint32_t fontSlot : 2 = 0;  // see VerticalGlyph::fontSlot
+    uint32_t byteOffset{};
+    uint8_t style{};
+    uint8_t emphasis : 1 = 0;
     // The book's text-indent for a paragraph starting at this character, in quarter ems.
-    uint8_t indentQuarters : 7;
+    uint8_t indentQuarters : 7 = 0;
     // This character's share of its ruby, as a span of rubyPool_ (0 = none). A span rather than a
     // std::string keeps the entry at 24 bytes instead of 44: stream_ reserves 512 of them for the
     // whole build.
@@ -499,8 +499,8 @@ class VerticalParsedText {
   // with the chapter.
   struct InlineImage {
     std::string info;
-    uint16_t columns;
-    int16_t widthPx;
+    uint16_t columns{};
+    int16_t widthPx{};
   };
   std::vector<InlineImage> inlineImages_;
   std::vector<size_t> paragraphBreaksBeforeIndex_;

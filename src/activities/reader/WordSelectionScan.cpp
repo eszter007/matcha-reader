@@ -74,6 +74,7 @@ bool WordSelectionScan::isLookupableChar(uint32_t cp) {
   if (cp == 0x30FB) return false;
   if (cp >= 0xFE30 && cp <= 0xFE4F) return false;  // vertical presentation forms (﹁﹂ etc.)
   if (cp == 0x2026 || cp == 0x2025) return false;
+  // cppcheck-suppress knownConditionTrueFalse ; kept explicit in case the early return above moves
   if (cp >= '0' && cp <= '9') return false;
   if (cp >= 0xFF10 && cp <= 0xFF19) return false;
   if (cp >= 0x3040 && cp <= 0x309F) return true;  // Hiragana
@@ -1204,6 +1205,7 @@ void WordSelectionScan::scanOnePosition() {
 
     // A name that opens with the copula な right after hiragana: な子 in 哀れな子 is な plus 子,
     // not a name. の is left alone: before a name it is the possessive (妹ののり子).
+    // cppcheck-suppress knownConditionTrueFalse ; the reading filters above can clear hasMatch
     if (hasMatch && result.entry.sourceDict == DictIndex::DICT_NAMES && scanStart > 0 &&
         allGlyphs[scanStart - 1].paragraphIndex == paraIdx) {
       const uint32_t prev = allGlyphs[scanStart - 1].codepoint;

@@ -24,8 +24,8 @@ class TextSettingsActivity final : public UiListActivity {
   // position no longer matches its registry index and has to be looked up by name.
   struct FontEntry {
     std::string name;  // the label for built-in rows, the family name for SD rows
-    bool isBuiltin;
-    uint8_t settingIndex;
+    bool isBuiltin{};
+    uint8_t settingIndex{};
     std::string label;  // shown instead of name when set
     const char* displayName() const { return label.empty() ? name.c_str() : label.c_str(); }
   };
@@ -148,7 +148,7 @@ class TextSettingsActivity final : public UiListActivity {
 
   struct SizeEntry {
     std::string name;  // the point size, rendered for display ("14 pt")
-    uint8_t pointSize;
+    uint8_t pointSize{};
   };
 
   const SdCardFontRegistry* registry_;

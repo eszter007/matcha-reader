@@ -174,6 +174,7 @@ void ActivityManager::loop() {
     // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed.
     // Not while leaving: a reader that let go of its book for a sync would close itself and drop
     // the sync, and the page turner can hold a screen change over several passes.
+    // cppcheck-suppress knownConditionTrueFalse ; activity callbacks above can set pendingAction
     if (pendingAction == PendingAction::None) currentActivity->loop();
   }
 
@@ -224,6 +225,7 @@ void ActivityManager::loop() {
         }
 
         // Request an update to ensure the popped activity gets re-rendered
+        // cppcheck-suppress knownConditionTrueFalse ; the result handler can set pendingAction
         if (pendingAction == PendingAction::None) {
           requestUpdate();
         }

@@ -17,9 +17,9 @@ class HyphenationLanguagesActivity final : public UiListActivity {
 
  private:
   struct Row {
-    const LanguageEntry* language;
+    const LanguageEntry* language{};
     std::string name;
-    bool installed;
+    bool installed{};
   };
   std::vector<Row> rows;
   std::vector<freeink::ui::ListItem> items;
