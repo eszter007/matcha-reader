@@ -1900,11 +1900,15 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   const uint16_t rowsPerColumn =
       static_cast<uint16_t>(std::clamp((static_cast<int>(viewportHeight_) + rowPitchPx - cellPx) / rowPitchPx, 1,
                                        static_cast<int>(VerticalGlyph::MAX_GRID_CELLS)));
-  const int usableWidthPx = std::max(cellPx, static_cast<int>(viewportWidth_) - rightPaddingPx_);
   // N columns occupy N*advance - gap, not N*advance: the last one needs no trailing 行間, so
   // dividing the width by the advance drops a column whenever the remainder is a cell or more.
-  const uint16_t columnsPerPage = static_cast<uint16_t>(
-      std::clamp((usableWidthPx + columnGapPx_) / columnAdvancePx, 1, static_cast<int>(VerticalGlyph::MAX_GRID_CELLS)));
+  const int viewportWidthPx = static_cast<int>(viewportWidth_);
+  const uint16_t columnsPerPage = static_cast<uint16_t>(std::clamp((viewportWidthPx + columnGapPx_) / columnAdvancePx,
+                                                                   1, static_cast<int>(VerticalGlyph::MAX_GRID_CELLS)));
+  // The right padding (room for first-column ruby) comes out of the leftover width only, so it
+  // never costs a column; where the leftover is smaller, the ruby is clamped at the visible edge.
+  const int leftoverPx = std::max(0, viewportWidthPx - (columnsPerPage * columnAdvancePx - columnGapPx_));
+  const int usableWidthPx = std::max(cellPx, viewportWidthPx - std::min(rightPaddingPx_, leftoverPx));
   // The width that does not divide evenly into whole columns is left where it falls: on the LEFT,
   // because tategaki starts at the right margin and marches leftwards. It must not be spread into
   // the gaps -- 行間 is set in quarter ems by the line-spacing setting (and by whether furigana

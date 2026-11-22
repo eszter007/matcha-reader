@@ -655,6 +655,12 @@ if (parsedSize != fileSize) {
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
 
+### Version 164
+
+No format change. The room for furigana beside the first column no longer counts the part of the
+right margin hidden under the bezel, and is taken from the width left over after whole columns, so
+no column is lost. Cached chapters are laid out again.
+
 ### Version 163
 
 No format change. A full stop, comma or closing bracket right after an opening bracket, as in

@@ -140,7 +140,9 @@ namespace {
 // line-head opening bracket has already given up; the next characters printed over the bracket.
 // v163: no format change. A mark after an opening bracket, as in （．） or （）, keeps its own em
 // instead of closing up into the bracket.
-constexpr uint8_t VSECTION_FILE_VERSION = 163;
+// v164: no format change. First-column ruby room comes from the leftover width and excludes the
+// bezel inset, so columns move and ruby stays visible.
+constexpr uint8_t VSECTION_FILE_VERSION = 164;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -2244,12 +2246,20 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   b.layout.setColumnGapPx(std::max(2, emPx * gapQuarterEms / 4));
   b.layout.setCharacterSpacingPx(spec.characterSpacing);
   b.layout.setRubyShown(furiganaEnabled);
-  // The first column's ruby sits in the right margin (JLREQ Fig 2.37) and is half an em wide.
-  // Where the margin is narrower than that -- a large font at a small screen margin -- the ruby
-  // would be drawn back over its own base characters, so the text area gives up the shortfall
-  // and no more: at a margin that already holds the ruby, the column stays flush right.
+  // The first column's ruby sits in the right margin (JLREQ Fig 2.37). The bezel inset is part of
+  // that margin but hidden, so only the screen margin counts. Where it is narrower than the ruby's
+  // ink -- measured on a wide kana at ruby size -- the layout moves the columns left by the
+  // shortfall, taken from the width left over after whole columns (see layoutPages).
   if (furiganaEnabled) {
-    b.layout.setRightPaddingPx(std::max(0, (emPx + 1) / 2 - static_cast<int>(spec.rightMarginPx)));
+    int insetTop = 0, insetRight = 0, insetBottom = 0, insetLeft = 0;
+    renderer.getOrientedViewableTRBL(&insetTop, &insetRight, &insetBottom, &insetLeft);
+    const int visibleMarginPx = std::max(0, static_cast<int>(spec.rightMarginPx) - insetRight);
+    int rubyReachPx = (emPx + 1) / 2;
+    GlyphInk ink;
+    if (measureGlyphInk(renderer, fontId, 0x3042, 0, &ink) && ink.width > 0) {  // あ
+      rubyReachPx = (ink.left + ink.width + 1) / 2;
+    }
+    b.layout.setRightPaddingPx(std::max(0, rubyReachPx - visibleMarginPx));
   }
 
   b.sink.earlyRenderFn = earlyRenderFn_;

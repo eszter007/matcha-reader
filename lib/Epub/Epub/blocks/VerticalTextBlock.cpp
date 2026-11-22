@@ -327,10 +327,12 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
     }
 
     // Ruby's virtual body starts where the base character's cell ENDS, beside it, not over it.
-    // At the text edge that puts it in the margin, per JLREQ Fig 2.37 -- clamped to the panel by
-    // its measured ink reach, since a margin here is only a few px.
+    // At the text edge that puts it in the margin, per JLREQ Fig 2.37 -- clamped by its measured
+    // ink reach to the visible edge, since the bezel hides the panel's outer pixels.
     const int rubyReach = rubyInkRight > 0 ? rubyInkRight : std::max(1, cellG / 2);
-    const int rubyX = std::min(g.x + offsetX + cellG, renderer.getScreenWidth() - rubyReach);
+    int insetTop = 0, insetRight = 0, insetBottom = 0, insetLeft = 0;
+    renderer.getOrientedViewableTRBL(&insetTop, &insetRight, &insetBottom, &insetLeft);
+    const int rubyX = std::min(g.x + offsetX + cellG, renderer.getScreenWidth() - insetRight - rubyReach);
 
     // The base the annotation is set against: from the group's first cell to its last.
     const int baseTop = g.y + offsetY;
