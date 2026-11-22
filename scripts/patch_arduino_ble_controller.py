@@ -1,9 +1,10 @@
 """Match the C3 controller archive to the rebuilt SDK's flash-only setting.
 
-PioArduino 55.03.311 retains the packaged -lbtdm_app linker list after a custom
+PioArduino 55.03.3xx retains the packaged -lbtdm_app linker list after a custom
 SDK rebuild. ESP-IDF selects libbtdm_app_flash.a for this configuration. Mixing
 the flash-only header with the other archive makes controller init fail.
 """
+import importlib.util
 from pathlib import Path
 
 
@@ -57,8 +58,11 @@ def configure_controller(env):
         return
     platform = env.PioPlatform()
     framework = Path(platform.get_package_dir("framework-arduinoespressif32-libs"))
-    config = (framework / "esp32c3/sdkconfig").read_text().splitlines()
-    if "CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY=y" not in config:
+    helper = Path(env.subst("$PROJECT_DIR")) / "scripts" / "arduino_built_sdkconfig.py"
+    spec = importlib.util.spec_from_file_location("crosspoint_built_sdkconfig", helper)
+    built_config = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(built_config)
+    if built_config.built_sdkconfig(env, framework / "esp32c3").get("CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY") != "1":
         raise RuntimeError("BLE controller configuration does not match the rebuilt C3 SDK")
     idf = platform.get_package_dir("framework-espidf")
     if not idf:
