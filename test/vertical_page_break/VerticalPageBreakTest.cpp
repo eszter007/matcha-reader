@@ -282,3 +282,57 @@ TEST(VerticalPageBreak, FrameOfABlockFillingItsLastColumnEndsThere) {
   ASSERT_EQ(full[0].boxes.size(), 1u);
   EXPECT_EQ(full[0].boxes[0].w, partial[0].boxes[0].w) << "one column of text, one column of frame";
 }
+
+namespace {
+constexpr int EM = 20;
+
+// The glyph after the first occurrence of `cp` in the same column.
+const VerticalGlyph* glyphAfter(const VerticalPage& page, const uint32_t cp) {
+  for (size_t i = 0; i + 1 < page.glyphs.size(); i++) {
+    if (page.glyphs[i].codepoint == cp && page.glyphs[i + 1].column == page.glyphs[i].column) {
+      return &page.glyphs[i + 1];
+    }
+  }
+  return nullptr;
+}
+}  // namespace
+
+// An opening bracket's ink fills the end of its em; 。、，． and closing brackets fill the start of
+// theirs. Nothing between them can close up, or the mark is drawn on the bracket.
+TEST(VerticalPageBreak, MarkAfterOpeningBracketKeepsItsOwnEm) {
+  struct Case {
+    const char* text;
+    uint32_t open;
+  };
+  for (const Case c : {Case{"あい（．）う", 0xFF08}, Case{"あい（，）う", 0xFF08}, Case{"あい（。）う", 0xFF08},
+                       Case{"あい「。」う", 0x300C}, Case{"あい「、」う", 0x300C}, Case{"あい（）う", 0xFF08},
+                       Case{"あい「」う", 0x300C}, Case{"あい【】う", 0x3010}}) {
+    const auto pages = layout({c.text});
+    ASSERT_EQ(pages.size(), 1u) << c.text;
+    const VerticalGlyph* open = firstGlyphOf(pages[0], c.open);
+    const VerticalGlyph* next = glyphAfter(pages[0], c.open);
+    ASSERT_NE(open, nullptr) << c.text;
+    ASSERT_NE(next, nullptr) << c.text;
+    // Ink-aligned marks sit a couple of pixels above their cell top; a close-up would put them half
+    // an em into the bracket.
+    EXPECT_GE(next->y, open->y + EM - 3) << c.text;
+  }
+}
+
+// The pairs that do have space between them still close up by half an em (JLREQ 3.1.4).
+TEST(VerticalPageBreak, PunctuationPairsWithSpaceStillCloseUp) {
+  {
+    const auto pages = layout({"あい、「う"});
+    const VerticalGlyph* open = firstGlyphOf(pages[0], 0x300C);
+    ASSERT_NE(open, nullptr);
+    EXPECT_EQ(open->y, 2 * EM + EM / 2) << "、「 shares an em";
+  }
+  {
+    const auto pages = layout({"あい「『う』」"});
+    const VerticalGlyph* outer = firstGlyphOf(pages[0], 0x300C);
+    const VerticalGlyph* inner = firstGlyphOf(pages[0], 0x300E);
+    ASSERT_NE(outer, nullptr);
+    ASSERT_NE(inner, nullptr);
+    EXPECT_EQ(inner->y, outer->y + EM / 2) << "「『 is set solid";
+  }
+}

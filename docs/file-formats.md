@@ -655,6 +655,12 @@ if (parsedSize != fileSize) {
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
 
+### Version 163
+
+No format change. A full stop, comma or closing bracket right after an opening bracket, as in
+（．） or （）, keeps its own em and is no longer drawn over the bracket. Cached chapters are laid
+out again.
+
 ### Version 162
 
 The header gains two `u32` chapter text totals after the page index offset: the chapter's visible
