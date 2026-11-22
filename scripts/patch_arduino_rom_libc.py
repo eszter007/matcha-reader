@@ -19,6 +19,10 @@ def load_built_sdkconfig(env):
 
 
 def configure_rom_libc(env):
+    # pio check only dumps include paths and defines; nothing links, and the SDK libraries may
+    # not have been rebuilt for this environment.
+    if env.IsIntegrationDump():
+        return
     if env.BoardConfig().get("build.mcu") != "esp32c3":
         return
     # The outer core-generation pass has not installed its new sdkconfig yet.
