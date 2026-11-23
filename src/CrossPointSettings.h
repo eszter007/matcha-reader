@@ -5,6 +5,8 @@
 #include <BoardConfig.h>
 #include <Epub/ReaderRenderSpec.h>
 #include <PersistableStore.h>
+#include <SdCardFontRegistry.h>
+#include <VectorFontSupport.h>
 
 #include <cstdint>
 
@@ -546,8 +548,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t readerMenuStyle = READER_MENU_LIST;
   // SD card font family name (empty = use built-in fontFamily)
   char sdFontFamilyName[32] = "";
-  // Fallback dictionary folder under /dictionaries (empty = no fallback)
-  char dictionaryName[32] = "";
+  // SD card font family to use for the whole UI (menus, home);
+  // empty = the built-in UI font. Bound to the UI font slots at boot and on
+  // change. Independent of the reader font above.
+  char uiFontFamilyName[SdCardFontRegistry::FAMILY_NAME_CAPACITY] = "";
+  // Fallback dictionary folder under /dictionaries (empty = no fallback).
+  // Sized to DictionaryRegistry::MAX_NAME_BYTES (checked in SettingsList.h):
+  // a UTF-8 folder name can take 2 or 3 bytes per character.
+  char dictionaryName[128] = "";
   // Master switch for all SD-card plugin discovery/execution. New installs keep
   // this disabled; settings migration enables it when pre-existing plugin files
   // are found so a firmware update never silently disables an existing setup.

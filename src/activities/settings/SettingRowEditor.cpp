@@ -23,6 +23,7 @@
 #include "MappedInputManager.h"
 #include "OpdsServerListActivity.h"
 #include "OtaUpdateActivity.h"
+#include "SdCardFontSystem.h"
 #include "SdFirmwareUpdateActivity.h"
 #include "SettingsList.h"
 #include "SilentRestart.h"
@@ -330,6 +331,10 @@ void SettingRowEditor::drawHelp(const GfxRenderer& renderer, const std::vector<S
 
 std::string SettingRowEditor::valueText(const SettingInfo& setting) {
   if (setting.action == SettingAction::HomeButton) return tr(STR_CONFIGURE);
+  if (setting.action == SettingAction::UiFont) {
+    const char* name = sdFontSystem.activeUiFontName();
+    return name[0] == '\0' ? tr(STR_DEFAULT_VALUE) : name;
+  }
 #if FREEINK_CAP_FRONTLIGHT
   if (setting.action == SettingAction::LightSchedule) {
     char summary[48];

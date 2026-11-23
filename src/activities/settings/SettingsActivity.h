@@ -1,5 +1,6 @@
 #pragma once
 #include <I18n.h>
+#include <VectorFontSupport.h>
 
 #include <functional>
 #include <span>
@@ -26,6 +27,7 @@ class SettingsActivity final : public UiListActivity, private SettingRowEditor::
 
   OptionPopup optionPopup;
   SettingRowEditor editor{*this, renderer, mappedInput, *this, optionPopup};
+  bool redrawFontPopupBackground = false;
 
   // Row structure (label/actionValue), rebuilt only when the setting list
   // changes; rowValues_ holds the live value text, refreshed every

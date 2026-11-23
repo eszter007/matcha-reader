@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+class EpdFontFamily;
 class GfxRenderer;
 class SdCardFont;
 struct SdCardFontFamilyInfo;
@@ -31,6 +32,11 @@ class SdCardFontManager {
 
   // Whether a font of this physical size is resident.
   bool hasSize(uint8_t pointSize) const;
+  // Additively load the family's .cpfont at exactly `pointSize`, registered under `fontId`
+  // (a UI font slot). Returns false when the size is not installed or
+  // loading failed.
+  bool loadFamilyVariant(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t pointSize, int fontId,
+                         const EpdFontFamily* glyphFallback = nullptr);
 
   // Unload one font that loadFamilyExtraSize() added. The reader-size font (the first loaded) is
   // never unloaded here. No-op for an unknown id.
@@ -69,7 +75,8 @@ class SdCardFontManager {
 
   // Load+register one .cpfont of `family` and append it to loaded_.
   // Returns the font id, or 0 on failure (allocation, read, or id collision).
-  int loadFile(const SdCardFontFamilyInfo& family, const SdCardFontFileInfo& file, GfxRenderer& renderer);
+  int loadFile(const SdCardFontFamilyInfo& family, const SdCardFontFileInfo& file, GfxRenderer& renderer,
+               int fontIdOverride = 0, const EpdFontFamily* glyphFallback = nullptr);
 
   std::string loadedFamilyName_;
   uint8_t loadedPointSize_ = 0;

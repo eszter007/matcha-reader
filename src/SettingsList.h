@@ -153,6 +153,10 @@ inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
 // Global settings edit the fallback; reader settings show the language-selected dictionary.
 inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& dictionaries,
                                           const std::string& bookLanguage, const bool showAppliedDictionary) {
+  // Every listed folder name must fit the settings field whole: a name stored
+  // cut short no longer names a folder, so its dictionary is never found.
+  static_assert(sizeof(CrossPointSettings::dictionaryName) >= DictionaryRegistry::MAX_NAME_BYTES,
+                "dictionaryName must hold any folder name DictionaryRegistry lists");
   std::vector<std::string> folderNames;
   folderNames.reserve(dictionaries.size());
   std::transform(dictionaries.begin(), dictionaries.end(), std::back_inserter(folderNames),
@@ -175,8 +179,7 @@ inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& di
     const std::string appliedFolder = applied.empty() ? std::string() : applied.front();
     s.valueGetter = [folderNames, appliedFolder]() -> uint8_t {
       for (size_t i = 0; i < folderNames.size(); i++) {
-        // The fallback is persisted in a bounded field, so match it the same way as the editor.
-        if (strncmp(folderNames[i].c_str(), appliedFolder.c_str(), sizeof(SETTINGS.dictionaryName) - 1) == 0) {
+        if (folderNames[i] == appliedFolder) {
           return static_cast<uint8_t>(i + 1);
         }
       }
@@ -185,9 +188,7 @@ inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& di
   } else {
     s.valueGetter = [folderNames]() -> uint8_t {
       for (size_t i = 0; i < folderNames.size(); i++) {
-        // Compare within the settings field capacity: an over-long folder name is
-        // stored truncated, and must still match its list entry.
-        if (strncmp(folderNames[i].c_str(), SETTINGS.dictionaryName, sizeof(SETTINGS.dictionaryName) - 1) == 0) {
+        if (folderNames[i] == SETTINGS.dictionaryName) {
           return static_cast<uint8_t>(i + 1);
         }
       }

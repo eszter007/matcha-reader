@@ -786,8 +786,7 @@ void setupDisplayAndFonts(bool seamless = false) {
   EpdFontFamily::setBuiltinFallback(&cjk12FontFamily);
   EpdFontFamily::setSymbolFallback(&symbols14FontFamily);
 
-  // Discover and load SD card fonts
-  sdFontSystem.begin(renderer);
+  sdFontSystem.begin(renderer, smallFontFamily, ui10FontFamily, ui12FontFamily);
 
   LOG_DBG("MAIN", "Fonts setup");
 }

@@ -102,6 +102,7 @@ void ReaderActivity::onEnter() {
   }
 
   if (usesReaderFonts()) {
+    RenderLock lock;
     sdFontSystem.ensureLoaded(renderer);
   } else {
     // No book text: the reader font leaves RAM while the book is open, and so does the CJK
