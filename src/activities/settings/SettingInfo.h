@@ -33,6 +33,7 @@ enum class SettingAction {
   TextSettings,
   Plugins,
   KeyboardLayouts,
+  UiFont,
   HomeButton,
   ControlsPower,
   ControlsFront,

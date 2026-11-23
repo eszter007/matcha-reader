@@ -3,6 +3,7 @@
 #include <Utf8.h>
 
 const EpdFont* EpdFontFamily::getFont(const Style style) const {
+  if (useFallbackOnly()) return fallbackFont(style);
   // Extract font style bits; render-time overlay bits do not affect font selection.
   const bool hasBold = (style & BOLD) != 0;
   const bool hasItalic = (style & ITALIC) != 0;
@@ -21,7 +22,10 @@ const EpdFont* EpdFontFamily::getFont(const Style style) const {
 }
 
 void EpdFontFamily::getTextDimensions(const char* string, int* w, int* h, const Style style) const {
-  getFont(style)->getTextDimensions(string, w, h);
+  const auto* font = getFont(style);
+  const auto* fallback = fallbackFont(style);
+  font->getTextDimensions(string, w, h, fallback);
+  if (font != fallback && useFallbackOnly()) fallback->getTextDimensions(string, w, h, fallback);
 }
 
 const EpdFontData* EpdFontFamily::getData(const Style style) const { return getFont(style)->data; }
@@ -180,13 +184,33 @@ const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style
 }
 
 bool EpdFontFamily::hasCodepoint(const uint32_t cp, const Style style) const {
-  return getFont(style)->hasCodepoint(cp);
+  if (getFont(style)->hasCodepoint(cp)) return true;
+  const EpdFont* fallback = fallbackFont(style);
+  return fallback && fallback->hasCodepoint(cp);
 }
 
 int8_t EpdFontFamily::getKerning(const uint32_t leftCp, const uint32_t rightCp, const Style style) const {
-  return getFont(style)->getKerning(leftCp, rightCp);
+  const auto* font = glyphFont(leftCp, style);
+  return font && font == glyphFont(rightCp, style) ? font->getKerning(leftCp, rightCp) : 0;
 }
 
 uint32_t EpdFontFamily::applyLigatures(const uint32_t cp, const char*& text, const Style style) const {
-  return getFont(style)->applyLigatures(cp, text);
+  const auto* font = getFont(style);
+  return !glyphFallback || font->hasCodepoint(cp) ? font->applyLigatures(cp, text) : cp;
+}
+
+bool EpdFontFamily::useFallbackOnly() const {
+#if CROSSPOINT_VECTOR_FONTS
+  return glyphFallback && fallbackFamily && glyphLoadFailed && glyphLoadFailed->load(std::memory_order_relaxed);
+#else
+  return false;
+#endif
+}
+
+const EpdFont* EpdFontFamily::fallbackFont(const Style style) const {
+  return glyphFallback && fallbackFamily ? fallbackFamily->getFont(style) : nullptr;
+}
+
+const EpdFont* EpdFontFamily::glyphFont(const uint32_t cp, const Style style) const {
+  return getFont(style)->fontForCodepoint(cp, fallbackFont(style));
 }

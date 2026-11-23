@@ -33,7 +33,7 @@ int SdCardFontManager::computeFontId(uint32_t contentHash, const char* familyNam
 }
 
 int SdCardFontManager::loadFile(const SdCardFontFamilyInfo& family, const SdCardFontFileInfo& file,
-                                GfxRenderer& renderer) {
+                                GfxRenderer& renderer, const int fontIdOverride, const EpdFontFamily* glyphFallback) {
   char path[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
   if (!family.filePath(file, path, sizeof(path))) {
     LOG_ERR("SDMGR", "Font path too long in family %s", family.name.c_str());
@@ -60,7 +60,7 @@ int SdCardFontManager::loadFile(const SdCardFontFamilyInfo& family, const SdCard
   }
 
   const char* familyName = family.name.c_str();
-  int fontId = computeFontId(font->contentHash(), familyName, file.pointSize);
+  int fontId = fontIdOverride != 0 ? fontIdOverride : computeFontId(font->contentHash(), familyName, file.pointSize);
   // Guard against collision with built-in font IDs (astronomically unlikely
   // with FNV-1a hashes, but provides a safety net)
   if (renderer.getFontMap().count(fontId) != 0) {
@@ -75,6 +75,7 @@ int SdCardFontManager::loadFile(const SdCardFontFamilyInfo& family, const SdCard
 
   EpdFontFamily fontFamily(file.pointSize, font->getEpdFont(0), font->getEpdFont(1), font->getEpdFont(2),
                            font->getEpdFont(3));
+  fontFamily.setGlyphFallback(glyphFallback);
   renderer.insertFont(fontId, fontFamily);
   return fontId;
 }
@@ -121,6 +122,13 @@ bool SdCardFontManager::hasSize(const uint8_t pointSize) const {
 
 void SdCardFontManager::unloadExtras(GfxRenderer& renderer) {
   while (loaded_.size() > 1) unloadExtra(loaded_.back().fontId, renderer);
+}
+
+bool SdCardFontManager::loadFamilyVariant(const SdCardFontFamilyInfo& family, GfxRenderer& renderer,
+                                          const uint8_t pointSize, const int fontId,
+                                          const EpdFontFamily* glyphFallback) {
+  const SdCardFontFileInfo* file = family.findFile(pointSize);
+  return file && loadFile(family, *file, renderer, fontId, glyphFallback) != 0;
 }
 
 void SdCardFontManager::unloadExtra(const int fontId, GfxRenderer& renderer) {

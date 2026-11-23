@@ -1,4 +1,10 @@
 #pragma once
+#include <VectorFontSupport.h>
+
+#if CROSSPOINT_VECTOR_FONTS
+#include <atomic>
+#endif
+
 #include "EpdFont.h"
 
 class EpdFontFamily {
@@ -47,11 +53,28 @@ class EpdFontFamily {
   // else resolves through the fallback chain like getGlyph(), so it pairs with getDataForGlyph():
   // asking only the primary font handed callers one font's glyph with another font's data, and
   // the renderer dropped every glyph a UI font gets from its fallback (all UI Japanese).
-  const EpdGlyph* getGlyphMetrics(uint32_t cp, EpdGlyph& solidFallback, Style style = REGULAR) const {
+  // glyphData, when given, receives the font data the returned glyph belongs to.
+  const EpdGlyph* getGlyphMetrics(uint32_t cp, EpdGlyph& solidFallback, Style style = REGULAR,
+                                  const EpdFontData** glyphData = nullptr) const {
     const EpdFont* f = getFont(style);
-    if (syntheticGlyph::isSolid(cp) && !f->hasCodepoint(cp)) return f->getGlyphMetrics(cp, solidFallback);
+    if (syntheticGlyph::isSolid(cp) && !f->hasCodepoint(cp)) {
+      if (glyphData) *glyphData = f->data;
+      return f->getGlyphMetrics(cp, solidFallback);
+    }
+    if (glyphData) *glyphData = getDataForGlyph(cp, style);
     return getGlyph(cp, style);
   }
+  // A custom UI font: `fallback` (the built-in UI font of the same size) supplies the glyphs
+  // this family lacks, through the same chain as setFallback().
+  void setGlyphFallback(const EpdFontFamily* fallback) {
+    setFallback(fallback);
+    glyphFallback = fallback != nullptr;
+  }
+#if CROSSPOINT_VECTOR_FONTS
+  // Once set, a vector UI font that failed to load a glyph draws everything from its fallback.
+  void setGlyphLoadFailureFlag(const std::atomic<bool>* failure) { glyphLoadFailed = failure; }
+#endif
+  bool hasGlyphFallback() const { return glyphFallback; }
   /// Returns true if the resolved style's font can render `cp` directly
   /// (interval coverage only — see EpdFont::hasCodepoint).
   bool hasCodepoint(uint32_t cp, Style style = REGULAR) const;
@@ -102,6 +125,15 @@ class EpdFontFamily {
   // The fallback's font when it, not this family, supplies cp (see setFallback); else null.
   const EpdFont* nonCjkFallbackFont(uint32_t cp, Style style) const;
   const EpdFont* lastResortFont(uint32_t cp, Style style, const EpdGlyph** glyph) const;
+  bool glyphFallback = false;
+#if CROSSPOINT_VECTOR_FONTS
+  const std::atomic<bool>* glyphLoadFailed = nullptr;
+#endif
+
+  bool useFallbackOnly() const;
+  // The glyph fallback's font for a custom UI font; null otherwise.
+  const EpdFont* fallbackFont(Style style) const;
+  const EpdFont* glyphFont(uint32_t cp, Style style) const;
 
   const EpdFont* getFont(Style style) const;
 };

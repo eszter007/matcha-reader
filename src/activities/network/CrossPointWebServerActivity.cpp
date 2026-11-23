@@ -376,7 +376,7 @@ void CrossPointWebServerActivity::startWebServer() {
                      mappedInput.wasPressed(MappedInputManager::Button::Back) || mappedInput.wasHomeGesture();
     return leaveRequested;
   });
-  webServer->begin();
+  webServer->begin(renderer);
 
   if (webServer->isRunning()) {
     state = WebServerActivityState::SERVER_RUNNING;

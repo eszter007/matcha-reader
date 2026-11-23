@@ -2,7 +2,6 @@
 
 #include <DictIndex.h>
 #include <ESPmDNS.h>
-#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <Memory.h>
@@ -115,7 +114,7 @@ void CalibreConnectActivity::startWebServer() {
     requestUpdate();
     return;
   }
-  webServer->begin();
+  webServer->begin(renderer);
 
   if (webServer->isRunning()) {
     state = CalibreConnectState::SERVER_RUNNING;

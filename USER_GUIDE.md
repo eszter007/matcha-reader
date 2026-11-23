@@ -403,6 +403,9 @@ any profile of **Settings → Reader → Text Settings**.
   - **Cover Grid**: Home shows a grid of covers with a tab bar along the bottom (see
     [3.1.1](#311-tabs-and-button-navigation-cover-grid-theme)). Works with buttons or touch. Default on touch devices.
 
+- **UI Font**: The font for menus, library titles and other interface text. **Default** uses the built-in fonts. See
+  [Menu Fonts](docs/sd-card-fonts.md#menu-fonts) for supported files and sizes.
+
 - **Sunlight Fading Fix** (off by default): Fixes text fading in direct sunlight on some X4 screens. Not shown on
   touch devices, the X4 Pro or the X4 Classic.
 
