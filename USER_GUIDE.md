@@ -239,7 +239,7 @@ Files and folders whose names start with a dot are hidden. To show them, turn on
 * **Go back:** Press **Back** to go up one folder. Hold **Back** to jump to the top of the card.
 * **Delete or rename:** Hold **Confirm** on a file or folder for one second. A menu offers **Open**, **Delete** and **Rename**. The device asks before it deletes anything. Deleting a folder deletes everything in it.
 
-In the **Cover Grid** theme, Browse Files is the **Files** tab of the Library, not a separate Home entry. It keeps the **Books / Shelves / Files** tabs at the top and the tab row at the bottom. The back arrow in the header only appears inside a folder. At the top of the card, use the tabs to leave, or press **Back** to return to **Books**. All other themes keep **Browse Files** as its own entry on Home.
+In the **Cover Grid** theme, Browse Files is the **Files** tab of the Library, not a separate Home entry. It keeps the **Books / Shelves / Files** tabs at the top and the tab row at the bottom. The back arrow in the header only appears inside a folder. At the top of the card, use the tabs to leave, or press **Back** to return to **Books**. All other themes keep **Browse Files** as its own entry on Home. With **Library View** set to **CrossPoint List**, Browse Files is also the list's **Files** tab, in every theme (see [3.4](#34-library-screen)).
 
 ### 3.4 Library Screen
 
@@ -248,12 +248,13 @@ Matcha has two Library screens. Choose one in **Settings → Library → Library
 * **Matcha Covers** (the default) shows a grid of book covers. The README describes it.
 * **CrossPoint List** shows a list of titles and authors. The rest of this section is about the list.
 
-The list keeps an index of up to 4,096 books on the SD card, so you can find a book without remembering its folder. It has three tabs. An arrow next to a tab shows the sort direction.
+The list keeps an index of up to 4,096 books on the SD card, so you can find a book without remembering its folder. It has four tabs. An arrow next to a sorted tab shows the sort direction.
 
 * **Recent** shows the ten books you opened most recently first, then the rest of your books by file date. Turn on
   **Hide New Files in Recent** in **Settings → Library** to show only the books you opened.
 * **Title** groups books by the first letter of the title. Titles that start with a number or a symbol go under `#`. Other alphabets, such as Hebrew, get their own groups.
 * **Author** groups books by author.
+* **Files** opens Browse Files. At the top of the card it keeps the same four tabs, so **Recent**, **Title** or **Author** take you back to the list. Press **Back** there to return to **Recent**.
 
 `My Clippings.txt` and `crash_report.txt` are not listed. They stay in **Browse Files**.
 

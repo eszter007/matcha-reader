@@ -403,8 +403,7 @@ void ActivityManager::goToLibrary(const int initialTab) {
   // so each keeps its own concrete type at the allocation, and a null is reported before
   // replaceActivity() sees it.
   if (SETTINGS.libraryView == CrossPointSettings::LIBRARY_VIEW_LIST) {
-    (void)initialTab;  // the indexed list has its own tab set
-    auto activity = makeUniqueNoThrow<LibraryListActivity>(renderer, mappedInput);
+    auto activity = makeUniqueNoThrow<LibraryListActivity>(renderer, mappedInput, initialTab);
     if (!activity) {
       LOG_ERR("ACT", "OOM: library list activity");
       return;

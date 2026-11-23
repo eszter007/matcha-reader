@@ -123,8 +123,8 @@ class ActivityManager {
   // openSection jumps straight into one group (End = the section list).
   void goToSettings(SettingsSection openSection = SettingsSection::End);
   void goToFileBrowser(std::string path = {});
-  // initialTab selects the cover library's tab (LibraryTabs::Books / Shelves); the indexed list
-  // view has its own tabs and ignores it.
+  // initialTab selects the library's tab: Books / Shelves in the cover library, Recent / Title /
+  // Author in the list view (LibraryTabs).
   void goToLibrary(int initialTab = 0);
   void goToBrowser();
   // The server list as the Library's OPDS tab: picking a server opens the browser, so moving

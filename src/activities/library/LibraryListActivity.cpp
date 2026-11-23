@@ -21,6 +21,7 @@
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/HomeTabBar.h"
+#include "components/LibraryTabs.h"
 #include "components/UIScale.h"
 #include "components/UITheme.h"
 #include "components/icons/headerIcons.h"
@@ -45,7 +46,9 @@ constexpr unsigned long LONG_PRESS_MS = 1000;
 constexpr int RECENT_TAB = 0;
 constexpr int TITLE_TAB = 1;
 constexpr int AUTHOR_TAB = 2;
-constexpr int TAB_SLOTS = AUTHOR_TAB + 1;
+// Files is the SD browser: selecting it switches activity (LibraryTabs::activate).
+constexpr int FILES_TAB = AUTHOR_TAB + 1;
+constexpr int TAB_SLOTS = FILES_TAB + 1;
 
 constexpr bool isDescending(const library::SortOrder order) {
   return order == library::SortOrder::RecentDesc || order == library::SortOrder::TitleDesc ||
@@ -70,16 +73,21 @@ constexpr library::SortOrder orderForTab(const int tab, const uint8_t descending
 const char* tabLabelFor(const int tab) {
   if (tab == TITLE_TAB) return tr(STR_LIBRARY_TAB_TITLE);
   if (tab == AUTHOR_TAB) return tr(STR_LIBRARY_TAB_AUTHOR);
+  if (tab == FILES_TAB) return tr(STR_TAB_FILES);
   return tr(STR_LIBRARY_TAB_RECENT);
 }
 
 }  // namespace
 
-LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialTab)
     : UiTabListActivity("Library", renderer, mappedInput, true) {
-  // Three short tab labels: a full-slot pill would stretch across a third of
-  // the screen, so cap it at the label plus padding (slots stay put).
+  // Short tab labels: a full-slot pill would stretch across its whole slot, so
+  // cap it at the label plus padding (slots stay put).
   tabPillMaxPad = 16;
+  if (initialTab > RECENT_TAB && initialTab < FILES_TAB) {
+    activeTabIndex = initialTab;
+    sortOrder = orderForTab(initialTab, descendingTabs);
+  }
 }
 
 void LibraryListActivity::onEnter() {
@@ -497,6 +505,10 @@ void LibraryListActivity::selectTab(const int index, const bool toggleIfActive) 
   closeSwipeDelete();
 #endif
   if (index < 0 || index >= TAB_SLOTS) return;
+  if (index == FILES_TAB) {
+    LibraryTabs::activate(LibraryTabs::filesTab());
+    return;
+  }
   if (toggleIfActive && index == activeTab()) descendingTabs ^= static_cast<uint8_t>(1u << index);
   sortOrder = orderForTab(index, descendingTabs);
   // The filter and the overlap rows hold positions in the old order, so they

@@ -18,6 +18,16 @@ constexpr int16_t PILL_LEADING = 4;
 // Lyra's tab: its label plus this much on each side, the pill width its equal slots used to cap at.
 constexpr int16_t LYRA_TAB_PAD = 16;
 constexpr int16_t LYRA_TAB_MIN_PAD = 4;
+// Full-slot pills: the least horizontal padding kept around a label and its sort arrow.
+constexpr int MIN_PILL_PAD = 4;
+
+// The sort arrow tabBar() lays out after a label: it widens the pill, so every width estimate here
+// must include it or tabBar() finds the row too wide and falls back to equal slots.
+int indicatorWidth(const fui::TabItem& tab, const fui::TabBarProps& props) {
+  if (tab.indicator == fui::TabIndicator::None || props.indicatorSize <= 0) return 0;
+  const bool hasLabel = tab.label != nullptr && tab.label[0] != '\0';
+  return props.indicatorSize + (hasLabel ? props.indicatorGap : 0);
+}
 
 // Cover Grid's tab band: content-width pills packed from the leading edge. Idle pills are a grey
 // outline, the selected one is filled solid black with white text -- no underline and no rule
@@ -58,7 +68,7 @@ void buildPills(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, const 
   const int16_t slotsWidth = static_cast<int16_t>(screen.frame().screen().width - 2 * side);
   const auto pillWidth = [&](const int i, const int pad) {
     const int16_t labelW = screen.target().measureText(props.text.font, tabs[i].label, props.text).width;
-    return std::max<int>(labelW + 2 * pad, pillHeight);
+    return std::max<int>(labelW + indicatorWidth(tabs[i], props) + 2 * pad, pillHeight);
   };
   const auto rowWidth = [&](const int first, const int n, const int pad) {
     int total = PILL_LEADING + PILL_GAP * (n - 1);
@@ -171,15 +181,25 @@ void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, 
   // Equal slots narrower than the widest label would clip it: show the window of tabs that fits,
   // ending on the selected one.
   {
-    int widest = 1;
+    const auto widestLabel = [&]() {
+      int widest = 1;
+      for (int i = 0; i < count; ++i) {
+        widest =
+            std::max<int>(widest, screen.target().measureText(tabProps.text.font, tabs[i].label, tabProps.text).width);
+      }
+      return widest;
+    };
     int selected = 0;
     for (int i = 0; i < count; ++i) {
-      widest =
-          std::max<int>(widest, screen.target().measureText(tabProps.text.font, tabs[i].label, tabProps.text).width);
       if (tabs[i].selected) selected = i;
     }
     const int available = screen.frame().screen().width - 2 * metrics.contentSidePadding;
-    const int fits = std::max(1, available / (widest + 16));
+    int fits = std::max(1, available / (widestLabel() + 16));
+    // Full-slot pills drop to the smaller UI text before they drop a tab.
+    if (count > fits && metrics.tabPillFullSlot) {
+      tabProps.text = screen.theme().smallText;
+      fits = std::max(1, available / (widestLabel() + 16));
+    }
     if (count > fits) {
       const int first = std::clamp(selected - fits + 1, 0, count - fits);
       tabProps.tabs = tabs + first;
@@ -194,7 +214,8 @@ void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, 
     for (; pad > LYRA_TAB_MIN_PAD; pad = static_cast<int16_t>(pad - 4)) {
       int row = tabProps.gap * (tabProps.count - 1);
       for (int i = 0; i < tabProps.count; ++i) {
-        row += screen.target().measureText(tabProps.text.font, tabProps.tabs[i].label, tabProps.text).width + 2 * pad;
+        row += screen.target().measureText(tabProps.text.font, tabProps.tabs[i].label, tabProps.text).width +
+               indicatorWidth(tabProps.tabs[i], tabProps) + 2 * pad;
       }
       if (row <= available) break;
     }
@@ -210,8 +231,34 @@ void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, 
     // stretching across the whole slot. The SDK shrinks the pill to content
     // width and centers it in its slot when the horizontal contentInset is
     // nonzero.
-    tabProps.contentInset.left = opt.pillMaxPad;
-    tabProps.contentInset.right = opt.pillMaxPad;
+    // Shrink the padding to fit: in a slot narrower than the widest label plus the full padding,
+    // the pills would end at different widths, and the widest would clip its label.
+    // The slots span the content area, which tabBar() gets below (safe area minus side padding).
+    const int available = screen.frame().safeRect().width - 2 * metrics.contentSidePadding;
+    const int slot =
+        available / std::max(1, static_cast<int>(tabProps.count)) - tabProps.tabInset.left - tabProps.tabInset.right;
+    // Sized as if the sort arrow sat on the widest label, wherever it is now: the text size and
+    // padding then stay the same whichever tab is selected.
+    int arrow = opt.reserveIndicator ? tabProps.indicatorSize + tabProps.indicatorGap : 0;
+    for (int i = 0; i < tabProps.count; ++i) arrow = std::max(arrow, indicatorWidth(tabProps.tabs[i], tabProps));
+    const auto widestPill = [&]() {
+      int widest = 0;
+      for (int i = 0; i < tabProps.count; ++i) {
+        widest = std::max<int>(
+            widest, screen.target().measureText(tabProps.text.font, tabProps.tabs[i].label, tabProps.text).width);
+      }
+      return widest + arrow;
+    };
+    int widest = widestPill();
+    // Less than a minimal padding left: the smaller UI text, before tabBar() cuts a label short or
+    // the sort arrow touches the pill edge.
+    if (widest + 2 * MIN_PILL_PAD > slot) {
+      tabProps.text = screen.theme().smallText;
+      widest = widestPill();
+    }
+    const auto pad = static_cast<int16_t>(std::clamp((slot - widest) / 2, 0, static_cast<int>(opt.pillMaxPad)));
+    tabProps.contentInset.left = pad;
+    tabProps.contentInset.right = pad;
   }
 
   // Legacy Lyra two-state treatment: with the selection on the tab band, the

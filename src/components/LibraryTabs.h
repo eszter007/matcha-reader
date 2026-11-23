@@ -16,15 +16,23 @@
 //
 // Every other theme keeps the two tabs it always had; Browse Files stays a separate entry on
 // their home menu.
+//
+// With Library View = List the band is the list's own: Recent, Title, Author, then Files.
 namespace LibraryTabs {
 
 enum Tab : int { Books = 0, Shelves = 1, Files = 2 };
 
-// 3 in the Cover Grid theme, 2 elsewhere.
+// Library View = List: the band is the list's, in every theme.
+bool listView();
+
+// 3 in the Cover Grid theme, 2 elsewhere, 4 with Library View = List.
 int count();
 
+// The index of the Files tab in the current band.
+int filesTab();
+
 // The band's tabs with `active` marked, for UiTabBand; returns how many. `tabs` holds MAX_TABS.
-constexpr int MAX_TABS = 3;
+constexpr int MAX_TABS = 4;
 int bandItems(freeink::ui::TabItem* tabs, int active);
 UiTabBand::Options bandOptions(bool focused, bool hasTouch, freeink::ui::ActionId action = 0);
 

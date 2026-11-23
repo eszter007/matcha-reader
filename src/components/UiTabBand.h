@@ -22,6 +22,9 @@ struct Options {
   // When > 0, each pill is capped at its label width plus this padding per side, centred in its
   // equal-width slot (RoundedRaff; Lyra tabs are label-width already).
   int16_t pillMaxPad = 0;
+  // Size the pills as if a sort arrow were showing, so a band drawn by another screen without the
+  // arrow (the list library's Files tab) matches the sorted one.
+  bool reserveIndicator = false;
 };
 
 // Whether the band draws the rule along its top edge itself (Lyra), full width. A header sitting
