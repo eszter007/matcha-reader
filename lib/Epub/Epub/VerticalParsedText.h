@@ -439,6 +439,8 @@ class VerticalParsedText {
   void setRightPaddingPx(int padPx) { rightPaddingPx_ = (padPx < 0) ? 0 : padPx; }
   // Furigana is drawn: a reading longer than its base spaces the base out (JLREQ 3.3.8).
   void setRubyShown(const bool shown) { rubyShown_ = shown; }
+  // Ruby size relative to the base, 8.8 fixed point (see RubySize.h).
+  void setRubyScale(const uint16_t scale) { rubyScale_ = scale; }
 
  private:
   const GfxRenderer& renderer_;
@@ -454,6 +456,7 @@ class VerticalParsedText {
   int characterSpacingPx_ = 0;
   int rightPaddingPx_ = 0;
   bool rubyShown_ = false;
+  uint16_t rubyScale_ = 128;
 
   struct PendingChar {
     uint32_t codepoint{};

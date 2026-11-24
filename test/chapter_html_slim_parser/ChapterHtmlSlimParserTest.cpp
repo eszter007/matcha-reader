@@ -258,7 +258,7 @@ TEST_F(ChapterHtmlSlimParserTest, UnequalTableCellsAndRubySurvivePageBreaks) {
       const auto& line = static_cast<const PageLine&>(*element);
       const auto& block = *line.getBlock();
       ASSERT_TRUE(block.valid());
-      EXPECT_LE(element->yPos + 16 + block.getRubyShift(12), parser.viewportHeight);
+      EXPECT_LE(element->yPos + 16 + block.getRubyShift(12, ruby::HALF), parser.viewportHeight);
       rubyLines += block.hasRuby();
       for (uint16_t word = 0; word < block.wordCount(); ++word) actual.insert(block.wordText(word));
     }

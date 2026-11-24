@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "../BookFontMap.h"
+#include "../RubyText.h"
 #include "GfxRenderer.h"
 #include "ImageBlock.h"
 #include "Kinsoku.h"
@@ -226,17 +227,17 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
                                bool black) const {
   const int cellPxLocal = drawGlyphs(renderer, page_, fontId, offsetX, offsetY, black);
 
-  // JLREQ 3.3.2: ruby is half the size of its base and set solid, so one ruby character's body is
-  // half an EM. The font's line height is the wrong yardstick: it carries Latin leading (48px
-  // against a 33px em in Noto Serif JP), which stepped the ruby 45% too far apart and ran every
-  // annotation past the foot of its base.
+  // JLREQ 3.3.2: ruby is set solid, so one ruby character's body is the ruby share of an EM
+  // (half by default; see the Furigana Size setting). The font's line height would add Latin leading.
   const int rubyEmPx = verticalCellPx(renderer, rubyFontId);
-  const int rubyLineHBody = (rubyEmPx + 1) / 2;
+  const uint16_t rel = renderer.rubyScale();
+  const int rubyLineHBody = ruby::partUp(rubyEmPx, rel);
   // Baseline of a ruby character below the top of its body: the base text's measured figure,
-  // halved with the glyph.
-  const int rubyBaselineInBodyBody = verticalCellBaselineOffset(renderer, rubyFontId, rubyEmPx) / 2;
+  // scaled with the glyph.
+  const int rubyBaselineInBodyBody = ruby::part(verticalCellBaselineOffset(renderer, rubyFontId, rubyEmPx), rel);
   const int rubyAscender = renderer.getFontAscenderSize(rubyFontId);
   const auto rubyStyle = static_cast<EpdFontFamily::Style>(EpdFontFamily::SUP);
+  const bool supAtBodySize = ruby::drawsWithSup(renderer, rubyFontId, rel);
 
   int prevRubyBottom = -9999;
   uint16_t prevRubyColumn = UINT16_MAX;
@@ -292,12 +293,16 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
     const std::string& rubyText = *text;
     if (rubyText.empty()) continue;
 
-    // A base set at a CSS font-size takes ruby half ITS size, beside its own cell.
+    // A base set at a CSS font-size takes ruby scaled from ITS size, beside its own cell.
     const int s8 = g.scale8 == 0 ? 8 : g.scale8;
-    const uint16_t rubyScale = static_cast<uint16_t>(s8 * 32);  // the base's scale; ruby draws at half
+    const uint16_t rubyScale = static_cast<uint16_t>(s8 * 32);  // the base's scale
     const auto atBase = [rubyScale](const int v) {
       return rubyScale == 256 ? v : static_cast<int>(std::lround(v * rubyScale / 256.0));
     };
+    // SUP (the 2x2 reduction) only at half size over a body-size base in a bitmap font; every
+    // other case draws through the scaled path, where a vector font rasterizes at the true size.
+    const bool useSup = rubyScale == 256 && supAtBodySize;
+    const auto drawScale = static_cast<uint16_t>(rubyScale * rel / 256);
     const int cellG = atBase(cellPxLocal);
     const int rubyLineH = atBase(rubyLineHBody);
     const int rubyBaselineInBody = atBase(rubyBaselineInBodyBody);
@@ -318,8 +323,8 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
         if (cp == 0) break;
         GlyphInk ink;
         if (measureGlyphInk(renderer, rubyFontId, cp, static_cast<uint8_t>(rubyStyle), &ink) && ink.width > 0) {
-          // SUP draws the glyph at 50%, so its metrics halve too.
-          rubyInkRight = std::max(rubyInkRight, (atBase(ink.left + ink.width) + 1) / 2);
+          // The glyph draws at the ruby scale, so its metrics scale too.
+          rubyInkRight = std::max(rubyInkRight, ruby::partUp(atBase(ink.left + ink.width), rel));
           if (uprightInkTop < 0 && ink.height > 0 && !Kinsoku::needsVerticalRotation(cp)) {
             uprightInkTop = ink.top;
             uprightInkHeight = ink.height;
@@ -383,9 +388,9 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
       bodyTop = baseTop - hangBefore;
     }
     // drawText takes a TOP; the scaled path puts the baseline the scaled ascender below it.
-    int rubyY = rubyScale == 256 ? bodyTop + rubyBaselineInBody -
-                                       renderer.textBaselineOffset(rubyFontId, rubyText.c_str(), rubyStyle)
-                                 : bodyTop + rubyBaselineInBody - atBase(rubyAscender) / 2;
+    int rubyY =
+        useSup ? bodyTop + rubyBaselineInBody - renderer.textBaselineOffset(rubyFontId, rubyText.c_str(), rubyStyle)
+               : bodyTop + rubyBaselineInBody - ruby::part(atBase(rubyAscender), rel);
     if (g.column == prevRubyColumn && rubyY < prevRubyBottom + 1) {
       rubyY = prevRubyBottom + 1;
     }
@@ -431,27 +436,27 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
         int cell = std::max(1, rubyLineH);
         GlyphInk rot;
         if (measureGlyphInk(renderer, rubyFontId, cp, static_cast<uint8_t>(rubyStyle), &rot) && rot.width > 0) {
-          cell = std::max({cell, (atBase(rot.width) + 1) / 2, (atBase(rot.height) + 1) / 2});
+          cell = std::max({cell, ruby::partUp(atBase(rot.width), rel), ruby::partUp(atBase(rot.height), rel)});
         }
-        const int baseline = rubyScale == 256
-                                 ? rubyY + renderer.textBaselineOffset(rubyFontId, rubyText.c_str(), rubyStyle)
-                                 : rubyY + atBase(rubyAscender) / 2;
+        const int baseline = useSup ? rubyY + renderer.textBaselineOffset(rubyFontId, rubyText.c_str(), rubyStyle)
+                                    : rubyY + ruby::part(atBase(rubyAscender), rel);
         // No upright neighbour to measure (an all-dash annotation): fall back to the slot centre.
-        const int centre =
-            uprightInkTop >= 0 ? baseline - uprightInkTop / 2 + uprightInkHeight / 4 : rubyY + rubyLineH / 2;
-        if (rubyScale == 256) {
+        const int centre = uprightInkTop >= 0
+                               ? baseline - ruby::part(uprightInkTop, rel) + ruby::part(uprightInkHeight, rel) / 2
+                               : rubyY + rubyLineH / 2;
+        if (useSup) {
           renderer.drawCharVerticalRotatedInCell(rubyFontId, rubyX, centre - cell / 2, cell, cp,
                                                  Kinsoku::verticalShiftType(cp), black, rubyStyle);
         } else {
-          // SUP would override the scale, so its half size is folded into the scale instead.
+          // SUP would override the scale, so the ruby size is folded into the scale instead.
           renderer.drawCharVerticalRotatedInCell(rubyFontId, rubyX, centre - cell / 2, cell, cp,
                                                  Kinsoku::verticalShiftType(cp), black, EpdFontFamily::REGULAR, nullptr,
-                                                 nullptr, static_cast<uint16_t>(rubyScale / 2));
+                                                 nullptr, drawScale);
         }
-      } else if (rubyScale == 256) {
+      } else if (useSup) {
         renderer.drawText(rubyFontId, rubyX, rubyY, buf, black, rubyStyle);
       } else {
-        renderer.drawTextScaled(rubyFontId, rubyX, rubyY, buf, static_cast<uint16_t>(rubyScale / 2), black);
+        renderer.drawTextScaled(rubyFontId, rubyX, rubyY, buf, drawScale, black);
       }
       rubyY += step;
       ri += charLen;

@@ -60,6 +60,7 @@ class TextSettingsActivity final : public UiListActivity {
     BookSideMargins,
     VerticalText,  // Japanese and Chinese
     Furigana,      // Japanese and Chinese: ruby over the text
+    FuriganaSize,  // Japanese and Chinese, while ruby is on
     WordMarks,     // Japanese and Chinese: lines in word lookup
     Count
   };

@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "CjkBreaks.h"
+#include "RubyText.h"
 #include "TokenBoundary.h"
 #include "hyphenation/HyphenationCommon.h"
 #include "hyphenation/Hyphenator.h"
@@ -1219,8 +1220,8 @@ int ParsedText::calculateRubyExtraStartOffset(const size_t wordIdx, const size_t
     groupActualWidth += measureWordWidth(renderer, fontId, wordAt(wordIdx + k), getWordStyleAt(wordIdx + k),
                                          blockStyle.letterSpacing, false, wordSpacingPercent);
   }
-  const int rubyWidth =
-      renderer.getTextAdvanceX(fontId, rubyTexts[wordIdx].c_str(), EpdFontFamily::SUP, blockStyle.letterSpacing);
+  const int rubyWidth = ruby::advance(renderer, fontId, rubyTexts[wordIdx].c_str(), blockStyle.letterSpacing,
+                                      ruby::horizontalScale(renderer, fontId));
   if (rubyWidth <= groupActualWidth) {
     return 0;
   }
@@ -1259,8 +1260,8 @@ int ParsedText::calculateRubyExtraEndOffset(const size_t lineStartIdx, const siz
     groupActualWidth += measureWordWidth(renderer, fontId, wordAt(k), getWordStyleAt(k), blockStyle.letterSpacing,
                                          false, wordSpacingPercent);
   }
-  const int rubyWidth =
-      renderer.getTextAdvanceX(fontId, rubyTexts[leaderIdx].c_str(), EpdFontFamily::SUP, blockStyle.letterSpacing);
+  const int rubyWidth = ruby::advance(renderer, fontId, rubyTexts[leaderIdx].c_str(), blockStyle.letterSpacing,
+                                      ruby::horizontalScale(renderer, fontId));
   if (rubyWidth <= groupActualWidth) {
     return 0;
   }
@@ -1286,6 +1287,7 @@ std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& rendere
 
   // Adjust widths for ruby groups to comply with JLReq standards
   if (!rubyTexts.empty()) {
+    const uint16_t rubyScale = ruby::horizontalScale(renderer, fontId);
     struct RubyGroupInfo {
       size_t start;
       size_t count;
@@ -1309,8 +1311,7 @@ std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& rendere
           g.baseWidth += wordWidths[i + g.count];
           g.count++;
         }
-        g.rubyWidth =
-            renderer.getTextAdvanceX(fontId, rubyTexts[i].c_str(), EpdFontFamily::SUP, blockStyle.letterSpacing);
+        g.rubyWidth = ruby::advance(renderer, fontId, rubyTexts[i].c_str(), blockStyle.letterSpacing, rubyScale);
 
         const int delta = g.rubyWidth - g.baseWidth;
         if (delta > 0) {
@@ -1326,8 +1327,8 @@ std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& rendere
         utf8EncodeCodepoint(firstCodepoint(rubyTexts[i]), firstChar);
         utf8EncodeCodepoint(lastCodepoint(rubyTexts[i]), lastChar);
 
-        g.firstCharWidth = renderer.getTextAdvanceX(fontId, firstChar, EpdFontFamily::SUP, blockStyle.letterSpacing);
-        g.lastCharWidth = renderer.getTextAdvanceX(fontId, lastChar, EpdFontFamily::SUP, blockStyle.letterSpacing);
+        g.firstCharWidth = ruby::advance(renderer, fontId, firstChar, blockStyle.letterSpacing, rubyScale);
+        g.lastCharWidth = ruby::advance(renderer, fontId, lastChar, blockStyle.letterSpacing, rubyScale);
 
         groups.push_back(g);
         i += g.count - 1;

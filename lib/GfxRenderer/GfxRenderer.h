@@ -180,6 +180,7 @@ class GfxRenderer {
   std::map<int, int> fallbackFontMap_;
   std::map<int, FallbackScale> fallbackScaleMap_;  // primary font id -> scales its fallback draws at
   std::map<int, FaceScale> faceScales_;            // font id -> the scale it is always drawn at
+  uint16_t rubyScale_ = 128;                       // see setRubyScale
 
   // The metrics as the font data holds them, before a FaceScale. The scaled walk applies its own
   // scale to these; the public getters return them scaled.
@@ -315,6 +316,11 @@ class GfxRenderer {
   // demand rather than held in a resident table. Measurement has to resolve those through
   // getGlyph() or it prices them from whatever fallback is resident instead.
   bool isVectorFont(const int fontId) const { return ttfFonts_.find(fontId) != ttfFonts_.end(); }
+  // Ruby (furigana) size relative to its base text, 8.8 fixed point; 128 is half (the JLREQ size).
+  // The reader sets it from its render spec, which keys the section caches on it, so layout and
+  // drawing read the same value.
+  void setRubyScale(const uint16_t scale) { rubyScale_ = scale; }
+  uint16_t rubyScale() const { return rubyScale_; }
   // Register/clear size-matched CJK UI fallbacks (see fallbackFontMap_).
   // setFallbackFont maps a primary UI font id to an SD font id of the same size.
   // scale (8.8 fixed point, 256 = as is): draw the fallback's glyphs that much smaller or larger,

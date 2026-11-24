@@ -456,10 +456,14 @@ void ReaderToolbarUi::buildTextRows(UiScreen& screen, const fui::Rect area) {
       default: {
         // Chooser: value and chevron at the right edge; a row with no value (it opens a screen)
         // keeps the whole width for its label.
-        const int16_t valueX = static_cast<int16_t>(r.value ? left + (right - left) / 3 : right - 24);
-        const fui::Rect valueRect{valueX, rowRect.y, static_cast<int16_t>(right - valueX), kTextRowH};
+        // A short value leaves the rest of the row to the label; a long one takes at most two thirds.
         char shown[64];
         snprintf(shown, sizeof(shown), "%s%s\xE2\x80\xBA", r.value ? r.value : "", r.value ? "  " : "");
+        const int valueW =
+            r.value ? std::min<int>(t.measureText(valueStyle.font, shown, valueStyle).width, (right - left) * 2 / 3)
+                    : 24;
+        const int16_t valueX = static_cast<int16_t>(right - valueW);
+        const fui::Rect valueRect{valueX, rowRect.y, static_cast<int16_t>(right - valueX), kTextRowH};
         centredText(t, valueRect, shown, valueStyle);
         screen.frame().hit(rowRect, ACTION_ROW, static_cast<int16_t>(i), fui::InputTouch);
         controlX = valueRect.x;

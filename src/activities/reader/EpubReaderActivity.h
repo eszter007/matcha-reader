@@ -169,6 +169,9 @@ class EpubReaderActivity final : public ReaderActivity {
   int8_t verticalOverride = -1;
   // Per-book furigana override: -1 = follow the text profile, 0 = off, 1 = on
   int8_t furiganaOverride = -1;
+  // Per-book Furigana Size override: -1 = follow the text profile, else the size index. Stored with
+  // furiganaOverride (EpubReaderUtils::packFurigana).
+  int8_t furiganaSizeOverride = -1;
   // Per-book language (cjk::LanguageChoice): LANG_AUTO follows the tag, else the user's pick for a
   // mis-tagged book. Kept with the sniff result in the book's language.bin.
   uint8_t languageOverride = 0;
@@ -702,10 +705,11 @@ class EpubReaderActivity final : public ReaderActivity {
     Orientation,
     Writing,
     Furigana,
+    FuriganaSize,
     FocusReading,
     MoreSettings
   };
-  static constexpr int kMaxTextControls = 10;
+  static constexpr int kMaxTextControls = 11;
   int textControls(TextControl* out) const;
   // The open panel's rows, kept here rather than on the render task's stack.
   ReaderToolbarUi::TextRow panelRows_[kMaxTextControls];
@@ -731,6 +735,8 @@ class EpubReaderActivity final : public ReaderActivity {
   void stepPageDraft(TextControl control, int step);
   void applyPageDraft();
   void showSizePopup();
+  void showFuriganaSizePopup();
+  char furiganaSizeLabel_[8] = {};  // the Furigana Size row's value
   void showFontPopup();
   void openTextSettingsFromPanel();
   // The text on the page on screen, empty for an image-only page.
@@ -950,6 +956,8 @@ class EpubReaderActivity final : public ReaderActivity {
   uint8_t readerBottomReserve(bool verticalMode) const;
 
   bool useFurigana() const;
+  // The Furigana Size index in effect: the book's override, else the text profile's.
+  uint8_t furiganaSize() const;
   bool isJapaneseBook() const;
   bool isChineseBook() const;
   // Japanese or Chinese: contiguous CJK text that uses the scan-based word lookup, the vertical
@@ -980,6 +988,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void followTextProfileChanges();
   uint8_t verticalModeBefore_ = 0;
   uint8_t furiganaBefore_ = 1;
+  uint8_t furiganaSizeBefore_ = 1;
   bool textProfileVisitOpen_ = false;
   // The language the book is read as: the override, else the EPUB tag when it names a CJK
   // language, else what the content sniff found, else the tag as written (possibly empty).

@@ -1448,7 +1448,8 @@ void ChapterHtmlSlimParser::finishTableRow() {
       if (lineIndex < tableCellLines[column].size()) {
         rowLineHeight = std::max<int16_t>(
             rowLineHeight, static_cast<int16_t>(lineHeight + tableCellLines[column][lineIndex]->getRubyShift(
-                                                                 renderer.getFontAscenderSize(fontId))));
+                                                                 renderer.getFontAscenderSize(fontId),
+                                                                 ruby::horizontalScale(renderer, fontId))));
       }
     }
 
@@ -3632,7 +3633,9 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
   // reason (VerticalSection::streamParseAndLayout keeps a second, narrower column-gap table).
   // TextBlock::render() drops its matching shift on the same condition.
   const int lineFontId = line->getBlockStyle().resolveFontId(fontId);
-  const int rubyExtra = furiganaEnabled ? line->getRubyShift(renderer.getFontAscenderSize(lineFontId)) : 0;
+  const int rubyExtra = furiganaEnabled ? line->getRubyShift(renderer.getFontAscenderSize(lineFontId),
+                                                             ruby::horizontalScale(renderer, lineFontId))
+                                        : 0;
   // A word enlarged by an inline font-size (span) needs the line's advance to cover its taller
   // glyphs, or it collides with the next line. Only lines that actually carry per-word fonts
   // pay the scan; the base font for the leading stays the block's own.
@@ -3753,7 +3756,8 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
 
   // Apply horizontal left inset (margin + padding) as x position offset
   const int16_t xOffset = line->getBlockStyle().leftInset();
-  const int rubyShift = line->getRubyShift(renderer.getFontAscenderSize(fontId));
+  const int rubyShift =
+      line->getRubyShift(renderer.getFontAscenderSize(fontId), ruby::horizontalScale(renderer, fontId));
   const int baseLineHeight = renderer.getLineHeight(fontId, lineCompression);
   for (const auto& link : line->takeLinkSpans()) {
     if (!currentPage->addLink(link.href, static_cast<int16_t>(xOffset + link.x),

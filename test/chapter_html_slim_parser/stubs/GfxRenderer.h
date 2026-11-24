@@ -27,6 +27,13 @@ class GfxRenderer {
     explicit FrameBufferLoan(GfxRenderer&) {}
     void end() {}
   };
+  // Ruby size hooks (lib/Epub/Epub/RubyText.h): bitmap faces drawn as is, ruby at half size.
+  struct FaceScale {
+    bool identity() const { return true; }
+  };
+  bool isVectorFont(int) const { return false; }
+  FaceScale faceScaleFor(int) const { return {}; }
+  uint16_t rubyScale() const { return 128; }
   // Fixture metrics: every glyph is 8 px wide, a space is 4 px, kerning is zero.
   static int trackingBetween(uint32_t left, uint32_t right, int8_t tracking) {
     return left == 0 || left == ' ' || right == ' ' ? 0 : tracking;

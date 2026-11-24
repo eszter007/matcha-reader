@@ -142,7 +142,9 @@ namespace {
 // instead of closing up into the bracket.
 // v164: no format change. First-column ruby room comes from the leftover width and excludes the
 // bezel inset, so columns move and ruby stays visible.
-constexpr uint8_t VSECTION_FILE_VERSION = 164;
+// v165: the furigana byte is half the ruby scale when furigana is on (was 1); ruby size
+// sets the ruby length, the column gap and the first-column ruby room.
+constexpr uint8_t VSECTION_FILE_VERSION = 165;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -2217,7 +2219,7 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   serialization::writePod(b.out, viewportWidth);
   serialization::writePod(b.out, viewportHeight);
   serialization::writePod(b.out, lineSpacing);
-  const uint8_t furiganaFlag = furiganaEnabled ? 1 : 0;
+  const uint8_t furiganaFlag = furiganaCacheByte(spec);
   serialization::writePod(b.out, furiganaFlag);
   serialization::writePod(b.out, spec.characterSpacing);
   serialization::writePod(b.out, spec.rightMarginPx);
@@ -2235,7 +2237,8 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   // 3.3.3) and is drawn in this gap beside its base column, so with furigana ON the floor is half
   // an em, and the settings span the half-to-full em Japanese body text conventionally uses. With
   // furigana OFF nothing is drawn there, so every setting tightens by a quarter em. (Line height
-  // would be the wrong yardstick: it carries Latin leading, 42px against a 28px em here.)
+  // would be the wrong yardstick: it carries Latin leading, 42px against a 28px em here.) A
+  // Furigana Size above half widens the gap to at least the ruby (ruby::verticalColumnGapPx).
   // 漢 sets the em; あ the first-column ruby room below. Both must be resident before measuring, or
   // a not-yet-streamed glyph falls back and the fallback layout is cached.
   renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2\xe3\x81\x82", 0x01);  // 漢あ
@@ -2245,21 +2248,23 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   static constexpr int kGapQuarterEmsPlain[] = {1, 2, 3};     // Tight 1/4, Normal 1/2, Wide 3/4 em
   const int gapQuarterEms =
       furiganaEnabled ? kGapQuarterEmsWithRuby[clampedLineSpacing] : kGapQuarterEmsPlain[clampedLineSpacing];
-  b.layout.setColumnGapPx(std::max(2, emPx * gapQuarterEms / 4));
+  const uint16_t rubyScale = spec.rubyScale;
+  b.layout.setColumnGapPx(ruby::verticalColumnGapPx(emPx, gapQuarterEms, furiganaEnabled, rubyScale));
   b.layout.setCharacterSpacingPx(spec.characterSpacing);
   b.layout.setRubyShown(furiganaEnabled);
+  b.layout.setRubyScale(rubyScale);
   // The first column's ruby sits in the right margin (JLREQ Fig 2.37). The bezel inset is part of
   // that margin but hidden, so only the screen margin counts. Where it is narrower than the ruby's
-  // ink (a wide kana at body size, halved as ruby draws it), the layout moves the columns left by the
+  // ink (a wide kana at body size, scaled as ruby draws it), the layout moves the columns left by the
   // shortfall, taken from the width left over after whole columns (see layoutPages).
   if (furiganaEnabled) {
     int insetTop = 0, insetRight = 0, insetBottom = 0, insetLeft = 0;
     renderer.getOrientedViewableTRBL(&insetTop, &insetRight, &insetBottom, &insetLeft);
     const int visibleMarginPx = std::max(0, static_cast<int>(spec.rightMarginPx) - insetRight);
-    int rubyReachPx = (emPx + 1) / 2;
+    int rubyReachPx = ruby::partUp(emPx, rubyScale);
     GlyphInk ink;
     if (measureGlyphInk(renderer, fontId, 0x3042, 0, &ink) && ink.width > 0) {  // あ
-      rubyReachPx = (ink.left + ink.width + 1) / 2;
+      rubyReachPx = ruby::partUp(ink.left + ink.width, rubyScale);
     }
     b.layout.setRightPaddingPx(std::max(0, rubyReachPx - visibleMarginPx));
   }
@@ -2663,7 +2668,7 @@ bool VerticalSection::loadSectionFile(const ReaderRenderSpec& spec, const bool r
   serialization::readPod(file, cachedBookFonts);
 
   if (cachedFontId != fontId || cachedWidth != viewportWidth || cachedHeight != viewportHeight ||
-      cachedLineSpacing != lineSpacing || cachedFurigana != (furiganaEnabled ? 1 : 0) ||
+      cachedLineSpacing != lineSpacing || cachedFurigana != furiganaCacheByte(spec) ||
       cachedCharacterSpacing != spec.characterSpacing || cachedRightMargin != spec.rightMarginPx ||
       cachedBookFonts != spec.bookFontsSignature) {
     file.close();

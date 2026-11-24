@@ -50,6 +50,7 @@ harness = r"""
 #include <Epub/ReaderRenderSpec.h>
 namespace BidiUtils { enum class BidiBaseDir : int8_t { AUTO = -1, LTR = 0, RTL = 1 }; }
 struct EpdFontFamily { enum Style { REGULAR, UNDERLINE = 4 }; };
+namespace ruby { template <class R> uint16_t horizontalScale(const R&, int) { return HALF; } }
 constexpr int TAG_PageLine = 1;
 struct Rect { int x = 0, y = 0, width = 0, height = 0; };
 enum class Color { LightGray };
@@ -65,7 +66,7 @@ struct Block {
   bool prefixSpace = false;
   bool valid() const { return true; }
   const Style& getBlockStyle() const { return style; }
-  int getRubyShift(int) const { return 0; }
+  int getRubyShift(int, uint16_t) const { return 0; }
   uint16_t wordCount() const {
     return packedText.empty() ? (prefixSpace ? 2 : 1) : std::count(packedText.begin(), packedText.end(), '\0');
   }

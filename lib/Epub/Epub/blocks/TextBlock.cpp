@@ -236,6 +236,7 @@ void rubyToken(const std::string& s, const std::vector<size_t>& br, const size_t
 void TextBlock::layoutRuby(const GfxRenderer& renderer, const int fontId, const int x,
                            std::vector<RubyDrawInfo>& rubies) const {
   rubies.resize(numWords);
+  const uint16_t rubyScale = ruby::horizontalScale(renderer, fontId);
   for (uint16_t i = 0; i < numWords; i++) {
     if (i < rubyTexts.size() && !rubyTexts[i].empty() && (wordStyle(i) & EpdFontFamily::RUBY_CONTINUE) == 0) {
       int groupWordCount = 1;
@@ -251,8 +252,7 @@ void TextBlock::layoutRuby(const GfxRenderer& renderer, const int fontId, const 
       const int leaderWordX = xposArr[i] + x;
       const auto baseDir =
           static_cast<BidiUtils::BidiBaseDir>(BidiUtils::detectParagraphLevel(wordText(i), blockStyle.isRtl ? 1 : 0));
-      const int rubyWidth =
-          renderer.getTextAdvanceX(fontId, rubyTexts[i].c_str(), EpdFontFamily::SUP, blockStyle.letterSpacing);
+      const int rubyWidth = ruby::advance(renderer, fontId, rubyTexts[i].c_str(), blockStyle.letterSpacing, rubyScale);
 
       rubies[i] = {leaderWordX - (rubyWidth - groupActualWidth) / 2, rubyWidth, rubyTexts[i], baseDir};
       // CSS ruby-align: space-around. A ruby narrower than its base is spread across it, each gap
@@ -264,7 +264,7 @@ void TextBlock::layoutRuby(const GfxRenderer& renderer, const int fontId, const 
           std::string tok;
           for (size_t k = 0; k <= breaks.size(); ++k) {
             rubyToken(rubyTexts[i], breaks, k, tok);
-            tokenSum += renderer.getTextAdvanceX(fontId, tok.c_str(), EpdFontFamily::SUP, blockStyle.letterSpacing);
+            tokenSum += ruby::advance(renderer, fontId, tok.c_str(), blockStyle.letterSpacing, rubyScale);
           }
           if (tokenSum < groupActualWidth) {
             int baseChars = 0;
@@ -312,7 +312,9 @@ void TextBlock::wordPlacements(const GfxRenderer& renderer, const int baseFontId
   if (!isValid) return;
   const int fontId = blockStyle.resolveFontId(baseFontId);
   const int wordY =
-      y + (suppressRuby ? 0 : getRubyShift(renderer.getFontAscenderSize(fontId))) + sizedWordDrop(renderer, fontId);
+      y +
+      (suppressRuby ? 0 : getRubyShift(renderer.getFontAscenderSize(fontId), ruby::horizontalScale(renderer, fontId))) +
+      sizedWordDrop(renderer, fontId);
   out.reserve(numWords);
   for (uint16_t i = 0; i < numWords; i++) {
     const int32_t fontSlot = fontsPresent ? wordFontArr[i] : 0;
@@ -400,7 +402,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
   // this much in the line's height. When the annotation is suppressed the layout reserves
   // nothing (see ChapterHtmlSlimParser::addLineToPage), so shifting here would push the words
   // out of their own line box and into the one below.
-  const int rubyShift = (suppressRuby ? 0 : getRubyShift(ascender)) + sizedWordDrop(renderer, fontId);
+  const uint16_t rubyScale = ruby::horizontalScale(renderer, fontId);
+  const int rubyShift = (suppressRuby ? 0 : getRubyShift(ascender, rubyScale)) + sizedWordDrop(renderer, fontId);
 
   for (uint16_t i = 0; i < numWords; i++) {
     const char* word = wordText(i);
@@ -481,8 +484,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
       const int rubyY = wordY - ascender - std::max(1, ascender / 12);
       const RubyDrawInfo& ruby = rubies[i];
       if (ruby.spread == 0) {
-        renderer.drawText(fontId, ruby.x, rubyY, ruby.text.c_str(), inkBlack, EpdFontFamily::SUP, ruby.baseDir,
-                          blockStyle.letterSpacing);
+        ruby::drawHorizontal(renderer, fontId, ruby.x, rubyY, ruby.text.c_str(), inkBlack, ruby.baseDir,
+                             blockStyle.letterSpacing, rubyScale);
       } else {
         // The edge gap is capped, so the rest of the space is split evenly over the n-1 inner gaps.
         // Each position is computed from k rather than accumulated, so rounding does not build up.
@@ -494,9 +497,9 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
           const int tokenIndex = ruby.baseDir == BidiUtils::BidiBaseDir::RTL ? n - 1 - k : k;
           rubyToken(ruby.text, ruby.breaks, static_cast<size_t>(tokenIndex), tok);
           const int gx = ruby.x + pen + ruby.edge + (innerTotal * k + (n - 1) / 2) / (n - 1);
-          renderer.drawText(fontId, gx, rubyY, tok.c_str(), inkBlack, EpdFontFamily::SUP, ruby.baseDir,
-                            blockStyle.letterSpacing);
-          pen += renderer.getTextAdvanceX(fontId, tok.c_str(), EpdFontFamily::SUP, blockStyle.letterSpacing);
+          ruby::drawHorizontal(renderer, fontId, gx, rubyY, tok.c_str(), inkBlack, ruby.baseDir,
+                               blockStyle.letterSpacing, rubyScale);
+          pen += ruby::advance(renderer, fontId, tok.c_str(), blockStyle.letterSpacing, rubyScale);
         }
       }
     }

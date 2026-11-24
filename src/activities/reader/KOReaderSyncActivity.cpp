@@ -125,7 +125,11 @@ void KOReaderSyncActivity::saveProgressAndReturn(int spineIndex, int page) {
   if (remotePosition.hasVisibleTextOffset && remotePosition.spineIndex == spineIndex) {
     offset = remotePosition.visibleTextOffset;
   }
-  if (!EpubReaderUtils::saveProgress(*epub, spineIndex, page, 0, -1, -1, 0xFF, offset)) {
+  // Keep the book's own vertical-text and furigana choices, stored beside the position.
+  int8_t vertical = -1;
+  int8_t furigana = -1;
+  ProgressFile::readBookChoices(epub->getCachePath(), vertical, furigana);
+  if (!EpubReaderUtils::saveProgress(*epub, spineIndex, page, 0, vertical, furigana, 0xFF, offset)) {
     {
       RenderLock lock(*this);
       state = SYNC_FAILED;

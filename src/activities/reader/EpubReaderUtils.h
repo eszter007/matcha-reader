@@ -7,6 +7,7 @@
 #include <optional>
 #include <vector>
 
+#include "FuriganaProgressByte.h"
 #include "ProgressFile.h"
 
 namespace EpubReaderUtils {

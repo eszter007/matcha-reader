@@ -243,8 +243,9 @@ Rect clippingWordRect(const GfxRenderer& renderer, const int fontId, const PageL
     width = std::min(width, static_cast<int>(block->wordXpos(i + 1) - block->wordXpos(i) - skipX));
   }
   return Rect{left + line.xPos + block->wordXpos(i) + skipX,
-              top + line.yPos + block->getRubyShift(renderer.getFontAscenderSize(fontId)), width,
-              renderer.getLineHeight(fontId)};
+              top + line.yPos +
+                  block->getRubyShift(renderer.getFontAscenderSize(fontId), ruby::horizontalScale(renderer, fontId)),
+              width, renderer.getLineHeight(fontId)};
 }
 
 int clampPercent(int percent) {
@@ -391,7 +392,8 @@ EpubReaderActivity::~EpubReaderActivity() {
   // ActivityManager destroys activities with its RenderLock already held;
   // taking another here self-deadlocks (renderingMutex is non-recursive).
   settleOverlayRefresh();
-  discardOverlayPage();  // free the overlay's page snapshot if one is held
+  discardOverlayPage();               // free the overlay's page snapshot if one is held
+  renderer.setRubyScale(ruby::HALF);  // other screens draw ruby at the default size
   // A radio still stopped for this book's build may start again in the next one.
   if (radioReleasedForBuild.load()) bleturner::afterPaint();
 }
@@ -454,6 +456,7 @@ void EpubReaderActivity::storeBookTextProfile() {
   if (now.wordSpacing != openTextProfile_.wordSpacing) profile.wordSpacing = now.wordSpacing;
   if (now.lookupWordMarks != openTextProfile_.lookupWordMarks) profile.lookupWordMarks = now.lookupWordMarks;
   if (now.furigana != openTextProfile_.furigana) profile.furigana = now.furigana;
+  if (now.furiganaSize != openTextProfile_.furiganaSize) profile.furiganaSize = now.furiganaSize;
   if (latin) {
     latinTextProfile_ = profile;
   } else {
@@ -652,7 +655,7 @@ void EpubReaderActivity::onReaderEnter() {
       LOG_DBG("ERS", "Loaded stock-layout cache: spine=%d page=%d", currentSpineIndex, nextPageNumber);
     } else if (dataSize >= 8) {
       verticalOverride = static_cast<int8_t>(data[6]);
-      furiganaOverride = static_cast<int8_t>(data[7]);
+      EpubReaderUtils::unpackFurigana(data[7], furiganaOverride, furiganaSizeOverride);
       // Drop a forced-vertical flag stored against a non-CJK book (set before
       // vertical was restricted to CJK books, or on a book whose language was
       // later corrected). useVerticalText() already ignores it; clearing it here
@@ -732,8 +735,9 @@ void EpubReaderActivity::onReaderExit() {
   if (textProfileVisitOpen_ && epub) {
     const int8_t vertical = verticalOverride;
     const int8_t furigana = furiganaOverride;
+    const int8_t furiganaSize = furiganaSizeOverride;
     followTextProfileChanges();
-    if (verticalOverride != vertical || furiganaOverride != furigana) {
+    if (verticalOverride != vertical || furiganaOverride != furigana || furiganaSizeOverride != furiganaSize) {
       // Text Settings freed the layout; the offset recorded then keeps the exact position.
       saveProgress(currentSpineIndex, shownPage(nextPageNumber), chapterPageTotal(cachedChapterTotalPageCount),
                    verticalOverride, furiganaOverride, cachedVisibleTextOffset);
@@ -2010,6 +2014,7 @@ void EpubReaderActivity::applyVerticalFuriganaOverride(const int8_t verticalOver
 void EpubReaderActivity::rememberTextProfile() {
   verticalModeBefore_ = profileVerticalMode();
   furiganaBefore_ = SETTINGS.furigana;
+  furiganaSizeBefore_ = SETTINGS.furiganaSize;
   textProfileVisitOpen_ = true;
 }
 
@@ -2019,6 +2024,7 @@ void EpubReaderActivity::followTextProfileChanges() {
   RenderLock lock(*this);  // the render task reads both overrides
   if (profileVerticalMode() != verticalModeBefore_) verticalOverride = -1;
   if (SETTINGS.furigana != furiganaBefore_) furiganaOverride = -1;
+  if (SETTINGS.furiganaSize != furiganaSizeBefore_) furiganaSizeOverride = -1;
 }
 
 void EpubReaderActivity::dropSectionsKeepingPosition() {
@@ -2473,8 +2479,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           verticalSection.reset();
           epub->clearCache();
           epub->setupCacheDir();
-          if (!EpubReaderUtils::saveProgress(*epub, spine, page, total, verticalOverride, furiganaOverride, percent,
-                                             offset)) {
+          if (!EpubReaderUtils::saveProgress(*epub, spine, page, total, verticalOverride,
+                                             EpubReaderUtils::packFurigana(furiganaOverride, furiganaSizeOverride),
+                                             percent, offset)) {
             LOG_ERR("ERS", "Failed to save progress before cache clear");
           }
         }
@@ -4663,7 +4670,8 @@ bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
   if (spineIndex >= 0 && spineIndex < epub->getSpineItemsCount()) {
     noteRecentPage(spineIndex, currentPage, pageCount, percent, offset);
   }
-  if (!EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, vertOverride, furiOverride, percent,
+  if (!EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, vertOverride,
+                                     EpubReaderUtils::packFurigana(furiOverride, furiganaSizeOverride), percent,
                                      offset)) {
     return false;
   }
@@ -6187,6 +6195,10 @@ ReaderRenderSpec EpubReaderActivity::readerSpec(const uint16_t viewportWidth, co
   ReaderRenderSpec spec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
   spec.fontId = effectiveReaderFontId();
   spec.furiganaEnabled = useFurigana();
+  spec.furiganaSize = furiganaSize();
+  spec.rubyScale = ruby::scaleForSize(spec.furiganaSize);
+  // Drawing reads the ruby scale from the renderer; it follows the spec the pages are laid out with.
+  renderer.setRubyScale(spec.rubyScale);
   spec.bookFontsSignature = bookFonts.signature();
   int marginTop, marginRight, marginBottom, marginLeft;
   renderer.getOrientedViewableTRBL(&marginTop, &marginRight, &marginBottom, &marginLeft);
@@ -6817,6 +6829,7 @@ int EpubReaderActivity::textControls(TextControl* out) const {
     out[n++] = TextControl::Size;
     out[n++] = TextControl::Font;
     if (vertical) out[n++] = TextControl::Furigana;
+    if (vertical && useFurigana()) out[n++] = TextControl::FuriganaSize;
     if (!cjk) out[n++] = TextControl::FocusReading;
     out[n++] = TextControl::MoreSettings;
   } else {
@@ -6908,6 +6921,9 @@ void EpubReaderActivity::changeTextControl(const TextControl control, const int 
     case TextControl::Font:
       showFontPopup();
       return;
+    case TextControl::FuriganaSize:
+      showFuriganaSizePopup();
+      return;
     case TextControl::MoreSettings:
       openTextSettingsFromPanel();
       return;
@@ -6922,6 +6938,31 @@ void EpubReaderActivity::applyTextSettingLive() {
   textSettingsDirty = true;
   discardOverlayPage();  // the stored page is laid out with the old settings
   requestUpdate();
+}
+
+// Furigana Size for this book, with a line on what a larger size costs. Like the Furigana toggle,
+// it becomes the book's own choice.
+void EpubReaderActivity::showFuriganaSizePopup() {
+  char labels[ruby::SIZE_COUNT][8];
+  const char* options[ruby::SIZE_COUNT];
+  for (int i = 0; i < ruby::SIZE_COUNT; ++i) {
+    snprintf(labels[i], sizeof(labels[i]), tr(STR_PERCENT_VALUE_FORMAT),
+             static_cast<unsigned>((ruby::SIZE_SCALES[i] * 100 + 128) / 256));
+    options[i] = labels[i];
+  }
+  overlayPopup.showMessage(isChineseBook() ? tr(STR_PINYIN_SIZE) : tr(STR_FURIGANA_SIZE),
+                           isChineseBook() ? tr(STR_PINYIN_SIZE_HELP) : tr(STR_FURIGANA_SIZE_HELP), options,
+                           ruby::SIZE_COUNT, furiganaSize(), [this](const int idx) {
+                             if (idx < 0 || idx >= ruby::SIZE_COUNT || idx == furiganaSize()) return;
+                             {
+                               RenderLock lock(*this);  // the render task reads the override
+                               furiganaSizeOverride = static_cast<int8_t>(idx);
+                             }
+                             // A section-cache layout parameter, like the Furigana toggle.
+                             discardOverlayPage();
+                             requestUpdate();
+                           });
+  paintOverlayPopup();
 }
 
 // The point sizes this book can render at, as a picker (Select on the Size row).
@@ -7333,6 +7374,16 @@ void EpubReaderActivity::renderOverlay() {
                nullptr,
                0,
                static_cast<int8_t>(useFurigana() ? 1 : 0)};
+          break;
+        case TextControl::FuriganaSize:
+          snprintf(furiganaSizeLabel_, sizeof(furiganaSizeLabel_), tr(STR_PERCENT_VALUE_FORMAT),
+                   static_cast<unsigned>((ruby::SIZE_SCALES[furiganaSize()] * 100 + 128) / 256));
+          r = {Row::Kind::Chooser,
+               Row::Picture::None,
+               isChineseBook() ? tr(STR_PINYIN_SIZE) : tr(STR_FURIGANA_SIZE),
+               furiganaSizeLabel_,
+               0,
+               -1};
           break;
         case TextControl::FocusReading:
           r = {Row::Kind::Toggle,
@@ -8569,6 +8620,11 @@ uint8_t EpubReaderActivity::readerBottomReserve(const bool verticalMode) const {
       statusBarHeight + (needsPageTurnLane ? UITheme::getInstance().getMetrics().statusBarVerticalMargin : 0));
   return verticalMode ? static_cast<uint8_t>(drawnHeight + SETTINGS.screenMargin)
                       : std::max(SETTINGS.screenMargin, drawnHeight);
+}
+
+uint8_t EpubReaderActivity::furiganaSize() const {
+  const int size = furiganaSizeOverride >= 0 ? furiganaSizeOverride : SETTINGS.furiganaSize;
+  return size < ruby::SIZE_COUNT ? static_cast<uint8_t>(size) : ruby::DEFAULT_SIZE;
 }
 
 bool EpubReaderActivity::useFurigana() const {

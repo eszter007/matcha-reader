@@ -11,6 +11,7 @@
 
 #include "GfxRenderer.h"
 #include "Kinsoku.h"
+#include "RubySize.h"
 #include "VerticalLayoutSupport.h"
 #include "VerticalParsedText.h"
 
@@ -1494,8 +1495,8 @@ struct VerticalParsedText::LayoutCursor {
     const int n = static_cast<int>(groupEnd - idx);
     const int gapPx = geom.rowPitchPx - geom.cellPx;
     const int basePx = n * geom.cellPx + (n - 1) * gapPx;
-    // Ruby is half the body size and set solid (VerticalTextBlock::render draws it so).
-    const int rubyLineH = (geom.cellPx + 1) / 2;
+    // Ruby is set solid at the ruby size (VerticalTextBlock::render draws it so).
+    const int rubyLineH = ruby::partUp(geom.cellPx, o.rubyScale_);
     int rubyChars = 0;
     for (size_t k = idx; k < groupEnd; k++) {
       const auto& c = o.stream_[k];
@@ -1903,10 +1904,15 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // N columns occupy N*advance - gap, not N*advance: the last one needs no trailing 行間, so
   // dividing the width by the advance drops a column whenever the remainder is a cell or more.
   const int viewportWidthPx = static_cast<int>(viewportWidth_);
-  const uint16_t columnsPerPage = static_cast<uint16_t>(std::clamp((viewportWidthPx + columnGapPx_) / columnAdvancePx,
-                                                                   1, static_cast<int>(VerticalGlyph::MAX_GRID_CELLS)));
-  // The right padding (room for first-column ruby) comes out of the leftover width only, so it
-  // never costs a column; where the leftover is smaller, the ruby is clamped at the visible edge.
+  // Ruby above half size is too wide to draw over its own column at the panel edge, so its room
+  // beside the first column may cost a column.
+  const int columnsWidthPx =
+      rubyShown_ && rubyScale_ > ruby::HALF ? std::max(cellPx, viewportWidthPx - rightPaddingPx_) : viewportWidthPx;
+  const uint16_t columnsPerPage = static_cast<uint16_t>(std::clamp((columnsWidthPx + columnGapPx_) / columnAdvancePx, 1,
+                                                                   static_cast<int>(VerticalGlyph::MAX_GRID_CELLS)));
+  // At half size and below, the right padding (room for first-column ruby) comes out of the
+  // leftover width only, so it never costs a column; where the leftover is smaller, the ruby is
+  // clamped at the visible edge.
   const int leftoverPx = std::max(0, viewportWidthPx - (columnsPerPage * columnAdvancePx - columnGapPx_));
   const int usableWidthPx = std::max(cellPx, viewportWidthPx - std::min(rightPaddingPx_, leftoverPx));
   // The rest of the width that does not divide evenly into whole columns stays on the LEFT,
