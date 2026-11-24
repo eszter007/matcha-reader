@@ -31,7 +31,8 @@
 // indexed book so an allocation failure remains recoverable on the C3.
 class LibraryListActivity final : public UiTabListActivity {
  public:
-  LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
+  // initialTab: Recent, Title or Author (the Files tab is the file browser).
+  LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, int initialTab = 0);
 
   void onEnter() override;
   void onExit() override;

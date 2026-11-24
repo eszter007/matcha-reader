@@ -687,7 +687,8 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   // The Library's own band, with Files marked: this screen is that tab, so leaving it for Books
   // or Shelves is a tab switch rather than a trip back through Home.
   if (showsLibraryTabs()) {
-    LibraryTabs::buildBand(screen, renderer, LibraryTabs::Files, topBandFocused, mappedInput.hasTouch(), ACTION_TAB);
+    LibraryTabs::buildBand(screen, renderer, LibraryTabs::filesTab(), topBandFocused, mappedInput.hasTouch(),
+                           ACTION_TAB);
   } else {
     screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   }
