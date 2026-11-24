@@ -98,8 +98,8 @@ if (parsedSize != fileSize) {
 ### Version 119 (fork numbering)
 
 The furigana byte (after `honorBookInsets`) is 0 when furigana is off and half the ruby scale
-when it is on (8.8 fixed point, so 64 at the default 50 %); it was 1 for on. The ruby scale is the
-Furigana Size setting; 40 % is raised toward 8 pt for the reader's point size, up to 50 %. The size sets the room above a line
+when it is on (8.8 fixed point, so 64 at the default 50 %); it was 1 for on. The ruby scale comes from the
+Furigana Size setting. The size sets the room above a line
 with ruby and the ruby widths, so changing it rebuilds the section. The header length is
 unchanged. Completed and partial sections are rebuilt. Book metadata and saved progress are kept.
 
@@ -666,8 +666,8 @@ its trailer only; the page records are written and read by `VerticalSection.cpp`
 ### Version 165
 
 The furigana byte is 0 when furigana is off and half the ruby scale when it is on (8.8 fixed
-point, so 64 at the default 50 %); it was 1 for on. The ruby scale is the Furigana Size setting;
-40 % is raised toward 8 pt for the reader's point size, up to 50 %. The size sets the length of a ruby group down the column, the
+point, so 64 at the default 50 %); it was 1 for on. The ruby scale comes from the Furigana Size setting.
+The size sets the length of a ruby group down the column, the
 column gap (at least the ruby width) and the ruby room beside the first column, which above half
 size may cost a column. The header length
 is unchanged. Cached chapters are laid out again.

@@ -369,7 +369,7 @@ TEST(VerticalPageBreak, LargeFuriganaKeepsTheColumnGapAtLeastTheRubyWidth) {
   // Half size keeps the half-em gap the ruby has always used.
   EXPECT_EQ(ruby::verticalColumnGapPx(EM, TIGHT, true, ruby::HALF), EM / 2);
   for (uint8_t size = 0; size < ruby::SIZE_COUNT; size++) {
-    const uint16_t scale = ruby::effectiveScale(ruby::scaleForSize(size), 18);  // 18 pt text
+    const uint16_t scale = ruby::scaleForSize(size);
     const int gap = ruby::verticalColumnGapPx(EM, TIGHT, true, scale);
     EXPECT_GE(gap, ruby::partUp(EM, scale)) << "size " << int(size);
 

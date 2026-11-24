@@ -6196,7 +6196,7 @@ ReaderRenderSpec EpubReaderActivity::readerSpec(const uint16_t viewportWidth, co
   spec.fontId = effectiveReaderFontId();
   spec.furiganaEnabled = useFurigana();
   spec.furiganaSize = furiganaSize();
-  spec.rubyScale = ruby::effectiveScale(ruby::scaleForSize(spec.furiganaSize), SETTINGS.fontPointSize);
+  spec.rubyScale = ruby::scaleForSize(spec.furiganaSize);
   // Drawing reads the ruby scale from the renderer; it follows the spec the pages are laid out with.
   renderer.setRubyScale(spec.rubyScale);
   spec.bookFontsSignature = bookFonts.signature();

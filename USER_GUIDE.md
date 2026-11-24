@@ -528,8 +528,7 @@ to that book only.
       book applies to all books of that script, and also replaces that book's own choice from the **Text** panel.
     - **Furigana Size** (**Pinyin Size** in the Chinese profiles), shown while Furigana is on: 40%, 50%, 60% or 70%
       of the text size. The default is 50%. A larger size widens the gap between lines (columns in vertical
-      text), so fewer lines fit on a page. At 40%, furigana is raised toward 8 pt for small text, but never past
-      50%. With an SD font (TTF or OTF) on a device that supports them, furigana
+      text), so fewer lines fit on a page. With an SD font (TTF or OTF) on a device that supports them, furigana
       is drawn from the font at its own size, so it stays sharp. Like Furigana, each profile keeps its own size.
     - **Underline Dictionary Words** (off by default, Japanese and Chinese profiles): while you pick a word to look
       up, every word the dictionary knows gets a line under it, or beside it in vertical text. On a page the device

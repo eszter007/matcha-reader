@@ -46,8 +46,8 @@ struct ReaderRenderSpec {
   // Matcha: furigana size, an index into ruby::SIZE_SCALES (40/50/60/70 % of the base). Per book
   // like furiganaEnabled. A larger size reserves more room above a line and between columns.
   uint8_t furiganaSize = ruby::DEFAULT_SIZE;
-  // The scale ruby is laid out and drawn at (8.8, RubySize.h): furiganaSize, with 40 % raised
-  // toward 8 pt for the reader's point size. Set by the reader with furiganaSize; the cache key.
+  // The scale ruby is laid out and drawn at (8.8, RubySize.h), from furiganaSize. Set by the
+  // reader with furiganaSize; the cache key.
   uint16_t rubyScale = ruby::HALF;
   // Matcha, vertical text: the margin right of the text area, bezel inset included. The first
   // column's ruby is drawn there, and where it is narrower than the ruby the layout holds back
