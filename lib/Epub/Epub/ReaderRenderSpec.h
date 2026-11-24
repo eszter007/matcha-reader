@@ -89,7 +89,7 @@ inline uint32_t readerRenderSpecSignature(const ReaderRenderSpec& spec) {
 }
 
 // The furigana byte of both section cache headers: 0 when furigana is off (its size then changes
-// nothing), else half the ruby scale (rubyScale / 2, 51..128).
+// nothing), else half the ruby scale: 51, 64, 77 or 89 for 40, 50, 60 or 70 %.
 inline uint8_t furiganaCacheByte(const ReaderRenderSpec& spec) {
   return spec.furiganaEnabled ? static_cast<uint8_t>(std::max(1, spec.rubyScale >> 1)) : 0;
 }

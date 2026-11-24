@@ -227,10 +227,8 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
                                bool black) const {
   const int cellPxLocal = drawGlyphs(renderer, page_, fontId, offsetX, offsetY, black);
 
-  // JLREQ 3.3.2: ruby is half the size of its base (the Furigana Size setting can change that) and
-  // set solid, so one ruby character's body is that share of an EM. The font's line height is the wrong yardstick: it
-  // carries Latin leading (48px against a 33px em in Noto Serif JP), which stepped the ruby 45% too far apart and ran
-  // every annotation past the foot of its base.
+  // JLREQ 3.3.2: ruby is set solid, so one ruby character's body is the ruby share of an EM
+  // (half by default; see the Furigana Size setting). The font's line height would add Latin leading.
   const int rubyEmPx = verticalCellPx(renderer, rubyFontId);
   const uint16_t rel = renderer.rubyScale();
   const int rubyLineHBody = ruby::partUp(rubyEmPx, rel);

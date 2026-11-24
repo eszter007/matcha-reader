@@ -6950,8 +6950,9 @@ void EpubReaderActivity::showFuriganaSizePopup() {
              static_cast<unsigned>((ruby::SIZE_SCALES[i] * 100 + 128) / 256));
     options[i] = labels[i];
   }
-  overlayPopup.showMessage(isChineseBook() ? tr(STR_PINYIN_SIZE) : tr(STR_FURIGANA_SIZE), tr(STR_FURIGANA_SIZE_HELP),
-                           options, ruby::SIZE_COUNT, furiganaSize(), [this](const int idx) {
+  overlayPopup.showMessage(isChineseBook() ? tr(STR_PINYIN_SIZE) : tr(STR_FURIGANA_SIZE),
+                           isChineseBook() ? tr(STR_PINYIN_SIZE_HELP) : tr(STR_FURIGANA_SIZE_HELP), options,
+                           ruby::SIZE_COUNT, furiganaSize(), [this](const int idx) {
                              if (idx < 0 || idx >= ruby::SIZE_COUNT || idx == furiganaSize()) return;
                              {
                                RenderLock lock(*this);  // the render task reads the override

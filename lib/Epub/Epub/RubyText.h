@@ -44,7 +44,7 @@ inline void drawHorizontal(const GfxRenderer& renderer, const int fontId, const 
                           EpdFontFamily::REGULAR, baseDir, letterSpacing);
 }
 
-// The ruby scale for a line in fontId: the renderer's setting, already raised to the minimum.
+// The ruby scale for a line: the renderer's setting, the same for every font.
 inline uint16_t horizontalScale(const GfxRenderer& renderer, const int /*fontId*/) { return renderer.rubyScale(); }
 
 }  // namespace ruby

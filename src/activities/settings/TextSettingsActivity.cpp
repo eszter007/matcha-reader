@@ -507,8 +507,9 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
         options[i] = labels[i];
       }
       const bool chinese = profile_ != CrossPointSettings::TextProfileId::Japanese;
-      optionPopup_.showMessage(chinese ? tr(STR_PINYIN_SIZE) : tr(STR_FURIGANA_SIZE), tr(STR_FURIGANA_SIZE_HELP),
-                               options, ruby::SIZE_COUNT, std::min<int>(SETTINGS.furiganaSize, ruby::SIZE_COUNT - 1),
+      optionPopup_.showMessage(chinese ? tr(STR_PINYIN_SIZE) : tr(STR_FURIGANA_SIZE),
+                               chinese ? tr(STR_PINYIN_SIZE_HELP) : tr(STR_FURIGANA_SIZE_HELP), options,
+                               ruby::SIZE_COUNT, std::min<int>(SETTINGS.furiganaSize, ruby::SIZE_COUNT - 1),
                                [](int idx) { SETTINGS.furiganaSize = static_cast<uint8_t>(idx); });
       requestUpdate();
       break;

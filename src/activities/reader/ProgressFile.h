@@ -16,6 +16,20 @@ namespace ProgressFile {
 // apart; a card that saw both firmwares carries both kinds.
 inline constexpr bool isStockLayout(const int size) { return size == 4 || size == 6 || size == 10; }
 
+// The book's own vertical-text and furigana bytes ([6] and [7]) from progress.bin, or -1 each
+// when there are none (no file, or the stock layout, which has the text offset there).
+inline void readBookChoices(const std::string& cachePath, int8_t& vertical, int8_t& furigana) {
+  vertical = -1;
+  furigana = -1;
+  HalFile f;
+  if (!Storage.openFileForRead("PRG", cachePath + "/progress.bin", f)) return;
+  uint8_t data[13];
+  const int size = f.read(data, sizeof(data));
+  if (size < 8 || isStockLayout(size)) return;
+  vertical = static_cast<int8_t>(data[6]);
+  furigana = static_cast<int8_t>(data[7]);
+}
+
 // Writes `len` bytes of reader progress to `<cachePath>/progress.bin` without
 // ever leaving the canonical file half-written.
 //

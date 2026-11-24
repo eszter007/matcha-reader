@@ -98,10 +98,10 @@ if (parsedSize != fileSize) {
 ### Version 119 (fork numbering)
 
 The furigana byte (after `honorBookInsets`) is 0 when furigana is off and half the ruby scale
-when it is on (8.8 fixed point, so 64 at the default 50 %); it was 1 for on. The ruby scale comes from the
-Furigana Size setting. The size sets the room above a line
-with ruby and the ruby widths, so changing it rebuilds the section. The header length is
-unchanged. Completed and partial sections are rebuilt. Book metadata and saved progress are kept.
+when it is on (8.8 fixed point, so 64 at the default 50 %); it was 1 for on. The ruby scale
+comes from the Furigana Size setting. The size sets the room above a line with ruby and the
+ruby widths, so changing it rebuilds the section. The header length is unchanged. Completed
+and partial sections are rebuilt. Book metadata and saved progress are kept.
 
 ### Version 118 (fork numbering)
 

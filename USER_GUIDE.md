@@ -526,7 +526,7 @@ to that book only.
     - **Furigana** (on by default, Japanese profile), called **Pinyin / Zhuyin** in the Chinese profiles: shows the
       readings a book puts over its text. Each of the three profiles keeps its own setting. A change made inside a
       book applies to all books of that script, and also replaces that book's own choice from the **Text** panel.
-    - **Furigana Size** (**Pinyin Size** in the Chinese profiles), shown while Furigana is on: 40%, 50%, 60% or 70%
+    - **Furigana Size** (**Pinyin Size** in the Chinese profiles, also for zhuyin), shown while Furigana is on: 40%, 50%, 60% or 70%
       of the text size. The default is 50%. A larger size widens the gap between lines (columns in vertical
       text), so fewer lines fit on a page. With an SD font (TTF or OTF) on a device that supports them, furigana
       is drawn from the font at its own size, so it stays sharp. Like Furigana, each profile keeps its own size.
