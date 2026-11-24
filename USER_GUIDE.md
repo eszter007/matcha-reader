@@ -742,8 +742,8 @@ The rows are grouped by the control they change. Each one is described further d
   on devices with a Home key, **Swipe Up**. With **Off** you can still open it by swiping down from the top edge,
   with the Home key, or with a button set to open it.
 
-- **Tap to look up** (no setting of its own): When neither page direction uses taps, a short tap on a word looks it
-  up, and holding a word starts a clipping that you drag out with your finger. Tapping a link still follows it, and
+- **Tap to look up** (no setting of its own): When neither page direction uses taps, or **Touch Reader Controls** is off, a
+  short tap on a word looks it up, and holding a word starts a clipping that you drag out with your finger. Tapping a link still follows it, and
   tapping empty space in the centre opens the reader menu. In the centre, a tap up to a line away from text still
   looks up the nearest word, so a slightly missed word does not open the menu. In manga, holding inside a speech bubble still looks up
   the text.
@@ -1265,7 +1265,7 @@ A clipping saves a passage you have selected and highlights it on the page.
 
 **With buttons:** choose **Create Clipping** in the Reader Menu. Move to the first word and press **Confirm**, then move to the last word and press **Confirm** again to save. **Back** clears the selection. Press **Back** again to leave.
 
-**With touch:** press and hold a word. Its definition opens, with a handle on each side of the word. Drag a handle to turn the lookup into a selection. If your page turns use swipes only, holding a word starts the selection right away. Drag the handles to set the start and end, then tap one of the buttons above the selection (below it when the selection is at the top of the page): **Define** (look it up), **Translate** (with Gemini, see [6.2](#62-page-translation)), **Clip** or **Save** (bookmark the page). When the selection holds several words, **Define** shows the word it opens on first and further words of the selection (up to ten) on the next pages. They fill in while you read; a **Loading...** page at the end means more are coming. Back or a tap outside the panel stops the lookups.
+**With touch:** press and hold a word. Its definition opens, with a handle on each side of the word. Drag a handle to turn the lookup into a selection. If your page turns use swipes only, or Touch Reader Controls is off, holding a word starts the selection right away. Drag the handles to set the start and end, then tap one of the buttons above the selection (below it when the selection is at the top of the page): **Define** (look it up), **Translate** (with Gemini, see [6.2](#62-page-translation)), **Clip** or **Save** (bookmark the page). When the selection holds several words, **Define** shows the word it opens on first and further words of the selection (up to ten) on the next pages. They fill in while you read; a **Loading...** page at the end means more are coming. Back or a tap outside the panel stops the lookups.
 
 To carry a selection onto the next page, hold the end handle on the last word for a second. A selection can cover up to three pages of the same chapter. To remove a clipping, press and hold its highlighted text.
 
