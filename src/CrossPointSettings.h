@@ -455,6 +455,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Japanese and Chinese: ruby (furigana, pinyin or zhuyin) over the text. A book's own choice
   // overrides it. Per text profile; the Latin value is never used.
   uint8_t furigana = 1;
+  // Furigana size: 0..3 = 40/50/60/70 % of the text (ruby::SIZE_SCALES), 50 % by default. A book's
+  // own choice overrides it, as for furigana. Per text profile; the Latin value is never used.
+  uint8_t furiganaSize = 1;
   // Text profiles: books in each script keep their own font, size and spacing. The live fields
   // (fontFamily, sdFontFamilyName, fontPointSize, lineSpacing, characterSpacing, wordSpacing) hold
   // the Latin profile; a book in another script swaps its profile in while it is open
@@ -471,6 +474,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     uint8_t publisherFonts = 0;   // see CrossPointSettings::publisherFonts
     uint8_t lookupWordMarks = 0;  // see CrossPointSettings::lookupWordMarks
     uint8_t furigana = 1;         // see CrossPointSettings::furigana
+    uint8_t furiganaSize = 1;     // see CrossPointSettings::furiganaSize
     bool operator==(const TextProfile&) const = default;
   };
   TextProfile liveTextProfile() const;

@@ -180,6 +180,7 @@ class GfxRenderer {
   std::map<int, int> fallbackFontMap_;
   std::map<int, FallbackScale> fallbackScaleMap_;  // primary font id -> scales its fallback draws at
   std::map<int, FaceScale> faceScales_;            // font id -> the scale it is always drawn at
+  uint16_t rubyScale_ = 128;                       // see setRubyScale
 
   // The metrics as the font data holds them, before a FaceScale. The scaled walk applies its own
   // scale to these; the public getters return them scaled.
@@ -321,6 +322,11 @@ class GfxRenderer {
   // for a fallback that is not the primary's size -- the CJK cuts start at 12 pt, the UI fonts at 8.
   // nonCjkScale: the same for what the fallback itself takes from ITS fallback family (the
   // built-in Latin of a CJK companion, see EpdFontFamily::setFallback), which has its own size.
+  // Ruby (furigana) size relative to its base text, 8.8 fixed point; 128 is half (the JLREQ size).
+  // The reader sets it from its render spec, which keys the section caches on it, so layout and
+  // drawing read the same value.
+  void setRubyScale(const uint16_t scale) { rubyScale_ = scale; }
+  uint16_t rubyScale() const { return rubyScale_; }
   void setFallbackFont(int primaryFontId, int fallbackFontId, uint16_t scale = 256, uint16_t nonCjkScale = 256) {
     fallbackFontMap_[primaryFontId] = fallbackFontId;
     if (scale == 256 && nonCjkScale == 256) {

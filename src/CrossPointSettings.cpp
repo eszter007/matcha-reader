@@ -1,6 +1,7 @@
 #include "CrossPointSettings.h"
 
 #include <BlePageTurnerJson.h>
+#include <Epub/RubySize.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <ObfuscationUtils.h>
@@ -51,6 +52,7 @@ CrossPointSettings::TextProfile CrossPointSettings::liveTextProfile() const {
   p.publisherFonts = publisherFonts;
   p.lookupWordMarks = lookupWordMarks;
   p.furigana = furigana;
+  p.furiganaSize = furiganaSize;
   return p;
 }
 
@@ -64,6 +66,7 @@ void CrossPointSettings::setLiveTextProfile(const TextProfile& p) {
   publisherFonts = p.publisherFonts;
   lookupWordMarks = p.lookupWordMarks;
   furigana = p.furigana;
+  furiganaSize = p.furiganaSize;
 }
 
 void CrossPointSettings::holdLatinTextProfile(const TextProfile& latin) {
@@ -190,6 +193,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
     o["publisherFonts"] = p.publisherFonts;
     o["lookupWordMarks"] = p.lookupWordMarks;
     o["furigana"] = p.furigana;
+    o["furiganaSize"] = p.furiganaSize;
   }
   if (uiFontFamilyName[0] != '\0') {
     doc["uiFontFamilyName"] = uiFontFamilyName;
@@ -470,6 +474,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
         p.publisherFonts = (o["publisherFonts"] | 0) != 0 ? 1 : 0;
         p.lookupWordMarks = (o["lookupWordMarks"] | 0) != 0 ? 1 : 0;
         p.furigana = (o["furigana"] | 1) != 0 ? 1 : 0;
+        p.furiganaSize = clamp(o["furiganaSize"] | ruby::DEFAULT_SIZE, ruby::SIZE_COUNT, ruby::DEFAULT_SIZE);
       }
       scriptTextProfiles[i - 1] = p;
     }

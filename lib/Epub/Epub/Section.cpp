@@ -317,7 +317,9 @@ namespace {
 //      reph, positioned marks, in the book's language; reordered vowel signs for fonts without
 //      shaping data), and TextBlocks store each complex-script word's drawn form so page turns
 //      never shape. The display-text flag is bit 2 here: bit 1 is the per-word font array.
-constexpr uint8_t SECTION_FILE_VERSION = 118;
+// v119: the furigana byte is half the ruby scale when furigana is on (was 1); ruby size
+//      sets the room above ruby lines and the ruby widths.
+constexpr uint8_t SECTION_FILE_VERSION = 119;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -407,7 +409,7 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   serialization::writePod(file, spec.imageRendering);
   serialization::writePod(file, spec.focusReadingEnabled);
   serialization::writePod(file, spec.honorBookInsets);
-  serialization::writePod(file, spec.furiganaEnabled);
+  serialization::writePod(file, furiganaCacheByte(spec));
   serialization::writePod(file, spec.characterSpacing);
   serialization::writePod(file, spec.wordSpacingPercent);
   // Patterns change the layout, and a pack can be installed (or fail to load) after a build.
@@ -454,7 +456,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     uint8_t fileImageRendering;
     bool fileFocusReadingEnabled;
     bool fileHonorBookInsets;
-    bool fileFuriganaEnabled;
+    uint8_t fileFurigana;
     int8_t fileCharacterSpacing;
     uint8_t fileWordSpacingPercent;
     uint8_t fileHyphenationPatterns;
@@ -471,7 +473,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     serialization::readPod(file, fileImageRendering);
     serialization::readPod(file, fileFocusReadingEnabled);
     serialization::readPod(file, fileHonorBookInsets);
-    serialization::readPod(file, fileFuriganaEnabled);
+    serialization::readPod(file, fileFurigana);
     serialization::readPod(file, fileCharacterSpacing);
     serialization::readPod(file, fileWordSpacingPercent);
     serialization::readPod(file, fileHyphenationPatterns);
@@ -485,7 +487,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         spec.viewportWidth != fileViewportWidth || spec.viewportHeight != fileViewportHeight ||
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
         spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
-        spec.honorBookInsets != fileHonorBookInsets || spec.furiganaEnabled != fileFuriganaEnabled ||
+        spec.honorBookInsets != fileHonorBookInsets || furiganaCacheByte(spec) != fileFurigana ||
         spec.characterSpacing != fileCharacterSpacing || spec.wordSpacingPercent != fileWordSpacingPercent ||
         spec.bookFontsSignature != fileBookFontsSignature || hyphenationPatterns != fileHyphenationPatterns) {
       // Name the field(s). A mismatch here throws the whole chapter away and rebuilds it, and on a
@@ -523,7 +525,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         note("focusReading", spec.focusReadingEnabled, fileFocusReadingEnabled);
       if (spec.honorBookInsets != fileHonorBookInsets)
         note("honorBookInsets", spec.honorBookInsets, fileHonorBookInsets);
-      if (spec.furiganaEnabled != fileFuriganaEnabled) note("furigana", spec.furiganaEnabled, fileFuriganaEnabled);
+      if (furiganaCacheByte(spec) != fileFurigana) note("furigana", furiganaCacheByte(spec), fileFurigana);
       if (spec.characterSpacing != fileCharacterSpacing)
         note("characterSpacing", spec.characterSpacing, fileCharacterSpacing);
       if (spec.wordSpacingPercent != fileWordSpacingPercent)
@@ -823,6 +825,8 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   // captures the BuildContext pointer to append to its in-RAM LUT; build_ owns the
   // context for the parser's whole lifetime.
   BuildContext* ctxPtr = ctx.get();
+  // Ruby widths and the room above ruby lines are measured at this scale (RubySize.h).
+  renderer.setRubyScale(spec.rubyScale);
   ctx->parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
       epub, ctxPtr->parsePath, renderer, spec.fontId, spec.lineCompression, spec.extraParagraphSpacing,
       spec.paragraphAlignment, spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled,

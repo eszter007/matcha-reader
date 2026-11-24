@@ -1,3 +1,4 @@
+#include <Epub/RubySize.h>
 #include <Epub/VerticalParsedText.h>
 #include <GfxRenderer.h>
 #include <gtest/gtest.h>
@@ -360,4 +361,57 @@ TEST(VerticalPageBreak, RubyRoomNeverCostsAColumn) {
     }
     EXPECT_EQ(lastColumn, 4) << "padding " << c.paddingPx << " keeps all five columns";
   }
+}
+
+TEST(VerticalPageBreak, LargeFuriganaKeepsTheColumnGapAtLeastTheRubyWidth) {
+  constexpr int EM = 20;
+  constexpr int TIGHT = 2;  // quarter ems: the narrowest gap with ruby
+  // Half size keeps the half-em gap the ruby has always used.
+  EXPECT_EQ(ruby::verticalColumnGapPx(EM, TIGHT, true, ruby::HALF), EM / 2);
+  for (uint8_t size = 0; size < ruby::SIZE_COUNT; size++) {
+    const uint16_t scale = ruby::effectiveScale(ruby::scaleForSize(size), 18);  // 18 pt text
+    const int gap = ruby::verticalColumnGapPx(EM, TIGHT, true, scale);
+    EXPECT_GE(gap, ruby::partUp(EM, scale)) << "size " << int(size);
+
+    // Laid out with that gap, the column to the left starts past the first column's ruby.
+    GfxRenderer renderer;
+    VerticalParsedText text(renderer, 0, 200, VIEWPORT_H);
+    text.setRubyShown(true);
+    text.setRubyScale(scale);
+    text.setColumnGapPx(gap);
+    text.addParagraph(std::string(TEN) + TEN);
+    const auto pages = text.layoutPages();
+    ASSERT_FALSE(pages.empty());
+    const VerticalGlyph* first = nullptr;
+    const VerticalGlyph* second = nullptr;
+    for (const auto& g : pages[0].glyphs) {
+      if (g.column == 0 && !first) first = &g;
+      if (g.column == 1 && !second) second = &g;
+    }
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+    EXPECT_GE(first->x - (second->x + EM), ruby::partUp(EM, scale)) << "size " << int(size);
+  }
+}
+
+TEST(VerticalPageBreak, LargerFuriganaSpacesALongReadingFurtherDownTheColumn) {
+  const auto rowAfterGroup = [](const uint16_t scale) {
+    GfxRenderer renderer;
+    VerticalParsedText text(renderer, 0, VIEWPORT_W, VIEWPORT_H);
+    text.setRubyShown(true);
+    text.setRubyScale(scale);
+    VerticalParsedText::RubyRun base;
+    base.baseText = "漢";
+    base.rubyText = "かんじかんじ";  // six ruby characters over one base
+    VerticalParsedText::RubyRun after;
+    after.baseText = "の";
+    text.addAnnotatedParagraph({base, after});
+    const auto pages = text.layoutPages();
+    const VerticalGlyph* g = pages.empty() ? nullptr : firstGlyphOf(pages[0], U'の');
+    return g ? static_cast<int>(g->row) : -1;
+  };
+  const int half = rowAfterGroup(ruby::HALF);
+  const int seventy = rowAfterGroup(ruby::scaleForSize(3));
+  ASSERT_GE(half, 0);
+  EXPECT_GT(seventy, half);
 }

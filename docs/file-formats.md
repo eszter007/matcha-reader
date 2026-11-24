@@ -95,6 +95,14 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 119 (fork numbering)
+
+The furigana byte (after `honorBookInsets`) is 0 when furigana is off and half the ruby scale
+when it is on (8.8 fixed point, so 64 at the default 50 %); it was 1 for on. The ruby scale is the
+Furigana Size setting raised to at least 8 pt for the reader's point size. The size sets the room above a line
+with ruby and the ruby widths, so changing it rebuilds the section. The header length is
+unchanged. Completed and partial sections are rebuilt. Book metadata and saved progress are kept.
+
 ### Version 118 (fork numbering)
 
 A `u8 hyphenationPatterns` follows `wordSpacingPercent`: 1 when the book's language had
@@ -654,6 +662,15 @@ if (parsedSize != fileSize) {
 
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
+
+### Version 165
+
+The furigana byte is 0 when furigana is off and half the ruby scale when it is on (8.8 fixed
+point, so 64 at the default 50 %); it was 1 for on. The ruby scale is the Furigana Size setting
+raised to at least 8 pt for the reader's point size. The size sets the length of a ruby group down the column, the
+column gap (at least the ruby width) and the ruby room beside the first column, which above half
+size may cost a column. The header length
+is unchanged. Cached chapters are laid out again.
 
 ### Version 164
 

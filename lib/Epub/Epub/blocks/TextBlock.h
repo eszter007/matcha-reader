@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "../../../../src/fontIds.h"
+#include "../RubyText.h"
 #include "Block.h"
 #include "BlockStyle.h"
 #include "Epub/FootnoteEntry.h"
@@ -251,7 +252,8 @@ class TextBlock final : public Block {
   };
   void wordPlacements(const GfxRenderer& renderer, int baseFontId, int x, int y, bool suppressRuby,
                       std::vector<WordPlacement>& out) const;
-  int getRubyShift(int ascender) const { return hasRuby() ? (ascender / 2) : 0; }
+  // Room above the line for its ruby; `scale` is the ruby scale (see RubySize.h).
+  int getRubyShift(int ascender, uint16_t scale) const { return hasRuby() ? ruby::part(ascender, scale) : 0; }
   const std::vector<std::string>& getRubyTexts() const { return rubyTexts; }
   std::vector<LinkSpan> takeLinkSpans() { return std::move(linkSpans); }
   void setDropCap(const DropCap& value) { dropCap = value; }

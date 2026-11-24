@@ -526,6 +526,11 @@ to that book only.
     - **Furigana** (on by default, Japanese profile), called **Pinyin / Zhuyin** in the Chinese profiles: shows the
       readings a book puts over its text. Each of the three profiles keeps its own setting. A change made inside a
       book applies to all books of that script, and also replaces that book's own choice from the **Text** panel.
+    - **Furigana Size** (**Pinyin Size** in the Chinese profiles), shown while Furigana is on: 40%, 50%, 60% or 70%
+      of the text size. The default is 50%. A larger size widens the gap between lines (columns in vertical
+      text), so fewer lines fit on a page. Furigana is never smaller than 8 pt, so at small font sizes it is drawn
+      larger than the chosen share (at 12 pt text, every size draws at 8 pt, about 67%). With an SD font (TTF or OTF) on a device that supports them, furigana
+      is drawn from the font at its own size, so it stays sharp. Like Furigana, each profile keeps its own size.
     - **Underline Dictionary Words** (off by default, Japanese and Chinese profiles): while you pick a word to look
       up, every word the dictionary knows gets a line under it, or beside it in vertical text. On a page the device
       is still checking, more lines appear as it finds more words. Each of the three profiles keeps its own setting.
@@ -1233,7 +1238,7 @@ The menu shows these entries, top to bottom. Some only appear when they apply to
 * **Progress row:** drag the knob or tap the line to jump through the book; the buttons at either end go to the previous or next chapter.
 * **Chapter line:** the chapter, the page and the book percentage, and a bookmark you tap to mark or unmark the page.
 * **Contents** lists the chapters. **Translate** translates the page straight away. **More** lists everything else from the full menu.
-* **Text:** the font size (the small and large A step it down and up), the font, **Focus Reading**, and **More text settings** for the full list (word spacing, hyphenation, indents and more). Japanese and Chinese books show **Furigana** (**Pinyin / Zhuyin** in Chinese books) instead of Focus Reading.
+* **Text:** the font size (the small and large A step it down and up), the font, **Focus Reading**, and **More text settings** for the full list (word spacing, hyphenation, indents and more). Japanese and Chinese books show **Furigana** (**Pinyin / Zhuyin** in Chinese books) instead of Focus Reading, and while it is on, **Furigana Size** (40% to 70% of the text, 50% by default) for this book only.
 * **Page:** line spacing, margins, alignment and orientation as small page pictures: tap one to choose it. Japanese and Chinese books get **Vertical Text** (lines or columns) instead of alignment.
 
 With buttons, Left and Right move between the dock's controls and Select uses one. In the Text and Page panels, Up and Down choose a row, and Left and Right change it one step at a time, which reaches every value, not just the ones the pictures show. On the Text panel's Font and More text settings rows, Left and Right switch to the next panel instead; on the Page panel, go back to the dock to change panel. Back steps from a panel to the dock, and from the dock to the page.
@@ -1538,8 +1543,8 @@ as written (in 食べる, た goes over 食 and べる stays bare). Words that d
 
 **Switches.** **Tategaki (vertical Japanese)** and **Furigana** are in **Settings → Reader → Text Settings →
 Japanese**, for all Japanese books. Inside a book, **Reader Settings → Text Settings** opens the same page. To change
-one book only, use **Vertical Text** in the reader toolbar's **Page** panel and **Furigana** in its **Text** panel
-(set **Reader Settings → Reader Menu Style** to **Toolbar**, see [§5](#5-reader-menu)). That choice is saved with
+one book only, use **Vertical Text** in the reader toolbar's **Page** panel and **Furigana** and **Furigana Size**
+in its **Text** panel (set **Reader Settings → Reader Menu Style** to **Toolbar**, see [§5](#5-reader-menu)). That choice is saved with
 the book.
 
 <p align="center">

@@ -154,7 +154,7 @@ void DictionaryWordSelectActivity::extractWords() {
     const bool lineHasDropCap = dropCapWord_ < 0 && block->getDropCap().present();
     const uint16_t lastWordIndex = block->wordCount() > 0 ? static_cast<uint16_t>(block->wordCount() - 1) : 0;
     const int ascender = renderer.getFontAscenderSize(lineFontId);
-    const int rubyShift = block->getRubyShift(ascender);
+    const int rubyShift = block->getRubyShift(ascender, ruby::horizontalScale(renderer, lineFontId));
     for (uint16_t i = 0; i < block->wordCount(); i++) {
       const char* text = block->wordText(i);
       if (!isSelectableToken(text)) continue;

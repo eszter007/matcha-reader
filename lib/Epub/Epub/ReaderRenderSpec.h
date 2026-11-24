@@ -1,5 +1,8 @@
 #pragma once
+#include <algorithm>
 #include <cstdint>
+
+#include "RubySize.h"
 
 // The resolved text-rendering configuration a reader hands to the layout
 // engine. Section-cache validation keys on every field: a section file built
@@ -40,6 +43,12 @@ struct ReaderRenderSpec {
   // taking it from the store. Layout and drawing must agree on it: TextBlock::render shifts
   // words down by exactly the reserve this adds.
   bool furiganaEnabled = true;
+  // Matcha: furigana size, an index into ruby::SIZE_SCALES (40/50/60/70 % of the base). Per book
+  // like furiganaEnabled. A larger size reserves more room above a line and between columns.
+  uint8_t furiganaSize = ruby::DEFAULT_SIZE;
+  // The scale ruby is laid out and drawn at (8.8, RubySize.h): furiganaSize raised to the 8 pt
+  // minimum for the reader's point size. Set by the reader with furiganaSize; the cache key.
+  uint16_t rubyScale = ruby::HALF;
   // Matcha, vertical text: the margin right of the text area, bezel inset included. The first
   // column's ruby is drawn there, and where it is narrower than the ruby the layout holds back
   // the difference. Set by the reader like fontId; 0 (the default) reserves the full ruby width.
@@ -75,5 +84,12 @@ inline uint32_t readerRenderSpecSignature(const ReaderRenderSpec& spec) {
   mix(spec.imageRendering);
   mix(spec.focusReadingEnabled);
   if (spec.bookFontsSignature != 0) mix(spec.bookFontsSignature);
+  if (spec.furiganaEnabled && spec.rubyScale != ruby::HALF) mix(0x10000u + spec.rubyScale);
   return signature == 0 ? 1 : signature;
+}
+
+// The furigana byte of both section cache headers: 0 when furigana is off (its size then changes
+// nothing), else half the ruby scale (rubyScale / 2, 51..128).
+inline uint8_t furiganaCacheByte(const ReaderRenderSpec& spec) {
+  return spec.furiganaEnabled ? static_cast<uint8_t>(std::max(1, spec.rubyScale >> 1)) : 0;
 }

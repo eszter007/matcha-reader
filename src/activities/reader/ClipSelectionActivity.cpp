@@ -173,7 +173,8 @@ bool ClipSelectionActivity::extractWords() {
       const bool isRtl = block->getBlockStyle().isRtl;
       const size_t remaining = capacity - lineStart;
       size_t rtlWordCount = 0;
-      const int rubyShift = block->getRubyShift(renderer.getFontAscenderSize(fontId));
+      const int rubyShift =
+          block->getRubyShift(renderer.getFontAscenderSize(fontId), ruby::horizontalScale(renderer, fontId));
       for (uint16_t i = 0; i < block->wordCount(); ++i) {
         if (block->wordStartsParagraph(i)) paragraphStartPending = true;
         const char* text = block->wordText(i);

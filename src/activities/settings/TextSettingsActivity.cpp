@@ -1,5 +1,6 @@
 #include "TextSettingsActivity.h"
 
+#include <Epub/RubySize.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <Memory.h>
@@ -35,7 +36,7 @@ constexpr StrId LAYOUT_ROW_NAME_IDS[] = {
     StrId::STR_LINE_SPACING,   StrId::STR_WORD_SPACING,          StrId::STR_CHARACTER_SPACING,
     StrId::STR_EXTRA_SPACING,  StrId::STR_PARAGRAPH_INDENTATION, StrId::STR_ALIGNMENT,
     StrId::STR_SCREEN_MARGIN,  StrId::STR_BOOK_CSS_MARGINS,      StrId::STR_TATEGAKI,
-    StrId::STR_FURIGANA_LABEL, StrId::STR_LOOKUP_WORD_MARKS};
+    StrId::STR_FURIGANA_LABEL, StrId::STR_FURIGANA_SIZE,         StrId::STR_LOOKUP_WORD_MARKS};
 // Only Focus Reading shows in the preview; the other Style rows say so in their label.
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION_NO_PREVIEW,
                                         StrId::STR_EMBEDDED_STYLE_NO_PREVIEW, StrId::STR_PUBLISHER_FONTS_NO_PREVIEW,
@@ -71,6 +72,11 @@ constexpr StrId CHARACTER_SPACING_IDS[] = {StrId::STR_SPACING_MINUS_2, StrId::ST
 constexpr StrId VERTICAL_TEXT_IDS[] = {StrId::STR_VERTICAL_AUTOMATIC, StrId::STR_STATE_ON, StrId::STR_STATE_OFF};
 constexpr StrId ALIGNMENT_IDS[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
                                    StrId::STR_BOOK_S_STYLE};
+// A Furigana Size index as the percentage it is labelled with.
+unsigned furiganaSizePercent(const int index) {
+  return (ruby::scaleForSize(static_cast<uint8_t>(index)) * 100 + 128) / 256;
+}
+
 constexpr int MARGIN_MIN = CrossPointSettings::SCREEN_MARGIN_MIN;
 constexpr int MARGIN_MAX = CrossPointSettings::SCREEN_MARGIN_MAX;
 constexpr int MARGIN_STEP = CrossPointSettings::SCREEN_MARGIN_STEP;
@@ -238,9 +244,10 @@ void TextSettingsActivity::rebuildRowItems() {
       const LayoutRow row = layoutRowAt(layoutIndex);
       // Chinese profiles name the vertical and ruby rows for their own script.
       const bool chinese = profile_ != CrossPointSettings::TextProfileId::Japanese;
-      item.label = row == LayoutRow::VerticalText && chinese ? tr(STR_ZHIPAI)
-                   : row == LayoutRow::Furigana && chinese   ? tr(STR_PINYIN_LABEL)
-                                                             : I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(row)]);
+      item.label = row == LayoutRow::VerticalText && chinese   ? tr(STR_ZHIPAI)
+                   : row == LayoutRow::Furigana && chinese     ? tr(STR_PINYIN_LABEL)
+                   : row == LayoutRow::FuriganaSize && chinese ? tr(STR_PINYIN_SIZE)
+                                                               : I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(row)]);
       if (layoutIndex == 0) item.sectionHeading = layoutHeading_.c_str();
     } else {
       const int styleIndex = i - LAYOUT_FIRST_ROW - layoutCount;
@@ -485,10 +492,27 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
       SETTINGS.bookCssMargins = !SETTINGS.bookCssMargins;
       requestUpdate();
       break;
-    case LayoutRow::Furigana:
+    case LayoutRow::Furigana: {
+      RenderLock lock;
       SETTINGS.furigana = !SETTINGS.furigana;
+      rebuildRowItems();  // Furigana Size shows only while furigana is on
       requestUpdate();
       break;
+    }
+    case LayoutRow::FuriganaSize: {
+      char labels[ruby::SIZE_COUNT][8];
+      const char* options[ruby::SIZE_COUNT];
+      for (int i = 0; i < ruby::SIZE_COUNT; ++i) {
+        snprintf(labels[i], sizeof(labels[i]), tr(STR_PERCENT_VALUE_FORMAT), furiganaSizePercent(i));
+        options[i] = labels[i];
+      }
+      const bool chinese = profile_ != CrossPointSettings::TextProfileId::Japanese;
+      optionPopup_.showMessage(chinese ? tr(STR_PINYIN_SIZE) : tr(STR_FURIGANA_SIZE), tr(STR_FURIGANA_SIZE_HELP),
+                               options, ruby::SIZE_COUNT, std::min<int>(SETTINGS.furiganaSize, ruby::SIZE_COUNT - 1),
+                               [](int idx) { SETTINGS.furiganaSize = static_cast<uint8_t>(idx); });
+      requestUpdate();
+      break;
+    }
     case LayoutRow::WordMarks:
       SETTINGS.lookupWordMarks = !SETTINGS.lookupWordMarks;
       requestUpdate();
@@ -636,6 +660,11 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
       const uint8_t v = setting ? *setting : 0;
       return I18N.get(VERTICAL_TEXT_IDS[v < std::size(VERTICAL_TEXT_IDS) ? v : 0]);
     }
+    case LayoutRow::FuriganaSize: {
+      char label[8];
+      snprintf(label, sizeof(label), tr(STR_PERCENT_VALUE_FORMAT), furiganaSizePercent(SETTINGS.furiganaSize));
+      return label;
+    }
 
     // ParaSpacing, BookSideMargins, Furigana and WordMarks draw switches -- see layoutRowIsSwitch().
     default:
@@ -697,6 +726,7 @@ int TextSettingsActivity::visibleLayoutRows(LayoutRow* out) const {
   }
   if (cjkProfile()) {
     add(LayoutRow::Furigana);
+    if (SETTINGS.furigana) add(LayoutRow::FuriganaSize);
     add(LayoutRow::WordMarks);
   }
   return count;

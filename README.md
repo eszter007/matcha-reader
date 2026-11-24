@@ -54,7 +54,7 @@ Comics, sentence mining and page translation work in every column.
 
 ## Japanese
 
-Vertical text is detected from the book, with right-to-left columns, kinsoku, emphasis marks and furigana. Layout and furigana can be switched per book or for all books. A Japanese font is built in, and an SD font looks better and adds rare kanji. Books without furigana can get it from a script that edits the EPUB.
+Vertical text is detected from the book, with right-to-left columns, kinsoku, emphasis marks and furigana. Layout and furigana can be switched per book or for all books, and furigana can be set to 40, 50 (default), 60 or 70 % of the text size. A Japanese font is built in, and an SD font looks better and adds rare kanji. Books without furigana can get it from a script that edits the EPUB.
 
 <p align="center">
   <img src="docs/images/screenshots/vertical-text.png" width="260" alt="Vertical Japanese text">
