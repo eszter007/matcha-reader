@@ -32,9 +32,9 @@ inline int advance(const GfxRenderer& renderer, const int fontId, const char* te
 
 // Draws horizontal ruby. `top` is the y drawText takes, so the baseline sits the body
 // ascender below it at every size.
-inline void drawHorizontal(const GfxRenderer& renderer, const int fontId, const int x, const int top,
-                           const char* text, const bool black, const BidiUtils::BidiBaseDir baseDir,
-                           const int8_t letterSpacing, const uint16_t scale) {
+inline void drawHorizontal(const GfxRenderer& renderer, const int fontId, const int x, const int top, const char* text,
+                           const bool black, const BidiUtils::BidiBaseDir baseDir, const int8_t letterSpacing,
+                           const uint16_t scale) {
   if (drawsWithSup(renderer, fontId, scale)) {
     renderer.drawText(fontId, x, top, text, black, EpdFontFamily::SUP, baseDir, letterSpacing);
     return;
