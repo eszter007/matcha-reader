@@ -6,6 +6,13 @@
 #include "ContentOpfParser.h"
 #include "Epub/BookMetadataCache.h"
 
+// ContentOpfParser keeps references to its path arguments, so they must outlive it: named
+// strings, never temporaries built from literals.
+const std::string kNoPath;
+const std::string kOps = "OPS/";
+const std::string kCache = "/cache";
+const std::string kMissingCache = "/missing-cache";
+
 namespace {
 
 void parse(ContentOpfParser& parser, const std::string& xml) {
@@ -18,7 +25,7 @@ void parse(ContentOpfParser& parser, const std::string& xml) {
 TEST(ContentOpfParserMetadata, EntityCallbackDoesNotSplitOneAuthor) {
   const std::string xml =
       R"(<package xmlns:dc="urn:dc"><metadata><dc:creator>&#201;mile Zola</dc:creator></metadata></package>)";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -29,7 +36,7 @@ TEST(ContentOpfParserMetadata, ClampsOversizedMetadataTextInsteadOfGrowingUnboun
   const std::string hugeTitle(64 * 1024, 'A');
   const std::string xml =
       "<package xmlns:dc=\"urn:dc\"><metadata><dc:title>" + hugeTitle + " tail</dc:title></metadata></package>";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -46,7 +53,7 @@ TEST(ContentOpfParserMetadata, SeparatesCreatorElementsAndCollapsesXmlWhitespace
 Octavia E. Butler
 </dc:creator>
   </metadata></package>)";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -58,7 +65,7 @@ TEST(ContentOpfParserMetadata, DropsByteOrderMarksFromMetadataText) {
   const std::string xml =
       "<package xmlns:dc=\"urn:dc\"><metadata><dc:title>\xEF\xBB\xBFKokoro</dc:title>"
       "<dc:creator>Natsume\xEF\xBB\xBF Soseki</dc:creator></metadata></package>";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -71,7 +78,7 @@ TEST(ContentOpfParserMetadata, ByteOrderMarkLeavesNoSpaceOrSeparatorBehind) {
       "<package xmlns:dc=\"urn:dc\"><metadata><dc:title>Title \xEF\xBB\xBF</dc:title>"
       "<dc:creator>First</dc:creator><dc:creator>\xEF\xBB\xBF</dc:creator><dc:creator>Second</dc:creator>"
       "</metadata></package>";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -86,7 +93,7 @@ TEST(ContentOpfParserMetadata, ExtractsIsbnAsinAndCalibreSeries) {
     <meta name="calibre:series" content="The Expanse"/>
     <meta name="calibre:series_index" content="3.5"/>
   </metadata></package>)";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -101,7 +108,7 @@ TEST(ContentOpfParserMetadata, ExtractsAmazonSchemeAsin) {
   const std::string xml = R"(<package xmlns:dc="urn:dc" xmlns:opf="urn:opf"><metadata>
     <dc:identifier opf:scheme="AMAZON">B0BF8Y54MS</dc:identifier>
   </metadata></package>)";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -113,7 +120,7 @@ TEST(ContentOpfParserMetadata, ExtractsPrefixedIdentifiers) {
     <dc:identifier>ISBN: 9781234567890</dc:identifier>
     <dc:identifier>ASIN: B012345678</dc:identifier>
   </metadata></package>)";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -126,7 +133,7 @@ TEST(ContentOpfParserMetadata, ExtractsUrnIdentifiers) {
     <dc:identifier>urn:isbn:9781234567890</dc:identifier>
     <dc:identifier>urn:asin:B012345678</dc:identifier>
   </metadata></package>)";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -138,7 +145,7 @@ TEST(ContentOpfParserMetadata, ClampsOversizedMetadataAttributes) {
   const std::string hugeSeries(64 * 1024, 'S');
   const std::string xml =
       R"(<package><metadata><meta name="calibre:series" content=")" + hugeSeries + R"("/></metadata></package>)";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -152,7 +159,7 @@ TEST(ContentOpfParserMetadata, ExtractsEpub3SeriesCollection) {
     <meta refines="#series-1" property="group-position">2</meta>
     <meta refines="#series-1" property="collection-type">series</meta>
   </metadata></package>)";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -167,7 +174,7 @@ TEST(ContentOpfParserMetadata, ResolvesRefinementsBeforeCollectionDeclaration) {
     <meta refines="#series-a" property="group-position">7</meta>
     <meta id="series-a" property="belongs-to-collection">Deferred Series</meta>
   </metadata></package>)";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -185,7 +192,7 @@ TEST(ContentOpfParserMetadata, ResolvesInterleavedCollectionRefinementsById) {
     <meta refines="#series-b" property="collection-type">series</meta>
     <meta refines="#series-b" property="group-position">9</meta>
   </metadata></package>)";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -202,7 +209,7 @@ TEST(ContentOpfParserMetadata, KeepsSeriesIndexWithSelectedMetadataSource) {
     <meta refines="#epub-series" property="collection-type">series</meta>
     <meta refines="#epub-series" property="group-position">9</meta>
   </metadata></package>)";
-  ContentOpfParser parser("", "", xml.size(), nullptr);
+  ContentOpfParser parser(kNoPath, kNoPath, xml.size(), nullptr);
 
   parse(parser, xml);
 
@@ -219,7 +226,7 @@ TEST(ContentOpfParserMetadata, StopsBeforeManifestWithoutOpeningTemporaryStorage
   </metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest>
   </package>)";
   Storage = {};
-  ContentOpfParser parser("/missing-cache", "OPS/", xml.size(), nullptr, true);
+  ContentOpfParser parser(kMissingCache, kOps, xml.size(), nullptr, true);
 
   ASSERT_TRUE(parser.setup());
   EXPECT_LT(parser.write(reinterpret_cast<const uint8_t*>(xml.data()), xml.size()), xml.size());
@@ -234,7 +241,7 @@ TEST(ContentOpfParserMetadata, NeverEntersManifestWhenMetadataElementIsMissing) 
   const std::string xml =
       R"(<package><manifest><item id="chapter" href="chapter.xhtml"/></manifest><spine/></package>)";
   Storage = {};
-  ContentOpfParser parser("/missing-cache", "OPS/", xml.size(), nullptr, true);
+  ContentOpfParser parser(kMissingCache, kOps, xml.size(), nullptr, true);
 
   ASSERT_TRUE(parser.setup());
   EXPECT_LT(parser.write(reinterpret_cast<const uint8_t*>(xml.data()), xml.size()), xml.size());
@@ -312,7 +319,7 @@ std::vector<std::string> spineHrefs(const int items, const std::vector<int>& spi
   const std::string xml = packageXml(items, spineOrder);
   BookMetadataCache cache;
   Storage = {};
-  ContentOpfParser parser("/cache", "OPS/", xml.size(), &cache);
+  ContentOpfParser parser(kCache, kOps, xml.size(), &cache);
   parse(parser, xml);
   return cache.spineHrefs;
 }
