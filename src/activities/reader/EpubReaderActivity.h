@@ -484,6 +484,12 @@ class EpubReaderActivity final : public ReaderActivity {
   // Set by tickVerticalBuild() when the build finished: the next render() positions the page in the
   // finished section instead of loading it. Loop and render task share it under the RenderLock.
   bool verticalBuildFinished_ = false;
+  // openOverlay() found the render task busy: its next render() paints the chrome over the page.
+  // Written on the loop task, read on the render task under the render lock.
+  std::atomic<bool> overlayPaintOwed_{false};
+  bool overlayPaintFirstOpen_ = false;
+  // The snapshot-and-chrome paint over the page in the framebuffer, with one fast refresh.
+  void paintOverlayOnPage(bool firstOpen);
   // Drops the vertical section, and with it a finish that render() has not placed yet.
   void dropVerticalSection() {
     verticalSection.reset();

@@ -3082,6 +3082,16 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // refreshing came before the tail began, and the tail then warmed the next page for seconds
   // while the menu waited (device log: 6.4s from press to menu).
   renderInputStamp_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
+  // An overlay opened while this task was busy: the page is still in the framebuffer, so paint the
+  // chrome over it (one fast refresh) instead of rendering the page again.
+  if (overlayPaintOwed_) {
+    overlayPaintOwed_ = false;
+    if (overlay != Overlay::None && toolbarUi && usesToolbarMenu() && (section || verticalSection) &&
+        !pageBufferStale) {
+      paintOverlayOnPage(overlayPaintFirstOpen_);
+      return;
+    }
+  }
   // Cleared before the epub guard: a page without links must not leave the previous
   // page's rectangles tappable.
   currentPageLinks.clear();
@@ -5557,6 +5567,8 @@ void EpubReaderActivity::buildNoticeThunk(void* ctx) {
   // scribble on the bytes the inflate is using. The next page boundary retries naturally if a
   // later request is made; during layout the framebuffer is available and this draws at once.
   if (!self->renderer.hasFrameBuffer()) return;
+  // Asked for before the reader's page appeared, which it now has: nothing to wait for.
+  if (self->earlyPageActuallyDisplayed_) return;
   GUI.drawPopup(self->renderer, tr(STR_LOADING_POPUP));
   // The page render that follows repaints the whole screen over this, and a plain FAST leaves
   // the popup's glyphs ghosting underneath; take the absolute pass.
@@ -7261,30 +7273,40 @@ void EpubReaderActivity::openOverlay(Overlay target) {
   // the first open (see #2190 for the mechanism).
   // Serialize against the render task: renderBook may be mid-page (status bar
   // included) in the shared framebuffer, and painting the chrome from the loop
-  // task at the same time interleaves the two frames. Never wait for it: a render
-  // in progress draws the overlay itself when it finishes (finishPageRender), in
-  // the same refresh, and the loop stays free.
-  RenderLock lock{RenderLock::Try{}};
-  if ((section || verticalSection) && !pageBufferStale && lock.held()) {
-    settleOverlayRefresh();
-    if (previous == Overlay::None) {
-      // Snapshot the clean page so stepping back from a panel to the toolbar
-      // (and closing, where supported) can restore it without a re-render.
-      overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
-    } else if (overlayPageStored) {
-      // Overlay -> overlay: wipe the previous chrome (toolbar header, sheet,
-      // progress row) back to the clean page so none of it shows around or
-      // through the new sheet; re-store for the next transition. No baseline
-      // resync: the glass still shows the old chrome, and the differential
-      // must keep diffing against it to erase it.
-      renderer.restoreBwBuffer(/*resyncPanelBaseline=*/false);
-      overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
-    }
-    renderOverlay();
-    pushOverlayRefresh();
-  } else {
+  // task at the same time interleaves the two frames. Never wait for it: the
+  // render task holds the lock through a whole refresh (~0.7 s on the A4). It
+  // paints the chrome the same way once it is free (render()).
+  if (!(section || verticalSection) || pageBufferStale) {
     requestUpdate();  // no page in the framebuffer: renderBook() draws the overlay once it is
+    return;
   }
+  RenderLock lock{RenderLock::Try{}};
+  if (lock.held()) {
+    paintOverlayOnPage(previous == Overlay::None);
+    return;
+  }
+  overlayPaintFirstOpen_ = overlayPaintOwed_ ? overlayPaintFirstOpen_ : previous == Overlay::None;
+  overlayPaintOwed_ = true;
+  requestUpdate();
+}
+
+void EpubReaderActivity::paintOverlayOnPage(const bool firstOpen) {
+  settleOverlayRefresh();
+  if (firstOpen) {
+    // Snapshot the clean page so stepping back from a panel to the toolbar
+    // (and closing, where supported) can restore it without a re-render.
+    overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
+  } else if (overlayPageStored) {
+    // Overlay -> overlay: wipe the previous chrome (toolbar header, sheet,
+    // progress row) back to the clean page so none of it shows around or
+    // through the new sheet; re-store for the next transition. No baseline
+    // resync: the glass still shows the old chrome, and the differential
+    // must keep diffing against it to erase it.
+    renderer.restoreBwBuffer(/*resyncPanelBaseline=*/false);
+    overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
+  }
+  renderOverlay();
+  pushOverlayRefresh();
 }
 
 // Grayscale panels re-render to restore AA; other boards restore the B/W snapshot.
@@ -7522,8 +7544,16 @@ void EpubReaderActivity::handleOverlayInput() {
     });
     return;
   }
+  // Never waits for the render task (it holds the lock through a whole refresh): a busy one paints
+  // the chrome itself next, over the snapshot when there is one.
   const auto fastRedraw = [this] {
-    RenderLock lock;  // the render task shares the framebuffer
+    RenderLock lock{RenderLock::Try{}};  // the render task shares the framebuffer
+    if (!lock.held()) {
+      if (!overlayPaintOwed_) overlayPaintFirstOpen_ = false;
+      overlayPaintOwed_ = true;
+      requestUpdate();
+      return;
+    }
     settleOverlayRefresh();
     renderOverlay();
     pushOverlayRefresh();
@@ -7678,15 +7708,15 @@ void EpubReaderActivity::handleOverlayInput() {
     // it (2+ refreshes -> one FAST). Re-store right away so another panel
     // round-trip can restore again.
     if (overlayPageStored) {
-      {
-        RenderLock lock;  // the render task shares the framebuffer
-        settleOverlayRefresh();
-        // No baseline resync: the glass shows the panel, and erasing it needs
-        // the differential to keep diffing against the last pushed frame.
-        renderer.restoreBwBuffer(/*resyncPanelBaseline=*/false);
-        overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
+      RenderLock lock{RenderLock::Try{}};  // the render task shares the framebuffer
+      if (!lock.held()) {
+        // The render task paints it next: snapshot restore and chrome, as below.
+        if (!overlayPaintOwed_) overlayPaintFirstOpen_ = false;
+        overlayPaintOwed_ = true;
+        requestUpdate();
+        return;
       }
-      fastRedraw();  // takes its own RenderLock
+      paintOverlayOnPage(/*firstOpen=*/false);  // restores the snapshot under the toolbar
       return;
     }
     requestUpdate();
