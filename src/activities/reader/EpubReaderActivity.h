@@ -484,6 +484,11 @@ class EpubReaderActivity final : public ReaderActivity {
   // Set by tickVerticalBuild() when the build finished: the next render() positions the page in the
   // finished section instead of loading it. Loop and render task share it under the RenderLock.
   bool verticalBuildFinished_ = false;
+  // Drops the vertical section, and with it a finish that render() has not placed yet.
+  void dropVerticalSection() {
+    verticalSection.reset();
+    verticalBuildFinished_ = false;
+  }
   // The page the last forward turn during a vertical build asked for, until the build shows it;
   // -1 when none. Loop task only (turns, ticks, and the early render run inside a tick).
   int midBuildTurnTarget_ = -1;

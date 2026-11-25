@@ -751,7 +751,7 @@ void EpubReaderActivity::onReaderExit() {
   }
 
   section.reset();
-  verticalSection.reset();
+  dropVerticalSection();
   CLIPPINGS.unload();
 
   restoreGlobalReaderSettings();
@@ -1777,7 +1777,7 @@ void EpubReaderActivity::readerLoop() {
         currentSpineIndex--;
       }
       section.reset();
-      verticalSection.reset();
+      dropVerticalSection();
     }
     // A skip is navigation, not reading: it never counts toward session dwell.
     notePageTurn(false, true);
@@ -1871,7 +1871,7 @@ void EpubReaderActivity::jumpToPercent(int percent) {
     nextPageNumber = 0;
     pendingPercentJump = true;
     section.reset();
-    verticalSection.reset();
+    dropVerticalSection();
     return;
   }
 
@@ -1917,7 +1917,7 @@ void EpubReaderActivity::jumpToPercent(int percent) {
     nextPageNumber = 0;
     pendingPercentJump = true;
     section.reset();
-    verticalSection.reset();
+    dropVerticalSection();
   }
 }
 
@@ -2078,7 +2078,7 @@ void EpubReaderActivity::dropSectionsKeepingPosition() {
     cachedVisibleTextOffset = visibleOffsetForPage(section->currentPage);
   }
   section.reset();
-  verticalSection.reset();
+  dropVerticalSection();
 }
 
 void EpubReaderActivity::applyLanguageOverride(const int8_t choice) {
@@ -2260,7 +2260,7 @@ void EpubReaderActivity::applyProgressChange(const ProgressChangeResult& sync) {
         cachedChapterTotalPageCount = sync.totalPages;
         nextPageNumber = std::max(0, sync.page);  // hint until the offset resolves
         section.reset();
-        verticalSection.reset();
+        dropVerticalSection();
       }
       requestUpdate();
       return;
@@ -2304,7 +2304,7 @@ void EpubReaderActivity::applyProgressChange(const ProgressChangeResult& sync) {
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = targetPage;
     section.reset();
-    verticalSection.reset();
+    dropVerticalSection();
   } else if (verticalSection && verticalSection->currentPage != targetPage) {
     RenderLock lock(*this);
     // A page saved under another layout can be past this chapter's end. A still-building
@@ -2424,7 +2424,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                                nextPageNumber = 0;
 
                                section.reset();
-                               verticalSection.reset();
+                               dropVerticalSection();
                              });
       break;
     }
@@ -2497,7 +2497,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           const auto offset = visibleOffsetForPage(page);
           const auto percent = static_cast<uint8_t>(pageBasedPercent(spine, page + 1));
           section.reset();
-          verticalSection.reset();
+          dropVerticalSection();
           epub->clearCache();
           epub->setupCacheDir();
           if (!EpubReaderUtils::saveProgress(*epub, spine, page, total, verticalOverride,
@@ -2729,7 +2729,7 @@ bool EpubReaderActivity::launchKOReaderSync(const bool withClockAndInsights) {
     // render would call through a dangling context.
     ImageBlock::setExtractor(nullptr, nullptr);
     section.reset();
-    verticalSection.reset();
+    dropVerticalSection();
     // Mapped here, with the sections already gone, so the mapper works at the lowest heap point
     // of the release. No rendering may run while it borrows the framebuffer.
     {
@@ -2798,7 +2798,7 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
 
     // Reset section to force re-layout in the new orientation.
     section.reset();
-    verticalSection.reset();
+    dropVerticalSection();
   }
 }
 
@@ -2829,7 +2829,7 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
       nextPageNumber = section->currentPage;
     }
     section.reset();
-    verticalSection.reset();
+    dropVerticalSection();
   }
 }
 
@@ -2906,7 +2906,7 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
         nextPageNumber = 0;
         currentSpineIndex++;
         section.reset();
-        verticalSection.reset();
+        dropVerticalSection();
       }
     }
   } else {
@@ -2923,7 +2923,7 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
         pendingPageJump = std::numeric_limits<uint16_t>::max();
         currentSpineIndex--;
         section.reset();
-        verticalSection.reset();
+        dropVerticalSection();
       }
     } else {
       moved = false;  // already on the first page of the book
@@ -3186,7 +3186,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         nextPageNumber = section->currentPage;
       }
       section.reset();
-      verticalSection.reset();
+      dropVerticalSection();
       // The relayout repaints THIS page with its lines shifted under whatever the panel
       // already shows. A mid-cycle FAST erases the old glyphs with the weak DU transition
       // only, leaving the previous layout crisply superimposed (photographed on device
@@ -3254,7 +3254,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // finished chapter in RAM. It takes the positioning below exactly as a build that ran to the
     // end here, rather than a reload -- a degraded build stamps its file stale for the NEXT open,
     // and reloading it now would start the whole build over.
-    const bool finishedBetweenFrames = verticalBuildFinished_;
+    // Only for the section whose build finished: dropVerticalSection() clears it, and a null section
+    // has nothing to place.
+    const bool finishedBetweenFrames = verticalBuildFinished_ && verticalSection != nullptr;
     verticalBuildFinished_ = false;
     if (!verticalSection || (finishedBetweenFrames && !verticalSection->isBuilding())) {
       if (!finishedBetweenFrames) {
@@ -3359,7 +3361,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         if (!built) {
           LOG_ERR("ERS", "Failed to build vertical section");
           failedVerticalSpineIndex = currentSpineIndex;
-          verticalSection.reset();
+          dropVerticalSection();
           showPendingSyncSaveError();
           return;
         }
@@ -3496,7 +3498,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         }
         LOG_ERR("ERS", "Failed to get vertical page");
         verticalSection->clearCache();
-        verticalSection.reset();
+        dropVerticalSection();
         requestUpdate();
         automaticPageTurnActive = false;
         showPendingSyncSaveError();
@@ -5581,7 +5583,7 @@ void EpubReaderActivity::tickVerticalBuild() {
   if (step == VerticalSection::BuildStep::Failed) {
     LOG_ERR("ERS", "Failed to build vertical section");
     failedVerticalSpineIndex = currentSpineIndex;
-    verticalSection.reset();
+    dropVerticalSection();
     requestUpdate();
     return;
   }
@@ -6569,7 +6571,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
           lookupPage_ = VerticalPage();  // a failed read can leave a partial page behind
           LOG_ERR("ERS", "Word lookup: page %d not readable after dropping the build", pageIndex);
         }
-        verticalSection.reset();
+        dropVerticalSection();
         verticalBuildInProgress_.store(false, std::memory_order_relaxed);
         verticalTickCount_ = 0;
         verticalTickBusyMs_ = 0;
@@ -6721,7 +6723,7 @@ void EpubReaderActivity::openTranslationFor(std::string text, const StrId title)
   {
     RenderLock lock(*this);  // the render task may still be in its warm tail
     section.reset();
-    verticalSection.reset();
+    dropVerticalSection();
     releaseReloadableMemory();
   }
   auto translation =
@@ -7538,7 +7540,7 @@ void EpubReaderActivity::handleOverlayInput() {
       nextPageNumber = 0;
       currentSpineIndex = target;
       section.reset();
-      verticalSection.reset();
+      dropVerticalSection();
       // The snapshot shows the old chapter; holding its ~48 KB through the
       // section load starves the new page's font caches and gray pass.
       discardOverlayPage();
@@ -7648,7 +7650,7 @@ void EpubReaderActivity::handleOverlayInput() {
         pendingAnchor = item.anchor;
         nextPageNumber = 0;
         section.reset();
-        verticalSection.reset();
+        dropVerticalSection();
       }
       {
         RenderLock lock;  // the render task may be inside renderOverlay()
@@ -8107,7 +8109,7 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
     section.reset();
-    verticalSection.reset();
+    dropVerticalSection();
   }
   requestUpdate();
   LOG_DBG("ERS", "Navigated to spine %d for href: %s", targetSpineIndex, hrefStr.c_str());
@@ -8171,7 +8173,7 @@ void EpubReaderActivity::restoreSavedPosition() {
     currentSpineIndex = pos.spineIndex;
     nextPageNumber = pos.pageNumber;
     section.reset();
-    verticalSection.reset();
+    dropVerticalSection();
   }
   requestUpdate();
 }
