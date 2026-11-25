@@ -5,6 +5,7 @@
 #include <FontDecompressor.h>
 #include <FsHelpers.h>
 #include <GaijiText.h>
+#include <HalMemory.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -1687,6 +1688,62 @@ struct LayoutPageSink final : ParagraphSink {
   // the direct field-wise path.
   static constexpr size_t kPageBufCap = 12 * 1024;
 
+#ifdef BOARD_HAS_PSRAM
+  // Pages serialized back to back in PSRAM and written in one SD call when the buffer fills, so
+  // the card sees few large writes instead of one small write per page. Everything that reads
+  // or seeks `out` mid-build calls flushPages() first.
+  static constexpr size_t kPageBatchCap = 64 * 1024;
+  HalMemory::PsramBuffer pageBatch_;
+  size_t pageBatchLen_ = 0;
+  bool pageBatchTried_ = false;
+
+  // False when a write failed; the build is then failed.
+  bool flushPages() {
+    if (pageBatchLen_ == 0) return true;
+    const size_t len = pageBatchLen_;
+    pageBatchLen_ = 0;
+    if (out.write(pageBatch_.get(), len) == len) return true;
+    LOG_ERR("VSC", "Failed to write %u bytes of pages to cache", static_cast<unsigned>(len));
+    failed = true;
+    return false;
+  }
+
+  // Serializes `p` into the batch. False when the batch is unavailable or the page does not fit
+  // even an empty batch; the caller then writes the page directly.
+  bool batchPage(const VerticalPage& p, bool& ok) {
+    if (!pageBatch_ && !pageBatchTried_) {
+      pageBatchTried_ = true;
+      pageBatch_ = HalMemory::allocatePsram(kPageBatchCap);
+    }
+    if (!pageBatch_) return false;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      serialization::BufWriter w(pageBatch_.get() + pageBatchLen_, kPageBatchCap - pageBatchLen_);
+      if (writePage(w, p) && !w.overflow) {
+        pageBatchLen_ += w.len;
+        ok = true;
+        return true;
+      }
+      if (pageBatchLen_ == 0) return false;  // larger than the whole batch
+      if (!flushPages()) {
+        ok = false;
+        return true;
+      }
+    }
+    return false;
+  }
+#else
+  bool flushPages() { return true; }
+#endif
+
+  // Where the next page record starts in the file, counting pages still in the batch.
+  size_t nextPageOffset() const {
+#ifdef BOARD_HAS_PSRAM
+    return out.position() + pageBatchLen_;
+#else
+    return out.position();
+#endif
+  }
+
   void writeOne(const VerticalPage& p) {
     if (failed) return;  // a cancel latched mid-batch: the rest of this batch is discarded too
     if (pageOffsets.size() == pageOffsets.capacity()) {
@@ -1717,7 +1774,17 @@ struct LayoutPageSink final : ParagraphSink {
         return;
       }
     }
-    pageOffsets.push_back(static_cast<uint32_t>(out.position()));
+    pageOffsets.push_back(static_cast<uint32_t>(nextPageOffset()));
+#ifdef BOARD_HAS_PSRAM
+    bool batchedOk = false;
+    if (batchPage(p, batchedOk)) {
+      if (!batchedOk) return;  // flushPages() failed the build
+      if (checkCancelled()) return;
+      servePageRequest(p, static_cast<int>(pageOffsets.size()) - 1);
+      return;
+    }
+    if (!flushPages()) return;  // the direct write below must land after the batched pages
+#endif
     // TRANSIENT staging buffer: allocated for this one write, freed before layout resumes.
     // Holding it resident across the whole build deepened the layout's low-heap dips by
     // roughly its own size (device evidence: maxAlloc bottoms 14324 without it vs
@@ -1803,6 +1870,7 @@ struct LayoutPageSink final : ParagraphSink {
     // for the whole build and stretched it from 18.5s to 36.4s while re-degrading pagination.
     const uint64_t attemptKey = (static_cast<uint64_t>(req) << 32) | (ESP.getMaxAllocHeap() >> 12);
     if (attemptKey == lastRefusedAttemptKey) return;
+    if (!flushPages()) return;
     const size_t endPos = out.position();
     // Commit pending writes before reading earlier records through the same handle: without
     // the flush, a backward seek can hand back stale/garbage bytes for freshly written pages
@@ -2491,6 +2559,7 @@ bool VerticalSection::finishBuild(const bool parseOk) {
 
   b.extractor.flushParagraph();
   b.sink.flushText(/*isFinalFlush=*/true);
+  b.sink.flushPages();  // sets failed on a write error
 
   if (b.sink.cancelled) {
     lastBuildCancelled_ = true;
@@ -2885,6 +2954,7 @@ const VerticalPage* VerticalSection::getPage(int pageIndex) const {
     // Mid-build the section file is still open for writing: read the page back through that
     // handle, as the sink's mid-build page serving does, and return the cursor to the end.
     HalFile& out = build_->out;
+    if (!build_->sink.flushPages()) return nullptr;
     const size_t endPos = out.position();
     out.flush();  // pending writes first, or a backward seek reads stale bytes
     if (!out.seek(pageOffsets_[static_cast<size_t>(pageIndex)])) {
