@@ -15,11 +15,18 @@
 
 namespace {
 
+// The plain and PSRAM builds of this suite run in parallel under ctest.
+#ifdef BOARD_HAS_PSRAM
+constexpr char kDirPrefix[] = "cssparser-psram-";
+#else
+constexpr char kDirPrefix[] = "cssparser-";
+#endif
+
 class CssParserTest : public ::testing::Test {
  protected:
   void SetUp() override {
     dir_ = std::filesystem::temp_directory_path() /
-           ("cssparser-" + std::to_string(::testing::UnitTest::GetInstance()->current_test_info()->line()));
+           (std::string(kDirPrefix) + std::to_string(::testing::UnitTest::GetInstance()->current_test_info()->line()));
     std::filesystem::create_directories(dir_);
   }
   void TearDown() override { std::filesystem::remove_all(dir_); }
