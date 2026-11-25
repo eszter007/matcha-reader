@@ -1286,13 +1286,26 @@ void EpubReaderActivity::readerLoop() {
   // A vertical chapter build continues here after render() showed the reader's page: one slice per
   // tick, so a menu or lookup press is handled before the next one. No heap gate, unlike the
   // horizontal build below: this build is already under way and guards its own allocations, and
-  // pausing it would only keep its working set resident longer. Not under an open toolbar or panel:
-  // a slice can lend the framebuffer they paint over (image probes) or draw a served page into it,
-  // and repainting the overlay after each one cost a full refresh per slice. A held button or
-  // finger goes first.
-  if (verticalBuildInProgress_.load(std::memory_order_relaxed) && overlay == Overlay::None && !inputHeld()) {
+  // pausing it would only keep its working set resident longer. Under an open toolbar or panel only
+  // while it has nothing to draw: a page served mid-build, or the loading notice, is drawn straight
+  // into the framebuffer the overlay paints over. A held button or finger goes first.
+  // Not in a frame that brought a press or release either: the input below acts first, and a menu
+  // opening must not wait behind a slice or the render a finished build requests.
+  if (verticalBuildInProgress_.load(std::memory_order_relaxed) && !inputHeld() && !mappedInput.wasAnyPressed() &&
+      !mappedInput.wasAnyReleased()) {
     RenderLock lock{RenderLock::Try{}};
-    if (lock.held()) tickVerticalBuild();
+    const bool drawsNothing =
+        verticalSection && verticalSection->pendingPageRequest() < 0 && !verticalSection->buildNoticePending();
+    if (lock.held() && (overlay == Overlay::None || drawsNothing)) {
+      const Overlay overlayBefore = overlay;
+      const uint32_t loansBefore = renderer.frameBufferLoanCount();
+      tickVerticalBuild();
+      // An image probe that lent the framebuffer hands it back white. Under an overlay nothing is
+      // repainted now: the page is redrawn when the overlay closes (closeOverlayToPage()).
+      if (overlayBefore != Overlay::None && renderer.frameBufferLoanCount() != loansBefore) {
+        pageBufferStale = true;
+      }
+    }
   }
 
   // Drive any in-progress incremental section build forward, off the page-turn critical path.
@@ -5588,7 +5601,9 @@ void EpubReaderActivity::tickVerticalBuild() {
     cachedChapterTotalPageCount = 0;
   }
   verticalBuildFinished_ = true;
-  requestUpdate();
+  // Under an open toolbar or panel the page on screen is already right; render() places the finished
+  // chapter when the overlay closes, so the overlay is not repainted from under the reader.
+  if (overlay == Overlay::None) requestUpdate();
 }
 
 void EpubReaderActivity::requestVerticalBuildNotice() {
@@ -7266,7 +7281,10 @@ void EpubReaderActivity::closeOverlayToPage() {
   overlayPopup.dismiss();  // an option picker cannot outlive its panel
   toolbarUi.reset();       // ~1 KB of interaction table + props, only needed while open
   if (BoardConfig::isEegoA4()) pagesUntilFullRefresh = 1;
-  if (!xteinkClassPanel() && overlayPageStored) {
+  // A chapter build that ended, or lent the framebuffer, under the overlay: render the page properly
+  // instead of restoring the snapshot.
+  const bool renderOwed = verticalBuildFinished_ || pageBufferStale;
+  if (!xteinkClassPanel() && overlayPageStored && !renderOwed) {
     RenderLock lock;  // the render task shares the framebuffer
     settleOverlayRefresh();
     // No baseline resync: the glass shows the chrome, and erasing it needs
