@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <initializer_list>
 #include <iterator>
 
 #include "CrossPointSettings.h"
@@ -1361,8 +1362,7 @@ void SdCardFontSystem::unloadCompanionTtf(GfxRenderer& renderer) {
   // Only a streamed companion holds an open file; close() asserts on one that was never opened.
   if (companionTtfSource_.file) companionTtfSource_.file.close();
 #ifdef BOARD_HAS_PSRAM
-  companionTtfSource_.blocks.init(nullptr, 0);
-  companionTtfSource_.blockStore.reset();
+  releaseBlockCache(companionTtfSource_);
 #endif
   companionTtfSource_.bytes.clear();
   companionTtfSource_.present = false;
@@ -1393,8 +1393,7 @@ void SdCardFontSystem::releaseTtfSources(TtfSource*& sources, const TtfSource* o
     freeink::font::PsramVector<uint8_t>().swap(s.bytes);  // actually release
     if (s.file) s.file.close();
 #ifdef BOARD_HAS_PSRAM
-    s.blocks.init(nullptr, 0);
-    s.blockStore.reset();
+    releaseBlockCache(s);
 #endif
     s.streamed = false;
     s.size = 0;
@@ -1459,7 +1458,43 @@ void SdCardFontSystem::unloadTtf(GfxRenderer& renderer) {
   ttfPointSize_ = 0;
 }
 
-bool SdCardFontSystem::openTtfSourceInto(TtfSource& s, const std::string& path, const bool keepResident) {
+#ifdef BOARD_HAS_PSRAM
+namespace {
+// Outline block caches across every streamed source. The regular file takes up to 2 MB: a CJK page
+// faults ~400 outlines, at most one 2 KB block each, so 2 MB keeps several pages' worth. Bold and
+// italic files are rare in Japanese text and get 256 KB each. Allocation also leaves 3 MB of PSRAM
+// free for images, publisher fonts and the rest of the reader.
+constexpr size_t kBlockCacheBudget = 2816 * 1024;  // 2 MB + 3 x 256 KB
+constexpr size_t kBlockCachePsramFloor = 3 * 1024 * 1024;
+size_t gBlockCacheBytes = 0;
+}  // namespace
+
+void SdCardFontSystem::releaseBlockCache(TtfSource& s) {
+  s.blocks.init(nullptr, 0);
+  s.blockStore.reset();
+  gBlockCacheBytes -= std::min(gBlockCacheBytes, s.blockBytes);
+  s.blockBytes = 0;
+}
+
+void SdCardFontSystem::allocateBlockCache(TtfSource& s, const bool primary) {
+  for (const size_t sets : primary ? std::initializer_list<size_t>{256, 64, 32} : std::initializer_list<size_t>{32}) {
+    const size_t bytes = StreamBlockCache::bytesFor(sets);
+    if (gBlockCacheBytes + bytes > kBlockCacheBudget) continue;
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) < bytes + kBlockCachePsramFloor) continue;
+    s.blockStore = HalMemory::allocatePsram(bytes);
+    if (!s.blockStore) continue;
+    s.blocks.init(s.blockStore.get(), sets);
+    s.blockBytes = bytes;
+    gBlockCacheBytes += bytes;
+    LOG_DBG("SDFS", "TTF block cache: %u KB in PSRAM (%u KB in all)", static_cast<unsigned>(bytes / 1024),
+            static_cast<unsigned>(gBlockCacheBytes / 1024));
+    return;
+  }
+}
+#endif
+
+bool SdCardFontSystem::openTtfSourceInto(TtfSource& s, const std::string& path, const bool keepResident,
+                                         [[maybe_unused]] const bool primary) {
   HalFile f = Storage.open(path.c_str());
   if (!f) {
     LOG_ERR("SDFS", "Failed to open TTF: %s", path.c_str());
@@ -1516,21 +1551,8 @@ bool SdCardFontSystem::openTtfSourceInto(TtfSource& s, const std::string& path, 
     }
   }
 #ifdef BOARD_HAS_PSRAM
-  // 2 MB holds a CJK novel's page working set of outlines (~400 glyphs, a 2 KB block each at worst)
-  // many times over; a smaller PSRAM gets 512 KB, and none at all leaves plain streaming.
-  s.blocks.init(nullptr, 0);  // a cache of another file must never serve this one
-  s.blockStore.reset();
-  if (len > prefix) {
-    for (const size_t sets : {size_t{256}, size_t{64}}) {
-      const size_t bytes = StreamBlockCache::bytesFor(sets);
-      if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) < bytes + 1024 * 1024) continue;
-      s.blockStore = HalMemory::allocatePsram(bytes);
-      if (!s.blockStore) continue;
-      s.blocks.init(s.blockStore.get(), sets);
-      LOG_DBG("SDFS", "TTF block cache: %u KB in PSRAM", static_cast<unsigned>(bytes / 1024));
-      break;
-    }
-  }
+  releaseBlockCache(s);  // a cache of another file must never serve this one
+  if (len > prefix) allocateBlockCache(s, primary);
 #endif
   LOG_DBG("SDFS", "Streaming TTF %s (%u KB) from SD", path.c_str(), static_cast<unsigned>(len / 1024));
   s.size = static_cast<unsigned long>(len);
@@ -1606,7 +1628,7 @@ bool SdCardFontSystem::openTtfFamilySources(const SdCardFontFamilyInfo& family, 
       complete = false;
       continue;
     }
-    if (!openTtfSourceInto(sources[role], path)) complete = false;
+    if (!openTtfSourceInto(sources[role], path, /*keepResident=*/false, /*primary=*/role == 0)) complete = false;
   }
   sourceSlotGenerations_[sources == sourceSlots_[1]] = complete && sources[0].present ? generation : 0;
   return sources[0].present;

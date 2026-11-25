@@ -317,7 +317,8 @@ class SdCardFontSystem {
   struct TtfSource;
   // Streams the file from SD (its first 1 MB cached in PSRAM). keepResident instead reads a file of
   // up to 6 MB whole into RAM when the heap allows: the CJK companion, whose glyphs every page faults.
-  bool openTtfSourceInto(TtfSource& source, const std::string& path, bool keepResident = false);
+  // `primary`: the family's regular file, which gets the large outline block cache (PSRAM boards).
+  bool openTtfSourceInto(TtfSource& source, const std::string& path, bool keepResident = false, bool primary = true);
   // Open every style file the family ships. False if regular failed to open.
   bool openTtfFamilySources(const SdCardFontFamilyInfo& family, TtfSource* sources);
   // A vector CJK extension (NotoSerifJP.ttf) as the CJK companion: the .cpfont manager cannot
@@ -343,6 +344,8 @@ class SdCardFontSystem {
 #ifdef BOARD_HAS_PSRAM
   // The card read behind the block cache.
   static unsigned long cardRead(void* ctx, unsigned long offset, unsigned char* buffer, unsigned long count);
+  static void releaseBlockCache(TtfSource& source);
+  static void allocateBlockCache(TtfSource& source, bool primary);
 #endif
 #endif  // CROSSPOINT_VECTOR_FONTS
 
@@ -410,6 +413,7 @@ class SdCardFontSystem {
     // Blocks of the file past the prefix (glyph outlines), so a glyph drawn again at another size,
     // or loaded twice in one fault (metrics, then bitmap), does not go back to the card.
     HalMemory::PsramBuffer blockStore;
+    size_t blockBytes = 0;  // counted against the shared block-cache budget
     StreamBlockCache blocks;
 #endif
   };
