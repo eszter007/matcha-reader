@@ -738,3 +738,42 @@ TEST_F(CssParserTest, AutoMarginsAndEndAlignReachTheVerticalEngine) {
   EXPECT_FALSE(styleOf("align-end").alignCenter);
   EXPECT_EQ(styleOf("wrapper").blockAlign, 0) << "a plain auto margin centres a wrapper horizontally, not a block";
 }
+
+namespace {
+void writeFile(const std::string& path, const std::string& text) {
+  std::FILE* f = std::fopen(path.c_str(), "wb");
+  std::fwrite(text.data(), 1, text.size(), f);
+  std::fclose(f);
+}
+}  // namespace
+
+// A chapter with no <style> is remembered, so its rebuild does not scan the HTML again; one with
+// <style> is read every time.
+TEST_F(CssParserTest, ChapterWithoutStylesIsNotScannedTwice) {
+  CssParser parser(cachePath());
+  const std::string plain = cachePath() + "/plain.html";
+  const std::string styled = cachePath() + "/styled.html";
+  writeFile(plain, "<html><head></head><body><p>a</p></body></html>");
+  writeFile(styled, "<html><head><style>.k { margin-top: 1em; }</style></head><body></body></html>");
+  std::vector<CssParser::VerticalBlockRule> out;
+  out.reserve(256);
+  EXPECT_EQ(parser.appendChapterVerticalStyles(plain, out), 0u);
+  // Changed behind the parser's back: the remembered answer still holds for this chapter.
+  writeFile(plain, "<html><head><style>.k { margin-top: 1em; }</style></head><body></body></html>");
+  EXPECT_EQ(parser.appendChapterVerticalStyles(plain, out), 0u);
+  EXPECT_EQ(parser.appendChapterVerticalStyles(styled, out), 1u);
+  out.clear();
+  EXPECT_EQ(parser.appendChapterVerticalStyles(styled, out), 1u);
+  out.clear();
+  EXPECT_EQ(parser.appendChapterVerticalStyles(plain, out), 1u) << "another chapter in between forgets it";
+}
+
+TEST_F(CssParserTest, AMissingChapterFileIsNotRememberedAsUnstyled) {
+  CssParser parser(cachePath());
+  const std::string path = cachePath() + "/late.html";
+  std::vector<CssParser::VerticalBlockRule> out;
+  out.reserve(256);
+  EXPECT_EQ(parser.appendChapterVerticalStyles(path, out), 0u);  // not there yet: an open error
+  writeFile(path, "<html><head><style>.k { margin-top: 1em; }</style></head><body></body></html>");
+  EXPECT_EQ(parser.appendChapterVerticalStyles(path, out), 1u);
+}

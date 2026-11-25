@@ -2054,7 +2054,8 @@ void CssParser::addVerticalRule(std::vector<VerticalBlockRule>& out, std::string
   if (out.size() < out.capacity()) out.push_back(rule);
 }
 
-bool CssParser::extractStyleBlocks(const std::string& htmlPath, const std::string& cssPath) {
+bool CssParser::extractStyleBlocks(const std::string& htmlPath, const std::string& cssPath, bool* scannedWhole) {
+  if (scannedWhole) *scannedWhole = false;
   HalFile in;
   if (!Storage.openFileForRead("CSS", htmlPath, in)) return false;
   HalFile out;
@@ -2121,6 +2122,7 @@ bool CssParser::extractStyleBlocks(const std::string& htmlPath, const std::strin
       }
     }
   }
+  if (scannedWhole) *scannedWhole = n == 0;
   return written > 0;
 }
 
@@ -2138,8 +2140,28 @@ bool CssParser::loadStyleBlocks(const std::string& htmlPath) {
 }
 
 size_t CssParser::appendChapterVerticalStyles(const std::string& htmlPath, std::vector<VerticalBlockRule>& out) {
+  const uint64_t fontStamp = bookfonts::slotStamp();
+  if (htmlPath == chapterWithoutStyles_ && fontStamp == chapterWithoutStylesFontStamp_) return 0;
+  chapterWithoutStyles_.clear();
   clear();
-  if (!loadStyleBlocks(htmlPath)) {
+  const std::string tmp = cachePath + "/.chapter.css";
+  bool scannedWhole = false;
+  const bool found = extractStyleBlocks(htmlPath, tmp, &scannedWhole);
+  if (!found) {
+    Storage.remove(tmp.c_str());
+    // Only a scan that read the whole file proves there is nothing; a read error must retry.
+    if (scannedWhole) {
+      chapterWithoutStyles_ = htmlPath;
+      chapterWithoutStylesFontStamp_ = fontStamp;
+    }
+    releasePools();
+    return 0;
+  }
+  HalFile file;
+  const bool loaded = Storage.openFileForRead("CSS", tmp, file) && loadFromStream(file);
+  file.close();
+  Storage.remove(tmp.c_str());
+  if (!loaded) {
     releasePools();
     return 0;
   }

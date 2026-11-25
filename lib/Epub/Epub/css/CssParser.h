@@ -413,7 +413,12 @@ class CssParser {
   // One rule into the vertical engine's table: v|-scoped or unscoped, tag/class selectors only.
   static void addVerticalRule(std::vector<VerticalBlockRule>& out, std::string_view selector, const CssStyle& css);
   // Copies every <style> block's contents from the HTML into cssPath. False when there is none.
-  static bool extractStyleBlocks(const std::string& htmlPath, const std::string& cssPath);
+  // `scannedWhole`, when given, is set when the whole file was read (false on an open or read error).
+  static bool extractStyleBlocks(const std::string& htmlPath, const std::string& cssPath, bool* scannedWhole = nullptr);
+  // The last chapter found to add no vertical rules of its own (most chapters have no <style>),
+  // so a rebuild of it skips scanning its HTML again.
+  std::string chapterWithoutStyles_;
+  uint64_t chapterWithoutStylesFontStamp_ = 0;
   [[nodiscard]] std::string_view selectorAt(size_t index) const;
   [[nodiscard]] const CssStyle& styleAt(size_t index) const;
   PoolResult ensureEntryCapacity(size_t needed);
