@@ -470,26 +470,36 @@ class CssParser {
 
   std::string cachePath;
 
+  // What a collectVerticalStyles() result depends on besides the rules cache itself.
+  struct VerticalStylesKey {
+    uint64_t linked = 0;
+    uint64_t fontStamp = 0;
+    uint16_t maxOut = 0;
+    bool all = true;
+    bool operator==(const VerticalStylesKey&) const = default;
+  };
+  // css_vstyles.cache: complete collectVerticalStyles() results, so a chapter build after the
+  // book is reopened does not scan the whole rules cache again (over a second on a heavy book).
+  static constexpr uint8_t VSTYLES_CACHE_VERSION = 1;
+  static constexpr uint8_t VSTYLES_MAX_ENTRIES = 4;
+  // Reads the entry for `key` into `out` (reserved for key.maxOut). False on a miss.
+  bool loadVerticalStyles(const VerticalStylesKey& key, size_t rulesSize, std::vector<VerticalBlockRule>& out) const;
+  void saveVerticalStyles(const VerticalStylesKey& key, size_t rulesSize,
+                          const std::vector<VerticalBlockRule>& rules) const;
+
 #ifdef BOARD_HAS_PSRAM
-  // The last complete collectVerticalStyles() result, in PSRAM. A chapter rebuild (font size,
-  // margins) re-reads the same CSS cache, which takes over a second on a heavy book; the result
-  // depends only on the cache, the stylesheet filter and the installed book fonts.
+  // The last complete collectVerticalStyles() result, in PSRAM: a chapter rebuild (font size,
+  // margins) then reads neither cache file.
   struct VerticalMemo {
     HalMemory::PsramBuffer rules;
     uint16_t count = 0;
-    uint16_t maxOut = 0;
-    uint64_t linked = 0;
-    uint64_t fontStamp = 0;
-    bool all = true;
+    VerticalStylesKey key;
   };
   mutable VerticalMemo verticalMemo_;
+  void rememberVerticalStyles(const VerticalStylesKey& key, const std::vector<VerticalBlockRule>& rules) const;
 #endif
-  // Called wherever the rules cache is written or removed.
-  void invalidateVerticalMemo() const {
-#ifdef BOARD_HAS_PSRAM
-    verticalMemo_.rules.reset();
-#endif
-  }
+  // Called wherever the rules cache is written or removed: drops the memo and css_vstyles.cache.
+  void invalidateVerticalMemo() const;
 
   /**
    * The colours seen so far inside ONE `{ ... }` rule block, as luma (0 = black, 255 = white).

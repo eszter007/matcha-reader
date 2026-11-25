@@ -93,6 +93,26 @@ if (parsedSize != fileSize) {
 }
 ```
 
+## `css_vstyles.cache`
+
+Lives beside `css_rules.cache` in the book's cache directory. It holds the vertical engine's styled-block
+table (`CssParser::collectVerticalStyles()`), so a vertical chapter build after reopening a book does not
+scan the whole rules cache again. It is deleted whenever `css_rules.cache` is written or removed.
+
+### Version 1
+
+- `u8` version (1)
+- `u32` size of `css_rules.cache` when this file was written. A different size means other rules, and the
+  file is ignored.
+- Up to 4 entries until the end of the file, one per stylesheet filter:
+  - `u16` maxOut, `u8` 1 when every stylesheet applies, `u64` linked-stylesheet mask
+  - `u64` book-font slot stamp (`bookfonts::slotStamp()`)
+  - `u16` count, then count × 32-byte `CssParser::VerticalBlockRule`, stored as in memory. Bump the
+    version if that struct changes.
+
+Only a complete scan is written. A read error or a heap-short stylesheet filter writes nothing, and a
+failed write removes the file.
+
 ## `section.bin`
 
 ### Version 119 (fork numbering)

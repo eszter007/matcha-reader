@@ -282,6 +282,96 @@ TEST_F(CssParserTest, RepeatedVerticalCollectionSkipsTheCacheRead) {
 }
 #endif
 
+namespace {
+std::filesystem::path vstylesPath(const std::string& dir) { return std::filesystem::path(dir) / "css_vstyles.cache"; }
+}  // namespace
+
+// A reopened book (a new parser) reads the collected table back instead of scanning the rules.
+TEST_F(CssParserTest, VerticalStylesSurviveAReopenPerFilter) {
+  std::vector<CssParser::VerticalBlockRule> all, textOnly;
+  {
+    CssParser parser(cachePath());
+    writeTwoStylesheetCache(parser, [&](const std::string& css) { return loadCss(parser, css); });
+    const auto filter = parser.stylesheetFilterFor({"OPS/css/text.css"});
+    ASSERT_EQ(parser.collectVerticalStyles(all), 1u);
+    ASSERT_EQ(parser.collectVerticalStyles(textOnly, 256, &filter), 0u);
+  }
+  ASSERT_TRUE(std::filesystem::exists(vstylesPath(cachePath())));
+  CssParser reopened(cachePath());
+  const auto filter = reopened.stylesheetFilterFor({"OPS/css/text.css"});
+  std::vector<CssParser::VerticalBlockRule> got;
+  EXPECT_EQ(reopened.collectVerticalStyles(got, 256, &filter), 0u) << "another filter's entry was served";
+  ASSERT_EQ(reopened.collectVerticalStyles(got), 1u);
+  EXPECT_EQ(std::memcmp(all.data(), got.data(), sizeof(got[0])), 0);
+}
+
+TEST_F(CssParserTest, VerticalStylesFileIsDroppedWithTheRulesCache) {
+  CssParser parser(cachePath());
+  writeTwoStylesheetCache(parser, [&](const std::string& css) { return loadCss(parser, css); });
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  ASSERT_EQ(parser.collectVerticalStyles(vertical), 1u);
+  ASSERT_TRUE(std::filesystem::exists(vstylesPath(cachePath())));
+
+  // A rebuild by another parser (the book reopened and its CSS parsed again).
+  {
+    CssParser writer(cachePath());
+    const std::vector<std::string> sources{"OPS/css/text.css"};
+    const uint8_t aliases[] = {0};
+    ASSERT_TRUE(writer.beginCacheAppend(&sources, aliases));
+    writer.setSource(0);
+    ASSERT_TRUE(loadCss(writer, ".a { margin-top: 1em; }\n.b { text-align: center; }\n"));
+    ASSERT_TRUE(writer.appendRulesToCache());
+    writer.clear();
+    ASSERT_TRUE(writer.endCacheAppend(/*discard=*/false));
+  }
+  EXPECT_FALSE(std::filesystem::exists(vstylesPath(cachePath())));
+  CssParser reopened(cachePath());
+  EXPECT_EQ(reopened.collectVerticalStyles(vertical), 2u);
+  reopened.deleteCache();
+  EXPECT_FALSE(std::filesystem::exists(vstylesPath(cachePath())));
+}
+
+// A file written for other rules (same path, different rules cache size) is not trusted.
+TEST_F(CssParserTest, VerticalStylesFromOtherRulesAreIgnored) {
+  {
+    CssParser parser(cachePath());
+    writeTwoStylesheetCache(parser, [&](const std::string& css) { return loadCss(parser, css); });
+    std::vector<CssParser::VerticalBlockRule> vertical;
+    ASSERT_EQ(parser.collectVerticalStyles(vertical), 1u);
+  }
+  const auto saved = std::filesystem::path(cachePath() + "-vstyles-other-rules.bin");
+  std::filesystem::copy_file(vstylesPath(cachePath()), saved, std::filesystem::copy_options::overwrite_existing);
+  {
+    CssParser writer(cachePath());
+    const std::vector<std::string> sources{"OPS/css/text.css"};
+    const uint8_t aliases[] = {0};
+    ASSERT_TRUE(writer.beginCacheAppend(&sources, aliases));
+    writer.setSource(0);
+    ASSERT_TRUE(loadCss(writer, ".a { margin-top: 1em; }\n.b { text-align: center; }\n"));
+    ASSERT_TRUE(writer.appendRulesToCache());
+    writer.clear();
+    ASSERT_TRUE(writer.endCacheAppend(/*discard=*/false));
+  }
+  std::filesystem::copy_file(saved, vstylesPath(cachePath()), std::filesystem::copy_options::overwrite_existing);
+  std::filesystem::remove(saved);
+  CssParser reopened(cachePath());
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  EXPECT_EQ(reopened.collectVerticalStyles(vertical), 2u) << "a table from other rules was served";
+}
+
+TEST_F(CssParserTest, ATruncatedScanIsNotPersisted) {
+  {
+    CssParser parser(cachePath());
+    writeTwoStylesheetCache(parser, [&](const std::string& css) { return loadCss(parser, css); });
+  }
+  const auto rules = std::filesystem::path(cachePath()) / "css_rules.cache";
+  std::filesystem::resize_file(rules, std::filesystem::file_size(rules) - 3);  // last record cut short
+  CssParser parser(cachePath());
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  parser.collectVerticalStyles(vertical);
+  EXPECT_FALSE(std::filesystem::exists(vstylesPath(cachePath())));
+}
+
 TEST_F(CssParserTest, ImportPathIsPercentDecoded) {
   {
     CssParser writer(cachePath());

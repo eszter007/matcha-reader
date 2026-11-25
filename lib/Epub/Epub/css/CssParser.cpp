@@ -1742,6 +1742,7 @@ constexpr char rulesCache[] = "/css_rules.cache";
 constexpr char rulesCacheTmp[] = "/css_rules.cache.tmp";
 // @font-face rules, beside the rule cache (CssParser::saveFontFaces).
 constexpr char fontFacesCache[] = "/css_fonts.cache";
+constexpr char verticalStylesCache[] = "/css_vstyles.cache";
 
 bool CssParser::hasCache() const { return hasCacheAt(cachePath); }
 
@@ -1916,6 +1917,7 @@ bool CssParser::validateCache() const {
     LOG_DBG("CSS", "Cache version mismatch (got %u, expected %u), removing stale cache for rebuild", version,
             CssParser::CSS_CACHE_VERSION);
     file.close();
+    invalidateVerticalMemo();
     Storage.remove((cachePath + rulesCache).c_str());
     return false;
   }
@@ -2064,9 +2066,13 @@ bool CssParser::extractStyleBlocks(const std::string& htmlPath, const std::strin
   enum class State : uint8_t { Outside, StartTag, Body } state = State::Outside;
   size_t match = 0;  // how much of OPEN / CLOSE the bytes so far have matched
   char pending[sizeof(CLOSE)];
-  uint8_t buf[256];
+  // One SD read per 4 KB instead of per 256 bytes: the whole chapter is scanned on every build.
+  uint8_t smallBuf[256];
+  auto bigBuf = makeUniqueNoThrow<uint8_t[]>(4096);
+  uint8_t* buf = bigBuf ? bigBuf.get() : smallBuf;
+  const size_t bufSize = bigBuf ? 4096 : sizeof(smallBuf);
   int n;
-  while ((n = in.read(buf, sizeof(buf))) > 0) {
+  while ((n = in.read(buf, bufSize)) > 0) {
     for (int i = 0; i < n; i++) {
       const char c = static_cast<char>(buf[i]);
       const char lower = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
@@ -2162,14 +2168,15 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
 
   if (cachePath.empty()) return 0;
 
-#ifdef BOARD_HAS_PSRAM
   static_assert(std::is_trivially_copyable_v<VerticalBlockRule>);
-  const bool wantAll = stylesheets == nullptr || stylesheets->all;
-  const uint64_t wantLinked = wantAll ? 0 : stylesheets->linked;
-  const uint64_t fontStamp = bookfonts::slotStamp();
+  VerticalStylesKey key;
+  key.all = stylesheets == nullptr || stylesheets->all;
+  key.linked = key.all ? 0 : stylesheets->linked;
+  key.fontStamp = bookfonts::slotStamp();
+  key.maxOut = static_cast<uint16_t>(maxOut);
+#ifdef BOARD_HAS_PSRAM
   auto& memo = verticalMemo_;
-  if (memo.rules && memo.maxOut == maxOut && memo.all == wantAll && memo.linked == wantLinked &&
-      memo.fontStamp == fontStamp) {
+  if (memo.rules && memo.key == key) {
     out.resize(memo.count);
     memcpy(out.data(), memo.rules.get(), memo.count * sizeof(VerticalBlockRule));
     LOG_DBG("CSS", "Vertical styles reused: %u selectors", static_cast<unsigned>(memo.count));
@@ -2179,6 +2186,14 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
 
   HalFile file;
   if (!Storage.openFileForRead("CSS", cachePath + rulesCache, file)) return 0;
+  const size_t rulesSize = file.size();
+  if (loadVerticalStyles(key, rulesSize, out)) {
+#ifdef BOARD_HAS_PSRAM
+    rememberVerticalStyles(key, out);
+#endif
+    LOG_DBG("CSS", "Vertical styles from css_vstyles.cache: %u selectors", static_cast<unsigned>(out.size()));
+    return out.size();
+  }
 
   uint8_t version = 0;
   if (file.read(&version, 1) != 1 || version != CssParser::CSS_CACHE_VERSION) return 0;
@@ -2188,7 +2203,7 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
   StylesheetFilter applied;
   if (!readStylesheetTable(file, stylesheets, applied)) return 0;
   // A narrowed request that comes back as "every stylesheet" ran short of heap for the import masks.
-  [[maybe_unused]] const bool filterHeapShort = applied.all && stylesheets != nullptr && !stylesheets->all;
+  const bool filterHeapShort = applied.all && stylesheets != nullptr && !stylesheets->all;
 
   std::string selector;
   uint16_t i = 0;
@@ -2272,22 +2287,128 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
     LOG_ERR("CSS", "collectVerticalStyles hit the %u-entry cap; later rules (e.g. borders) may be dropped",
             static_cast<unsigned>(maxOut));
   }
-#ifdef BOARD_HAS_PSRAM
   // Only a whole read is kept: a read error stops the loop before the cap and the last record.
   const bool complete = i == ruleCount || out.size() >= maxOut;
-  if (complete && !filterHeapShort && !out.empty()) {
-    memo.rules = HalMemory::allocatePsram(out.size() * sizeof(VerticalBlockRule));
-    if (memo.rules) {
-      memcpy(memo.rules.get(), out.data(), out.size() * sizeof(VerticalBlockRule));
-      memo.count = static_cast<uint16_t>(out.size());
-      memo.maxOut = static_cast<uint16_t>(maxOut);
-      memo.all = wantAll;
-      memo.linked = wantLinked;
-      memo.fontStamp = fontStamp;
+  if (complete && !filterHeapShort) {
+    file.close();
+    saveVerticalStyles(key, rulesSize, out);
+#ifdef BOARD_HAS_PSRAM
+    rememberVerticalStyles(key, out);
+#endif
+  }
+  return out.size();
+}
+
+#ifdef BOARD_HAS_PSRAM
+void CssParser::rememberVerticalStyles(const VerticalStylesKey& key,
+                                       const std::vector<VerticalBlockRule>& rules) const {
+  auto& memo = verticalMemo_;
+  memo.rules.reset();
+  if (rules.empty()) return;
+  memo.rules = HalMemory::allocatePsram(rules.size() * sizeof(VerticalBlockRule));
+  if (!memo.rules) return;
+  memcpy(memo.rules.get(), rules.data(), rules.size() * sizeof(VerticalBlockRule));
+  memo.count = static_cast<uint16_t>(rules.size());
+  memo.key = key;
+}
+#endif
+
+void CssParser::invalidateVerticalMemo() const {
+#ifdef BOARD_HAS_PSRAM
+  verticalMemo_.rules.reset();
+#endif
+  if (cachePath.empty()) return;
+  const std::string path = cachePath + verticalStylesCache;
+  if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
+}
+
+// css_vstyles.cache: u8 version, u32 size of css_rules.cache when written, then entries to EOF:
+// u16 maxOut, u8 all, u64 linked, u64 font stamp, u16 count, count x VerticalBlockRule (raw).
+namespace {
+struct VerticalStylesEntryHeader {
+  uint16_t maxOut;
+  uint8_t all;
+  uint64_t linked;
+  uint64_t fontStamp;
+  uint16_t count;
+};
+bool readEntryHeader(HalFile& file, VerticalStylesEntryHeader& h) {
+  return file.read(&h.maxOut, 2) == 2 && file.read(&h.all, 1) == 1 && file.read(&h.linked, 8) == 8 &&
+         file.read(&h.fontStamp, 8) == 8 && file.read(&h.count, 2) == 2;
+}
+}  // namespace
+
+bool CssParser::loadVerticalStyles(const VerticalStylesKey& key, const size_t rulesSize,
+                                   std::vector<VerticalBlockRule>& out) const {
+  HalFile file;
+  if (!Storage.openFileForRead("CSS", cachePath + verticalStylesCache, file)) return false;
+  uint8_t version = 0;
+  uint32_t storedRulesSize = 0;
+  if (file.read(&version, 1) != 1 || version != VSTYLES_CACHE_VERSION ||
+      file.read(&storedRulesSize, sizeof(storedRulesSize)) != sizeof(storedRulesSize) || storedRulesSize != rulesSize) {
+    return false;
+  }
+  for (uint8_t entry = 0; entry < VSTYLES_MAX_ENTRIES; ++entry) {
+    VerticalStylesEntryHeader h{};
+    if (!readEntryHeader(file, h) || h.count > h.maxOut) return false;
+    const size_t bytes = static_cast<size_t>(h.count) * sizeof(VerticalBlockRule);
+    const VerticalStylesKey stored{h.linked, h.fontStamp, h.maxOut, h.all != 0};
+    if (!(stored == key)) {
+      if (!file.seekCur(bytes)) return false;
+      continue;
+    }
+    if (out.capacity() < h.count) return false;
+    out.resize(h.count);
+    if (bytes > 0 && static_cast<size_t>(file.read(out.data(), bytes)) != bytes) {
+      out.clear();
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+void CssParser::saveVerticalStyles(const VerticalStylesKey& key, const size_t rulesSize,
+                                   const std::vector<VerticalBlockRule>& rules) const {
+  const std::string path = cachePath + verticalStylesCache;
+  // Append while there is room for another stylesheet filter, else start the file over.
+  uint8_t entries = 0;
+  bool reusable = false;
+  {
+    HalFile file;
+    uint8_t version = 0;
+    uint32_t storedRulesSize = 0;
+    if (Storage.openFileForRead("CSS", path, file) && file.read(&version, 1) == 1 && version == VSTYLES_CACHE_VERSION &&
+        file.read(&storedRulesSize, 4) == 4 && storedRulesSize == rulesSize) {
+      reusable = true;
+      VerticalStylesEntryHeader h{};
+      while (entries < VSTYLES_MAX_ENTRIES && readEntryHeader(file, h) &&
+             file.seekCur(static_cast<size_t>(h.count) * sizeof(VerticalBlockRule))) {
+        ++entries;
+      }
     }
   }
-#endif
-  return out.size();
+  HalFile file;
+  const bool append = reusable && entries < VSTYLES_MAX_ENTRIES;
+  if (append ? !Storage.openFileForAppend("CSS", path.c_str(), file) : !Storage.openFileForWrite("CSS", path, file)) {
+    return;
+  }
+  bool ok = true;
+  if (!append) {
+    const uint32_t size32 = static_cast<uint32_t>(rulesSize);
+    ok = file.write(&VSTYLES_CACHE_VERSION, 1) == 1 && file.write(&size32, 4) == 4;
+  }
+  const uint8_t all = key.all ? 1 : 0;
+  const auto count = static_cast<uint16_t>(rules.size());
+  const size_t bytes = rules.size() * sizeof(VerticalBlockRule);
+  ok = ok && file.write(&key.maxOut, 2) == 2 && file.write(&all, 1) == 1 && file.write(&key.linked, 8) == 8 &&
+       file.write(&key.fontStamp, 8) == 8 && file.write(&count, 2) == 2 &&
+       (bytes == 0 || file.write(rules.data(), bytes) == bytes);
+  if (!ok) {
+    // A torn entry would read as garbage: drop the whole file, the next build collects again.
+    file.close();
+    Storage.remove(path.c_str());
+  }
 }
 
 bool CssParser::beginCacheAppend(const std::vector<std::string>* sources, const uint8_t* aliases) {
@@ -2692,6 +2813,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
             CssParser::CSS_CACHE_VERSION);
     // Explicitly close() file before calling Storage.remove()
     file.close();
+    invalidateVerticalMemo();
     Storage.remove((cachePath + rulesCache).c_str());
     return false;
   }
