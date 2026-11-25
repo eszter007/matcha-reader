@@ -4187,12 +4187,12 @@ void EpubReaderActivity::finishPageRender(const uint16_t viewportWidth, const ui
   if (overlay != Overlay::None && usesToolbarMenu()) {
     // The page just re-rendered under the overlay: refresh the snapshot that
     // backs panel->toolbar restores (any previous copy is stale). Not while the
-    // chapter is still being built in slices (a live Text/Page change): the
-    // copy would take the heap the build needs, and the panels re-render the
-    // page without one.
+    // chapter is still being built in slices (a live Text/Page change) on a board
+    // without PSRAM: the copy would take the heap the build needs, and the panels
+    // re-render the page without one. With PSRAM the copy lives there.
     const bool building = verticalBuildInProgress_.load(std::memory_order_relaxed) ||
                           (verticalSection && verticalSection->isBuilding()) || (section && section->isBuilding());
-    if (building) {
+    if (building && HalMemory::getPsramHeap().totalBytes == 0) {
       discardOverlayPage();
     } else {
       overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
@@ -5653,9 +5653,10 @@ void EpubReaderActivity::refreshEarlyPageStatusBar() {
   // The early page drew its status bar while the chapter had no page count yet ("1/1 0%"), and
   // the page is kept on screen when the build ends. Redraw the same page with the real numbers:
   // the body comes out pixel-identical, so the fast refresh only changes the bar.
-  if (UITheme::getInstance().getStatusBarHeight() == 0 || !renderer.hasFrameBuffer()) return;
+  const bool forced = earlyShownChapterPages_ < 0;  // the page must be repainted (an overlay closed over it)
+  if ((!forced && UITheme::getInstance().getStatusBarHeight() == 0) || !renderer.hasFrameBuffer()) return;
   updateChapterPageSpan(lastViewportWidth, lastViewportHeight);
-  if (chapterPagesTotal == earlyShownChapterPages_ && bookPagesTotal == earlyShownBookPages_) return;
+  if (!forced && chapterPagesTotal == earlyShownChapterPages_ && bookPagesTotal == earlyShownBookPages_) return;
   const VerticalPage* page = verticalSection ? verticalSection->getPage() : nullptr;
   if (!page) return;  // not now: the next page turn draws the bar anyway
   renderer.clearScreen();
@@ -7246,11 +7247,13 @@ void EpubReaderActivity::openOverlay(Overlay target) {
   // Xteink-class panels, whose close path re-renders the page. If text or
   // images ever visibly ghost through the chrome, restore a HALF cleanup on
   // the first open (see #2190 for the mechanism).
-  if ((section || verticalSection) && !pageBufferStale) {
-    // Serialize against the render task: renderBook may be mid-page (status
-    // bar included) in the shared framebuffer, and painting the chrome from
-    // the loop task at the same time interleaves the two frames.
-    RenderLock lock;
+  // Serialize against the render task: renderBook may be mid-page (status bar
+  // included) in the shared framebuffer, and painting the chrome from the loop
+  // task at the same time interleaves the two frames. Never wait for it: a render
+  // in progress draws the overlay itself when it finishes (finishPageRender), in
+  // the same refresh, and the loop stays free.
+  RenderLock lock{RenderLock::Try{}};
+  if ((section || verticalSection) && !pageBufferStale && lock.held()) {
     settleOverlayRefresh();
     if (previous == Overlay::None) {
       // Snapshot the clean page so stepping back from a panel to the toolbar
@@ -7286,10 +7289,16 @@ void EpubReaderActivity::closeOverlayToPage() {
     toolbarUi.reset();       // ~1 KB of interaction table + props, only needed while open
   }
   if (BoardConfig::isEegoA4()) pagesUntilFullRefresh = 1;
-  // A chapter build that ended, or lent the framebuffer, under the overlay: render the page properly
-  // instead of restoring the snapshot.
-  const bool renderOwed = verticalBuildFinished_ || pageBufferStale;
-  if (!xteinkClassPanel() && overlayPageStored && !renderOwed) {
+  // A chapter build that ended under the overlay: render() places the finished chapter and keeps the
+  // early page, and its status-bar redraw (forced here) repaints the page over the chrome in one
+  // refresh. A framebuffer the build lent away needs the whole page rendered again.
+  if (verticalBuildFinished_ && !pageBufferStale) {
+    earlyShownChapterPages_ = -1;
+    discardOverlayPage();
+    requestUpdate();
+    return;
+  }
+  if (!xteinkClassPanel() && overlayPageStored && !pageBufferStale) {
     RenderLock lock;  // the render task shares the framebuffer
     settleOverlayRefresh();
     // No baseline resync: the glass shows the chrome, and erasing it needs
