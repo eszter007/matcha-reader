@@ -130,7 +130,6 @@ class VerticalSection {
   // Ask the active build to draw feedback at its next page boundary. Used when a backward turn,
   // menu, or lookup must wait for the render lock the build owns.
   void requestBuildNotice() { buildNoticePending_.store(true, std::memory_order_relaxed); }
-  bool buildNoticePending() const { return buildNoticePending_.load(std::memory_order_relaxed); }
 
   // Draws the loading notice; invoked between pages on the render task. See requestBuildNotice().
   void setBuildNoticeHook(void* ctx, void (*fn)(void*)) {

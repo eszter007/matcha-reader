@@ -1286,23 +1286,13 @@ void EpubReaderActivity::readerLoop() {
   // A vertical chapter build continues here after render() showed the reader's page: one slice per
   // tick, so a menu or lookup press is handled before the next one. No heap gate, unlike the
   // horizontal build below: this build is already under way and guards its own allocations, and
-  // pausing it would only keep its working set resident longer. Under an open toolbar or panel only
-  // while it has nothing to draw: a page served mid-build, or the loading notice, is drawn straight
-  // into the framebuffer the overlay paints over. A held button or finger goes first.
-  if (verticalBuildInProgress_.load(std::memory_order_relaxed) && !inputHeld()) {
+  // pausing it would only keep its working set resident longer. Not under an open toolbar or panel:
+  // a slice can lend the framebuffer they paint over (image probes) or draw a served page into it,
+  // and repainting the overlay after each one cost a full refresh per slice. A held button or
+  // finger goes first.
+  if (verticalBuildInProgress_.load(std::memory_order_relaxed) && overlay == Overlay::None && !inputHeld()) {
     RenderLock lock{RenderLock::Try{}};
-    const bool drawsNothing =
-        verticalSection && verticalSection->pendingPageRequest() < 0 && !verticalSection->buildNoticePending();
-    if (lock.held() && (overlay == Overlay::None || drawsNothing)) {
-      const Overlay overlayBefore = overlay;
-      const uint32_t loansBefore = renderer.frameBufferLoanCount();
-      tickVerticalBuild();
-      // An image probe lends the framebuffer and hands it back white: repaint the page and overlay.
-      if (overlayBefore != Overlay::None && renderer.frameBufferLoanCount() != loansBefore) {
-        pageBufferStale = true;
-        requestUpdate();
-      }
-    }
+    if (lock.held()) tickVerticalBuild();
   }
 
   // Drive any in-progress incremental section build forward, off the page-turn critical path.
