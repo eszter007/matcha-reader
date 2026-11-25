@@ -1418,9 +1418,9 @@ void EpubReaderActivity::readerLoop() {
     }
     // The style was switched off while an overlay was up (Settings reached via
     // the More panel); fall back to the clean page.
-    overlay = Overlay::None;
     {
       RenderLock lock;  // the render task may be inside renderOverlay()
+      overlay = Overlay::None;
       toolbarUi.reset();
     }
     discardOverlayPage();
@@ -7277,9 +7277,14 @@ void EpubReaderActivity::closeOverlayToPage() {
   applyPageDraft();
   saveTextSettingsIfDirty();
   mappedInput.resetHomeButtonInput();
-  overlay = Overlay::None;
-  overlayPopup.dismiss();  // an option picker cannot outlive its panel
-  toolbarUi.reset();       // ~1 KB of interaction table + props, only needed while open
+  {
+    // The render task reads overlay and toolbarUi together inside renderOverlay(): change them
+    // only while it cannot be rendering.
+    RenderLock lock;
+    overlay = Overlay::None;
+    overlayPopup.dismiss();  // an option picker cannot outlive its panel
+    toolbarUi.reset();       // ~1 KB of interaction table + props, only needed while open
+  }
   if (BoardConfig::isEegoA4()) pagesUntilFullRefresh = 1;
   // A chapter build that ended, or lent the framebuffer, under the overlay: render the page properly
   // instead of restoring the snapshot.
@@ -7626,9 +7631,9 @@ void EpubReaderActivity::handleOverlayInput() {
         section.reset();
         verticalSection.reset();
       }
-      overlay = Overlay::None;
       {
         RenderLock lock;  // the render task may be inside renderOverlay()
+        overlay = Overlay::None;
         toolbarUi.reset();
       }
       discardOverlayPage();
@@ -8006,9 +8011,9 @@ void EpubReaderActivity::runOverlayLeafAction(const EpubReaderMenuActivity::Menu
   }
   // Leaf actions open their own screen / perform the action; close the overlay first. The sheet's
   // tables go too: left allocated they split the heap the next screen or a chapter build needs.
-  overlay = Overlay::None;
   {
     RenderLock lock;  // the render task may be inside renderOverlay()
+    overlay = Overlay::None;
     toolbarUi.reset();
   }
   if (action == MA::GO_TO_PERCENT && overlayPageStored) {
