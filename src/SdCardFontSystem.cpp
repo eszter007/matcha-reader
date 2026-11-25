@@ -1360,6 +1360,10 @@ void SdCardFontSystem::unloadCompanionTtf(GfxRenderer& renderer) {
   companionTtf_.reset();
   // Only a streamed companion holds an open file; close() asserts on one that was never opened.
   if (companionTtfSource_.file) companionTtfSource_.file.close();
+#ifdef BOARD_HAS_PSRAM
+  companionTtfSource_.blocks.init(nullptr, 0);
+  companionTtfSource_.blockStore.reset();
+#endif
   companionTtfSource_.bytes.clear();
   companionTtfSource_.present = false;
   companionTtfSource_.streamed = false;
@@ -1388,6 +1392,10 @@ void SdCardFontSystem::releaseTtfSources(TtfSource*& sources, const TtfSource* o
     s.bytes.clear();
     freeink::font::PsramVector<uint8_t>().swap(s.bytes);  // actually release
     if (s.file) s.file.close();
+#ifdef BOARD_HAS_PSRAM
+    s.blocks.init(nullptr, 0);
+    s.blockStore.reset();
+#endif
     s.streamed = false;
     s.size = 0;
     s.present = false;
@@ -1507,6 +1515,23 @@ bool SdCardFontSystem::openTtfSourceInto(TtfSource& s, const std::string& path, 
       freeink::font::PsramVector<uint8_t>().swap(s.bytes);  // fall back to pure streaming
     }
   }
+#ifdef BOARD_HAS_PSRAM
+  // 2 MB holds a CJK novel's page working set of outlines (~400 glyphs, a 2 KB block each at worst)
+  // many times over; a smaller PSRAM gets 512 KB, and none at all leaves plain streaming.
+  s.blocks.init(nullptr, 0);  // a cache of another file must never serve this one
+  s.blockStore.reset();
+  if (len > prefix) {
+    for (const size_t sets : {size_t{256}, size_t{64}}) {
+      const size_t bytes = StreamBlockCache::bytesFor(sets);
+      if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) < bytes + 1024 * 1024) continue;
+      s.blockStore = HalMemory::allocatePsram(bytes);
+      if (!s.blockStore) continue;
+      s.blocks.init(s.blockStore.get(), sets);
+      LOG_DBG("SDFS", "TTF block cache: %u KB in PSRAM", static_cast<unsigned>(bytes / 1024));
+      break;
+    }
+  }
+#endif
   LOG_DBG("SDFS", "Streaming TTF %s (%u KB) from SD", path.c_str(), static_cast<unsigned>(len / 1024));
   s.size = static_cast<unsigned long>(len);
   s.present = true;
@@ -1534,8 +1559,25 @@ unsigned long SdCardFontSystem::prefixRead(void* ctx, const unsigned long offset
     if (fromCache == count) return count;
     return fromCache + readFromCard(offset + fromCache, buffer + fromCache, count - fromCache);
   }
+#ifdef BOARD_HAS_PSRAM
+  if (s->blocks.active()) {
+    return s->blocks.read(&SdCardFontSystem::cardRead, s, s->size, offset, buffer, count);
+  }
+#endif
   return readFromCard(offset, buffer, count);
 }
+
+#ifdef BOARD_HAS_PSRAM
+unsigned long SdCardFontSystem::cardRead(void* ctx, const unsigned long offset, unsigned char* buffer,
+                                         const unsigned long count) {
+  auto* s = static_cast<TtfSource*>(ctx);
+  const auto read = SdCardFontRegistry::halFileRead(&s->file, offset, buffer, count);
+  if (s->uiReadFailed && read < count && offset <= s->size && count <= s->size - offset) {
+    s->uiReadFailed->store(true, std::memory_order_relaxed);
+  }
+  return read;
+}
+#endif
 
 void SdCardFontSystem::addTtfSources(TtfEpdFont& font, TtfSource* sources) {
   for (uint8_t st = 0; st < 4; ++st) {

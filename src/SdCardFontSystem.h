@@ -1,6 +1,10 @@
 #pragma once
 
 #include <HalStorage.h>  // HalFile (kept open for streamed TTFs)
+#ifdef BOARD_HAS_PSRAM
+#include <HalMemory.h>
+#include <StreamBlockCache.h>
+#endif
 #include <SdCardFontManager.h>
 #include <SdCardFontRegistry.h>
 #include <VectorFontSupport.h>
@@ -336,6 +340,10 @@ class SdCardFontSystem {
   void releaseTtfLookup(GfxRenderer& renderer);
   // ReadFn for streamed sources: serves the PSRAM prefix cache first, SD after.
   static unsigned long prefixRead(void* ctx, unsigned long offset, unsigned char* buffer, unsigned long count);
+#ifdef BOARD_HAS_PSRAM
+  // The card read behind the block cache.
+  static unsigned long cardRead(void* ctx, unsigned long offset, unsigned char* buffer, unsigned long count);
+#endif
 #endif  // CROSSPOINT_VECTOR_FONTS
 
   SdCardFontRegistry registry_;
@@ -398,6 +406,12 @@ class SdCardFontSystem {
     unsigned long size = 0;
     bool present = false;
     std::atomic<bool>* uiReadFailed = nullptr;
+#ifdef BOARD_HAS_PSRAM
+    // Blocks of the file past the prefix (glyph outlines), so a glyph drawn again at another size,
+    // or loaded twice in one fault (metrics, then bitmap), does not go back to the card.
+    HalMemory::PsramBuffer blockStore;
+    StreamBlockCache blocks;
+#endif
   };
 
   // Sources outlive the FreeType faces that borrow them. The reader and UI
