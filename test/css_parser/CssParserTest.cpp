@@ -235,6 +235,46 @@ TEST_F(CssParserTest, LinkedStylesheetBringsInWhatItImports) {
   EXPECT_EQ(vertical.size(), 2u) << "the vertical engine must see the imported box and indent rules";
 }
 
+// Chapter rebuilds collect again on the same parser: each filter gets its own result, and a
+// rebuilt cache is read afresh.
+TEST_F(CssParserTest, RepeatedVerticalCollectionFollowsFilterAndCacheRebuild) {
+  CssParser parser(cachePath());
+  writeTwoStylesheetCache(parser, [&](const std::string& css) { return loadCss(parser, css); });
+  const auto textOnly = parser.stylesheetFilterFor({"OPS/css/text.css"});
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  EXPECT_EQ(parser.collectVerticalStyles(vertical), 1u);
+  EXPECT_EQ(parser.collectVerticalStyles(vertical, 256, &textOnly), 0u);
+  EXPECT_EQ(parser.collectVerticalStyles(vertical), 1u);
+  EXPECT_EQ(parser.collectVerticalStyles(vertical, 256, &textOnly), 0u);
+
+  const std::vector<std::string> sources{"OPS/css/text.css"};
+  const uint8_t aliases[] = {0};
+  ASSERT_TRUE(parser.beginCacheAppend(&sources, aliases));
+  parser.setSource(0);
+  ASSERT_TRUE(loadCss(parser, ".a { margin-top: 1em; }\n.b { text-align: center; }\n"));
+  ASSERT_TRUE(parser.appendRulesToCache());
+  parser.clear();
+  ASSERT_TRUE(parser.endCacheAppend(/*discard=*/false));
+  EXPECT_EQ(parser.collectVerticalStyles(vertical), 2u) << "a rebuilt cache served the old rules";
+
+  parser.deleteCache();
+  EXPECT_EQ(parser.collectVerticalStyles(vertical), 0u) << "a deleted cache served the old rules";
+}
+
+#ifdef BOARD_HAS_PSRAM
+TEST_F(CssParserTest, RepeatedVerticalCollectionSkipsTheCacheRead) {
+  CssParser parser(cachePath());
+  writeTwoStylesheetCache(parser, [&](const std::string& css) { return loadCss(parser, css); });
+  std::vector<CssParser::VerticalBlockRule> first;
+  ASSERT_EQ(parser.collectVerticalStyles(first), 1u);
+  // Removed behind the parser's back: only the memo can answer now.
+  std::filesystem::remove(std::filesystem::path(cachePath()) / "css_rules.cache");
+  std::vector<CssParser::VerticalBlockRule> again;
+  ASSERT_EQ(parser.collectVerticalStyles(again), 1u);
+  EXPECT_EQ(std::memcmp(first.data(), again.data(), sizeof(first[0])), 0);
+}
+#endif
+
 TEST_F(CssParserTest, ImportPathIsPercentDecoded) {
   {
     CssParser writer(cachePath());

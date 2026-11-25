@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef BOARD_HAS_PSRAM
+#include <HalMemory.h>
+#endif
+
 #include <HalStorage.h>
 
 #include <cstdint>
@@ -465,6 +469,27 @@ class CssParser {
   static void encodeStyleWire(const CssStyle& style, uint8_t* out);
 
   std::string cachePath;
+
+#ifdef BOARD_HAS_PSRAM
+  // The last complete collectVerticalStyles() result, in PSRAM. A chapter rebuild (font size,
+  // margins) re-reads the same CSS cache, which takes over a second on a heavy book; the result
+  // depends only on the cache, the stylesheet filter and the installed book fonts.
+  struct VerticalMemo {
+    HalMemory::PsramBuffer rules;
+    uint16_t count = 0;
+    uint16_t maxOut = 0;
+    uint64_t linked = 0;
+    uint64_t fontStamp = 0;
+    bool all = true;
+  };
+  mutable VerticalMemo verticalMemo_;
+#endif
+  // Called wherever the rules cache is written or removed.
+  void invalidateVerticalMemo() const {
+#ifdef BOARD_HAS_PSRAM
+    verticalMemo_.rules.reset();
+#endif
+  }
 
   /**
    * The colours seen so far inside ONE `{ ... }` rule block, as luma (0 = black, 255 = white).

@@ -42,4 +42,10 @@ uint8_t slotForFamily(const uint16_t familyKey) {
 
 int fontIdForSlot(const uint8_t slot) { return slot >= 1 && slot <= familyCount ? ids[slot - 1] : 0; }
 
+uint64_t slotStamp() {
+  uint64_t stamp = familyCount;
+  for (size_t i = 0; i < familyCount; ++i) stamp |= static_cast<uint64_t>(keys[i]) << (16 * (i + 1));
+  return stamp;
+}
+
 }  // namespace bookfonts

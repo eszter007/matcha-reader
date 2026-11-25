@@ -31,5 +31,7 @@ static_assert(MAX_FAMILIES < READER_SLOT, "slots must fit in 2 bits");
 uint8_t slotForFamily(uint16_t familyKey);
 // The font a slot draws with; 0 for slot 0 and READER_SLOT (the caller's own font).
 int fontIdForSlot(uint8_t slot);
+// Identifies the installed families as slotForFamily sees them: equal stamps map every key alike.
+uint64_t slotStamp();
 
 }  // namespace bookfonts

@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstring>
 #include <string_view>
+#include <type_traits>
 
 #include "../BookFontMap.h"
 #include "../ReaderFontScale.h"
@@ -1749,6 +1750,7 @@ bool CssParser::hasCacheAt(const std::string& bookCachePath) {
 }
 
 void CssParser::deleteCache() const {
+  invalidateVerticalMemo();
   if (hasCache()) Storage.remove((cachePath + rulesCache).c_str());
   if (Storage.exists((cachePath + fontFacesCache).c_str())) Storage.remove((cachePath + fontFacesCache).c_str());
 }
@@ -1766,6 +1768,7 @@ bool CssParser::saveToCache() const {
     return false;
   }
 
+  invalidateVerticalMemo();
   HalFile file;
   if (!Storage.openFileForWrite("CSS", cachePath + rulesCache, file)) {
     return false;
@@ -2159,6 +2162,21 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
 
   if (cachePath.empty()) return 0;
 
+#ifdef BOARD_HAS_PSRAM
+  static_assert(std::is_trivially_copyable_v<VerticalBlockRule>);
+  const bool wantAll = stylesheets == nullptr || stylesheets->all;
+  const uint64_t wantLinked = wantAll ? 0 : stylesheets->linked;
+  const uint64_t fontStamp = bookfonts::slotStamp();
+  auto& memo = verticalMemo_;
+  if (memo.rules && memo.maxOut == maxOut && memo.all == wantAll && memo.linked == wantLinked &&
+      memo.fontStamp == fontStamp) {
+    out.resize(memo.count);
+    memcpy(out.data(), memo.rules.get(), memo.count * sizeof(VerticalBlockRule));
+    LOG_DBG("CSS", "Vertical styles reused: %u selectors", static_cast<unsigned>(memo.count));
+    return out.size();
+  }
+#endif
+
   HalFile file;
   if (!Storage.openFileForRead("CSS", cachePath + rulesCache, file)) return 0;
 
@@ -2169,9 +2187,12 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
   if (ruleCount > MAX_CACHED_RULES) return 0;
   StylesheetFilter applied;
   if (!readStylesheetTable(file, stylesheets, applied)) return 0;
+  // A narrowed request that comes back as "every stylesheet" ran short of heap for the import masks.
+  [[maybe_unused]] const bool filterHeapShort = applied.all && stylesheets != nullptr && !stylesheets->all;
 
   std::string selector;
-  for (uint16_t i = 0; i < ruleCount && out.size() < maxOut; i++) {
+  uint16_t i = 0;
+  for (; i < ruleCount && out.size() < maxOut; i++) {
     uint8_t source = 0;
     if (file.read(&source, 1) != 1) break;
     uint16_t selectorLen = 0;
@@ -2251,6 +2272,21 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
     LOG_ERR("CSS", "collectVerticalStyles hit the %u-entry cap; later rules (e.g. borders) may be dropped",
             static_cast<unsigned>(maxOut));
   }
+#ifdef BOARD_HAS_PSRAM
+  // Only a whole read is kept: a read error stops the loop before the cap and the last record.
+  const bool complete = i == ruleCount || out.size() >= maxOut;
+  if (complete && !filterHeapShort && !out.empty()) {
+    memo.rules = HalMemory::allocatePsram(out.size() * sizeof(VerticalBlockRule));
+    if (memo.rules) {
+      memcpy(memo.rules.get(), out.data(), out.size() * sizeof(VerticalBlockRule));
+      memo.count = static_cast<uint16_t>(out.size());
+      memo.maxOut = static_cast<uint16_t>(maxOut);
+      memo.all = wantAll;
+      memo.linked = wantLinked;
+      memo.fontStamp = fontStamp;
+    }
+  }
+#endif
   return out.size();
 }
 
@@ -2624,6 +2660,7 @@ bool CssParser::endCacheAppend(const bool discard) {
     return false;
   }
   // Publish: the temp file is complete and framed, so it can take over as the cache.
+  invalidateVerticalMemo();
   Storage.remove((cachePath + rulesCache).c_str());
   if (!Storage.rename((cachePath + rulesCacheTmp).c_str(), (cachePath + rulesCache).c_str())) {
     LOG_ERR("CSS", "Failed to publish rules cache; removing temp");
