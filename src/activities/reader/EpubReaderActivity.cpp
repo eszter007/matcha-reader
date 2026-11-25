@@ -3146,9 +3146,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // one side until the book is reopened. Detect the change and reflow in place,
   // preserving the reading position the same way applyOrientation() does. This runs
   // in the render task, which already holds the render lock, so no RenderLock here.
+  [[maybe_unused]] bool reflowingInPlace = false;
   {
     if ((section || verticalSection) && renderSpec != sectionLayoutSpec) {
       LOG_DBG("ERS", "Layout params changed; reflowing section in place");
+      reflowingInPlace = verticalSection != nullptr;
       // Anchor the position by content before the sections go: a reflow re-paginates, so the
       // page number about to be recorded below is only the fallback. Vertical can answer this
       // now too, so a font or spacing change no longer costs vertical readers their place.
@@ -3262,7 +3264,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       } else if (!verticalSection->loadSectionFile(readerSpec(viewportWidth, viewportHeight),
                                                    /*retryDegraded=*/true)) {
         LOG_DBG("ERS", "Vertical cache not found, building...");
-        GUI.drawPopup(renderer, tr(STR_INDEXING));
+#ifdef BOARD_HAS_PSRAM
+        // A vertical relayout in place (font size, spacing) shows the reader's page through the early
+        // render within a few seconds, and that render already takes the HALF pass set above. A popup
+        // first costs a whole panel refresh (~0.8 s on the A4) before the build can start.
+        const bool skipIndexingPopup = reflowingInPlace && !pendingPercentJump && !pendingPageJump.has_value();
+#else
+        const bool skipIndexingPopup = false;
+#endif
+        if (!skipIndexingPopup) GUI.drawPopup(renderer, tr(STR_INDEXING));
         // Same force every horizontal Indexing-popup site applies: the popup paints FAST, and a
         // rebuilt layout replaces it with shifted content -- HALF-clear or both ghost under the page.
         pagesUntilFullRefresh = 1;
