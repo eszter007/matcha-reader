@@ -490,6 +490,11 @@ class EpubReaderActivity final : public ReaderActivity {
   bool overlayPaintFirstOpen_ = false;
   // The snapshot-and-chrome paint over the page in the framebuffer, with one fast refresh.
   void paintOverlayOnPage(bool firstOpen);
+  // closeOverlayToPage() found the render task busy: its next render() closes the overlay.
+  std::atomic<bool> overlayCloseOwed_{false};
+  // The close itself, with the render lock held. True when it put the page back on screen (snapshot
+  // restore); false when the caller must render the page.
+  bool finishOverlayClose();
   // Drops the vertical section, and with it a finish that render() has not placed yet.
   void dropVerticalSection() {
     verticalSection.reset();
