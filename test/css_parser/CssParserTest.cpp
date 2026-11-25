@@ -768,6 +768,17 @@ TEST_F(CssParserTest, ChapterWithoutStylesIsNotScannedTwice) {
   EXPECT_EQ(parser.appendChapterVerticalStyles(plain, out), 1u) << "another chapter in between forgets it";
 }
 
+TEST_F(CssParserTest, ChapterStylesWithNothingVerticalAreNotScannedTwice) {
+  CssParser parser(cachePath());
+  const std::string path = cachePath() + "/bold.html";
+  writeFile(path, "<html><head><style>p { font-weight: bold; }</style></head><body></body></html>");
+  std::vector<CssParser::VerticalBlockRule> out;
+  out.reserve(256);
+  EXPECT_EQ(parser.appendChapterVerticalStyles(path, out), 0u);
+  writeFile(path, "<html><head><style>.k { margin-top: 1em; }</style></head><body></body></html>");
+  EXPECT_EQ(parser.appendChapterVerticalStyles(path, out), 0u) << "the chapter was scanned again";
+}
+
 TEST_F(CssParserTest, AMissingChapterFileIsNotRememberedAsUnstyled) {
   CssParser parser(cachePath());
   const std::string path = cachePath() + "/late.html";

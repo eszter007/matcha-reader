@@ -1991,11 +1991,11 @@ CssParser::VerticalBlockStyle CssParser::verticalBlockStyleOf(const CssStyle& cs
   return vs;
 }
 
-void CssParser::addVerticalRule(std::vector<VerticalBlockRule>& out, std::string_view selector, const CssStyle& css) {
+bool CssParser::addVerticalRule(std::vector<VerticalBlockRule>& out, std::string_view selector, const CssStyle& css) {
   // Only unscoped and "v|"-scoped selectors feed the vertical engine.
   bool verticalScope = false;
   if (selector.size() >= 2 && selector[1] == '|') {
-    if (selector[0] != 'v') return;
+    if (selector[0] != 'v') return false;
     selector.remove_prefix(2);
     verticalScope = true;
   }
@@ -2004,7 +2004,7 @@ void CssParser::addVerticalRule(std::vector<VerticalBlockRule>& out, std::string
   // them would spend entries of the bounded `out` cap on rules that can never match there.
   if (selector.empty() || selector.find(CssSelector::DESCENDANT_COMBINATOR) != std::string_view::npos ||
       selector.find(CssSelector::CHILD_COMBINATOR) != std::string_view::npos) {
-    return;
+    return false;
   }
   VerticalBlockStyle vs = verticalBlockStyleOf(css);
   // Auto margins along the column place the whole block: both ends centre it, the head alone pushes it to
@@ -2014,7 +2014,7 @@ void CssParser::addVerticalRule(std::vector<VerticalBlockRule>& out, std::string
     const bool autoFoot = css.defined.marginBottom && css.marginBottom.unit == CssUnit::Auto;
     vs.blockAlign = autoFoot ? VERTICAL_BLOCK_CENTER : VERTICAL_BLOCK_END;
   }
-  if (!vs.any()) return;
+  if (!vs.any()) return false;
 
   VerticalBlockRule rule;
   rule.style = vs;
@@ -2048,10 +2048,11 @@ void CssParser::addVerticalRule(std::vector<VerticalBlockRule>& out, std::string
       existing.fontScale32 = vs.fontScale32;
       existing.fontScaleOfParent = vs.fontScaleOfParent;
     }
-    return;
+    return true;
   }
   // Within the capacity the caller reserved: growing it would need room for two copies.
   if (out.size() < out.capacity()) out.push_back(rule);
+  return true;
 }
 
 bool CssParser::extractStyleBlocks(const std::string& htmlPath, const std::string& cssPath, bool* scannedWhole) {
@@ -2167,12 +2168,20 @@ size_t CssParser::appendChapterVerticalStyles(const std::string& htmlPath, std::
   }
   const size_t before = out.size();
   const auto order = sourceOrder();
+  bool anyVertical = false;
   for (uint16_t i = 0; i < entryCount_; ++i) {
     const uint16_t entry = order ? order[i] : i;
-    addVerticalRule(out, selectorAt(entry), styleAt(entry));
+    anyVertical = addVerticalRule(out, selectorAt(entry), styleAt(entry)) || anyVertical;
   }
   releasePools();
-  return out.size() - before;
+  const size_t added = out.size() - before;
+  // Its <style> blocks hold nothing the vertical engine reads, which a later build would only find
+  // again.
+  if (!anyVertical) {
+    chapterWithoutStyles_ = htmlPath;
+    chapterWithoutStylesFontStamp_ = fontStamp;
+  }
+  return added;
 }
 
 size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, const size_t maxOut,

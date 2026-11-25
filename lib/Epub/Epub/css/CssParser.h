@@ -411,12 +411,13 @@ class CssParser {
   [[nodiscard]] const CssStyle* findStyle(const std::string_view* pieces, size_t count) const;
   [[nodiscard]] std::unique_ptr<uint16_t[]> sourceOrder() const;
   // One rule into the vertical engine's table: v|-scoped or unscoped, tag/class selectors only.
-  static void addVerticalRule(std::vector<VerticalBlockRule>& out, std::string_view selector, const CssStyle& css);
+  // False when the rule holds nothing the vertical engine reads.
+  static bool addVerticalRule(std::vector<VerticalBlockRule>& out, std::string_view selector, const CssStyle& css);
   // Copies every <style> block's contents from the HTML into cssPath. False when there is none.
   // `scannedWhole`, when given, is set when the whole file was read (false on an open or read error).
   static bool extractStyleBlocks(const std::string& htmlPath, const std::string& cssPath, bool* scannedWhole = nullptr);
-  // The last chapter found to add no vertical rules of its own (most chapters have no <style>),
-  // so a rebuild of it skips scanning its HTML again.
+  // The last chapter found to add no vertical rules of its own (most chapters have no <style>, or
+  // none the vertical engine reads), so a rebuild of it skips scanning its HTML again.
   std::string chapterWithoutStyles_;
   uint64_t chapterWithoutStylesFontStamp_ = 0;
   [[nodiscard]] std::string_view selectorAt(size_t index) const;
