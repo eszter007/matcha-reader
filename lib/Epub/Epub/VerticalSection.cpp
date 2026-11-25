@@ -196,8 +196,17 @@ struct TextExtractor {
   // buffer is about half a second of layout, far too coarse a slice for a menu to open within.
   XML_Parser parser = nullptr;
   uint32_t sliceDeadlineMs = 0;  // 0: no deadline
+  bool (*yieldNow)() = nullptr;  // input waiting: end the slice now. Polled at most every 2 ms.
+  uint32_t lastYieldPollMs = 0;
   void yieldIfSliceOver() {
-    if (sliceDeadlineMs != 0 && parser && static_cast<int32_t>(millis() - sliceDeadlineMs) >= 0) {
+    if (sliceDeadlineMs == 0 || !parser) return;
+    const uint32_t now = millis();
+    bool stop = static_cast<int32_t>(now - sliceDeadlineMs) >= 0;
+    if (!stop && yieldNow && now - lastYieldPollMs >= 2) {
+      lastYieldPollMs = now;
+      stop = yieldNow();
+    }
+    if (stop) {
       sliceDeadlineMs = 0;  // one stop per slice; expat ignores a second call anyway
       XML_StopParser(parser, XML_TRUE);
     }
@@ -2457,11 +2466,14 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   return true;
 }
 
-VerticalSection::BuildStep VerticalSection::buildSomeMore(const uint32_t maxMillis) {
+VerticalSection::BuildStep VerticalSection::buildSomeMore(const uint32_t maxMillis, bool (*yieldNow)()) {
   if (!build_) return BuildStep::Failed;
   BuildContext& b = *build_;
   const uint32_t sliceStart = millis();
-  const auto sliceOver = [&] { return maxMillis != 0 && millis() - sliceStart >= maxMillis; };
+  const auto sliceOver = [&] {
+    return maxMillis != 0 && (millis() - sliceStart >= maxMillis || (yieldNow && yieldNow()));
+  };
+  b.extractor.yieldNow = maxMillis != 0 ? yieldNow : nullptr;
   b.extractor.sliceDeadlineMs = maxMillis != 0 ? std::max<uint32_t>(1, sliceStart + maxMillis) : 0;
   // The starved-glyph counter is global: between slices the reader draws pages too (a menu, a
   // turn), and inside one the early render does. Only what this slice's layout measured counts.

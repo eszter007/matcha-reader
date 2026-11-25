@@ -384,6 +384,12 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
 // A button contact is closed right now (HalGPIO::rawInputActive()). Input it cannot read stops the
 // build once the loop has debounced it.
 bool buttonContactClosed() { return gpio.rawInputActive(); }
+// A held button or finger: background work yields to it.
+bool inputHeld() {
+  float x = 0.0f;
+  float y = 0.0f;
+  return gpio.rawInputActive() || (gpio.hasTouch() && gpio.isTouchHeldAt(x, y));
+}
 
 }  // namespace
 
@@ -1280,11 +1286,23 @@ void EpubReaderActivity::readerLoop() {
   // A vertical chapter build continues here after render() showed the reader's page: one slice per
   // tick, so a menu or lookup press is handled before the next one. No heap gate, unlike the
   // horizontal build below: this build is already under way and guards its own allocations, and
-  // pausing it would only keep its working set resident longer. Not under an open toolbar or panel:
-  // a page served mid-build is drawn straight into the framebuffer they paint over.
-  if (verticalBuildInProgress_.load(std::memory_order_relaxed)) {
+  // pausing it would only keep its working set resident longer. Under an open toolbar or panel only
+  // while it has nothing to draw: a page served mid-build, or the loading notice, is drawn straight
+  // into the framebuffer the overlay paints over. A held button or finger goes first.
+  if (verticalBuildInProgress_.load(std::memory_order_relaxed) && !inputHeld()) {
     RenderLock lock{RenderLock::Try{}};
-    if (lock.held() && overlay == Overlay::None) tickVerticalBuild();
+    const bool drawsNothing =
+        verticalSection && verticalSection->pendingPageRequest() < 0 && !verticalSection->buildNoticePending();
+    if (lock.held() && (overlay == Overlay::None || drawsNothing)) {
+      const Overlay overlayBefore = overlay;
+      const uint32_t loansBefore = renderer.frameBufferLoanCount();
+      tickVerticalBuild();
+      // An image probe lends the framebuffer and hands it back white: repaint the page and overlay.
+      if (overlayBefore != Overlay::None && renderer.frameBufferLoanCount() != loansBefore) {
+        pageBufferStale = true;
+        requestUpdate();
+      }
+    }
   }
 
   // Drive any in-progress incremental section build forward, off the page-turn critical path.
@@ -3321,6 +3339,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         while (step == VerticalSection::BuildStep::InProgress && !(earlyTarget >= 0 && earlyPageActuallyDisplayed_)) {
           step = verticalSection->buildSomeMore(BACKGROUND_BUILD_BUDGET_MS);
         }
+        // The page after it too, briefly, so the first forward turn is served from a written page.
+        const uint32_t aheadStart = millis();
+        while (step == VerticalSection::BuildStep::InProgress && earlyTarget >= 0 &&
+               verticalSection->pageCount < earlyTarget + 2 && millis() - aheadStart < 200 && !inputHeld()) {
+          step = verticalSection->buildSomeMore(BACKGROUND_BUILD_BUDGET_MS, &inputHeld);
+        }
         if (step == VerticalSection::BuildStep::InProgress) {
           LOG_DBG("ERS", "Page %d shown; laying out the rest of chapter %d between frames", earlyTarget,
                   currentSpineIndex);
@@ -3408,7 +3432,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // While the chapter is still building, the early page's bookkeeping is the baseline mid-build
     // turns offset from: a render then (the menu opening over the page) draws normally and leaves it.
     const bool stillBuilding = verticalSection->isBuilding();
-    if (!stillBuilding && earlyPageActuallyDisplayed_ &&
+    if (!stillBuilding && earlyPageActuallyDisplayed_ && overlay == Overlay::None &&
         earlyDisplayedPage_.exchange(-1, std::memory_order_relaxed) == verticalSection->currentPage) {
       earlyPageActuallyDisplayed_ = false;
       lastRenderedVPage_ = verticalSection->currentPage;
@@ -5542,7 +5566,7 @@ void EpubReaderActivity::tickVerticalBuild() {
   }
   if (verticalTickCount_ == 0) verticalTickWallStartMs_ = millis();
   const uint32_t sliceStart = millis();
-  const VerticalSection::BuildStep step = verticalSection->buildSomeMore(BACKGROUND_BUILD_BUDGET_MS);
+  const VerticalSection::BuildStep step = verticalSection->buildSomeMore(BACKGROUND_BUILD_BUDGET_MS, &inputHeld);
   verticalTickBusyMs_ += millis() - sliceStart;
   verticalTickCount_++;
   if (step == VerticalSection::BuildStep::InProgress) return;
@@ -5578,6 +5602,8 @@ void EpubReaderActivity::tickVerticalBuild() {
 }
 
 void EpubReaderActivity::requestVerticalBuildNotice() {
+  // Not once the reader's page is on screen: the menu opens over it without waiting for the build.
+  if (earlyPageActuallyDisplayed_) return;
   if (verticalBuildInProgress_.load(std::memory_order_relaxed) && verticalSection) {
     verticalSection->requestBuildNotice();
   }
