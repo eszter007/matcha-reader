@@ -5639,6 +5639,16 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   renderStatusBar();
   earlyShownChapterPages_ = chapterPagesTotal;
   earlyShownBookPages_ = bookPagesTotal;
+  // An open toolbar or panel (a size change from the Text panel) stays on screen: snapshot the new
+  // page under it for the panel steps that restore it, then draw the chrome into the same refresh.
+  if (overlay != Overlay::None && usesToolbarMenu() && toolbarUi) {
+    discardOverlayPage();
+    if (HalMemory::getPsramHeap().totalBytes > 0) {
+      overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
+    }
+    renderOverlay();
+    if (overlayPopup.isActive()) overlayPopup.render(renderer);
+  }
   renderer.displayBuffer();
   earlyPageActuallyDisplayed_ = true;
   // The build resumes the moment this returns and needs its headroom back: the prewarm above
