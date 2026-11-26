@@ -545,6 +545,14 @@ class EpubReaderActivity final : public ReaderActivity {
   // Written on the render task, read by pageTurn() on the loop() task.
   std::atomic<int> earlyDisplayedPage_{-1};
   bool earlyPageActuallyDisplayed_ = false;
+  // Anchored relayout after a size change (see render()): the preview page's identity, and the
+  // real index of that page once the full build reaches it.
+  bool anchorPreviewBuild_ = false;
+  std::atomic<bool> anchorPreviewShown_{false};
+  std::atomic<int> anchorRealPage_{-1};
+  uint32_t anchorPreviewStart_ = 0;
+  size_t anchorPreviewGlyphs_ = 0;
+  static void anchorPageThunk(void* ctx, int pageIndex);
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
   // fallbackOffset: the content offset to record when the page has no layout to read one from.
   bool saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride, int8_t furiOverride,

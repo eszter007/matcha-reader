@@ -76,6 +76,10 @@ class VerticalSection {
   void (*earlyRenderFn_)(void*, const VerticalPage&, int) = nullptr;
   void* earlyRenderCtx_ = nullptr;
   int earlyRenderTargetPage_ = -1;
+  // See setAnchor().
+  uint32_t anchorOffset_ = UINT32_MAX;
+  bool anchorPreviewOnly_ = false;
+  void (*anchorPageFn_)(void*, int) = nullptr;
   // See requestPageDuringBuild(). Written by the loop() task, read by the build on the
   // render task; -1 = no pending request.
   std::atomic<int> buildPageRequest_{-1};
@@ -118,6 +122,18 @@ class VerticalSection {
     earlyRenderCtx_ = ctx;
     earlyRenderFn_ = fn;
     earlyRenderTargetPage_ = targetPage;
+  }
+
+  // Starts a page at the chapter text offset `offset` (UINT32_MAX: no anchor) on the next
+  // startBuild(). Until the build reaches it, page requests wait; then they move from the early
+  // target estimate to the real anchor page, and `pageFn` (same ctx as the early-render hook)
+  // gets its index. With previewOnly, the build skips the text before the anchor, draws the
+  // anchor page through the early-render hook at the target index, and stops: a quick first
+  // page, before the full build lays out the same page again.
+  void setAnchor(uint32_t offset, bool previewOnly, void (*pageFn)(void*, int)) {
+    anchorOffset_ = offset;
+    anchorPreviewOnly_ = previewOnly;
+    anchorPageFn_ = pageFn;
   }
 
   // Mid-build page turns: the reader's loop() task records the page the user wants while a

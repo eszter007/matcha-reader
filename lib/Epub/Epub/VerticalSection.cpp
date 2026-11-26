@@ -1492,7 +1492,14 @@ struct LayoutPageSink final : ParagraphSink {
   const void* cancelCtx = nullptr;
   bool cancelled = false;
   uint64_t lastRefusedAttemptKey = 0;  // see servePageRequest()
-  int fontReleasedForReq_ = -1;        // one font-cache release per starved request; see servePageRequest()
+  // See VerticalSection::setAnchor(). seedTarget is the page index the reader's position was
+  // estimated at; requests made against it move to the real anchor page once that is known.
+  uint32_t anchorOffset = UINT32_MAX;
+  bool anchorPreviewOnly = false;
+  bool anchorReached = false;
+  int seedTarget = -1;
+  void (*anchorPageFn)(void*, int) = nullptr;
+  int fontReleasedForReq_ = -1;  // one font-cache release per starved request; see servePageRequest()
 
   // Reusable read-back slot for mid-build backward turns. It grows through readPage's guarded
   // on-demand reserve; preallocating a second full page here starved the actual layout page.
@@ -1523,7 +1530,86 @@ struct LayoutPageSink final : ParagraphSink {
         viewportWidth(viewportWidth),
         viewportHeight(viewportHeight) {}
 
+  static size_t utf8Count(const std::string& s) {
+    size_t n = 0;
+    for (const char c : s) {
+      if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) n++;
+    }
+    return n;
+  }
+
+  // The page break before the anchor: pages so far are written, the next page starts here.
+  void reachAnchor() {
+    if (!anchorPreviewOnly) {
+      // Written while anchorReached is still false, so none of these pages serves a request.
+      flushText();
+      VerticalPage pendingTail;
+      if (!failed && layout.finalizePendingPage(pendingTail)) writeOne(pendingTail);
+    }
+    anchorReached = true;
+    if (anchorPreviewOnly) return;
+    const int anchorPage = static_cast<int>(pageOffsets.size());
+    if (pageRequest && seedTarget >= 0) {
+      const int req = pageRequest->load(std::memory_order_relaxed);
+      if (req >= 0) pageRequest->store(std::max(0, req + anchorPage - seedTarget), std::memory_order_relaxed);
+    }
+    if (anchorPageFn) anchorPageFn(earlyRenderCtx, anchorPage);
+  }
+
   void onParagraph(std::vector<RubyRun>& runs, const bool continuesPrevious) override {
+    if (failed) return;
+    if (anchorOffset != UINT32_MAX && !anchorReached && !runs.empty()) {
+      const RubyRun& last = runs.back();
+      if (last.visibleTextOffset + utf8Count(last.baseText) <= anchorOffset) {
+        if (anchorPreviewOnly) {
+          runs.clear();
+          return;
+        }
+      } else {
+        // Split at the anchor: the runs before it, the break, then the rest as a continuation.
+        // A ruby run is never split; one holding the anchor goes after the break whole.
+        std::vector<RubyRun> before;
+        size_t i = 0;
+        while (i < runs.size()) {
+          RubyRun& r = runs[i];
+          const uint32_t len = static_cast<uint32_t>(utf8Count(r.baseText));
+          if (r.visibleTextOffset >= anchorOffset) break;
+          if (r.visibleTextOffset + len <= anchorOffset || !r.rubyText.empty()) {
+            if (!r.rubyText.empty() && r.visibleTextOffset + len > anchorOffset) break;
+            before.push_back(std::move(r));
+            ++i;
+            continue;
+          }
+          const uint32_t keep = anchorOffset - r.visibleTextOffset;
+          size_t pos = 0;
+          for (uint32_t cp = 0; pos < r.baseText.size();) {
+            if ((static_cast<unsigned char>(r.baseText[pos]) & 0xC0) != 0x80) {
+              if (cp == keep) break;
+              ++cp;
+            }
+            ++pos;
+          }
+          RubyRun head = r;
+          head.baseText = r.baseText.substr(0, pos);
+          r.baseText.erase(0, pos);
+          r.visibleTextOffset = anchorOffset;
+          r.indentQuarters = 0;
+          before.push_back(std::move(head));
+          break;
+        }
+        runs.erase(runs.begin(), runs.begin() + static_cast<std::ptrdiff_t>(i));
+        const bool splitMidParagraph = !before.empty();
+        if (splitMidParagraph && !anchorPreviewOnly) onParagraphText(before, continuesPrevious);
+        reachAnchor();
+        if (failed) return;
+        onParagraphText(runs, continuesPrevious || splitMidParagraph);
+        return;
+      }
+    }
+    onParagraphText(runs, continuesPrevious);
+  }
+
+  void onParagraphText(std::vector<RubyRun>& runs, const bool continuesPrevious) {
     if (failed) return;
     // (Furigana-glossary harvest happens in TextExtractor's ruby handlers, which also see
     // whole-<ruby>-element boundaries for mono-ruby pairs; rubyHarvest is only OWNED here.)
@@ -1623,6 +1709,7 @@ struct LayoutPageSink final : ParagraphSink {
 
   void onImage(const std::string& src, const uint32_t visibleTextOffset) override {
     if (failed) return;
+    if (anchorPreviewOnly && !anchorReached) return;
     // Lay out any buffered text, then FINALIZE the in-progress page before the image page is
     // written. Without this, the image page was written while the half-filled text page stayed
     // pending: the pending page (whose content PRECEDES the image) landed in the cache AFTER
@@ -1755,6 +1842,14 @@ struct LayoutPageSink final : ParagraphSink {
 
   void writeOne(const VerticalPage& p) {
     if (failed) return;  // a cancel latched mid-batch: the rest of this batch is discarded too
+    if (anchorPreviewOnly) {
+      // The first page from the anchor is all a preview build makes: draw it and stop.
+      if (!anchorReached) return;
+      if (earlyRenderFn && !p.isImagePage()) renderEarly(p, std::max(0, seedTarget));
+      cancelled = true;
+      failed = true;
+      return;
+    }
     if (pageOffsets.size() == pageOffsets.capacity()) {
       // std::vector's automatic doubling throws/aborts when the heap is fragmented, so grow by a
       // bounded step that still leaves working headroom. Step down through smaller ones rather
@@ -1840,6 +1935,7 @@ struct LayoutPageSink final : ParagraphSink {
     if (noticeFlag && noticeFlag->exchange(false, std::memory_order_relaxed) && buildNoticeFn) {
       buildNoticeFn(buildNoticeCtx);
     }
+    if (anchorOffset != UINT32_MAX && !anchorReached) return;  // requests are still estimates
     const int req = pageRequest->load(std::memory_order_relaxed);
     if (req < 0 || req > lastBuilt) return;
     // Serving renders a page mid-build, and parts of that path allocate bare -- under
@@ -2357,6 +2453,10 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   b.sink.buildNoticeCtx = buildNoticeCtx_;
   b.sink.cancelFn = cancelFn_;
   b.sink.cancelCtx = cancelCtx_;
+  b.sink.anchorOffset = anchorOffset_;
+  b.sink.anchorPreviewOnly = anchorPreviewOnly_;
+  b.sink.seedTarget = earlyRenderFn_ ? earlyRenderTargetPage_ : -1;
+  b.sink.anchorPageFn = anchorPageFn_;
 
   // Styled blocks (borders, start offsets, hanging indents, centering, gaps): collect the
   // vertical-relevant selectors. Streams the on-disk CSS cache -- does NOT materialize the

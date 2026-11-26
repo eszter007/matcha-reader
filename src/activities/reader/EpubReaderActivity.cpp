@@ -3371,6 +3371,32 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // slice), then hand the rest to loop()'s ticks (tickVerticalBuild): between slices the
         // menu and word lookup open at once instead of after the whole chapter. A percent jump has
         // no early target and still waits here for the final page count.
+        // After a size change, first lay out only the page that starts where the reader was and
+        // show it; the full build below then breaks a page at the same offset, so its copy of that
+        // page matches and is not drawn again. PSRAM boards only: the preview repeats the setup.
+        const bool anchored = reflowingInPlace && earlyTarget >= 0 && !pendingPageJump.has_value() &&
+                              cachedVisibleTextOffset.has_value() && HalMemory::hasPsram();
+        anchorPreviewShown_.store(false, std::memory_order_relaxed);
+        anchorRealPage_.store(-1, std::memory_order_relaxed);
+        if (anchored) {
+          verticalSection->setAnchor(*cachedVisibleTextOffset, /*previewOnly=*/true, nullptr);
+          anchorPreviewBuild_ = true;
+          if (verticalSection->startBuild(readerSpec(viewportWidth, viewportHeight))) {
+            while (verticalSection->buildSomeMore(BACKGROUND_BUILD_BUDGET_MS, &leavingReader) ==
+                       VerticalSection::BuildStep::InProgress &&
+                   !leavingReader()) {
+            }
+          }
+          anchorPreviewBuild_ = false;
+          anchorPreviewShown_.store(earlyPageActuallyDisplayed_, std::memory_order_relaxed);
+          verticalSection->setAnchor(*cachedVisibleTextOffset, /*previewOnly=*/false, &anchorPageThunk);
+          if (leavingReader()) {
+            verticalBuildInProgress_.store(false, std::memory_order_relaxed);
+            return;
+          }
+        } else {
+          verticalSection->setAnchor(UINT32_MAX, false, nullptr);
+        }
         VerticalSection::BuildStep step = verticalSection->startBuild(readerSpec(viewportWidth, viewportHeight))
                                               ? VerticalSection::BuildStep::InProgress
                                               : VerticalSection::BuildStep::Failed;
@@ -5656,6 +5682,15 @@ void EpubReaderActivity::requestVerticalBuildNotice() {
   }
 }
 
+void EpubReaderActivity::anchorPageThunk(void* ctx, const int pageIndex) {
+  auto* self = static_cast<EpubReaderActivity*>(ctx);
+  self->anchorRealPage_.store(pageIndex, std::memory_order_relaxed);
+  // The preview was drawn at the estimated index; turns from here count from the real one.
+  if (self->anchorPreviewShown_.load(std::memory_order_relaxed)) {
+    self->earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
+  }
+}
+
 void EpubReaderActivity::earlyRenderVerticalPageThunk(void* ctx, const VerticalPage& page, const int pageIndex) {
   static_cast<EpubReaderActivity*>(ctx)->earlyRenderVerticalPage(page, pageIndex);
 }
@@ -5666,9 +5701,24 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   // Update the shown-page index BEFORE drawing (the render takes 0.7-3s): a button press
   // during the render should target the page AFTER this one, not re-request this one
   // (observed on device as the same page rendering twice back-to-back).
+  // The full build reaching the page the preview build already drew: same text from the same
+  // offset, so the screen is already right.
+  if (anchorPreviewShown_.exchange(false, std::memory_order_relaxed) &&
+      pageIndex == anchorRealPage_.load(std::memory_order_relaxed) && page.visibleTextOffset == anchorPreviewStart_ &&
+      page.glyphs.size() == anchorPreviewGlyphs_) {
+    earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
+    if (pageIndex >= midBuildTurnTarget_) midBuildTurnTarget_ = -1;
+    if (verticalSection) verticalSection->currentPage = pageIndex;
+    LOG_DBG("ERS", "Anchor page %d matches the preview; not drawn again", pageIndex);
+    return;
+  }
   earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
   if (pageIndex >= midBuildTurnTarget_) midBuildTurnTarget_ = -1;  // that turn has been served
   if (leavingReader()) return;
+  if (anchorPreviewBuild_) {
+    anchorPreviewStart_ = page.visibleTextOffset;
+    anchorPreviewGlyphs_ = page.glyphs.size();
+  }
   // Renders between build slices (the menu opening over this page) draw the section's current page.
   if (verticalSection) verticalSection->currentPage = pageIndex;
   renderer.clearScreen();
