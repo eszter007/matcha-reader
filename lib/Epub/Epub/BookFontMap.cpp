@@ -40,11 +40,19 @@ uint8_t slotForFamily(const uint16_t familyKey) {
   return READER_SLOT;
 }
 
+uint8_t slotForFontId(const int fontId) {
+  if (fontId == 0) return 0;
+  for (size_t i = 0; i < familyCount; ++i) {
+    if (ids[i] == fontId) return static_cast<uint8_t>(i + 1);
+  }
+  return 0;
+}
+
 int fontIdForSlot(const uint8_t slot) { return slot >= 1 && slot <= familyCount ? ids[slot - 1] : 0; }
 
 uint64_t slotStamp() {
-  uint64_t stamp = familyCount;
-  for (size_t i = 0; i < familyCount; ++i) stamp |= static_cast<uint64_t>(keys[i]) << (16 * (i + 1));
+  uint64_t stamp = 14695981039346656037ull ^ familyCount;
+  for (size_t i = 0; i < familyCount; ++i) stamp = (stamp ^ keys[i]) * 1099511628211ull;
   return stamp;
 }
 

@@ -82,9 +82,9 @@ struct VerticalGlyph {
   uint32_t style : 7 = 0;       // EpdFontFamily::Style flags (BOLD, ITALIC, etc.)
   uint32_t renderKind : 3 = Upright;
   uint32_t emphasis : 1 = 0;  // text-emphasis (sesame dots beside character)
-  uint32_t paragraphIndex : 23 = 0;
+  uint32_t paragraphIndex : 20 = 0;
   // CSS font-family as a bookfonts slot: 0 = the layout's font, else a publisher family.
-  uint32_t fontSlot : 2 = 0;
+  uint32_t fontSlot : 5 = 0;
   // CSS font-size in eighths of the body size (8 = as is), snapped as horizontal text snaps it
   // (fontScaleTagForScale). 0 reads as 8.
   uint32_t scale8 : 6 = 8;
@@ -460,8 +460,8 @@ class VerticalParsedText {
 
   struct PendingChar {
     uint32_t codepoint{};
-    uint32_t paragraphIndex : 30 = 0;
-    uint32_t fontSlot : 2 = 0;  // see VerticalGlyph::fontSlot
+    uint32_t paragraphIndex : 27 = 0;
+    uint32_t fontSlot : 5 = 0;  // see VerticalGlyph::fontSlot
     uint32_t byteOffset{};
     uint8_t style{};
     uint8_t emphasis : 1 = 0;

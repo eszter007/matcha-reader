@@ -299,8 +299,9 @@ int TextBlock::sizedWordDrop(const GfxRenderer& renderer, const int fontId) cons
   for (uint16_t i = 0; i < numWords; i++) {
     const int32_t slot = wordFontArr[i];
     if (slot == 0 || slot == fontId) continue;
-    const int wordAscender =
-        isWordScaleTag(slot) ? (ascender * -slot + 128) / WORD_SCALE_ONE : renderer.getFontAscenderSize(slot);
+    const int slotFont = fontOfSlot(slot);
+    const int fontAscender = slotFont != 0 ? renderer.getFontAscenderSize(slotFont) : ascender;
+    const int wordAscender = (fontAscender * scaleOfSlot(slot) + 128) / WORD_SCALE_ONE;
     tallest = std::max(tallest, wordAscender);
   }
   return tallest - ascender;
@@ -317,8 +318,8 @@ void TextBlock::wordPlacements(const GfxRenderer& renderer, const int baseFontId
       sizedWordDrop(renderer, fontId);
   out.reserve(numWords);
   for (uint16_t i = 0; i < numWords; i++) {
-    const int32_t fontSlot = fontsPresent ? wordFontArr[i] : 0;
-    const int wordFontId = (!isWordScaleTag(fontSlot) && fontSlot != 0) ? fontSlot : fontId;
+    const int32_t wordFontOverride = wordFont(i);
+    const int wordFontId = wordFontOverride != 0 ? wordFontOverride : fontId;
     const int wordX = xposArr[i] + x;
     out.push_back({static_cast<int16_t>(wordX), static_cast<int16_t>(wordY), wordFontId});
   }
@@ -412,11 +413,10 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
     const int wordX = xposArr[i] + x;
     // Inline font-size override: this word was MEASURED with its own font (see
     // ParsedText::calculateWordWidths), so it must draw with the same one.
-    const int32_t fontSlot = fontsPresent ? wordFontArr[i] : 0;
-    const bool wordScaled = isWordScaleTag(fontSlot);
-    // A scale tag means the block's own font drawn smaller/larger, not a different font.
-    const uint16_t wordScale = wordScaled ? static_cast<uint16_t>(-fontSlot) : WORD_SCALE_ONE;
-    const int wordFontId = (!wordScaled && fontSlot != 0) ? fontSlot : fontId;
+    const uint16_t wordScale = wordFontScale(i);
+    const bool wordScaled = wordScale != WORD_SCALE_ONE;
+    const int32_t wordFontOverride = wordFont(i);
+    const int wordFontId = wordFontOverride != 0 ? wordFontOverride : fontId;
     const EpdFontFamily::Style currentStyle = wordStyle(i);
     const auto baseDir =
         static_cast<BidiUtils::BidiBaseDir>(BidiUtils::detectParagraphLevel(word, blockStyle.isRtl ? 1 : 0));

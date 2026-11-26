@@ -552,9 +552,10 @@ to that book only.
       time you open it.
     - **Embedded Style** (on by default): uses the book's own formatting (its CSS).
     - **Publisher Fonts** (off by default, X4 Pro and other boards with PSRAM): draws a book in the fonts it
-      ships, in horizontal and vertical text. Up to two of a book's font families are used, usually the body
-      font and a heading font; any other text, and any character a book font lacks, uses your font. Works
-      only with **Embedded Style** on. TrueType and OpenType fonts only: books that ship only WOFF fonts keep
+      ships, in horizontal and vertical text, at the sizes the book sets for headings and inline text. All
+      of a book's font families are used while memory lasts (up to 30); any character a book font lacks
+      uses your font. Works
+      only with **Embedded Style** on. TrueType and OpenType fonts only (OpenType with CFF outlines included): books that ship only WOFF fonts keep
       your font, and so does a font file larger than 4 MB (common for full Japanese or Chinese fonts). Text
       the book sets larger or smaller is drawn by scaling the font, so it can look slightly softer.
     - **Text Anti-Aliasing** (on by default): smooth grey edges on letters, furigana included. The grey appears

@@ -97,21 +97,28 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
   SesameMask sesame = makeSesameMask(cellPx);
   int sesameCell = cellPx;
   // A publisher font (VerticalGlyph::fontSlot) is set in the same cells, on its own baseline.
-  SizedCell slotBodies[4] = {body, body, body, body};
-  bool slotReady[4] = {true, false, false, false};
+  // A page rarely mixes more than a few families: a small cache, not one cell per slot.
+  struct SlotBody {
+    uint8_t slot = 0;
+    SizedCell cell;
+  };
+  SlotBody slotBodies[4];
+  size_t slotBodyCount = 0;
   const auto fontOfSlot = [&](const uint8_t slot) {
     const int id = bookfonts::fontIdForSlot(slot);
     return id != 0 ? id : fontId;
   };
   const auto bodyOfSlot = [&](const uint8_t slot) -> const SizedCell& {
     const int id = bookfonts::fontIdForSlot(slot);
-    if (id == 0 || slot >= 4) return body;
-    if (!slotReady[slot]) {
-      slotBodies[slot] =
-          SizedCell{256, cellPx, renderer.getFontAscenderSize(id), verticalCellBaselineOffset(renderer, id, cellPx)};
-      slotReady[slot] = true;
+    if (id == 0) return body;
+    for (size_t i = 0; i < slotBodyCount && i < 4; ++i) {
+      if (slotBodies[i].slot == slot) return slotBodies[i].cell;
     }
-    return slotBodies[slot];
+    SlotBody& entry = slotBodies[slotBodyCount++ % 4];
+    entry.slot = slot;
+    entry.cell =
+        SizedCell{256, cellPx, renderer.getFontAscenderSize(id), verticalCellBaselineOffset(renderer, id, cellPx)};
+    return entry.cell;
   };
 
   // Styled-block borders (kakomi boxes, .k-solid-top separator rules). Rects share the glyphs'

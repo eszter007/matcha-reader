@@ -312,7 +312,7 @@ class CssParser {
     bool fontScaleOfParent : 1 = false;
     // font-family as a bookfonts slot (0 = not set). Resolved when the rules are collected, which
     // happens while the book's fonts are loaded.
-    uint8_t fontSlot : 2 = 0;
+    uint8_t fontSlot : 5 = 0;
     uint8_t blockAlign = 0;   // VERTICAL_BLOCK_*: auto head/foot margins place the whole block
     uint8_t borderEdges = 0;  // CssStyle::BORDER_* edge mask; vertical rendering stays solid
     // font-size as a multiple of that size, in 32nds; 0 = not set. A byte keeps the rule at 32 bytes.
@@ -485,7 +485,7 @@ class CssParser {
   };
   // css_vstyles.cache: complete collectVerticalStyles() results, so a chapter build after the
   // book is reopened does not scan the whole rules cache again.
-  static constexpr uint8_t VSTYLES_CACHE_VERSION = 1;
+  static constexpr uint8_t VSTYLES_CACHE_VERSION = 2;
   static constexpr uint8_t VSTYLES_MAX_ENTRIES = 4;
   // Reads the entry for `key` into `out` (reserved for key.maxOut). False on a miss.
   bool loadVerticalStyles(const VerticalStylesKey& key, size_t rulesSize, std::vector<VerticalBlockRule>& out) const;
