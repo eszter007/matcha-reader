@@ -1,6 +1,7 @@
 add_executable(TextBlockDisplayTest
   TextBlockDisplayTest.cpp
   ${REPO_ROOT}/lib/Epub/Epub/blocks/TextBlock.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/BookFontMap.cpp
   ${REPO_ROOT}/lib/Epub/Epub/CjkBreaks.cpp
   ${REPO_ROOT}/lib/Epub/Epub/hyphenation/HyphenationCommon.cpp
   ${REPO_ROOT}/lib/MiniBidi/BidiUtils.cpp
