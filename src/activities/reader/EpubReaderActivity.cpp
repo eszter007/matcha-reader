@@ -1315,7 +1315,7 @@ void EpubReaderActivity::readerLoop() {
   }
   // A Text panel change closed during a vertical build is saved once the build ends (see
   // closeOverlayToPage()).
-  if (textSettingsDirty && !verticalBuildInProgress_.load(std::memory_order_relaxed)) saveTextSettingsIfDirty();
+  if (textSettingsDirty && canSaveTextSettings()) saveTextSettingsIfDirty();
 
   // Drive any in-progress incremental section build forward, off the page-turn critical path.
   // No window condition: stopping once the build was BUILD_WINDOW_AHEAD pages past the reader
@@ -3093,6 +3093,12 @@ void EpubReaderActivity::onLeaving() { readerLeaving.store(true, std::memory_ord
 // TODO: Failure handling
 
 void EpubReaderActivity::render(RenderLock&& lock) {
+  // Recorded on every exit, after any vertical build this render starts has set its flag.
+  struct RelayoutTaken {
+    std::atomic<uint32_t>& taken;
+    uint32_t seen;
+    ~RelayoutTaken() { taken.store(seen); }
+  } relayoutTaken{relayoutsTaken_, relayoutsRequested_.load()};
   if (leavingReader()) return;  // nobody will see this frame
   // Here rather than in renderContents(), so vertical pages get the reading waveform too.
   const ReaderUtils::ReaderRefreshScope readerRefresh;
@@ -3325,14 +3331,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       } else if (!verticalSection->loadSectionFile(readerSpec(viewportWidth, viewportHeight),
                                                    /*retryDegraded=*/true)) {
         LOG_DBG("ERS", "Vertical cache not found, building...");
-#ifdef BOARD_HAS_PSRAM
         // A vertical relayout in place (font size, spacing) shows the reader's page through the early
         // render within a few seconds, and that render already takes the HALF pass set above. A popup
         // first costs a whole panel refresh before the build can start.
         const bool skipIndexingPopup = reflowingInPlace && !pendingPercentJump && !pendingPageJump.has_value();
-#else
-        const bool skipIndexingPopup = false;
-#endif
         if (!skipIndexingPopup) GUI.drawPopup(renderer, tr(STR_INDEXING));
         // Same force every horizontal Indexing-popup site applies: the popup paints FAST, and a
         // rebuilt layout replaces it with shifted content -- HALF-clear or both ghost under the page.
@@ -3511,10 +3513,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       LOG_DBG("ERS", "Keeping early-rendered page %d; skipping duplicate refresh", verticalSection->currentPage);
       // The build lent the framebuffer after the page was drawn and handed it back white. The panel
       // still shows the page, but a transparent sleep screen draws over the buffer: repaint it.
-      if (renderer.frameBufferLoanCount() != earlyPageLoanCount_) earlyShownChapterPages_ = -1;
+      if (renderer.frameBufferLoanCount() != earlyPageLoanCount_) earlyPageNeedsRepaint_ = true;
       // Under an open toolbar or panel the page and chrome on screen stay as they are; the status bar
       // catches up with the next page drawn.
-      if (!overlayDrawn()) refreshEarlyPageStatusBar();
+      if (!overlayDrawn()) repaintEarlyPageIfNeeded();
       showPendingSyncSaveError();
       return;
     }
@@ -3532,7 +3534,6 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // A page drawn between build slices (the menu over it) is the early render's situation: the
     // build's working set is resident, so the glyph prewarm keeps the build-phase floor.
     duringEarlyBuildRender_ = stillBuilding;
-    if (stillBuilding) verticalSection->notePageDrawnBetweenSlices();
 
     renderer.clearScreen();
 
@@ -5759,15 +5760,34 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   if (verticalSection) verticalSection->currentPage = pageIndex;
   renderer.clearScreen();
   duringEarlyBuildRender_ = true;  // the build is paused mid-layout; prewarm keeps its high floor
-  renderVerticalPageBody(page);
+  // Without PSRAM the prewarm sits on top of the paused layout's working set: about 20 KB per font
+  // style on the page (glyph buffers plus the kern tables it loads). When that would leave less than
+  // EARLY_PREWARM_MARGIN free, load the glyphs on demand instead (~25 ms each from SD).
+  bool skipPrewarm = false;
+  if (!HalMemory::hasPsram()) {
+    constexpr uint32_t PREWARM_COST_PER_STYLE = 20 * 1024;
+    constexpr uint32_t EARLY_PREWARM_MARGIN = 16 * 1024;
+    const uint8_t styleMask =
+        std::accumulate(page.glyphs.begin(), page.glyphs.end(), uint8_t{0},
+                        [](uint8_t m, const auto& g) { return static_cast<uint8_t>(m | (1u << (g.style & 0x03))); });
+    const uint32_t cost = std::max(1, __builtin_popcount(styleMask)) * PREWARM_COST_PER_STYLE;
+    // A style's glyph buffer is one block of up to ~14 KB, so a fragmented heap fails it too.
+    constexpr uint32_t PREWARM_MIN_BLOCK = 16 * 1024;
+    const uint32_t freeHeap = ESP.getFreeHeap();
+    const uint32_t maxAlloc = ESP.getMaxAllocHeap();
+    skipPrewarm = freeHeap < cost + EARLY_PREWARM_MARGIN || maxAlloc < PREWARM_MIN_BLOCK;
+    LOG_DBG("ERS", "Early page: free=%u maxAlloc=%u, prewarm needs ~%u: %s", freeHeap, maxAlloc, cost,
+            skipPrewarm ? "glyphs on demand" : "prewarm");
+  }
+  // glyphsAlreadyWarm only skips the prewarm; unwarmed glyphs then load on demand.
+  renderVerticalPageBody(page, /*glyphsAlreadyWarm=*/skipPrewarm);
   duringEarlyBuildRender_ = false;
   // Into the SAME buffer as the page and before the single displayBuffer() below, so it costs no extra
   // refresh. Safe mid-build: renderStatusBar() reads estimatedTotalPages() and marks an estimate with
   // "~". Without it the bar is absent for a vertical chapter's first pages, until the build ends and
   // ordinary renders take over (horizontal has no early-render path).
   renderStatusBar();
-  earlyShownChapterPages_ = chapterPagesTotal;
-  earlyShownBookPages_ = bookPagesTotal;
+  earlyPageNeedsRepaint_ = false;
   // An open toolbar or panel (a size change from the Text panel) stays on screen: snapshot the new
   // page under it for the panel steps that restore it, then draw the chrome into the same refresh.
   if (overlayDrawn() && usesToolbarMenu() && toolbarUi) {
@@ -5792,14 +5812,13 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   LOG_DBG("ERS", "Early first render of page %d in %dms", pageIndex, millis() - start);
 }
 
-void EpubReaderActivity::refreshEarlyPageStatusBar() {
-  // The early page drew its status bar while the chapter had no page count yet ("1/1 0%"), and
-  // the page is kept on screen when the build ends. Redraw the same page with the real numbers:
-  // the body comes out pixel-identical, so the fast refresh only changes the bar.
-  const bool forced = earlyShownChapterPages_ < 0;  // the page must be repainted (an overlay closed over it)
-  if ((!forced && UITheme::getInstance().getStatusBarHeight() == 0) || !renderer.hasFrameBuffer()) return;
+void EpubReaderActivity::repaintEarlyPageIfNeeded() {
+  // The early page's status bar shows an estimated page count ("~"); the next page drawn shows the
+  // real one, so a changed count alone costs no refresh. Repaint only when the page must be drawn
+  // again (an overlay closed over it, or the build lent the framebuffer and handed it back white).
+  if (!earlyPageNeedsRepaint_ || !renderer.hasFrameBuffer()) return;
+  earlyPageNeedsRepaint_ = false;
   updateChapterPageSpan(lastViewportWidth, lastViewportHeight);
-  if (!forced && chapterPagesTotal == earlyShownChapterPages_ && bookPagesTotal == earlyShownBookPages_) return;
   const VerticalPage* page = verticalSection ? verticalSection->getPage() : nullptr;
   if (!page) return;  // not now: the next page turn draws the bar anyway
   renderer.clearScreen();
@@ -7121,6 +7140,7 @@ void EpubReaderActivity::changeTextControl(const TextControl control, const int 
 void EpubReaderActivity::applyTextSettingLive() {
   applyReaderTextSettings(/*persist=*/false);
   textSettingsDirty = true;
+  relayoutsRequested_.fetch_add(1);
   discardOverlayPage();  // the stored page is laid out with the old settings
   requestUpdate();
 }
@@ -7463,9 +7483,8 @@ void EpubReaderActivity::paintOverlayOnPage(const bool firstOpen) {
 // Grayscale panels re-render to restore AA; other boards restore the B/W snapshot.
 void EpubReaderActivity::closeOverlayToPage() {
   applyPageDraft();
-  // Not during a vertical build: the settings document would claim heap while the build and its
-  // early page hold the most (X4: settings save failed at 180 bytes free). loop() saves it after.
-  if (!verticalBuildInProgress_.load(std::memory_order_relaxed)) saveTextSettingsIfDirty();
+  // loop() saves it once the relayout is done (see canSaveTextSettings()).
+  if (canSaveTextSettings()) saveTextSettingsIfDirty();
   mappedInput.resetHomeButtonInput();
   // Never waits for the render task, which holds the lock through a whole refresh: a busy one draws
   // the page back at the start of its next render(), and the loop drops the overlay after it.
@@ -7514,9 +7533,9 @@ bool EpubReaderActivity::restorePageUnderOverlay() {
     return true;
   }
   // A build that finished under the overlay keeps its early page: render() repaints it with the
-  // status bar (forced, since the counts may not have changed), which erases the chrome.
+  // status bar, which erases the chrome.
   if (verticalBuildFinished_ && !pageBufferStale) {
-    earlyShownChapterPages_ = -1;
+    earlyPageNeedsRepaint_ = true;
   } else if (BoardConfig::isEegoA4()) {
     pagesUntilFullRefresh = 1;
   }
@@ -8067,6 +8086,12 @@ void EpubReaderActivity::paintOverlayPopup() {
   settleOverlayRefresh();
   overlayPopup.render(renderer);
   pushOverlayRefresh();
+}
+
+// Not while a relayout is owed or its vertical build runs: the settings document would claim heap
+// while the build and its early page hold the most.
+bool EpubReaderActivity::canSaveTextSettings() const {
+  return relayoutsTaken_.load() == relayoutsRequested_.load() && !verticalBuildInProgress_.load();
 }
 
 void EpubReaderActivity::saveTextSettingsIfDirty() {
