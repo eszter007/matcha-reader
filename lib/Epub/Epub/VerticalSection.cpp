@@ -2233,8 +2233,6 @@ struct VerticalSection::BuildContext {
   uint32_t starvedGlyphsAtStart = 0;
   // Glyph measurements this build's own layout took without ink data (see buildSomeMore()).
   uint32_t starvedInLayout = 0;
-  // A page was drawn between two slices (see notePageDrawnBetweenSlices()).
-  bool drawnBetweenSlices = false;
   std::string localPath;
   std::string tmpHtmlPath;
   std::string chapterDir;
@@ -2260,10 +2258,6 @@ VerticalSection::VerticalSection(const std::shared_ptr<Epub>& epub, const int sp
       filePath(epub->getCachePath() + "/vsections/" + std::to_string(spineIndex) + ".bin") {}
 
 VerticalSection::~VerticalSection() { abandonBuild(); }
-
-void VerticalSection::notePageDrawnBetweenSlices() {
-  if (build_) build_->drawnBetweenSlices = true;
-}
 
 void VerticalSection::abandonBuild() {
   if (!build_) return;
@@ -2707,15 +2701,7 @@ bool VerticalSection::finishBuild(const bool parseOk) {
   lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || b.layout.everDroppedForHeap() || b.layout.everSplitForHeap() ||
                              b.extractor.droppedTextForHeap;
   if (b.extractor.droppedTextForHeap) LOG_ERR("VSC", "Text dropped on low heap; chapter is incomplete");
-  // Set before the draw-between-slices case below, which loses no content.
-  const bool heapDegraded = lastBuildDroppedForHeap_ || b.starvedInLayout > 0;
-  if (b.drawnBetweenSlices) {
-    // A full page render ran next to the layout's resident working set, and on device the
-    // pagination came out different without any starved-glyph trace (342 pages for a chapter that
-    // lays out to 321 untouched). Serve this session from it, but re-lay it out on the next open.
-    LOG_INF("VSC", "Pages were drawn between build slices; re-laying the chapter out on next open");
-    lastBuildDroppedForHeap_ = true;
-  }
+  // A page drawn between slices leaves the layout unchanged; only starved measurements make it stale.
   if (b.starvedInLayout > 0) {
     LOG_ERR("VSC", "%u glyph(s) measured without ink data on low heap; layout is approximate", b.starvedInLayout);
     lastBuildDroppedForHeap_ = true;
@@ -2768,12 +2754,8 @@ bool VerticalSection::finishBuild(const bool parseOk) {
   // open hits the version-mismatch path in loadSectionFile and rebuilds the chapter -- with,
   // ideally, a healthier heap -- instead of the truncation being persisted as a valid cache.
   if (lastBuildDroppedForHeap_ && !rebuildingFromStale_) {
-    if (heapDegraded) {
-      LOG_ERR("VSC", "Build degraded on low heap (maxAlloc=%u at start); marking section stale for rebuild",
-              lastBuildStartMaxAlloc_);
-    } else {
-      LOG_INF("VSC", "Pages drawn between build slices; marking section stale for rebuild");
-    }
+    LOG_ERR("VSC", "Build degraded on low heap (maxAlloc=%u at start); marking section stale for rebuild",
+            lastBuildStartMaxAlloc_);
     if (file.seek(0)) {
       const uint8_t staleVersion = 0;
       serialization::writePod(file, staleVersion);
@@ -2790,11 +2772,7 @@ bool VerticalSection::finishBuild(const bool parseOk) {
     // time, so "did the heap improve" answered no forever and every open rebuilt the chapter --
     // 9.8s before the reader would even respond. Keep the best-effort cache: a few missing glyphs
     // on the densest pages beat re-indexing on every single open.
-    if (heapDegraded) {
-      LOG_ERR("VSC", "Stale rebuild degraded on low heap again; keeping best-effort cache to break the rebuild loop");
-    } else {
-      LOG_INF("VSC", "Stale rebuild drawn between slices again; keeping cache to break the rebuild loop");
-    }
+    LOG_ERR("VSC", "Stale rebuild degraded on low heap again; keeping best-effort cache to break the rebuild loop");
   }
   file.close();
   build_.reset();

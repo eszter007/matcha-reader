@@ -537,10 +537,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // would misread every press as "past the last page" and jump to the next spine (observed:
   // a press during the build teleported the reader to the end of the book).
   std::atomic<bool> verticalBuildInProgress_{false};
-  // Totals the early-rendered page's status bar showed; see refreshEarlyPageStatusBar().
-  int earlyShownChapterPages_ = 0;
-  int earlyShownBookPages_ = 0;
-  void refreshEarlyPageStatusBar();
+  // The kept early page must be drawn again when its build ends; see repaintEarlyPageIfNeeded().
+  bool earlyPageNeedsRepaint_ = false;
+  void repaintEarlyPageIfNeeded();
   // True when the page currently on the panel drew images. Overlays opened on top
   // of it need a HALF pass to scrub the charge a FAST diff leaves behind.
   bool shownPageHasImages_ = false;
@@ -766,6 +765,11 @@ class EpubReaderActivity final : public ReaderActivity {
   // A Text or Page change applied live but not yet written to the SD card: written once the
   // panel closes, not on every step.
   bool textSettingsDirty = false;
+  // Relayouts requested by the loop task vs. those render() has taken up. The settings document is
+  // not written while one is owed or its vertical build runs: both would hold the heap at once.
+  std::atomic<uint32_t> relayoutsRequested_{0};
+  std::atomic<uint32_t> relayoutsTaken_{0};
+  bool canSaveTextSettings() const;
   void saveTextSettingsIfDirty();
   // option >= 0: the tapped option cell (a stepper's 0 = smaller, 1 = larger); otherwise step
   // the value by `step` (a tap on the row's label, or a button on a Text toggle).
