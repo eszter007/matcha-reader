@@ -56,16 +56,19 @@ class Epub {
                           void* cancelCtx = nullptr, ZipFile* sharedZip = nullptr) const;
   bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool writeSpineEntries = true,
                        BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr, bool metadataOnly = false,
-                       ZipFile* sharedZip = nullptr);
-  bool parseTocNcxFile(BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
-  bool parseTocNavFile(BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
+                       ZipFile* sharedZip = nullptr, bool normalizeLookup = false);
+  // sharedZip: the archive load() already holds open, used instead of opening it again.
+  bool parseTocNcxFile(BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr,
+                       ZipFile* sharedZip = nullptr) const;
+  bool parseTocNavFile(BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr,
+                       ZipFile* sharedZip = nullptr) const;
   // Extracted from generateThumbBmp() so the cover can also be rendered straight from a
   // parsed href. Cancellable like its caller: shouldCancel is polled during extraction and
   // decode, and partial files are removed on cancel.
   bool generateThumbBmpForCover(int height, const std::string& coverImageHref,
                                 BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   bool openProtection();
-  void discoverCssFilesFromZip();
+  void discoverCssFilesFromZip(ZipFile* sharedZip = nullptr);
   void parseCssFiles() const;
 
  public:

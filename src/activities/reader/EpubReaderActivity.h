@@ -29,6 +29,11 @@
 #include "util/SentenceMining.h"
 
 class EpubReaderActivity final : public ReaderActivity {
+#ifdef BOARD_HAS_PSRAM
+  // Reused for this reader's lifetime; never consumes internal RAM.
+  HalMemory::PsramBuffer grayPlanes;
+  size_t grayPlaneCapacity = 0;
+#endif
   std::shared_ptr<Epub> epub;
   std::unique_ptr<Section> section = nullptr;
   std::unique_ptr<VerticalSection> verticalSection = nullptr;
@@ -1066,7 +1071,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // per-book setting changed).
   void dropSectionsKeepingPosition();
 
-  void drawClippingHighlights(const Page& page, int fontId, int orientedMarginTop, int orientedMarginLeft) const;
+  bool drawClippingHighlights(const Page& page, int fontId, int orientedMarginTop, int orientedMarginLeft) const;
   // The orientation the current layout was built for. The control center's
   // orientation tile can move SETTINGS.orientation while this reader sits on
   // the activity stack, and Pop restores it without onEnter(), so the drift has
