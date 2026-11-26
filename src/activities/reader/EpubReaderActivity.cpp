@@ -3379,6 +3379,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         anchorPreviewShown_.store(false, std::memory_order_relaxed);
         anchorRealPage_.store(-1, std::memory_order_relaxed);
         if (anchored) {
+          anchorSeedPage_ = earlyTarget;
           verticalSection->setAnchor(*cachedVisibleTextOffset, /*previewOnly=*/true, nullptr);
           anchorPreviewBuild_ = true;
           if (verticalSection->startBuild(readerSpec(viewportWidth, viewportHeight))) {
@@ -5685,6 +5686,10 @@ void EpubReaderActivity::requestVerticalBuildNotice() {
 void EpubReaderActivity::anchorPageThunk(void* ctx, const int pageIndex) {
   auto* self = static_cast<EpubReaderActivity*>(ctx);
   self->anchorRealPage_.store(pageIndex, std::memory_order_relaxed);
+  // A turn kept for the end of the build was counted from the estimate too.
+  if (self->midBuildTurnTarget_ >= 0 && self->anchorSeedPage_ >= 0) {
+    self->midBuildTurnTarget_ = std::max(0, self->midBuildTurnTarget_ + pageIndex - self->anchorSeedPage_);
+  }
   // The preview was drawn at the estimated index; turns from here count from the real one.
   if (self->anchorPreviewShown_.load(std::memory_order_relaxed)) {
     self->earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
@@ -5703,14 +5708,19 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   // (observed on device as the same page rendering twice back-to-back).
   // The full build reaching the page the preview build already drew: same text from the same
   // offset, so the screen is already right.
-  if (anchorPreviewShown_.exchange(false, std::memory_order_relaxed) &&
-      pageIndex == anchorRealPage_.load(std::memory_order_relaxed) && page.visibleTextOffset == anchorPreviewStart_ &&
-      page.glyphs.size() == anchorPreviewGlyphs_) {
-    earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
-    if (pageIndex >= midBuildTurnTarget_) midBuildTurnTarget_ = -1;
-    if (verticalSection) verticalSection->currentPage = pageIndex;
-    LOG_DBG("ERS", "Anchor page %d matches the preview; not drawn again", pageIndex);
-    return;
+  if (anchorPreviewShown_.exchange(false, std::memory_order_relaxed)) {
+    const bool same = pageIndex == anchorRealPage_.load(std::memory_order_relaxed) &&
+                      page.visibleTextOffset == anchorPreviewStart_ && page.glyphs.size() == anchorPreviewGlyphs_;
+    LOG_DBG("ERS", "Anchor check: page %d/%d start %u/%u glyphs %u/%u", pageIndex,
+            anchorRealPage_.load(std::memory_order_relaxed), static_cast<unsigned>(page.visibleTextOffset),
+            static_cast<unsigned>(anchorPreviewStart_), static_cast<unsigned>(page.glyphs.size()),
+            static_cast<unsigned>(anchorPreviewGlyphs_));
+    if (same) {
+      earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
+      if (pageIndex >= midBuildTurnTarget_) midBuildTurnTarget_ = -1;
+      if (verticalSection) verticalSection->currentPage = pageIndex;
+      return;
+    }
   }
   earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
   if (pageIndex >= midBuildTurnTarget_) midBuildTurnTarget_ = -1;  // that turn has been served

@@ -550,6 +550,7 @@ class EpubReaderActivity final : public ReaderActivity {
   bool anchorPreviewBuild_ = false;
   std::atomic<bool> anchorPreviewShown_{false};
   std::atomic<int> anchorRealPage_{-1};
+  int anchorSeedPage_ = -1;  // the estimated index the preview was drawn at
   uint32_t anchorPreviewStart_ = 0;
   size_t anchorPreviewGlyphs_ = 0;
   static void anchorPageThunk(void* ctx, int pageIndex);

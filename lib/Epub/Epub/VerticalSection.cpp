@@ -2446,7 +2446,13 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   b.sink.earlyRenderCtx = earlyRenderCtx_;
   // Seed the shared page-request slot with the initial early-render target; page turns
   // recorded while the build runs simply overwrite it (latest wins).
-  buildPageRequest_.store(earlyRenderFn_ ? earlyRenderTargetPage_ : -1, std::memory_order_relaxed);
+  // The full build after an anchor preview keeps the request: a turn pressed while the preview
+  // page was drawn is in it, counted from the same estimate.
+  const bool keepRequest =
+      anchorOffset_ != UINT32_MAX && !anchorPreviewOnly_ && buildPageRequest_.load(std::memory_order_relaxed) >= 0;
+  if (!keepRequest) {
+    buildPageRequest_.store(earlyRenderFn_ ? earlyRenderTargetPage_ : -1, std::memory_order_relaxed);
+  }
   b.sink.pageRequest = &buildPageRequest_;
   b.sink.noticeFlag = &buildNoticePending_;
   b.sink.buildNoticeFn = buildNoticeFn_;
