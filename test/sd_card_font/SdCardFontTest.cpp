@@ -633,7 +633,7 @@ TEST(SdCardFontTest, BitmapBatchesReduceReadsAndKeepTheSamePixels) {
     // A batch larger than 16 KiB must cross staging boundaries.
     ASSERT_EQ(0, font.prewarm(page(FIRST, 300).c_str(), 1, false, false, false));
     expectPageBitmaps(font, FIRST, 300);
-    font.releaseResidentCaches();
+    font.releaseRenderCaches();
     ASSERT_EQ(0, font.prewarm(page(FIRST + 310, 100).c_str(), 1, false, false, false));
     expectPageBitmaps(font, FIRST + 310, 100);
   }
