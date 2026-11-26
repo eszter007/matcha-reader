@@ -1313,6 +1313,9 @@ void EpubReaderActivity::readerLoop() {
       }
     }
   }
+  // A Text panel change closed during a vertical build is saved once the build ends (see
+  // closeOverlayToPage()).
+  if (textSettingsDirty && !verticalBuildInProgress_.load(std::memory_order_relaxed)) saveTextSettingsIfDirty();
 
   // Drive any in-progress incremental section build forward, off the page-turn critical path.
   // No window condition: stopping once the build was BUILD_WINDOW_AHEAD pages past the reader
@@ -7460,7 +7463,9 @@ void EpubReaderActivity::paintOverlayOnPage(const bool firstOpen) {
 // Grayscale panels re-render to restore AA; other boards restore the B/W snapshot.
 void EpubReaderActivity::closeOverlayToPage() {
   applyPageDraft();
-  saveTextSettingsIfDirty();
+  // Not during a vertical build: the settings document would claim heap while the build and its
+  // early page hold the most (X4: settings save failed at 180 bytes free). loop() saves it after.
+  if (!verticalBuildInProgress_.load(std::memory_order_relaxed)) saveTextSettingsIfDirty();
   mappedInput.resetHomeButtonInput();
   // Never waits for the render task, which holds the lock through a whole refresh: a busy one draws
   // the page back at the start of its next render(), and the loop drops the overlay after it.
@@ -8068,6 +8073,7 @@ void EpubReaderActivity::saveTextSettingsIfDirty() {
   if (!textSettingsDirty) return;
   textSettingsDirty = false;
   SETTINGS.saveToFile();
+  LOG_DBG("ERS", "Text settings saved (free=%u)", static_cast<unsigned>(ESP.getFreeHeap()));
 }
 
 void EpubReaderActivity::applyReaderTextSettings(const bool persist) {
