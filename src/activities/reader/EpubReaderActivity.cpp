@@ -6293,8 +6293,7 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
   });
 }
 
-void EpubReaderActivity::renderStatusBar() const {
-  // Calculate progress in book
+EpubReaderActivity::ChapterPageInfo EpubReaderActivity::chapterPageInfo() const {
   const auto span = sectionPageSpan();
   const int rawPageCount = span.count;
   const int sectionPage = span.page;
@@ -6319,6 +6318,11 @@ void EpubReaderActivity::renderStatusBar() const {
         (rawPageCount > 0) ? (static_cast<float>(sectionPage - 1) / sectionPageCount) : 0.0f;
     bookProgress = epub->calculateProgress(currentSpineIndex, sectionChapterProg) * 100;
   }
+  return {currentPage, pageCount, bookProgress};
+}
+
+void EpubReaderActivity::renderStatusBar() const {
+  const auto [currentPage, pageCount, bookProgress] = chapterPageInfo();
 
   std::string title;
 
@@ -7560,17 +7564,15 @@ void EpubReaderActivity::renderOverlay() {
 
   if (overlay == Overlay::Toolbar) {
     chapterTitle = currentChapterTitle();
-    const int pageCount = chapterPageTotal(0);
-    const int currentPage = shownPage(0);
-    const float chapterProgress =
-        pageCount > 0 ? static_cast<float>(currentPage + 1) / static_cast<float>(pageCount) : 0.0f;
-    const float bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress);
-    pageInfo = std::to_string(currentPage + 1) + "/" + std::to_string(pageCount) + " \xC2\xB7 " +
-               std::to_string(clampPercent(static_cast<int>(bookProgress * 100.0f + 0.5f))) + "%";
+    // The same numbers as the status bar: pages of the ToC chapter, not of this spine file.
+    const auto [currentPage, pageCount, bookPercent] = chapterPageInfo();
+    const float bookProgress = bookPercent / 100.0f;
+    pageInfo = std::to_string(currentPage) + "/" + std::to_string(pageCount) + " \xC2\xB7 " +
+               std::to_string(clampPercent(static_cast<int>(bookPercent + 0.5f))) + "%";
     model.chapterTitle = chapterTitle.c_str();
     model.bookmarked = currentPageBookmarked;
     model.pageInfo = pageInfo.c_str();
-    model.progressPermille = static_cast<int>(bookProgress * 1000.0f + 0.5f);
+    model.progressPermille = std::clamp(static_cast<int>(bookProgress * 1000.0f + 0.5f), 0, 1000);
     toolbarUi->setModel(model);
     toolbarUi->render();
     return;

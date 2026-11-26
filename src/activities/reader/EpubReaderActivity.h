@@ -943,6 +943,14 @@ class EpubReaderActivity final : public ReaderActivity {
     int count;
   };
   SectionPageSpan sectionPageSpan() const;
+  // Page of the ToC chapter (1-based), its page count, and book progress in percent, as the
+  // status bar and the toolbar show them.
+  struct ChapterPageInfo {
+    int page;
+    int count;
+    float bookPercent;
+  };
+  ChapterPageInfo chapterPageInfo() const;
   // The status bar's span when a lookup dropped the vertical build; see lookupPage_.
   SectionPageSpan lookupSpan_{1, 1};
   int pageBasedPercent(int spineIndex, int sectionPage) const;  // sectionPage is 1-based
