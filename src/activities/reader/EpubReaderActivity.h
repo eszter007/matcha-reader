@@ -484,18 +484,35 @@ class EpubReaderActivity final : public ReaderActivity {
   // Set by tickVerticalBuild() when the build finished: the next render() positions the page in the
   // finished section instead of loading it. Loop and render task share it under the RenderLock.
   bool verticalBuildFinished_ = false;
-  // openOverlay() found the render task busy: its next render() paints the chrome over the page.
-  // Written on the loop task, read on the render task under the render lock.
-  std::atomic<bool> overlayPaintOwed_{false};
-  bool overlayPaintFirstOpen_ = false;
+  // Overlay work the loop task handed to the render task because the render lock was taken (the
+  // render task holds it through a whole refresh). Taken once by the next render().
+  enum class OwedOverlayOp : uint8_t { None, PaintFirstOpen, PaintOver, Close };
+  std::atomic<uint8_t> owedOverlayOp_{static_cast<uint8_t>(OwedOverlayOp::None)};
+  // A first-open paint wins over a repaint: the snapshot must be taken of the bare page.
+  void oweOverlayPaint(bool firstOpen);
+  void oweOverlayClose() { owedOverlayOp_.store(static_cast<uint8_t>(OwedOverlayOp::Close)); }
+  OwedOverlayOp takeOwedOverlayOp() {
+    return static_cast<OwedOverlayOp>(owedOverlayOp_.exchange(static_cast<uint8_t>(OwedOverlayOp::None)));
+  }
+  // A close the render task was asked to do: from then on the page is drawn without the chrome and
+  // input goes to the page. overlay and toolbarUi stay as they are until the loop task, which owns
+  // them, applies the close (applyPendingOverlayClose()).
+  std::atomic<bool> overlayClosePending_{false};
+  // Input reached the page while the close was owed: render the page instead of the snapshot.
+  std::atomic<bool> closeSnapshotStale_{false};
+  // Set once the setup in openOverlay() is complete; the render task draws no chrome before that.
+  std::atomic<bool> overlayReady_{true};
+  // What the render task draws: an overlay that is set up and not being closed.
+  bool overlayDrawn() const { return overlay != Overlay::None && overlayReady_ && !overlayClosePending_; }
   // The snapshot-and-chrome paint over the page in the framebuffer, with one fast refresh.
   void paintOverlayOnPage(bool firstOpen);
-  // closeOverlayToPage() found the render task busy: its next render() closes the overlay.
-  std::atomic<bool> overlayCloseOwed_{false};
-  // The close itself, with the render lock held. True when it put the page back on screen (snapshot
-  // restore); false when the caller must render the page.
-  bool finishOverlayClose();
-  // Drops the vertical section, and with it a finish that render() has not placed yet.
+  // Restores the page under the chrome with the render lock held. True when the page is back on
+  // screen; false when the caller must render the page.
+  bool restorePageUnderOverlay();
+  // Loop task: drops overlay and toolbarUi once no render can be drawing them.
+  void applyPendingOverlayClose();
+  // Drops the vertical section, and with it a finish that render() has not placed yet. The only way
+  // the verticalSection member may be dropped.
   void dropVerticalSection() {
     verticalSection.reset();
     verticalBuildFinished_ = false;

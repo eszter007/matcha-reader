@@ -38,6 +38,7 @@
 #include <iterator>
 #include <limits>
 #include <numeric>
+#include <optional>
 
 #include "../../BookFonts.h"
 #include "../../util/BookmarkFile.h"
@@ -1409,7 +1410,12 @@ void EpubReaderActivity::readerLoop() {
   // below: the More panel's rate popup switches automatic turning on and leaves the panel
   // open, so the timer must neither flip the page under it nor eat the panel's next
   // Confirm/Back release.
-  if (overlay != Overlay::None) {
+  applyPendingOverlayClose();
+  // Input while a close is owed goes to the page; a page it turns must be rendered, not the snapshot.
+  if (overlayClosePending_ && (mappedInput.wasAnyPressed() || mappedInput.wasAnyReleased())) {
+    closeSnapshotStale_ = true;
+  }
+  if (overlay != Overlay::None && !overlayClosePending_) {
     if (usesToolbarMenu()) {
       // Hold the interval at zero elapsed so closing the panel starts a fresh one.
       lastPageTurnTime = millis();
@@ -3082,16 +3088,24 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // refreshing came before the tail began, and the tail then warmed the next page for seconds
   // while the menu waited (device log: 6.4s from press to menu).
   renderInputStamp_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
-  // An overlay opened while this task was busy: the page is still in the framebuffer, so paint the
-  // chrome over it (one fast refresh) instead of rendering the page again.
-  if (overlayCloseOwed_ && finishOverlayClose()) return;  // else this render draws the clean page
-  if (overlayPaintOwed_) {
-    overlayPaintOwed_ = false;
-    if (overlay != Overlay::None && toolbarUi && usesToolbarMenu() && (section || verticalSection) &&
-        !pageBufferStale) {
-      paintOverlayOnPage(overlayPaintFirstOpen_);
-      return;
+  // Overlay work the loop task could not do while this task held the lock.
+  switch (const OwedOverlayOp owed = takeOwedOverlayOp()) {
+    case OwedOverlayOp::PaintFirstOpen:
+    case OwedOverlayOp::PaintOver: {
+      // The page is still in the framebuffer: paint the chrome over it instead of rendering it.
+      const bool firstOpen = owed == OwedOverlayOp::PaintFirstOpen;
+      if (overlayDrawn() && toolbarUi && usesToolbarMenu() && (section || verticalSection) && !pageBufferStale) {
+        paintOverlayOnPage(firstOpen);
+        return;
+      }
+      break;
     }
+    case OwedOverlayOp::Close:
+      // The loop drops overlay and toolbarUi once this returns; draw the page back now.
+      if (restorePageUnderOverlay()) return;
+      break;  // render the clean page below
+    case OwedOverlayOp::None:
+      break;
   }
   // Cleared before the epub guard: a page without links must not leave the previous
   // page's rectangles tappable.
@@ -3301,7 +3315,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 #ifdef BOARD_HAS_PSRAM
         // A vertical relayout in place (font size, spacing) shows the reader's page through the early
         // render within a few seconds, and that render already takes the HALF pass set above. A popup
-        // first costs a whole panel refresh (~0.8 s on the A4) before the build can start.
+        // first costs a whole panel refresh before the build can start.
         const bool skipIndexingPopup = reflowingInPlace && !pendingPercentJump && !pendingPageJump.has_value();
 #else
         const bool skipIndexingPopup = false;
@@ -3457,7 +3471,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       LOG_DBG("ERS", "Keeping early-rendered page %d; skipping duplicate refresh", verticalSection->currentPage);
       // Under an open toolbar or panel the page and chrome on screen stay as they are; the status bar
       // catches up with the next page drawn.
-      if (overlay == Overlay::None) refreshEarlyPageStatusBar();
+      if (!overlayDrawn()) refreshEarlyPageStatusBar();
       showPendingSyncSaveError();
       return;
     }
@@ -4199,7 +4213,7 @@ void EpubReaderActivity::finishPageRender(const uint16_t viewportWidth, const ui
   pageBufferStale = false;  // the page is back in the framebuffer
 
   // Toolbar menu: overlay the toolbar / panel on top of the freshly rendered page.
-  if (overlay != Overlay::None && usesToolbarMenu()) {
+  if (overlayDrawn() && usesToolbarMenu()) {
     // The page just re-rendered under the overlay: refresh the snapshot that
     // backs panel->toolbar restores (any previous copy is stale). Not while the
     // chapter is still being built in slices (a live Text/Page change) on a board
@@ -4207,13 +4221,13 @@ void EpubReaderActivity::finishPageRender(const uint16_t viewportWidth, const ui
     // re-render the page without one. With PSRAM the copy lives there.
     const bool building = verticalBuildInProgress_.load(std::memory_order_relaxed) ||
                           (verticalSection && verticalSection->isBuilding()) || (section && section->isBuilding());
-    if (building && HalMemory::getPsramHeap().totalBytes == 0) {
+    if (building && !HalMemory::hasPsram()) {
       discardOverlayPage();
     } else {
       overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
     }
     renderOverlay();
-    overlayPaintOwed_ = false;  // this render paints the chrome: an owed paint would repeat it
+    owedOverlayOp_.store(static_cast<uint8_t>(OwedOverlayOp::None));  // painted: an owed paint would repeat it
     // An open option picker rides on top of the freshly drawn panel.
     if (overlayPopup.isActive()) overlayPopup.render(renderer);
     // FAST, same as openOverlay: HALF's inverting pass flashes the sheet
@@ -4801,7 +4815,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   shownPageHasImages_ = pageHasImages;
   // Under the open toolbar the chrome's FAST push follows, and on Xteink panels
   // closing it re-renders the page with grays anyway: skip the gray pass here.
-  const bool underToolbar = overlay != Overlay::None && usesToolbarMenu() && xteinkClassPanel();
+  const bool underToolbar = overlayDrawn() && usesToolbarMenu() && xteinkClassPanel();
   const bool needsTextGrayscale = SETTINGS.textAntiAliasing && !underToolbar;
   const bool needsAnyGrayscale = needsTextGrayscale || (pageHasImages && !underToolbar);
   const bool absoluteImageGrayscale =
@@ -5621,7 +5635,7 @@ void EpubReaderActivity::tickVerticalBuild() {
   verticalBuildFinished_ = true;
   // Under an open toolbar or panel the page on screen is already right; render() places the finished
   // chapter when the overlay closes, so the overlay is not repainted from under the reader.
-  if (overlay == Overlay::None) requestUpdate();
+  if (!overlayDrawn()) requestUpdate();
 }
 
 void EpubReaderActivity::requestVerticalBuildNotice() {
@@ -5659,14 +5673,14 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   earlyShownBookPages_ = bookPagesTotal;
   // An open toolbar or panel (a size change from the Text panel) stays on screen: snapshot the new
   // page under it for the panel steps that restore it, then draw the chrome into the same refresh.
-  if (overlay != Overlay::None && usesToolbarMenu() && toolbarUi) {
+  if (overlayDrawn() && usesToolbarMenu() && toolbarUi) {
     discardOverlayPage();
-    if (HalMemory::getPsramHeap().totalBytes > 0) {
+    if (HalMemory::hasPsram()) {
       overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
     }
     renderOverlay();
     if (overlayPopup.isActive()) overlayPopup.render(renderer);
-    overlayPaintOwed_ = false;
+    owedOverlayOp_.store(static_cast<uint8_t>(OwedOverlayOp::None));
   }
   // A relayout in place owes the HALF pass (see the reflow in render()): the early page takes it, so
   // the page after the build is not drawn again only to clear the old layout.
@@ -7222,6 +7236,19 @@ void EpubReaderActivity::settleOverlayRefresh() {
 void EpubReaderActivity::openOverlay(Overlay target) {
   mappedInput.resetHomeButtonInput();
   requestVerticalBuildNotice();
+  // Reopened before the loop applied an owed close: cancel the close. If its render already ran, the
+  // page on screen is bare and this is a first open.
+  bool pageBare = false;
+  if (overlayClosePending_) {
+    pageBare = takeOwedOverlayOp() != OwedOverlayOp::Close;
+    overlayClosePending_ = false;
+  }
+  // While chrome is drawn the render task may be painting it: change it under the lock, held for the
+  // setup only. Before a first open it draws none, and overlayReady_ keeps it from starting before the
+  // setup is done.
+  std::optional<RenderLock> setupLock;
+  if (overlay != Overlay::None && !pageBare) setupLock.emplace();
+  overlayReady_ = false;
   // Same as openReaderMenu(): allocate first, and leave the overlay closed if the
   // heap cannot spare it. std::make_unique would abort() here instead -- with
   // -fno-exceptions a failed bare `new` never returns null.
@@ -7229,10 +7256,11 @@ void EpubReaderActivity::openOverlay(Overlay target) {
     toolbarUi = makeUniqueNoThrow<ReaderToolbarUi>(renderer);
     if (!toolbarUi) {
       LOG_ERR("ERS", "OOM: reader toolbar, staying on the page");
+      overlayReady_ = true;
       return;
     }
   }
-  const Overlay previous = overlay;
+  const Overlay previous = pageBare ? Overlay::None : overlay;
   overlay = target;
   if (previous == Overlay::None) {
     toolbarUi->begin();
@@ -7266,6 +7294,8 @@ void EpubReaderActivity::openOverlay(Overlay target) {
       break;
   }
   panelHoldJumped = false;
+  overlayReady_ = true;
+  setupLock.reset();
 
   // The page is already on screen and still in the framebuffer, so paint the
   // chrome straight onto it and push one refresh. requestUpdate() would
@@ -7281,8 +7311,8 @@ void EpubReaderActivity::openOverlay(Overlay target) {
   // Serialize against the render task: renderBook may be mid-page (status bar
   // included) in the shared framebuffer, and painting the chrome from the loop
   // task at the same time interleaves the two frames. Never wait for it: the
-  // render task holds the lock through a whole refresh (~0.7 s on the A4). It
-  // paints the chrome the same way once it is free (render()).
+  // render task holds the lock through a whole refresh. It paints the chrome the
+  // same way once it is free (render()).
   if (!(section || verticalSection) || pageBufferStale) {
     requestUpdate();  // no page in the framebuffer: renderBook() draws the overlay once it is
     return;
@@ -7292,13 +7322,21 @@ void EpubReaderActivity::openOverlay(Overlay target) {
     paintOverlayOnPage(previous == Overlay::None);
     return;
   }
-  overlayPaintFirstOpen_ = overlayPaintOwed_ ? overlayPaintFirstOpen_ : previous == Overlay::None;
-  overlayPaintOwed_ = true;
+  oweOverlayPaint(previous == Overlay::None);
   requestUpdate();
 }
 
+void EpubReaderActivity::oweOverlayPaint(const bool firstOpen) {
+  const auto want = static_cast<uint8_t>(firstOpen ? OwedOverlayOp::PaintFirstOpen : OwedOverlayOp::PaintOver);
+  uint8_t current = owedOverlayOp_.load();
+  // PaintOver never replaces a first open; any paint replaces None or a cancelled close.
+  while (current != static_cast<uint8_t>(OwedOverlayOp::PaintFirstOpen) &&
+         !owedOverlayOp_.compare_exchange_weak(current, want)) {
+  }
+}
+
 void EpubReaderActivity::paintOverlayOnPage(const bool firstOpen) {
-  overlayPaintOwed_ = false;
+  owedOverlayOp_.store(static_cast<uint8_t>(OwedOverlayOp::None));
   settleOverlayRefresh();
   if (firstOpen) {
     // Snapshot the clean page so stepping back from a panel to the toolbar
@@ -7322,30 +7360,42 @@ void EpubReaderActivity::closeOverlayToPage() {
   applyPageDraft();
   saveTextSettingsIfDirty();
   mappedInput.resetHomeButtonInput();
-  // Never waits for the render task, which holds the lock through a whole refresh: a busy one
-  // closes the overlay itself at the start of its next render().
+  // Never waits for the render task, which holds the lock through a whole refresh: a busy one draws
+  // the page back at the start of its next render(), and the loop drops the overlay after it.
   RenderLock lock{RenderLock::Try{}};
   if (!lock.held()) {
-    overlayCloseOwed_ = true;
+    closeSnapshotStale_ = false;
+    overlayClosePending_ = true;
+    oweOverlayClose();
     requestUpdate();
     return;
   }
-  if (!finishOverlayClose()) requestUpdate();  // redraw the clean page
+  const bool restored = restorePageUnderOverlay();
+  overlay = Overlay::None;
+  overlayPopup.dismiss();          // an option picker cannot outlive its panel
+  toolbarUi.reset();               // ~1 KB of interaction table + props, only needed while open
+  if (!restored) requestUpdate();  // redraw the clean page
 }
 
-bool EpubReaderActivity::finishOverlayClose() {
-  // Called with the render lock held: the render task reads overlay and toolbarUi together inside
-  // renderOverlay().
-  overlayCloseOwed_ = false;
-  overlayPaintOwed_ = false;
+void EpubReaderActivity::applyPendingOverlayClose() {
+  // The close render has run once the owed op is taken; until then the chrome may still be drawn.
+  if (!overlayClosePending_ || static_cast<OwedOverlayOp>(owedOverlayOp_.load()) == OwedOverlayOp::Close) return;
+  RenderLock lock{RenderLock::Try{}};
+  if (!lock.held()) return;  // the next loop frame
+  overlayClosePending_ = false;
   overlay = Overlay::None;
-  overlayPopup.dismiss();  // an option picker cannot outlive its panel
-  toolbarUi.reset();       // ~1 KB of interaction table + props, only needed while open
-  // The snapshot is the page under the chrome. Xteink-class panels re-render it to restore AA; the
-  // EEGO restores it with a HALF pass, which also clears what its fast waveform leaves behind. A
-  // build that finished or lent the framebuffer under the overlay needs the page rendered again.
+  overlayPopup.dismiss();
+  toolbarUi.reset();
+}
+
+bool EpubReaderActivity::restorePageUnderOverlay() {
+  // Render lock held. The snapshot is the page under the chrome. Xteink-class panels re-render it to
+  // restore AA; the EEGO restores it with a HALF pass, which also clears what its fast waveform
+  // leaves behind. A build that finished or lent the framebuffer under the overlay needs the page
+  // rendered again.
+  owedOverlayOp_.store(static_cast<uint8_t>(OwedOverlayOp::None));
   const bool restore = (!xteinkClassPanel() || BoardConfig::isEegoA4()) && overlayPageStored && !pageBufferStale &&
-                       !verticalBuildFinished_;
+                       !verticalBuildFinished_ && !closeSnapshotStale_.exchange(false);
   if (restore) {
     settleOverlayRefresh();
     // No baseline resync: the glass shows the chrome, and erasing it needs
@@ -7569,8 +7619,7 @@ void EpubReaderActivity::handleOverlayInput() {
   const auto fastRedraw = [this] {
     RenderLock lock{RenderLock::Try{}};  // the render task shares the framebuffer
     if (!lock.held()) {
-      if (!overlayPaintOwed_) overlayPaintFirstOpen_ = false;
-      overlayPaintOwed_ = true;
+      oweOverlayPaint(/*firstOpen=*/false);
       requestUpdate();
       return;
     }
@@ -7731,8 +7780,7 @@ void EpubReaderActivity::handleOverlayInput() {
       RenderLock lock{RenderLock::Try{}};  // the render task shares the framebuffer
       if (!lock.held()) {
         // The render task paints it next: snapshot restore and chrome, as below.
-        if (!overlayPaintOwed_) overlayPaintFirstOpen_ = false;
-        overlayPaintOwed_ = true;
+        oweOverlayPaint(/*firstOpen=*/false);
         requestUpdate();
         return;
       }
