@@ -1,10 +1,10 @@
-#include "StreamBlockCache.h"
-
 #include <gtest/gtest.h>
 
 #include <cstring>
 #include <random>
 #include <vector>
+
+#include "StreamBlockCache.h"
 
 namespace {
 
