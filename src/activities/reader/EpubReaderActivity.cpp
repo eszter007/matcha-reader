@@ -3506,6 +3506,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride,
                    furiganaOverride);
       LOG_DBG("ERS", "Keeping early-rendered page %d; skipping duplicate refresh", verticalSection->currentPage);
+      // The build lent the framebuffer after the page was drawn and handed it back white. The panel
+      // still shows the page, but a transparent sleep screen draws over the buffer: repaint it.
+      if (renderer.frameBufferLoanCount() != earlyPageLoanCount_) earlyShownChapterPages_ = -1;
       // Under an open toolbar or panel the page and chrome on screen stay as they are; the status bar
       // catches up with the next page drawn.
       if (!overlayDrawn()) refreshEarlyPageStatusBar();
@@ -5777,6 +5780,7 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   // the page after the build is not drawn again only to clear the old layout.
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   earlyPageActuallyDisplayed_ = true;
+  earlyPageLoanCount_ = renderer.frameBufferLoanCount();
   // The build resumes the moment this returns and needs its headroom back: the prewarm above
   // re-claimed font page slots and the glyph slab that the build path released before starting,
   // and an image on the page loaded up to 96 KB of pixel cache that nothing else frees mid-build.

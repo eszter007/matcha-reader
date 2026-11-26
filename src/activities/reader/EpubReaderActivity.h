@@ -548,6 +548,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // Written on the render task, read by pageTurn() on the loop() task.
   std::atomic<int> earlyDisplayedPage_{-1};
   bool earlyPageActuallyDisplayed_ = false;
+  uint32_t earlyPageLoanCount_ = 0;  // renderer.frameBufferLoanCount() when the early page was drawn
   // Anchored relayout after a size change (see render()): the preview page's identity, and the
   // real index of that page once the full build reaches it.
   bool anchorPreviewBuild_ = false;
