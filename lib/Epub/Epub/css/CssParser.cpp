@@ -2348,6 +2348,7 @@ void CssParser::invalidateVerticalMemo() const {
 #ifdef BOARD_HAS_PSRAM
   verticalMemo_.rules.reset();
 #endif
+  chapterWithoutStyles_.clear();
   if (cachePath.empty()) return;
   const std::string path = cachePath + verticalStylesCache;
   if (Storage.exists(path.c_str())) Storage.remove(path.c_str());

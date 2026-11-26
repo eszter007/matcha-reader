@@ -416,9 +416,8 @@ class CssParser {
   // Copies every <style> block's contents from the HTML into cssPath. False when there is none.
   // `scannedWhole`, when given, is set when the whole file was read (false on an open or read error).
   static bool extractStyleBlocks(const std::string& htmlPath, const std::string& cssPath, bool* scannedWhole = nullptr);
-  // The last chapter found to add no vertical rules of its own (most chapters have no <style>, or
-  // none the vertical engine reads), so a rebuild of it skips scanning its HTML again.
-  std::string chapterWithoutStyles_;
+  // The last chapter whose <style> blocks add no vertical rules, so a rebuild skips the scan.
+  mutable std::string chapterWithoutStyles_;
   uint64_t chapterWithoutStylesFontStamp_ = 0;
   [[nodiscard]] std::string_view selectorAt(size_t index) const;
   [[nodiscard]] const CssStyle& styleAt(size_t index) const;
@@ -485,7 +484,7 @@ class CssParser {
     bool operator==(const VerticalStylesKey&) const = default;
   };
   // css_vstyles.cache: complete collectVerticalStyles() results, so a chapter build after the
-  // book is reopened does not scan the whole rules cache again (over a second on a heavy book).
+  // book is reopened does not scan the whole rules cache again.
   static constexpr uint8_t VSTYLES_CACHE_VERSION = 1;
   static constexpr uint8_t VSTYLES_MAX_ENTRIES = 4;
   // Reads the entry for `key` into `out` (reserved for key.maxOut). False on a miss.

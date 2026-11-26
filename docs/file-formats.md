@@ -104,10 +104,11 @@ scan the whole rules cache again. It is deleted whenever `css_rules.cache` is wr
 - `u8` version (1)
 - `u32` size of `css_rules.cache` when this file was written. A different size means other rules, and the
   file is ignored.
-- Up to 4 entries until the end of the file, one per stylesheet filter:
+- Up to 4 entries (`VSTYLES_MAX_ENTRIES`) until the end of the file, one per stylesheet filter:
   - `u16` maxOut, `u8` 1 when every stylesheet applies, `u64` linked-stylesheet mask
   - `u64` book-font slot stamp (`bookfonts::slotStamp()`)
-  - `u16` count, then count × 32-byte `CssParser::VerticalBlockRule`, stored as in memory. Bump the
+  - `u16` count, then count × 32-byte `CssParser::VerticalBlockRule`, stored as in memory (native
+    little-endian). Bump the
     version if that struct changes.
 
 Only a complete scan is written. A read error or a heap-short stylesheet filter writes nothing, and a
