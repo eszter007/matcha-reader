@@ -1076,6 +1076,7 @@ class EpubReaderActivity final : public ReaderActivity {
   }
   void onReaderEnter() override;
   void onReaderExit() override;
+  void onLeaving() override;
   void readerLoop() override;
   bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;

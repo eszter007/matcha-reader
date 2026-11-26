@@ -339,6 +339,8 @@ class SdCardFontSystem {
   // panel font lacks (IPA, rarer Latin). False when no TTF is loaded or the face failed to build.
   bool mapTtfForLookup(GfxRenderer& renderer, int primaryFontId, uint8_t pointSize);
   void releaseTtfLookup(GfxRenderer& renderer);
+  // Reads the source's prefix into PSRAM once, when it is first read.
+  static void fillPrefix(TtfSource& s);
   // ReadFn for streamed sources: serves the PSRAM prefix cache first, SD after.
   static unsigned long prefixRead(void* ctx, unsigned long offset, unsigned char* buffer, unsigned long count);
 #ifdef BOARD_HAS_PSRAM
@@ -408,6 +410,10 @@ class SdCardFontSystem {
     bool streamed = false;
     unsigned long size = 0;
     bool present = false;
+    // Streamed form: prefix bytes to cache on the first read (0 once tried). `bytes` is read only
+    // after prefixReady, since the loop and render tasks can read one shared source at once.
+    std::atomic<size_t> prefixWanted{0};
+    std::atomic<bool> prefixReady{false};
     std::atomic<bool>* uiReadFailed = nullptr;
 #ifdef BOARD_HAS_PSRAM
     // Blocks of the file past the prefix (glyph outlines), so a glyph drawn again at another size,

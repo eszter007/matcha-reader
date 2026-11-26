@@ -34,6 +34,9 @@ class Activity {
   virtual void onExit();
   // Last chance to queue activity-owned state before sleep events are drained.
   virtual void prepareForSleep() {}
+  // Called on the loop task before the activity is replaced, without the render lock: stop
+  // long render-task work so the replacement does not wait for it.
+  virtual void onLeaving() {}
   virtual void loop() {}
 
   virtual void render(RenderLock&&) {}

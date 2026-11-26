@@ -392,6 +392,10 @@ bool inputHeld() {
   return gpio.rawInputActive() || (gpio.hasTouch() && gpio.isTouchHeldAt(x, y));
 }
 
+// Set by onLeaving() when the reader is about to be replaced; one reader exists at a time.
+std::atomic<bool> readerLeaving{false};
+bool leavingReader() { return readerLeaving.load(std::memory_order_relaxed); }
+
 }  // namespace
 
 EpubReaderActivity::~EpubReaderActivity() {
@@ -542,6 +546,7 @@ void EpubReaderActivity::saveBookPrefs(const ReaderPrefs& prefs) const {
 }
 
 bool EpubReaderActivity::loadBook() {
+  readerLeaving.store(false, std::memory_order_relaxed);
   if (ESP.getMaxAllocHeap() < 64 * 1024) {
     // Unload the fonts themselves, not just their caches: the fonts the previous screen used (the
     // cover grid's CJK titles pull in the Japanese companion) keep small tables mid-heap that a
@@ -3080,7 +3085,10 @@ bool EpubReaderActivity::backgroundBuildWanted() const {
 }
 
 // TODO: Failure handling
+void EpubReaderActivity::onLeaving() { readerLeaving.store(true, std::memory_order_relaxed); }
+
 void EpubReaderActivity::render(RenderLock&& lock) {
+  if (leavingReader()) return;  // nobody will see this frame
   // Here rather than in renderContents(), so vertical pages get the reading waveform too.
   const ReaderUtils::ReaderRefreshScope readerRefresh;
   // Presses from here on are what the speculative tail gives way to (nextTurnAlreadyRequested,
@@ -3366,13 +3374,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         VerticalSection::BuildStep step = verticalSection->startBuild(readerSpec(viewportWidth, viewportHeight))
                                               ? VerticalSection::BuildStep::InProgress
                                               : VerticalSection::BuildStep::Failed;
-        while (step == VerticalSection::BuildStep::InProgress && !(earlyTarget >= 0 && earlyPageActuallyDisplayed_)) {
-          step = verticalSection->buildSomeMore(BACKGROUND_BUILD_BUDGET_MS);
+        while (step == VerticalSection::BuildStep::InProgress && !(earlyTarget >= 0 && earlyPageActuallyDisplayed_) &&
+               !leavingReader()) {
+          step = verticalSection->buildSomeMore(BACKGROUND_BUILD_BUDGET_MS, &leavingReader);
         }
         // The page after it too, briefly, so the first forward turn is served from a written page.
         const uint32_t aheadStart = millis();
         while (step == VerticalSection::BuildStep::InProgress && earlyTarget >= 0 &&
-               verticalSection->pageCount < earlyTarget + 2 && millis() - aheadStart < 200 && !inputHeld()) {
+               verticalSection->pageCount < earlyTarget + 2 && millis() - aheadStart < 200 && !inputHeld() &&
+               !leavingReader()) {
           step = verticalSection->buildSomeMore(BACKGROUND_BUILD_BUDGET_MS, &inputHeld);
         }
         if (step == VerticalSection::BuildStep::InProgress) {
@@ -5658,6 +5668,7 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   // (observed on device as the same page rendering twice back-to-back).
   earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
   if (pageIndex >= midBuildTurnTarget_) midBuildTurnTarget_ = -1;  // that turn has been served
+  if (leavingReader()) return;
   // Renders between build slices (the menu opening over this page) draw the section's current page.
   if (verticalSection) verticalSection->currentPage = pageIndex;
   renderer.clearScreen();
