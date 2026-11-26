@@ -2592,6 +2592,8 @@ bool VerticalSection::finishBuild(const bool parseOk) {
   lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || b.layout.everDroppedForHeap() || b.layout.everSplitForHeap() ||
                              b.extractor.droppedTextForHeap;
   if (b.extractor.droppedTextForHeap) LOG_ERR("VSC", "Text dropped on low heap; chapter is incomplete");
+  // Set before the draw-between-slices case below, which loses no content.
+  const bool heapDegraded = lastBuildDroppedForHeap_ || b.starvedInLayout > 0;
   if (b.drawnBetweenSlices) {
     // A full page render ran next to the layout's resident working set, and on device the
     // pagination came out different without any starved-glyph trace (342 pages for a chapter that
@@ -2651,8 +2653,12 @@ bool VerticalSection::finishBuild(const bool parseOk) {
   // open hits the version-mismatch path in loadSectionFile and rebuilds the chapter -- with,
   // ideally, a healthier heap -- instead of the truncation being persisted as a valid cache.
   if (lastBuildDroppedForHeap_ && !rebuildingFromStale_) {
-    LOG_ERR("VSC", "Build dropped glyphs on low heap (maxAlloc=%u at start); marking section stale for rebuild",
-            lastBuildStartMaxAlloc_);
+    if (heapDegraded) {
+      LOG_ERR("VSC", "Build degraded on low heap (maxAlloc=%u at start); marking section stale for rebuild",
+              lastBuildStartMaxAlloc_);
+    } else {
+      LOG_INF("VSC", "Marking section stale for rebuild");
+    }
     if (file.seek(0)) {
       const uint8_t staleVersion = 0;
       serialization::writePod(file, staleVersion);
@@ -2669,7 +2675,11 @@ bool VerticalSection::finishBuild(const bool parseOk) {
     // time, so "did the heap improve" answered no forever and every open rebuilt the chapter --
     // 9.8s before the reader would even respond. Keep the best-effort cache: a few missing glyphs
     // on the densest pages beat re-indexing on every single open.
-    LOG_ERR("VSC", "Stale-rebuild dropped glyphs again; keeping best-effort cache to break the rebuild loop");
+    if (heapDegraded) {
+      LOG_ERR("VSC", "Stale rebuild degraded on low heap again; keeping best-effort cache to break the rebuild loop");
+    } else {
+      LOG_INF("VSC", "Stale rebuild drawn between slices again; keeping cache to break the rebuild loop");
+    }
   }
   file.close();
   build_.reset();
