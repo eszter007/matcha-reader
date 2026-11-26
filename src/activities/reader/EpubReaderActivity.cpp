@@ -7187,6 +7187,7 @@ void EpubReaderActivity::showSizePopup() {
   }
   overlayPopup.show(StrId::STR_FONT_SIZE, labels, curIdx, [this, sizes](int idx) {
     if (idx < 0 || idx >= static_cast<int>(sizes.size())) return;
+    applyPageDraft();  // first, or closing the toolbar would put the drafted size back
     SETTINGS.fontPointSize = sizes[idx];
     applyTextSettingLive();
   });
@@ -7196,6 +7197,7 @@ void EpubReaderActivity::showSizePopup() {
 void EpubReaderActivity::stepPageDraft(const TextControl control, const int step) {
   if (!pageDraft_.active) {
     pageDraft_ = {true,
+                  SETTINGS.fontPointSize,
                   SETTINGS.lineSpacing,
                   SETTINGS.screenMargin,
                   SETTINGS.paragraphAlignment,
@@ -7205,6 +7207,17 @@ void EpubReaderActivity::stepPageDraft(const TextControl control, const int step
   const auto cycle = [](const int value, const int delta, const int count) { return (value + delta + count) % count; };
   PageDraft& d = pageDraft_;
   switch (control) {
+    case TextControl::Size: {
+      const auto sizes = SdCardFontSystem::selectablePointSizes(&sdFontSystem.registry(), fontScript());
+      if (sizes.empty()) break;
+      const uint8_t cur = snapToNearestPointSize(sizes, d.fontPointSize);
+      int idx = 0;
+      for (size_t i = 0; i < sizes.size(); ++i) {
+        if (sizes[i] == cur) idx = static_cast<int>(i);
+      }
+      d.fontPointSize = sizes[std::clamp(idx + step, 0, static_cast<int>(sizes.size()) - 1)];
+      break;
+    }
     // Picture to picture, so each press moves the frame (More text settings has the values between).
     case TextControl::LineSpacing:
       d.lineSpacing = kSpacingPicks[std::clamp(nearestPick(kSpacingPicks, d.lineSpacing) + step, 0,
@@ -7234,8 +7247,9 @@ void EpubReaderActivity::applyPageDraft() {
   if (!pageDraft_.active) return;
   const PageDraft d = pageDraft_;
   pageDraft_.active = false;
-  if (d.lineSpacing != SETTINGS.lineSpacing || d.screenMargin != SETTINGS.screenMargin ||
-      d.paragraphAlignment != SETTINGS.paragraphAlignment) {
+  if (d.fontPointSize != SETTINGS.fontPointSize || d.lineSpacing != SETTINGS.lineSpacing ||
+      d.screenMargin != SETTINGS.screenMargin || d.paragraphAlignment != SETTINGS.paragraphAlignment) {
+    SETTINGS.fontPointSize = d.fontPointSize;
     SETTINGS.lineSpacing = d.lineSpacing;
     SETTINGS.screenMargin = d.screenMargin;
     SETTINGS.paragraphAlignment = d.paragraphAlignment;
@@ -7599,9 +7613,10 @@ void EpubReaderActivity::renderOverlay() {
     // A control can drop out (Writing off removes it): keep the cursor on a row that exists.
     panelIndex = std::min(panelIndex, count - 1);
     char sizeValue[8];
-    snprintf(sizeValue, sizeof(sizeValue), "%u", static_cast<unsigned>(SETTINGS.fontPointSize));
-    // A button draft shows what Confirm will apply.
+    // A draft shows what closing the toolbar will apply.
     const bool draft = pageDraft_.active;
+    snprintf(sizeValue, sizeof(sizeValue), "%u",
+             static_cast<unsigned>(draft ? pageDraft_.fontPointSize : SETTINGS.fontPointSize));
     const uint8_t lineSpacing = draft ? pageDraft_.lineSpacing : SETTINGS.lineSpacing;
     const uint8_t screenMargin = draft ? pageDraft_.screenMargin : SETTINGS.screenMargin;
     const uint8_t alignment = draft ? pageDraft_.paragraphAlignment : SETTINGS.paragraphAlignment;
@@ -7947,6 +7962,12 @@ void EpubReaderActivity::handleOverlayInput() {
       if (controlPanelOpen() && row >= 0 && row < textCount) {
         panelIndex = row;
         panelToolRowFocused = false;
+        // The Size stepper only drafts the number; the toolbar closing lays the book out once.
+        if (textCtl[row] == TextControl::Size) {
+          stepPageDraft(TextControl::Size, routed.value % ReaderToolbarUi::kOptionStride == 0 ? -1 : 1);
+          fastRedraw();
+          return;
+        }
         applyPageDraft();  // a tap applies at once; buttons' pending edits go first
         changeTextControl(textCtl[row], routed.value % ReaderToolbarUi::kOptionStride, 0);
       }

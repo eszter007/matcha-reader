@@ -774,10 +774,12 @@ class EpubReaderActivity final : public ReaderActivity {
   // option >= 0: the tapped option cell (a stepper's 0 = smaller, 1 = larger); otherwise step
   // the value by `step` (a tap on the row's label, or a button on a Text toggle).
   void changeTextControl(TextControl control, int option, int step);
-  // Page panel on button boards: Left/Right edit this draft and only the panel redraws. It is
-  // applied in one re-layout when the toolbar closes (Confirm on a Page row, Back, or leaving).
+  // Page panel on button boards (Left/Right) and the Size stepper's taps edit this draft and only
+  // the panel redraws. It is applied in one re-layout when the toolbar closes (Confirm on a Page
+  // row, Back, or leaving).
   struct PageDraft {
     bool active = false;
+    uint8_t fontPointSize = 0;
     uint8_t lineSpacing = 0;
     uint8_t screenMargin = 0;
     uint8_t paragraphAlignment = 0;
