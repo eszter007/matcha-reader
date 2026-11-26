@@ -96,6 +96,7 @@ class Bitmap {
   void setTransparentAsWhite(const bool enabled) { transparentAsWhite = enabled; }
   // Advance past the next row without decoding it (a seek, not a read).
   BmpReaderError skipRow() const;
+  bool hasNativePalette() const { return nativePalette; }
 
  private:
   static uint16_t readLE16(HalFile& f);

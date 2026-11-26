@@ -21,6 +21,11 @@ class GfxRenderer {
     const char* text;
     const char* display;
   };
+  enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
+  RenderMode renderMode = BW;
+  bool absoluteGrayPlanes = false;
+  RenderMode getRenderMode() const { return renderMode; }
+  bool grayPlanesAreAbsolute() const { return absoluteGrayPlanes; }
   // The fixture has no framebuffer to lend; image probes run as without a loan.
   class FrameBufferLoan {
    public:

@@ -18,6 +18,7 @@
 #include <HalDisplay.h>
 #include <HalFrontlight.h>
 #include <HalGPIO.h>
+#include <HalMemory.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -806,8 +807,11 @@ bool EpubReaderActivity::buildTickHeapGate() {
     buildHeapPausedSinceMs_ = 0;
     buildHeapPauseReleased_ = false;
   }
+  // The heap the build's malloc and new draw from. With PSRAM, small requests fall back to it once
+  // internal RAM runs out, so internal RAM alone paused builds for good (OnePage).
   const auto belowFloors = [] {
-    return ESP.getFreeHeap() < BACKGROUND_BUILD_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < BACKGROUND_BUILD_MIN_MAX_ALLOC;
+    const auto heap = HalMemory::getDefaultHeap();
+    return heap.freeBytes < BACKGROUND_BUILD_MIN_FREE_HEAP || heap.largestBlockBytes < BACKGROUND_BUILD_MIN_MAX_ALLOC;
   };
   // Below the floors: the tick is deferrable, so wait -- page-turn transients free up between
   // turns. Once per pause, trade the reloadable caches first. Track the paused state so
@@ -4940,8 +4944,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   }
 
   forcedRefreshPending = false;
+  // A restored snapshot may carry highlights; assume it does so EEGO A4 keeps separate plane passes.
+  [[maybe_unused]] bool drewClippingHighlights = true;
   if (!restorePageSnapshot()) {
-    drawClippingHighlights(*page, fontId, orientedMarginTop, orientedMarginLeft);
+    drewClippingHighlights = drawClippingHighlights(*page, fontId, orientedMarginTop, orientedMarginLeft);
     page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
     savePageSnapshot();
   }
@@ -4981,6 +4987,16 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
                            : imageWarmInputStamp_.load(std::memory_order_relaxed) != inputStamp;
     };
 
+#ifdef BOARD_HAS_PSRAM
+    if (!grayPlanes || grayPlaneCapacity < planeBytes) {
+      grayPlanes.reset();
+      grayPlaneCapacity = 0;
+      grayPlanes = HalMemory::allocatePsram(2 * planeBytes);
+      if (grayPlanes) grayPlaneCapacity = planeBytes;
+    }
+    if (grayPlanes) stripRows = gh;  // whole planes fit in PSRAM: one band each
+#endif
+
     // Render one plane band-by-band into a whole-plane buffer without touching
     // the controller, so it can run while the refresh is still in flight.
     auto renderPlaneToBuffer = [&](const bool lsbPlane, uint8_t* buf) {
@@ -5018,12 +5034,38 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       return ESP.getFreeHeap() >= planeBytes + PLANE_BUF_HEADROOM &&
              ESP.getMaxAllocHeap() >= planeBytes + PLANE_BUF_MAX_ALLOC_RESERVE;
     };
-    auto lsbPlaneBuf = (overlapRefresh && planeBufFits()) ? makeUniqueNoThrow<uint8_t[]>(planeBytes) : nullptr;
-    auto msbPlaneBuf = (lsbPlaneBuf && planeBufFits()) ? makeUniqueNoThrow<uint8_t[]>(planeBytes) : nullptr;
+    uint8_t* lsbPlaneBuf = nullptr;
+    uint8_t* msbPlaneBuf = nullptr;
+#ifdef BOARD_HAS_PSRAM
+    if (grayPlanes) {
+      lsbPlaneBuf = grayPlanes.get();
+      msbPlaneBuf = grayPlanes.get() + planeBytes;
+    }
+#endif
+    auto internalLsb =
+        (!lsbPlaneBuf && overlapRefresh && planeBufFits()) ? makeUniqueNoThrow<uint8_t[]>(planeBytes) : nullptr;
+    auto internalMsb = (internalLsb && planeBufFits()) ? makeUniqueNoThrow<uint8_t[]>(planeBytes) : nullptr;
+    if (internalLsb) {
+      lsbPlaneBuf = internalLsb.get();
+      msbPlaneBuf = internalMsb.get();
+    }
 
     if (lsbPlaneBuf) {
-      bool cancelled = !renderPlaneToBuffer(true, lsbPlaneBuf.get());
-      if (!cancelled && msbPlaneBuf) cancelled = !renderPlaneToBuffer(false, msbPlaneBuf.get());
+      bool cancelled = false;
+#ifdef BOARD_HAS_PSRAM
+      // Both planes in one pass. Images and EEGO A4 clipping highlights need separate plane passes.
+      if (grayPlanes && !pageHasImages && (!drewClippingHighlights || !BoardConfig::isEegoA4())) {
+        renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+        renderer.beginGrayPairTarget(lsbPlaneBuf, msbPlaneBuf, gh);
+        renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
+        renderGrayscalePass();
+        renderer.endStripTarget();
+      } else
+#endif
+      {
+        cancelled = !renderPlaneToBuffer(true, lsbPlaneBuf);
+        if (!cancelled && msbPlaneBuf) cancelled = !renderPlaneToBuffer(false, msbPlaneBuf);
+      }
       const auto tGrayRender = millis();
 
       renderer.waitRefreshComplete();
@@ -5031,14 +5073,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
       if (!cancelled) cancelled = shouldCancel();
       if (!cancelled) {
-        renderer.writeGrayscalePlaneStrip(true, lsbPlaneBuf.get(), 0, gh);
+        renderer.writeGrayscalePlaneStrip(true, lsbPlaneBuf, 0, gh);
         if (msbPlaneBuf) {
           cancelled = shouldCancel();
         } else {
-          cancelled = !renderPlaneToBuffer(false, lsbPlaneBuf.get());
+          cancelled = !renderPlaneToBuffer(false, lsbPlaneBuf);
         }
         if (!cancelled) {
-          renderer.writeGrayscalePlaneStrip(false, msbPlaneBuf ? msbPlaneBuf.get() : lsbPlaneBuf.get(), 0, gh);
+          renderer.writeGrayscalePlaneStrip(false, msbPlaneBuf ? msbPlaneBuf : lsbPlaneBuf, 0, gh);
         }
       }
       const auto tGrayWrite = millis();
@@ -5978,17 +6020,17 @@ bool EpubReaderActivity::textAtPoint(const int x, const int y, const int reach) 
   return false;
 }
 
-void EpubReaderActivity::drawClippingHighlights(const Page& page, const int fontId, const int orientedMarginTop,
+bool EpubReaderActivity::drawClippingHighlights(const Page& page, const int fontId, const int orientedMarginTop,
                                                 const int orientedMarginLeft) const {
   if (!section || !CLIPPINGS.hasClippings() || section->currentPage < 0 || section->currentPage >= section->pageCount) {
-    return;
+    return false;
   }
 
   size_t chapterClippings = 0;
   for (size_t i = 0; i < CLIPPINGS.clippingCount(); ++i) {
     if (CLIPPINGS.clippingAt(i)->spineIndex == currentSpineIndex) ++chapterClippings;
   }
-  if (!chapterClippings) return;
+  if (!chapterClippings) return false;
 
   const auto started = millis();
   size_t highlightedWords = 0;
@@ -6063,6 +6105,7 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
   }
   LOG_DBG("CLIP", "Highlight pass: chapter_clips=%u highlighted_words=%u time=%lums",
           static_cast<unsigned>(chapterClippings), static_cast<unsigned>(highlightedWords), millis() - started);
+  return highlightedWords != 0;
 }
 
 namespace {

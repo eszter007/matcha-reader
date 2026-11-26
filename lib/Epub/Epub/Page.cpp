@@ -149,7 +149,9 @@ void PageBox::render(GfxRenderer& renderer, const int fontId, const int xOffset,
   // because the page renders its elements in insertion order.
   if (fill == FILL_BLACK) {
     renderer.fillRect(x, y, width, height, true);
-  } else if (fill == FILL_LIGHT_GRAY) {
+  } else if (fill == FILL_LIGHT_GRAY &&
+             (renderer.getRenderMode() == GfxRenderer::BW || renderer.grayPlanesAreAbsolute())) {
+    // The B/W base already contains the fill when grayscale is an overlay.
     renderer.fillRectDither(x, y, width, height, Color::LightGray);
   }
   // Each edge in its own style; a double edge adds a second line just inside the first.
