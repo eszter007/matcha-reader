@@ -1567,6 +1567,16 @@ bool SdCardFontSystem::openTtfSourceInto(TtfSource& s, const std::string& path, 
 // Streamed-source read: serve from the PSRAM prefix cache when the range is
 // there, hit SD only for the tail (glyf outlines). A read straddling the
 // boundary splits across both.
+namespace {
+// Set while a TTF family loads: opening each style's face reads its tables, and filling every
+// style's prefix then would cost a card read per style even when no glyph is ever drawn.
+std::atomic<bool> prefixFillDeferred{false};
+struct PrefixFillDeferral {
+  PrefixFillDeferral() { prefixFillDeferred.store(true, std::memory_order_relaxed); }
+  ~PrefixFillDeferral() { prefixFillDeferred.store(false, std::memory_order_relaxed); }
+};
+}  // namespace
+
 unsigned long SdCardFontSystem::prefixRead(void* ctx, const unsigned long offset, unsigned char* buffer,
                                            const unsigned long count) {
   auto* s = static_cast<TtfSource*>(ctx);
@@ -1578,7 +1588,8 @@ unsigned long SdCardFontSystem::prefixRead(void* ctx, const unsigned long offset
     return read;
   };
   bool ready = s->prefixReady.load(std::memory_order_acquire);
-  if (!ready && count > 0 && s->prefixWanted.load(std::memory_order_relaxed) > 0) {
+  if (!ready && count > 0 && !prefixFillDeferred.load(std::memory_order_relaxed) &&
+      s->prefixWanted.load(std::memory_order_relaxed) > 0) {
     fillPrefix(*s);
     ready = s->prefixReady.load(std::memory_order_acquire);
   }
@@ -1813,6 +1824,7 @@ void SdCardFontSystem::loadTtfFamily(const SdCardFontFamilyInfo& family, GfxRend
   }
 
   unloadTtf(renderer);
+  const PrefixFillDeferral deferFill;
 
   if (family.files.empty()) {
     LOG_ERR("SDFS", "Vector family %s has no file", family.name.c_str());
