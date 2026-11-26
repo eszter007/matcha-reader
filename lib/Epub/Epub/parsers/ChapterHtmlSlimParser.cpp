@@ -2842,7 +2842,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
           }
         }
         entry.fontScale = parentScale * cssFontSizeScale(cssStyle);
-        entry.fontIdOverride = fontIdForScale(entry.fontScale, self->fontId);
+        // A publisher font is resident at one size: its spans scale it, as the block's size does.
+        const uint8_t familySlot = bookfonts::slotForFontId(self->inheritedFamilyFontId());
+        const int32_t scaleTag = fontScaleTagForScale(entry.fontScale);
+        entry.fontIdOverride =
+            familySlot != 0 ? (scaleTag != 0 ? TextBlock::familyScaleTag(familySlot, static_cast<uint16_t>(-scaleTag))
+                                             : self->inheritedFamilyFontId())
+                            : fontIdForScale(entry.fontScale, self->fontId);
         if (entry.fontIdOverride == 0) {
           // No resident size can serve the ask: the reader font is a single-size SD-card font
           // with no ladder, or the nearest step IS the base. Scale the block font's bitmap
@@ -2853,11 +2859,24 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       // <html>/<body> name the book's font through the family scopes, which blocks inherit; as a
       // word font it would also override the font a heading inside sets for itself.
       if (cssStyle.hasFontFamily() && !entry.setsParagraphDirection) {
-        // A word slot holds one font, so a span naming a publisher font draws it at block size.
+        // A publisher font keeps the span's size (its own or an inherited one) as a scale of it.
         const int familyFontId = self->inheritedFamilyFontId();
+        float sizeScale = entry.hasFontId ? entry.fontScale : 1.0f;
+        if (!entry.hasFontId) {
+          for (auto it = self->inlineStyleStack.rbegin(); it != self->inlineStyleStack.rend(); ++it) {
+            if (it->hasFontId) {
+              sizeScale = it->fontScale;
+              break;
+            }
+          }
+        }
+        const uint8_t familySlot = bookfonts::slotForFontId(familyFontId);
+        const int32_t scaleTag = familySlot != 0 ? fontScaleTagForScale(sizeScale) : 0;
         entry.hasFontId = true;
-        entry.fontIdOverride = familyFontId != 0 ? familyFontId : self->fontId;
-        entry.fontScale = 1.0f;
+        entry.fontIdOverride = scaleTag != 0 ? TextBlock::familyScaleTag(familySlot, static_cast<uint16_t>(-scaleTag))
+                               : familyFontId != 0 ? familyFontId
+                                                   : self->fontId;
+        entry.fontScale = scaleTag != 0 ? sizeScale : 1.0f;
       }
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
@@ -3663,16 +3682,11 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
         everyWordSized = false;
         continue;
       }
-      int h = 0;
-      int ink = 0;
-      if (TextBlock::isWordScaleTag(wf)) {
-        const auto scale = static_cast<uint16_t>(-wf);
-        h = std::max(1, (renderer.getLineHeight(lineFontId, lineCompression) * scale + 128) / 256);
-        ink = (renderer.getFontInkHeight(lineFontId) * scale + 128) / 256;
-      } else {
-        h = renderer.getLineHeight(wf, lineCompression);
-        ink = renderer.getFontInkHeight(wf);
-      }
+      const int slotFont = TextBlock::fontOfSlot(wf);
+      const int font = slotFont != 0 ? slotFont : lineFontId;
+      const uint16_t scale = TextBlock::scaleOfSlot(wf);
+      const int h = std::max(1, (renderer.getLineHeight(font, lineCompression) * scale + 128) / 256);
+      const int ink = (renderer.getFontInkHeight(font) * scale + 128) / 256;
       wordsTallest = std::max(wordsTallest, h);
       wordsInk = std::max(wordsInk, ink);
     }

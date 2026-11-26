@@ -319,7 +319,7 @@ namespace {
 //      never shape. The display-text flag is bit 2 here: bit 1 is the per-word font array.
 // v119: the furigana byte is half the ruby scale when furigana is on (was 1); ruby size
 //      sets the room above ruby lines and the ruby widths.
-constexpr uint8_t SECTION_FILE_VERSION = 119;
+constexpr uint8_t SECTION_FILE_VERSION = 120;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

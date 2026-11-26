@@ -109,7 +109,7 @@ class GfxRenderer {
     uint32_t lastUse = 0;
   };
   // E.g. h1-h3 and a span; more sizes than this on one page rebuild faces in turn.
-  static constexpr size_t SIZED_VECTOR_FACE_SLOTS = 4;
+  static constexpr size_t SIZED_VECTOR_FACE_SLOTS = 8;
   mutable SizedVectorFace sizedVectorFaces_[SIZED_VECTOR_FACE_SLOTS];
   mutable uint32_t sizedVectorClock_ = 0;
 #endif

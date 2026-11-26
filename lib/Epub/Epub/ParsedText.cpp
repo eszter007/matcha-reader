@@ -2240,10 +2240,10 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   for (size_t i = 0; i < lineWordCount; i++) {
     const uint8_t boundary = focusBoundaryAt(i);
     const int32_t slot = !lineWordFonts.empty() ? lineWordFonts[i] : 0;
-    const int wordFont = (slot != 0 && !TextBlock::isWordScaleTag(slot)) ? slot : fontId;
+    const int slotFont = TextBlock::fontOfSlot(slot);
+    const int wordFont = slotFont != 0 ? slotFont : fontId;
     // An x INSIDE the word, so it scales with the word it indexes into.
-    const uint16_t wordScale =
-        TextBlock::isWordScaleTag(slot) ? static_cast<uint16_t>(-slot) : TextBlock::WORD_SCALE_ONE;
+    const uint16_t wordScale = TextBlock::scaleOfSlot(slot);
     outBoundaries.push_back(boundary);
     const auto style = static_cast<EpdFontFamily::Style>(lineWordStyles[i] & ~TextBlock::DISCRETIONARY_HYPHEN_FLAG);
     const bool rtl = BidiUtils::startsWithRtl(lineWords[i].c_str());

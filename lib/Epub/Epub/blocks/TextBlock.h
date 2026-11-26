@@ -14,6 +14,7 @@
 #include "../RubyText.h"
 #include "Block.h"
 #include "BlockStyle.h"
+#include "Epub/BookFontMap.h"
 #include "Epub/FootnoteEntry.h"
 
 // Represents a line of text on a page.
@@ -225,19 +226,36 @@ class TextBlock final : public Block {
   static_assert(!(UI_12_FONT_ID >= -512 && UI_12_FONT_ID <= -32), "font id in scale-tag range");
   static_assert(!(SMALL_FONT_ID >= -512 && SMALL_FONT_ID <= -32), "font id in scale-tag range");
 
+  // A publisher family and a size together (a sized span in a book font): bits 0-9 hold the
+  // 256-based scale, bits 10-14 the bookfonts slot, below FAMILY_SCALE_TAG_BASE.
+  static constexpr int32_t FAMILY_SCALE_TAG_BASE = -(1 << 24);
+  static int32_t familyScaleTag(const uint8_t familySlot, const uint16_t scale) {
+    return FAMILY_SCALE_TAG_BASE - (static_cast<int32_t>(familySlot) << 10) - scale;
+  }
+  static bool isFamilyScaleTag(const int32_t slot) {
+    return slot <= FAMILY_SCALE_TAG_BASE - 32 && slot > FAMILY_SCALE_TAG_BASE - (32 << 10);
+  }
+  // The font a raw slot names; 0 = the block's font.
+  static int fontOfSlot(const int32_t slot) {
+    if (isWordScaleTag(slot)) return 0;
+    if (isFamilyScaleTag(slot))
+      return bookfonts::fontIdForSlot(static_cast<uint8_t>((FAMILY_SCALE_TAG_BASE - slot) >> 10));
+    return slot;
+  }
+  // The bitmap scale a raw slot names; 256 = unscaled.
+  static uint16_t scaleOfSlot(const int32_t slot) {
+    if (isWordScaleTag(slot)) return static_cast<uint16_t>(-slot);
+    if (isFamilyScaleTag(slot)) return static_cast<uint16_t>((FAMILY_SCALE_TAG_BASE - slot) & 1023);
+    return WORD_SCALE_ONE;
+  }
+
   // Per-word font override; 0 = the block's font (also for blocks without the array, and for a
   // word carrying a scale tag instead of an id).
-  int32_t wordFont(const uint16_t i) const {
-    const int32_t slot = fontsPresent ? wordFontArr[i] : 0;
-    return isWordScaleTag(slot) ? 0 : slot;
-  }
+  int32_t wordFont(const uint16_t i) const { return fontOfSlot(fontsPresent ? wordFontArr[i] : 0); }
   // The raw slot: a font id, a scale tag (isWordScaleTag) or 0 for the block's font.
   int32_t wordFontSlot(const uint16_t i) const { return fontsPresent ? wordFontArr[i] : 0; }
   // 256 = unscaled. Only ever non-256 when the slot carries a tag.
-  uint16_t wordFontScale(const uint16_t i) const {
-    const int32_t slot = fontsPresent ? wordFontArr[i] : 0;
-    return isWordScaleTag(slot) ? static_cast<uint16_t>(-slot) : WORD_SCALE_ONE;
-  }
+  uint16_t wordFontScale(const uint16_t i) const { return scaleOfSlot(fontsPresent ? wordFontArr[i] : 0); }
   uint8_t focusBoundary(const uint16_t i) const { return focusPresent ? focusBoundaryArr[i] : 0; }
   uint16_t focusSplitX(const uint16_t i) const { return focusPresent ? focusSplitXArr[i] : 0; }
   bool hasRuby() const;

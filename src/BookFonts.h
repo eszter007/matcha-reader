@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Epub/BookFontMap.h>
 #include <VectorFontSupport.h>
 
 #include <cstdint>
@@ -10,12 +11,12 @@ class GfxRenderer;
 class TtfEpdFont;
 
 // The publisher fonts (@font-face) of the open book, on boards with vector fonts (PSRAM).
-// Up to MAX_FAMILIES families load, each with the styles the book ships; their files are held
-// in PSRAM, de-obfuscated, and drawn by FreeType at the reader's point size. A glyph a family
-// lacks comes from the reader font. On boards without vector fonts every call is a no-op.
+// Every family loads while PSRAM lasts (at most MAX_FAMILIES), each with the styles the book
+// ships; their files are held in PSRAM, de-obfuscated, and drawn by FreeType at the reader's point size. A glyph a
+// family lacks comes from the reader font. On boards without vector fonts every call is a no-op.
 class BookFonts {
  public:
-  static constexpr int MAX_FAMILIES = 2;  // bookfonts::MAX_FAMILIES
+  static constexpr int MAX_FAMILIES = static_cast<int>(bookfonts::MAX_FAMILIES);
 
   BookFonts();
   ~BookFonts();

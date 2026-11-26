@@ -2,6 +2,7 @@
 
 #include <Epub.h>
 #include <Epub/BookFontMap.h>
+#include <Epub/blocks/TextBlock.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -82,8 +83,11 @@ Obfuscation readObfuscation(const Epub& epub) {
 
 int familyFontId(const uint16_t familyKey, const uint8_t pointSize) {
   uint32_t h = fnv(fnv(fnv(2166136261u, 0x424B464Eu /* "BKFN" */), familyKey), pointSize);
-  const int id = static_cast<int>(h);
-  return id != 0 ? id : 1;
+  int id = static_cast<int>(h);
+  // Keep clear of the per-word tag ranges (TextBlock), or the id would decode as a size.
+  if (id == 0 || (id < 0 && id >= TextBlock::FAMILY_SCALE_TAG_BASE - (32 << 10)))
+    id = static_cast<int>(h | 0x40000000u);
+  return id;
 }
 }  // namespace
 

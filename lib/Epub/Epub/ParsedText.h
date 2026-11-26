@@ -184,14 +184,15 @@ class ParsedText {
   // The font a word measures and draws with (block font unless an inline font-size overrode it).
   int effectiveWordFont(size_t index, int blockFontId) const {
     const int32_t slot = index < wordFonts.size() ? wordFonts[index] : 0;
-    return (slot != 0 && !TextBlock::isWordScaleTag(slot)) ? slot : blockFontId;
+    const int font = TextBlock::fontOfSlot(slot);
+    return font != 0 ? font : blockFontId;
   }
   // Bitmap scale for a word whose size the font ladder could not serve; 256 = unscaled. Widths
   // MUST be scaled by it wherever they are measured -- the drawn word is scaled, and a width
   // measured unscaled would put the next word straight through it.
   uint16_t effectiveWordScale(const size_t index) const {
     const int32_t slot = index < wordFonts.size() ? wordFonts[index] : 0;
-    return TextBlock::isWordScaleTag(slot) ? static_cast<uint16_t>(-slot) : TextBlock::WORD_SCALE_ONE;
+    return TextBlock::scaleOfSlot(slot);
   }
   uint8_t addLinkTarget(const char* href);
   bool linkTargetMatches(uint8_t linkId, const char* href) const;

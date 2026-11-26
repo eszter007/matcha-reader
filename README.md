@@ -149,7 +149,7 @@ A wallpaper over the page you were reading. The book shows through. See [Guide �
 - Translate the selected text from the touch selection bar
 - Optimize EPUB on upload: splits single-file novels into chapters and fits images to the screen
 - Updating an EPUB, TXT or Markdown book keeps your place: upload or copy a new version under the same file name
-- Publisher fonts on boards with PSRAM (X4 Pro and others): a book can be drawn in the fonts it ships, horizontal and vertical
+- Publisher fonts on boards with PSRAM (X4 Pro and others): a book can be drawn in the fonts it ships (TrueType and OpenType, CFF included) at the book's sizes, horizontal and vertical
 - Japanese and Chinese interface language support
 - Hyphenation in 36 languages: English is built in, the other 35 are a small download offered when a book needs one. See [Guide §3.6.6](USER_GUIDE.md#366-reader)
 - Underline Dictionary Words (off by default): in Japanese and Chinese books, Word Lookup draws a line under every word the dictionary knows (beside it in vertical text). It is in Text Settings → LAYOUT for the Japanese and Chinese profiles. See [Guide §6.1](USER_GUIDE.md#61-word-lookup)
