@@ -125,9 +125,9 @@ class VerticalSection {
   }
 
   // Starts a page at the chapter text offset `offset` (UINT32_MAX: no anchor) on the next
-  // startBuild(). Until the build reaches it, page requests wait; then they move from the early
-  // target estimate to the real anchor page, and `pageFn` (same ctx as the early-render hook)
-  // gets its index. With previewOnly, the build skips the text before the anchor, draws the
+  // startBuild() only. Until the build reaches it, page requests wait; then `pageFn` (same ctx
+  // as the early-render hook) gets the real anchor page index and moves pending requests from
+  // the early target estimate onto it. With previewOnly, the build skips the text before the anchor, draws the
   // anchor page through the early-render hook at the target index, and stops: a quick first
   // page, before the full build lays out the same page again.
   void setAnchor(uint32_t offset, bool previewOnly, void (*pageFn)(void*, int)) {

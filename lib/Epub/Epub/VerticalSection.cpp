@@ -1548,12 +1548,8 @@ struct LayoutPageSink final : ParagraphSink {
     }
     anchorReached = true;
     if (anchorPreviewOnly) return;
-    const int anchorPage = static_cast<int>(pageOffsets.size());
-    if (pageRequest && seedTarget >= 0) {
-      const int req = pageRequest->load(std::memory_order_relaxed);
-      if (req >= 0) pageRequest->store(std::max(0, req + anchorPage - seedTarget), std::memory_order_relaxed);
-    }
-    if (anchorPageFn) anchorPageFn(earlyRenderCtx, anchorPage);
+    // The callback moves page requests counted from the estimate onto the real numbering.
+    if (anchorPageFn) anchorPageFn(earlyRenderCtx, static_cast<int>(pageOffsets.size()));
   }
 
   void onParagraph(std::vector<RubyRun>& runs, const bool continuesPrevious) override {
@@ -1709,6 +1705,10 @@ struct LayoutPageSink final : ParagraphSink {
 
   void onImage(const std::string& src, const uint32_t visibleTextOffset) override {
     if (failed) return;
+    if (anchorOffset != UINT32_MAX && !anchorReached && visibleTextOffset >= anchorOffset) {
+      reachAnchor();  // the reading position is this image page
+      if (failed) return;
+    }
     if (anchorPreviewOnly && !anchorReached) return;
     // Lay out any buffered text, then FINALIZE the in-progress page before the image page is
     // written. Without this, the image page was written while the half-filled text page stayed
@@ -2463,6 +2463,10 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   b.sink.anchorPreviewOnly = anchorPreviewOnly_;
   b.sink.seedTarget = earlyRenderFn_ ? earlyRenderTargetPage_ : -1;
   b.sink.anchorPageFn = anchorPageFn_;
+  // One build only: a later startBuild() without setAnchor() lays out from the start.
+  anchorOffset_ = UINT32_MAX;
+  anchorPreviewOnly_ = false;
+  anchorPageFn_ = nullptr;
 
   // Styled blocks (borders, start offsets, hanging indents, centering, gaps): collect the
   // vertical-relevant selectors. Streams the on-disk CSS cache -- does NOT materialize the
@@ -2679,6 +2683,11 @@ bool VerticalSection::finishBuild(const bool parseOk) {
   b.sink.flushText(/*isFinalFlush=*/true);
   b.sink.flushPages();  // sets failed on a write error
 
+  if (b.sink.cancelled && b.sink.anchorPreviewOnly) {
+    LOG_DBG("VSC", "Anchor preview done (spine=%d)", spineIndex);
+    abandonBuild();
+    return false;
+  }
   if (b.sink.cancelled) {
     lastBuildCancelled_ = true;
     LOG_INF("VSC", "Speculative build cancelled after %zu pages (spine=%d)", pageOffsets_.size(), spineIndex);
@@ -2763,7 +2772,7 @@ bool VerticalSection::finishBuild(const bool parseOk) {
       LOG_ERR("VSC", "Build degraded on low heap (maxAlloc=%u at start); marking section stale for rebuild",
               lastBuildStartMaxAlloc_);
     } else {
-      LOG_INF("VSC", "Marking section stale for rebuild");
+      LOG_INF("VSC", "Pages drawn between build slices; marking section stale for rebuild");
     }
     if (file.seek(0)) {
       const uint8_t staleVersion = 0;

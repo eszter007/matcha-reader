@@ -2861,6 +2861,7 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
   // this branch exists to avoid. Nothing here needs it. The branch only writes atomics the build
   // polls, and the section cannot be destroyed while its own build is running on it.
   if (verticalBuildInProgress_.load(std::memory_order_relaxed)) {
+    const std::lock_guard<std::mutex> turnGuard(buildTurnMutex_);
     const int shown = earlyDisplayedPage_.load(std::memory_order_relaxed);
     if (shown >= 0 && verticalSection) {
       if (isForwardTurn) {
@@ -3084,8 +3085,9 @@ bool EpubReaderActivity::backgroundBuildWanted() const {
   return section && section->isBuilding() && !bleturner::holdsHeap() && currentSpineIndex != backgroundBuildFailedSpine;
 }
 
-// TODO: Failure handling
 void EpubReaderActivity::onLeaving() { readerLeaving.store(true, std::memory_order_relaxed); }
+
+// TODO: Failure handling
 
 void EpubReaderActivity::render(RenderLock&& lock) {
   if (leavingReader()) return;  // nobody will see this frame
@@ -3395,8 +3397,6 @@ void EpubReaderActivity::render(RenderLock&& lock) {
             verticalBuildInProgress_.store(false, std::memory_order_relaxed);
             return;
           }
-        } else {
-          verticalSection->setAnchor(UINT32_MAX, false, nullptr);
         }
         VerticalSection::BuildStep step = verticalSection->startBuild(readerSpec(viewportWidth, viewportHeight))
                                               ? VerticalSection::BuildStep::InProgress
@@ -5685,15 +5685,19 @@ void EpubReaderActivity::requestVerticalBuildNotice() {
 
 void EpubReaderActivity::anchorPageThunk(void* ctx, const int pageIndex) {
   auto* self = static_cast<EpubReaderActivity*>(ctx);
+  const std::lock_guard<std::mutex> turnGuard(self->buildTurnMutex_);
   self->anchorRealPage_.store(pageIndex, std::memory_order_relaxed);
-  // A turn kept for the end of the build was counted from the estimate too.
-  if (self->midBuildTurnTarget_ >= 0 && self->anchorSeedPage_ >= 0) {
-    self->midBuildTurnTarget_ = std::max(0, self->midBuildTurnTarget_ + pageIndex - self->anchorSeedPage_);
+  if (self->anchorSeedPage_ < 0) return;
+  // Everything so far counted pages from the estimate; from here they count from the real index.
+  const int delta = pageIndex - self->anchorSeedPage_;
+  const auto rebase = [delta](const int page) { return page >= 0 ? std::max(0, page + delta) : page; };
+  if (self->verticalSection) {
+    const int req = self->verticalSection->pendingPageRequest();
+    if (req >= 0) self->verticalSection->requestPageDuringBuild(rebase(req));
   }
-  // The preview was drawn at the estimated index; turns from here count from the real one.
-  if (self->anchorPreviewShown_.load(std::memory_order_relaxed)) {
-    self->earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
-  }
+  self->midBuildTurnTarget_ = rebase(self->midBuildTurnTarget_);
+  self->earlyDisplayedPage_.store(rebase(self->earlyDisplayedPage_.load(std::memory_order_relaxed)),
+                                  std::memory_order_relaxed);
 }
 
 void EpubReaderActivity::earlyRenderVerticalPageThunk(void* ctx, const VerticalPage& page, const int pageIndex) {
@@ -5709,21 +5713,28 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   // The full build reaching the page the preview build already drew: same text from the same
   // offset, so the screen is already right.
   if (anchorPreviewShown_.exchange(false, std::memory_order_relaxed)) {
-    const bool same = pageIndex == anchorRealPage_.load(std::memory_order_relaxed) &&
-                      page.visibleTextOffset == anchorPreviewStart_ && page.glyphs.size() == anchorPreviewGlyphs_;
-    LOG_DBG("ERS", "Anchor check: page %d/%d start %u/%u glyphs %u/%u", pageIndex,
-            anchorRealPage_.load(std::memory_order_relaxed), static_cast<unsigned>(page.visibleTextOffset),
-            static_cast<unsigned>(anchorPreviewStart_), static_cast<unsigned>(page.glyphs.size()),
-            static_cast<unsigned>(anchorPreviewGlyphs_));
+    const bool isAnchorPage = pageIndex == anchorRealPage_.load(std::memory_order_relaxed);
+    const bool same =
+        isAnchorPage && page.visibleTextOffset == anchorPreviewStart_ && page.glyphs.size() == anchorPreviewGlyphs_;
     if (same) {
-      earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
-      if (pageIndex >= midBuildTurnTarget_) midBuildTurnTarget_ = -1;
+      {
+        const std::lock_guard<std::mutex> turnGuard(buildTurnMutex_);
+        earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
+        if (pageIndex >= midBuildTurnTarget_) midBuildTurnTarget_ = -1;
+      }
       if (verticalSection) verticalSection->currentPage = pageIndex;
       return;
     }
+    if (isAnchorPage) {
+      LOG_DBG("ERS", "Anchor page differs from the preview (page %d, start %u); drawing it", pageIndex,
+              static_cast<unsigned>(page.visibleTextOffset));
+    }
   }
-  earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
-  if (pageIndex >= midBuildTurnTarget_) midBuildTurnTarget_ = -1;  // that turn has been served
+  {
+    const std::lock_guard<std::mutex> turnGuard(buildTurnMutex_);
+    earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
+    if (pageIndex >= midBuildTurnTarget_) midBuildTurnTarget_ = -1;  // that turn has been served
+  }
   if (leavingReader()) return;
   if (anchorPreviewBuild_) {
     anchorPreviewStart_ = page.visibleTextOffset;

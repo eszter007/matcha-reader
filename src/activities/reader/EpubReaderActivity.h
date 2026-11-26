@@ -521,8 +521,11 @@ class EpubReaderActivity final : public ReaderActivity {
     verticalBuildFinished_ = false;
   }
   // The page the last forward turn during a vertical build asked for, until the build shows it;
-  // -1 when none. Loop task only (turns, ticks, and the early render run inside a tick).
+  // -1 when none. Under buildTurnMutex_ while a build runs.
   int midBuildTurnTarget_ = -1;
+  // Orders a turn during a build (loop task) against the early render and the anchor's page
+  // renumbering (render task, or loop task inside a tick). Held only for a few stores.
+  std::mutex buildTurnMutex_;
   // Background-build accounting, logged when it finishes: ticks, time inside slices, wall time.
   uint32_t verticalTickCount_ = 0;
   uint32_t verticalTickBusyMs_ = 0;
