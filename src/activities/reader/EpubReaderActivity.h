@@ -503,7 +503,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // Set once the setup in openOverlay() is complete; the render task draws no chrome before that.
   std::atomic<bool> overlayReady_{true};
   // What the render task draws: an overlay that is set up and not being closed.
-  bool overlayDrawn() const { return overlay != Overlay::None && overlayReady_ && !overlayClosePending_; }
+  // overlayReady_ is read first (acquire): it orders the reads of overlay and toolbarUi after it.
+  bool overlayDrawn() const {
+    return overlayReady_.load(std::memory_order_acquire) && !overlayClosePending_ && overlay != Overlay::None;
+  }
   // The snapshot-and-chrome paint over the page in the framebuffer, with one fast refresh.
   void paintOverlayOnPage(bool firstOpen);
   // Restores the page under the chrome with the render lock held. True when the page is back on

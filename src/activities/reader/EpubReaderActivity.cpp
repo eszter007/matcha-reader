@@ -7236,6 +7236,11 @@ void EpubReaderActivity::settleOverlayRefresh() {
 void EpubReaderActivity::openOverlay(Overlay target) {
   mappedInput.resetHomeButtonInput();
   requestVerticalBuildNotice();
+  // The render task draws chrome only once overlayReady_ is true (overlayDrawn() reads it first, with
+  // acquire). It goes false before anything else changes, and the fence keeps the plain writes to
+  // overlay and toolbarUi below from moving ahead of it; the release store at the end publishes them.
+  overlayReady_.store(false, std::memory_order_release);
+  std::atomic_thread_fence(std::memory_order_seq_cst);
   // Reopened before the loop applied an owed close: cancel the close. If its render already ran, the
   // page on screen is bare and this is a first open.
   bool pageBare = false;
@@ -7244,11 +7249,13 @@ void EpubReaderActivity::openOverlay(Overlay target) {
     overlayClosePending_ = false;
   }
   // While chrome is drawn the render task may be painting it: change it under the lock, held for the
-  // setup only. Before a first open it draws none, and overlayReady_ keeps it from starting before the
-  // setup is done.
+  // setup only. A first open takes the lock only if it is free, and otherwise relies on overlayReady_.
   std::optional<RenderLock> setupLock;
-  if (overlay != Overlay::None && !pageBare) setupLock.emplace();
-  overlayReady_ = false;
+  if (overlay != Overlay::None && !pageBare) {
+    setupLock.emplace();
+  } else {
+    setupLock.emplace(RenderLock::Try{});
+  }
   // Same as openReaderMenu(): allocate first, and leave the overlay closed if the
   // heap cannot spare it. std::make_unique would abort() here instead -- with
   // -fno-exceptions a failed bare `new` never returns null.
@@ -7256,7 +7263,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
     toolbarUi = makeUniqueNoThrow<ReaderToolbarUi>(renderer);
     if (!toolbarUi) {
       LOG_ERR("ERS", "OOM: reader toolbar, staying on the page");
-      overlayReady_ = true;
+      overlayReady_.store(true, std::memory_order_release);
       return;
     }
   }
@@ -7294,7 +7301,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
       break;
   }
   panelHoldJumped = false;
-  overlayReady_ = true;
+  overlayReady_.store(true, std::memory_order_release);
   setupLock.reset();
 
   // The page is already on screen and still in the framebuffer, so paint the
