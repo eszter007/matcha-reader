@@ -991,6 +991,8 @@ class EpubReaderActivity final : public ReaderActivity {
   void syncBookFonts();
   void restoreSavedPosition();
   bool useVerticalText() const;
+  // What the Tategaki/Zhipai setting picks for this book when it has no choice of its own.
+  bool globalVerticalText() const;
   // True when page turning should be reversed for this book: the toggle is on AND this book
   // actually reads right-to-left (vertical text). A horizontal Latin book is never reversed, even
   // with the toggle left on from a Japanese one.

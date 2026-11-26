@@ -1544,7 +1544,7 @@ as written (in 食べる, た goes over 食 and べる stays bare). Words that d
 Japanese**, for all Japanese books. Inside a book, **Reader Settings → Text Settings** opens the same page. To change
 one book only, use **Vertical Text** in the reader toolbar's **Page** panel and **Furigana** and **Furigana Size**
 in its **Text** panel (set **Reader Settings → Reader Menu Style** to **Toolbar**, see [§5](#5-reader-menu)). That choice is saved with
-the book.
+the book. Choosing the same **Vertical Text** layout the global setting gives puts the book back on the global setting.
 
 <p align="center">
   <img src="docs/images/screenshots/vertical-text-furigana.png" width="260" alt="Vertical text with furigana beside the kanji">

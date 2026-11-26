@@ -2034,7 +2034,10 @@ void EpubReaderActivity::openReaderMenu() {
 void EpubReaderActivity::applyVerticalFuriganaOverride(const int8_t verticalOverrideIn,
                                                        const int8_t furiganaOverrideIn) {
   if (verticalOverrideIn >= 0 && verticalOverrideIn != (useVerticalText() ? 1 : 0)) {
-    verticalOverride = verticalOverrideIn;
+    // Choosing what the global setting would pick clears the book's own choice, so a toggle and
+    // back returns the book to Automatic.
+    const bool matchesGlobal = isCjkBook() && verticalOverrideIn == (globalVerticalText() ? 1 : 0);
+    verticalOverride = matchesGlobal ? int8_t{-1} : verticalOverrideIn;
     dropSectionsKeepingPosition();
     // Forcing vertical text on a non-CJK book is the same signal the book's script covers at
     // open: the companion font follows it.
@@ -8875,6 +8878,10 @@ bool EpubReaderActivity::useVerticalText() const {
   // No per-book choice: Tategaki (Japanese) or the Zhipai setting of the book's Chinese script
   // decides. Automatic opens a spine declared right-to-left (Japanese novels; Taiwanese novels from
   // Readmoo, Kobo, Books.com.tw) in columns, anything else horizontal.
+  return globalVerticalText();
+}
+
+bool EpubReaderActivity::globalVerticalText() const {
   return CrossPointSettings::verticalFor(profileVerticalMode(), epub && epub->pageProgressionRtl());
 }
 
