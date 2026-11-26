@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef BOARD_HAS_PSRAM
+#include <HalMemory.h>
+#endif
+
 #include <HalStorage.h>
 
 #include <cstdint>
@@ -407,9 +411,14 @@ class CssParser {
   [[nodiscard]] const CssStyle* findStyle(const std::string_view* pieces, size_t count) const;
   [[nodiscard]] std::unique_ptr<uint16_t[]> sourceOrder() const;
   // One rule into the vertical engine's table: v|-scoped or unscoped, tag/class selectors only.
-  static void addVerticalRule(std::vector<VerticalBlockRule>& out, std::string_view selector, const CssStyle& css);
+  // False when the rule holds nothing the vertical engine reads.
+  static bool addVerticalRule(std::vector<VerticalBlockRule>& out, std::string_view selector, const CssStyle& css);
   // Copies every <style> block's contents from the HTML into cssPath. False when there is none.
-  static bool extractStyleBlocks(const std::string& htmlPath, const std::string& cssPath);
+  // `scannedWhole`, when given, is set when the whole file was read (false on an open or read error).
+  static bool extractStyleBlocks(const std::string& htmlPath, const std::string& cssPath, bool* scannedWhole = nullptr);
+  // The last chapter whose <style> blocks add no vertical rules, so a rebuild skips the scan.
+  mutable std::string chapterWithoutStyles_;
+  uint64_t chapterWithoutStylesFontStamp_ = 0;
   [[nodiscard]] std::string_view selectorAt(size_t index) const;
   [[nodiscard]] const CssStyle& styleAt(size_t index) const;
   PoolResult ensureEntryCapacity(size_t needed);
@@ -465,6 +474,37 @@ class CssParser {
   static void encodeStyleWire(const CssStyle& style, uint8_t* out);
 
   std::string cachePath;
+
+  // What a collectVerticalStyles() result depends on besides the rules cache itself.
+  struct VerticalStylesKey {
+    uint64_t linked = 0;
+    uint64_t fontStamp = 0;
+    uint16_t maxOut = 0;
+    bool all = true;
+    bool operator==(const VerticalStylesKey&) const = default;
+  };
+  // css_vstyles.cache: complete collectVerticalStyles() results, so a chapter build after the
+  // book is reopened does not scan the whole rules cache again.
+  static constexpr uint8_t VSTYLES_CACHE_VERSION = 1;
+  static constexpr uint8_t VSTYLES_MAX_ENTRIES = 4;
+  // Reads the entry for `key` into `out` (reserved for key.maxOut). False on a miss.
+  bool loadVerticalStyles(const VerticalStylesKey& key, size_t rulesSize, std::vector<VerticalBlockRule>& out) const;
+  void saveVerticalStyles(const VerticalStylesKey& key, size_t rulesSize,
+                          const std::vector<VerticalBlockRule>& rules) const;
+
+#ifdef BOARD_HAS_PSRAM
+  // The last complete collectVerticalStyles() result, in PSRAM: a chapter rebuild (font size,
+  // margins) then reads neither cache file.
+  struct VerticalMemo {
+    HalMemory::PsramBuffer rules;
+    uint16_t count = 0;
+    VerticalStylesKey key;
+  };
+  mutable VerticalMemo verticalMemo_;
+  void rememberVerticalStyles(const VerticalStylesKey& key, const std::vector<VerticalBlockRule>& rules) const;
+#endif
+  // Called wherever the rules cache is written or removed: drops the memo and css_vstyles.cache.
+  void invalidateVerticalMemo() const;
 
   /**
    * The colours seen so far inside ONE `{ ... }` rule block, as luma (0 = black, 255 = white).

@@ -76,6 +76,10 @@ class VerticalSection {
   void (*earlyRenderFn_)(void*, const VerticalPage&, int) = nullptr;
   void* earlyRenderCtx_ = nullptr;
   int earlyRenderTargetPage_ = -1;
+  // See setAnchor().
+  uint32_t anchorOffset_ = UINT32_MAX;
+  bool anchorPreviewOnly_ = false;
+  void (*anchorPageFn_)(void*, int) = nullptr;
   // See requestPageDuringBuild(). Written by the loop() task, read by the build on the
   // render task; -1 = no pending request.
   std::atomic<int> buildPageRequest_{-1};
@@ -120,6 +124,18 @@ class VerticalSection {
     earlyRenderTargetPage_ = targetPage;
   }
 
+  // Starts a page at the chapter text offset `offset` (UINT32_MAX: no anchor) on the next
+  // startBuild() only. Until the build reaches it, page requests wait; then `pageFn` (same ctx
+  // as the early-render hook) gets the real anchor page index and moves pending requests from
+  // the early target estimate onto it. With previewOnly, the build skips the text before the anchor, draws the
+  // anchor page through the early-render hook at the target index, and stops: a quick first
+  // page, before the full build lays out the same page again.
+  void setAnchor(uint32_t offset, bool previewOnly, void (*pageFn)(void*, int)) {
+    anchorOffset_ = offset;
+    anchorPreviewOnly_ = previewOnly;
+    anchorPageFn_ = pageFn;
+  }
+
   // Mid-build page turns: the reader's loop() task records the page the user wants while a
   // build is still running on the render task; the build serves it through the early-render
   // hook as soon as that page exists (immediately via cache read-back if it is already
@@ -130,6 +146,7 @@ class VerticalSection {
   // Ask the active build to draw feedback at its next page boundary. Used when a backward turn,
   // menu, or lookup must wait for the render lock the build owns.
   void requestBuildNotice() { buildNoticePending_.store(true, std::memory_order_relaxed); }
+  bool buildNoticePending() const { return buildNoticePending_.load(std::memory_order_relaxed); }
 
   // Draws the loading notice; invoked between pages on the render task. See requestBuildNotice().
   void setBuildNoticeHook(void* ctx, void (*fn)(void*)) {
@@ -167,7 +184,8 @@ class VerticalSection {
   // The early-render and mid-build page-request hooks fire inside slices, as before.
   enum class BuildStep : uint8_t { InProgress, Done, Failed };
   bool startBuild(const ReaderRenderSpec& spec);
-  BuildStep buildSomeMore(uint32_t maxMillis);
+  // `yieldNow`, when given, is polled during the slice; true ends it early (input is waiting).
+  BuildStep buildSomeMore(uint32_t maxMillis, bool (*yieldNow)() = nullptr);
   bool isBuilding() const { return static_cast<bool>(build_); }
   // Drops a running build and its partial file; the next load rebuilds the chapter.
   void abandonBuild();

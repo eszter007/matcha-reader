@@ -19,7 +19,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <initializer_list>
 #include <iterator>
+#include <mutex>
 
 #include "CrossPointSettings.h"
 #include "ReaderFontSizes.h"
@@ -1320,7 +1322,7 @@ bool SdCardFontSystem::loadCompanionTtf(const SdCardFontFamilyInfo& family, GfxR
     if (f.style == 0) regular = &f;
   }
   if (!family.filePath(*regular, path, sizeof(path)) ||
-      !openTtfSourceInto(companionTtfSource_, path, /*keepResident=*/true))
+      !openTtfSourceInto(companionTtfSource_, path, /*keepResident=*/true, /*primary=*/true))
     return false;
   companionTtf_ = makeUniqueNoThrow<TtfEpdFont>();
   if (!companionTtf_) {
@@ -1360,6 +1362,9 @@ void SdCardFontSystem::unloadCompanionTtf(GfxRenderer& renderer) {
   companionTtf_.reset();
   // Only a streamed companion holds an open file; close() asserts on one that was never opened.
   if (companionTtfSource_.file) companionTtfSource_.file.close();
+#ifdef BOARD_HAS_PSRAM
+  releaseBlockCache(companionTtfSource_);
+#endif
   companionTtfSource_.bytes.clear();
   companionTtfSource_.present = false;
   companionTtfSource_.streamed = false;
@@ -1388,6 +1393,11 @@ void SdCardFontSystem::releaseTtfSources(TtfSource*& sources, const TtfSource* o
     s.bytes.clear();
     freeink::font::PsramVector<uint8_t>().swap(s.bytes);  // actually release
     if (s.file) s.file.close();
+#ifdef BOARD_HAS_PSRAM
+    s.prefixWanted.store(0, std::memory_order_relaxed);
+    s.prefixReady.store(false, std::memory_order_relaxed);
+    releaseBlockCache(s);
+#endif
     s.streamed = false;
     s.size = 0;
     s.present = false;
@@ -1451,7 +1461,48 @@ void SdCardFontSystem::unloadTtf(GfxRenderer& renderer) {
   ttfPointSize_ = 0;
 }
 
-bool SdCardFontSystem::openTtfSourceInto(TtfSource& s, const std::string& path, const bool keepResident) {
+#ifdef BOARD_HAS_PSRAM
+namespace {
+// Outline block caches across every streamed source: the regular file's holds several CJK pages'
+// outlines, and bold and italic files, rare in Japanese text, get small ones. 3 MB of PSRAM stays
+// free for images, publisher fonts and the rest of the reader.
+constexpr size_t kPrimaryBlockSets = 256;
+constexpr size_t kStyleBlockSets = 32;
+constexpr size_t kBlockCacheBudget =
+    StreamBlockCache::bytesFor(kPrimaryBlockSets) + 3 * StreamBlockCache::bytesFor(kStyleBlockSets);
+constexpr size_t kBlockCachePsramFloor = 3 * 1024 * 1024;
+// Sources are opened, read and released with the render lock held, on the render task or the loop
+// task, so this total needs no lock of its own.
+size_t gBlockCacheBytes = 0;
+}  // namespace
+
+void SdCardFontSystem::releaseBlockCache(TtfSource& s) {
+  s.blocks.init(nullptr, 0);
+  s.blockStore.reset();
+  gBlockCacheBytes -= std::min(gBlockCacheBytes, s.blockBytes);
+  s.blockBytes = 0;
+}
+
+void SdCardFontSystem::allocateBlockCache(TtfSource& s, const bool primary) {
+  for (const size_t sets : primary ? std::initializer_list<size_t>{kPrimaryBlockSets, 64, kStyleBlockSets}
+                                   : std::initializer_list<size_t>{kStyleBlockSets}) {
+    const size_t bytes = StreamBlockCache::bytesFor(sets);
+    if (gBlockCacheBytes + bytes > kBlockCacheBudget) continue;
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) < bytes + kBlockCachePsramFloor) continue;
+    s.blockStore = HalMemory::allocatePsram(bytes);
+    if (!s.blockStore) continue;
+    s.blocks.init(s.blockStore.get(), sets);
+    s.blockBytes = bytes;
+    gBlockCacheBytes += bytes;
+    LOG_DBG("SDFS", "TTF block cache: %u KB in PSRAM (%u KB in all)", static_cast<unsigned>(bytes / 1024),
+            static_cast<unsigned>(gBlockCacheBytes / 1024));
+    return;
+  }
+}
+#endif
+
+bool SdCardFontSystem::openTtfSourceInto(TtfSource& s, const std::string& path, const bool keepResident,
+                                         [[maybe_unused]] const bool primary) {
   HalFile f = Storage.open(path.c_str());
   if (!f) {
     LOG_ERR("SDFS", "Failed to open TTF: %s", path.c_str());
@@ -1497,16 +1548,16 @@ bool SdCardFontSystem::openTtfSourceInto(TtfSource& s, const std::string& path, 
   // loca, hmtx) sit before the multi-MB glyf table, so serving the first
   // 1 MB from RAM turns each glyph fault's 4-6 scattered SD seeks into one
   // glyf read. Gated per source so a small-PSRAM board takes what fits.
+  // Filled on the first read, so a style that is never drawn costs no card read.
+  freeink::font::PsramVector<uint8_t>().swap(s.bytes);
+#ifdef BOARD_HAS_PSRAM
   static constexpr size_t kStreamPrefix = 1024 * 1024;
   const size_t prefix = len < kStreamPrefix ? len : kStreamPrefix;
-  if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) > prefix + 256 * 1024) {
-    s.bytes.resize(prefix);
-    if (s.file.seek(0) && static_cast<size_t>(s.file.read(s.bytes.data(), prefix)) == prefix) {
-      LOG_DBG("SDFS", "Cached %u KB TTF prefix in PSRAM", static_cast<unsigned>(prefix / 1024));
-    } else {
-      freeink::font::PsramVector<uint8_t>().swap(s.bytes);  // fall back to pure streaming
-    }
-  }
+  s.prefixReady.store(false, std::memory_order_relaxed);
+  s.prefixWanted.store(prefix, std::memory_order_relaxed);
+  releaseBlockCache(s);  // a cache of another file must never serve this one
+  if (len > prefix) allocateBlockCache(s, primary);
+#endif
   LOG_DBG("SDFS", "Streaming TTF %s (%u KB) from SD", path.c_str(), static_cast<unsigned>(len / 1024));
   s.size = static_cast<unsigned long>(len);
   s.present = true;
@@ -1516,6 +1567,18 @@ bool SdCardFontSystem::openTtfSourceInto(TtfSource& s, const std::string& path, 
 // Streamed-source read: serve from the PSRAM prefix cache when the range is
 // there, hit SD only for the tail (glyf outlines). A read straddling the
 // boundary splits across both.
+#ifdef BOARD_HAS_PSRAM
+namespace {
+// Set while a TTF family loads: opening each style's face reads its tables, and filling every
+// style's prefix then would cost a card read per style even when no glyph is ever drawn.
+std::atomic<bool> prefixFillDeferred{false};
+struct PrefixFillDeferral {
+  PrefixFillDeferral() { prefixFillDeferred.store(true, std::memory_order_relaxed); }
+  ~PrefixFillDeferral() { prefixFillDeferred.store(false, std::memory_order_relaxed); }
+};
+}  // namespace
+#endif
+
 unsigned long SdCardFontSystem::prefixRead(void* ctx, const unsigned long offset, unsigned char* buffer,
                                            const unsigned long count) {
   auto* s = static_cast<TtfSource*>(ctx);
@@ -1526,7 +1589,17 @@ unsigned long SdCardFontSystem::prefixRead(void* ctx, const unsigned long offset
     }
     return read;
   };
-  const unsigned long cached = s->bytes.size();
+#ifdef BOARD_HAS_PSRAM
+  bool ready = s->prefixReady.load(std::memory_order_acquire);
+  if (!ready && count > 0 && !prefixFillDeferred.load(std::memory_order_relaxed) &&
+      s->prefixWanted.load(std::memory_order_relaxed) > 0) {
+    fillPrefix(*s);
+    ready = s->prefixReady.load(std::memory_order_acquire);
+  }
+  const unsigned long cached = ready ? s->bytes.size() : 0;
+#else
+  const unsigned long cached = 0;  // no prefix cache without PSRAM
+#endif
   if (offset < cached) {
     const unsigned long fromCache = (offset + count <= cached) ? count : cached - offset;
     if (count == 0) return 0;  // seek probe
@@ -1534,8 +1607,44 @@ unsigned long SdCardFontSystem::prefixRead(void* ctx, const unsigned long offset
     if (fromCache == count) return count;
     return fromCache + readFromCard(offset + fromCache, buffer + fromCache, count - fromCache);
   }
+#ifdef BOARD_HAS_PSRAM
+  if (s->blocks.active()) {
+    return s->blocks.read(&SdCardFontSystem::cardRead, s, s->size, offset, buffer, count);
+  }
+#endif
   return readFromCard(offset, buffer, count);
 }
+
+#ifdef BOARD_HAS_PSRAM
+void SdCardFontSystem::fillPrefix(TtfSource& s) {
+  if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) <=
+      s.prefixWanted.load(std::memory_order_relaxed) + 256 * 1024) {
+    return;  // not now: a later read tries again
+  }
+  // The exchange claims the fill; a read of this source on the other task meanwhile goes to SD.
+  const size_t prefix = s.prefixWanted.exchange(0, std::memory_order_relaxed);
+  if (prefix == 0) return;
+  freeink::font::PsramVector<uint8_t> head;
+  head.resize(prefix);
+  if (SdCardFontRegistry::halFileRead(&s.file, 0, head.data(), prefix) != prefix) {
+    s.prefixWanted.store(prefix, std::memory_order_relaxed);  // a short read is retried later
+    return;
+  }
+  s.bytes.swap(head);
+  s.prefixReady.store(true, std::memory_order_release);
+  LOG_DBG("SDFS", "Cached %u KB TTF prefix in PSRAM", static_cast<unsigned>(prefix / 1024));
+}
+
+unsigned long SdCardFontSystem::cardRead(void* ctx, const unsigned long offset, unsigned char* buffer,
+                                         const unsigned long count) {
+  auto* s = static_cast<TtfSource*>(ctx);
+  const auto read = SdCardFontRegistry::halFileRead(&s->file, offset, buffer, count);
+  if (s->uiReadFailed && read < count && offset <= s->size && count <= s->size - offset) {
+    s->uiReadFailed->store(true, std::memory_order_relaxed);
+  }
+  return read;
+}
+#endif
 
 void SdCardFontSystem::addTtfSources(TtfEpdFont& font, TtfSource* sources) {
   for (uint8_t st = 0; st < 4; ++st) {
@@ -1564,7 +1673,7 @@ bool SdCardFontSystem::openTtfFamilySources(const SdCardFontFamilyInfo& family, 
       complete = false;
       continue;
     }
-    if (!openTtfSourceInto(sources[role], path)) complete = false;
+    if (!openTtfSourceInto(sources[role], path, /*keepResident=*/false, /*primary=*/role == 0)) complete = false;
   }
   sourceSlotGenerations_[sources == sourceSlots_[1]] = complete && sources[0].present ? generation : 0;
   return sources[0].present;
@@ -1726,6 +1835,9 @@ void SdCardFontSystem::loadTtfFamily(const SdCardFontFamilyInfo& family, GfxRend
   }
 
   unloadTtf(renderer);
+#ifdef BOARD_HAS_PSRAM
+  const PrefixFillDeferral deferFill;
+#endif
 
   if (family.files.empty()) {
     LOG_ERR("SDFS", "Vector family %s has no file", family.name.c_str());

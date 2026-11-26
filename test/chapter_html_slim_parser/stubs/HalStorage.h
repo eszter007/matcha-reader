@@ -86,6 +86,7 @@ class HalStorage {
     return file.open(path.c_str(), "rb");
   }
   bool openFileForWrite(const char*, const std::string& path, HalFile& file) { return file.open(path.c_str(), "wb"); }
+  bool openFileForAppend(const char*, const char* path, HalFile& file) { return file.open(path, "ab"); }
   bool exists(const char* path) const {
     std::FILE* file = std::fopen(path, "rb");
     if (!file) return false;

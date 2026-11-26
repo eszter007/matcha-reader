@@ -15,11 +15,18 @@
 
 namespace {
 
+// The plain and PSRAM builds of this suite run in parallel under ctest.
+#ifdef BOARD_HAS_PSRAM
+constexpr char kDirPrefix[] = "cssparser-psram-";
+#else
+constexpr char kDirPrefix[] = "cssparser-";
+#endif
+
 class CssParserTest : public ::testing::Test {
  protected:
   void SetUp() override {
     dir_ = std::filesystem::temp_directory_path() /
-           ("cssparser-" + std::to_string(::testing::UnitTest::GetInstance()->current_test_info()->line()));
+           (std::string(kDirPrefix) + std::to_string(::testing::UnitTest::GetInstance()->current_test_info()->line()));
     std::filesystem::create_directories(dir_);
   }
   void TearDown() override { std::filesystem::remove_all(dir_); }
@@ -233,6 +240,136 @@ TEST_F(CssParserTest, LinkedStylesheetBringsInWhatItImports) {
   std::vector<CssParser::VerticalBlockRule> vertical;
   reader.collectVerticalStyles(vertical, 256, &filter);
   EXPECT_EQ(vertical.size(), 2u) << "the vertical engine must see the imported box and indent rules";
+}
+
+// Chapter rebuilds collect again on the same parser: each filter gets its own result, and a
+// rebuilt cache is read afresh.
+TEST_F(CssParserTest, RepeatedVerticalCollectionFollowsFilterAndCacheRebuild) {
+  CssParser parser(cachePath());
+  writeTwoStylesheetCache(parser, [&](const std::string& css) { return loadCss(parser, css); });
+  const auto textOnly = parser.stylesheetFilterFor({"OPS/css/text.css"});
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  EXPECT_EQ(parser.collectVerticalStyles(vertical), 1u);
+  EXPECT_EQ(parser.collectVerticalStyles(vertical, 256, &textOnly), 0u);
+  EXPECT_EQ(parser.collectVerticalStyles(vertical), 1u);
+  EXPECT_EQ(parser.collectVerticalStyles(vertical, 256, &textOnly), 0u);
+
+  const std::vector<std::string> sources{"OPS/css/text.css"};
+  const uint8_t aliases[] = {0};
+  ASSERT_TRUE(parser.beginCacheAppend(&sources, aliases));
+  parser.setSource(0);
+  ASSERT_TRUE(loadCss(parser, ".a { margin-top: 1em; }\n.b { text-align: center; }\n"));
+  ASSERT_TRUE(parser.appendRulesToCache());
+  parser.clear();
+  ASSERT_TRUE(parser.endCacheAppend(/*discard=*/false));
+  EXPECT_EQ(parser.collectVerticalStyles(vertical), 2u) << "a rebuilt cache served the old rules";
+
+  parser.deleteCache();
+  EXPECT_EQ(parser.collectVerticalStyles(vertical), 0u) << "a deleted cache served the old rules";
+}
+
+#ifdef BOARD_HAS_PSRAM
+TEST_F(CssParserTest, RepeatedVerticalCollectionSkipsTheCacheRead) {
+  CssParser parser(cachePath());
+  writeTwoStylesheetCache(parser, [&](const std::string& css) { return loadCss(parser, css); });
+  std::vector<CssParser::VerticalBlockRule> first;
+  ASSERT_EQ(parser.collectVerticalStyles(first), 1u);
+  // Removed behind the parser's back: only the memo can answer now.
+  std::filesystem::remove(std::filesystem::path(cachePath()) / "css_rules.cache");
+  std::vector<CssParser::VerticalBlockRule> again;
+  ASSERT_EQ(parser.collectVerticalStyles(again), 1u);
+  EXPECT_EQ(std::memcmp(first.data(), again.data(), sizeof(first[0])), 0);
+}
+#endif
+
+namespace {
+std::filesystem::path vstylesPath(const std::string& dir) { return std::filesystem::path(dir) / "css_vstyles.cache"; }
+}  // namespace
+
+// A reopened book (a new parser) reads the collected table back instead of scanning the rules.
+TEST_F(CssParserTest, VerticalStylesSurviveAReopenPerFilter) {
+  std::vector<CssParser::VerticalBlockRule> all, textOnly;
+  {
+    CssParser parser(cachePath());
+    writeTwoStylesheetCache(parser, [&](const std::string& css) { return loadCss(parser, css); });
+    const auto filter = parser.stylesheetFilterFor({"OPS/css/text.css"});
+    ASSERT_EQ(parser.collectVerticalStyles(all), 1u);
+    ASSERT_EQ(parser.collectVerticalStyles(textOnly, 256, &filter), 0u);
+  }
+  ASSERT_TRUE(std::filesystem::exists(vstylesPath(cachePath())));
+  CssParser reopened(cachePath());
+  const auto filter = reopened.stylesheetFilterFor({"OPS/css/text.css"});
+  std::vector<CssParser::VerticalBlockRule> got;
+  EXPECT_EQ(reopened.collectVerticalStyles(got, 256, &filter), 0u) << "another filter's entry was served";
+  ASSERT_EQ(reopened.collectVerticalStyles(got), 1u);
+  EXPECT_EQ(std::memcmp(all.data(), got.data(), sizeof(got[0])), 0);
+}
+
+TEST_F(CssParserTest, VerticalStylesFileIsDroppedWithTheRulesCache) {
+  CssParser parser(cachePath());
+  writeTwoStylesheetCache(parser, [&](const std::string& css) { return loadCss(parser, css); });
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  ASSERT_EQ(parser.collectVerticalStyles(vertical), 1u);
+  ASSERT_TRUE(std::filesystem::exists(vstylesPath(cachePath())));
+
+  // A rebuild by another parser (the book reopened and its CSS parsed again).
+  {
+    CssParser writer(cachePath());
+    const std::vector<std::string> sources{"OPS/css/text.css"};
+    const uint8_t aliases[] = {0};
+    ASSERT_TRUE(writer.beginCacheAppend(&sources, aliases));
+    writer.setSource(0);
+    ASSERT_TRUE(loadCss(writer, ".a { margin-top: 1em; }\n.b { text-align: center; }\n"));
+    ASSERT_TRUE(writer.appendRulesToCache());
+    writer.clear();
+    ASSERT_TRUE(writer.endCacheAppend(/*discard=*/false));
+  }
+  EXPECT_FALSE(std::filesystem::exists(vstylesPath(cachePath())));
+  CssParser reopened(cachePath());
+  EXPECT_EQ(reopened.collectVerticalStyles(vertical), 2u);
+  reopened.deleteCache();
+  EXPECT_FALSE(std::filesystem::exists(vstylesPath(cachePath())));
+}
+
+// A file written for other rules (same path, different rules cache size) is not trusted.
+TEST_F(CssParserTest, VerticalStylesFromOtherRulesAreIgnored) {
+  {
+    CssParser parser(cachePath());
+    writeTwoStylesheetCache(parser, [&](const std::string& css) { return loadCss(parser, css); });
+    std::vector<CssParser::VerticalBlockRule> vertical;
+    ASSERT_EQ(parser.collectVerticalStyles(vertical), 1u);
+  }
+  const auto saved = std::filesystem::path(cachePath() + "-vstyles-other-rules.bin");
+  std::filesystem::copy_file(vstylesPath(cachePath()), saved, std::filesystem::copy_options::overwrite_existing);
+  {
+    CssParser writer(cachePath());
+    const std::vector<std::string> sources{"OPS/css/text.css"};
+    const uint8_t aliases[] = {0};
+    ASSERT_TRUE(writer.beginCacheAppend(&sources, aliases));
+    writer.setSource(0);
+    ASSERT_TRUE(loadCss(writer, ".a { margin-top: 1em; }\n.b { text-align: center; }\n"));
+    ASSERT_TRUE(writer.appendRulesToCache());
+    writer.clear();
+    ASSERT_TRUE(writer.endCacheAppend(/*discard=*/false));
+  }
+  std::filesystem::copy_file(saved, vstylesPath(cachePath()), std::filesystem::copy_options::overwrite_existing);
+  std::filesystem::remove(saved);
+  CssParser reopened(cachePath());
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  EXPECT_EQ(reopened.collectVerticalStyles(vertical), 2u) << "a table from other rules was served";
+}
+
+TEST_F(CssParserTest, ATruncatedScanIsNotPersisted) {
+  {
+    CssParser parser(cachePath());
+    writeTwoStylesheetCache(parser, [&](const std::string& css) { return loadCss(parser, css); });
+  }
+  const auto rules = std::filesystem::path(cachePath()) / "css_rules.cache";
+  std::filesystem::resize_file(rules, std::filesystem::file_size(rules) - 3);  // last record cut short
+  CssParser parser(cachePath());
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  parser.collectVerticalStyles(vertical);
+  EXPECT_FALSE(std::filesystem::exists(vstylesPath(cachePath())));
 }
 
 TEST_F(CssParserTest, ImportPathIsPercentDecoded) {
@@ -600,4 +737,54 @@ TEST_F(CssParserTest, AutoMarginsAndEndAlignReachTheVerticalEngine) {
   EXPECT_TRUE(styleOf("align-end").alignEnd);
   EXPECT_FALSE(styleOf("align-end").alignCenter);
   EXPECT_EQ(styleOf("wrapper").blockAlign, 0) << "a plain auto margin centres a wrapper horizontally, not a block";
+}
+
+namespace {
+void writeFile(const std::string& path, const std::string& text) {
+  std::FILE* f = std::fopen(path.c_str(), "wb");
+  std::fwrite(text.data(), 1, text.size(), f);
+  std::fclose(f);
+}
+}  // namespace
+
+// A chapter with no <style> is remembered, so its rebuild does not scan the HTML again; one with
+// <style> is read every time.
+TEST_F(CssParserTest, ChapterWithoutStylesIsNotScannedTwice) {
+  CssParser parser(cachePath());
+  const std::string plain = cachePath() + "/plain.html";
+  const std::string styled = cachePath() + "/styled.html";
+  writeFile(plain, "<html><head></head><body><p>a</p></body></html>");
+  writeFile(styled, "<html><head><style>.k { margin-top: 1em; }</style></head><body></body></html>");
+  std::vector<CssParser::VerticalBlockRule> out;
+  out.reserve(256);
+  EXPECT_EQ(parser.appendChapterVerticalStyles(plain, out), 0u);
+  // Changed behind the parser's back: the remembered answer still holds for this chapter.
+  writeFile(plain, "<html><head><style>.k { margin-top: 1em; }</style></head><body></body></html>");
+  EXPECT_EQ(parser.appendChapterVerticalStyles(plain, out), 0u);
+  EXPECT_EQ(parser.appendChapterVerticalStyles(styled, out), 1u);
+  out.clear();
+  EXPECT_EQ(parser.appendChapterVerticalStyles(styled, out), 1u);
+  out.clear();
+  EXPECT_EQ(parser.appendChapterVerticalStyles(plain, out), 1u) << "another chapter in between forgets it";
+}
+
+TEST_F(CssParserTest, ChapterStylesWithNothingVerticalAreNotScannedTwice) {
+  CssParser parser(cachePath());
+  const std::string path = cachePath() + "/bold.html";
+  writeFile(path, "<html><head><style>p { font-weight: bold; }</style></head><body></body></html>");
+  std::vector<CssParser::VerticalBlockRule> out;
+  out.reserve(256);
+  EXPECT_EQ(parser.appendChapterVerticalStyles(path, out), 0u);
+  writeFile(path, "<html><head><style>.k { margin-top: 1em; }</style></head><body></body></html>");
+  EXPECT_EQ(parser.appendChapterVerticalStyles(path, out), 0u) << "the chapter was scanned again";
+}
+
+TEST_F(CssParserTest, AMissingChapterFileIsNotRememberedAsUnstyled) {
+  CssParser parser(cachePath());
+  const std::string path = cachePath() + "/late.html";
+  std::vector<CssParser::VerticalBlockRule> out;
+  out.reserve(256);
+  EXPECT_EQ(parser.appendChapterVerticalStyles(path, out), 0u);  // not there yet: an open error
+  writeFile(path, "<html><head><style>.k { margin-top: 1em; }</style></head><body></body></html>");
+  EXPECT_EQ(parser.appendChapterVerticalStyles(path, out), 1u);
 }

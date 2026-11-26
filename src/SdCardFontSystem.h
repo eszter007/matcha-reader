@@ -1,6 +1,10 @@
 #pragma once
 
 #include <HalStorage.h>  // HalFile (kept open for streamed TTFs)
+#ifdef BOARD_HAS_PSRAM
+#include <HalMemory.h>
+#include <StreamBlockCache.h>
+#endif
 #include <SdCardFontManager.h>
 #include <SdCardFontRegistry.h>
 #include <VectorFontSupport.h>
@@ -313,7 +317,8 @@ class SdCardFontSystem {
   struct TtfSource;
   // Streams the file from SD (its first 1 MB cached in PSRAM). keepResident instead reads a file of
   // up to 6 MB whole into RAM when the heap allows: the CJK companion, whose glyphs every page faults.
-  bool openTtfSourceInto(TtfSource& source, const std::string& path, bool keepResident = false);
+  // `primary`: the family's regular file, which gets the large outline block cache (PSRAM boards).
+  bool openTtfSourceInto(TtfSource& source, const std::string& path, bool keepResident, bool primary);
   // Open every style file the family ships. False if regular failed to open.
   bool openTtfFamilySources(const SdCardFontFamilyInfo& family, TtfSource* sources);
   // A vector CJK extension (NotoSerifJP.ttf) as the CJK companion: the .cpfont manager cannot
@@ -334,8 +339,18 @@ class SdCardFontSystem {
   // panel font lacks (IPA, rarer Latin). False when no TTF is loaded or the face failed to build.
   bool mapTtfForLookup(GfxRenderer& renderer, int primaryFontId, uint8_t pointSize);
   void releaseTtfLookup(GfxRenderer& renderer);
+#ifdef BOARD_HAS_PSRAM
+  // Reads the source's prefix into PSRAM once, when it is first read.
+  static void fillPrefix(TtfSource& s);
+#endif
   // ReadFn for streamed sources: serves the PSRAM prefix cache first, SD after.
   static unsigned long prefixRead(void* ctx, unsigned long offset, unsigned char* buffer, unsigned long count);
+#ifdef BOARD_HAS_PSRAM
+  // The card read behind the block cache.
+  static unsigned long cardRead(void* ctx, unsigned long offset, unsigned char* buffer, unsigned long count);
+  static void releaseBlockCache(TtfSource& source);
+  static void allocateBlockCache(TtfSource& source, bool primary);
+#endif
 #endif  // CROSSPOINT_VECTOR_FONTS
 
   SdCardFontRegistry registry_;
@@ -398,6 +413,17 @@ class SdCardFontSystem {
     unsigned long size = 0;
     bool present = false;
     std::atomic<bool>* uiReadFailed = nullptr;
+#ifdef BOARD_HAS_PSRAM
+    // Streamed form: prefix bytes to cache on the first read (0 once claimed). `bytes` is read only
+    // after prefixReady, since the loop and render tasks can read one shared source at once.
+    std::atomic<size_t> prefixWanted{0};
+    std::atomic<bool> prefixReady{false};
+    // Blocks of the file past the prefix (glyph outlines), so a glyph drawn again at another size,
+    // or loaded twice in one fault (metrics, then bitmap), does not go back to the card.
+    HalMemory::PsramBuffer blockStore;
+    size_t blockBytes = 0;  // counted against the shared block-cache budget
+    StreamBlockCache blocks;
+#endif
   };
 
   // Sources outlive the FreeType faces that borrow them. The reader and UI

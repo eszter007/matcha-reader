@@ -267,6 +267,10 @@ void ActivityManager::loop() {
         continue;
       }
 
+      if (currentActivity &&
+          (pendingAction == PendingAction::Replace || pendingAction == PendingAction::ReplaceForSleep)) {
+        currentActivity->onLeaving();
+      }
       RenderLock lock;
       if (pendingAction == PendingAction::Replace || pendingAction == PendingAction::ReplaceForSleep) {
         // Destroy the current activity

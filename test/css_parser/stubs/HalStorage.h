@@ -28,6 +28,15 @@ class HalFile {
     return end >= position ? static_cast<int>(end - position) : 0;
   }
 
+  size_t size() const {
+    if (!file_) return 0;
+    const long position = std::ftell(file_);
+    std::fseek(file_, 0, SEEK_END);
+    const long end = std::ftell(file_);
+    std::fseek(file_, position, SEEK_SET);
+    return end > 0 ? static_cast<size_t>(end) : 0;
+  }
+
   int read(void* buffer, size_t count) {
     if (!file_) return -1;
     return static_cast<int>(std::fread(buffer, 1, count, file_));
@@ -92,6 +101,7 @@ class HalStorage {
   bool openFileForRead(const char*, const std::string& path, HalFile& file) { return file.open(path.c_str(), "rb"); }
   bool openFileForWrite(const char*, const char* path, HalFile& file) { return file.open(path, "w+b"); }
   bool openFileForWrite(const char*, const std::string& path, HalFile& file) { return file.open(path.c_str(), "w+b"); }
+  bool openFileForAppend(const char*, const char* path, HalFile& file) { return file.open(path, "ab"); }
 
  private:
   std::string failedRenameFrom_;

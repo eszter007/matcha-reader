@@ -24,4 +24,11 @@ class HalMemory {
   static HeapStats getDefaultHeap();
   static HeapStats getInternalHeap();
   static HeapStats getPsramHeap();
+  // Whether this board has PSRAM to use. Constant false on builds without it, so the code it guards
+  // compiles out there.
+#ifdef BOARD_HAS_PSRAM
+  static bool hasPsram() { return getPsramHeap().totalBytes > 0; }
+#else
+  static constexpr bool hasPsram() { return false; }
+#endif
 };

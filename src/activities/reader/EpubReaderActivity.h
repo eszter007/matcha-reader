@@ -484,9 +484,48 @@ class EpubReaderActivity final : public ReaderActivity {
   // Set by tickVerticalBuild() when the build finished: the next render() positions the page in the
   // finished section instead of loading it. Loop and render task share it under the RenderLock.
   bool verticalBuildFinished_ = false;
+  // Overlay work the loop task handed to the render task because the render lock was taken (the
+  // render task holds it through a whole refresh). Taken once by the next render().
+  enum class OwedOverlayOp : uint8_t { None, PaintFirstOpen, PaintOver, Close };
+  std::atomic<uint8_t> owedOverlayOp_{static_cast<uint8_t>(OwedOverlayOp::None)};
+  // A first-open paint wins over a repaint: the snapshot must be taken of the bare page.
+  void oweOverlayPaint(bool firstOpen);
+  void oweOverlayClose() { owedOverlayOp_.store(static_cast<uint8_t>(OwedOverlayOp::Close)); }
+  OwedOverlayOp takeOwedOverlayOp() {
+    return static_cast<OwedOverlayOp>(owedOverlayOp_.exchange(static_cast<uint8_t>(OwedOverlayOp::None)));
+  }
+  // A close the render task was asked to do: from then on the page is drawn without the chrome and
+  // input goes to the page. overlay and toolbarUi stay as they are until the loop task, which owns
+  // them, applies the close (applyPendingOverlayClose()).
+  std::atomic<bool> overlayClosePending_{false};
+  // Input reached the page while the close was owed: render the page instead of the snapshot.
+  std::atomic<bool> closeSnapshotStale_{false};
+  // Set once the setup in openOverlay() is complete; the render task draws no chrome before that.
+  std::atomic<bool> overlayReady_{true};
+  // What the render task draws: an overlay that is set up and not being closed.
+  // overlayReady_ is read first (acquire): it orders the reads of overlay and toolbarUi after it.
+  bool overlayDrawn() const {
+    return overlayReady_.load(std::memory_order_acquire) && !overlayClosePending_ && overlay != Overlay::None;
+  }
+  // The snapshot-and-chrome paint over the page in the framebuffer, with one fast refresh.
+  void paintOverlayOnPage(bool firstOpen);
+  // Restores the page under the chrome with the render lock held. True when the page is back on
+  // screen; false when the caller must render the page.
+  bool restorePageUnderOverlay();
+  // Loop task: drops overlay and toolbarUi once no render can be drawing them.
+  void applyPendingOverlayClose();
+  // Drops the vertical section, and with it a finish that render() has not placed yet. The only way
+  // the verticalSection member may be dropped.
+  void dropVerticalSection() {
+    verticalSection.reset();
+    verticalBuildFinished_ = false;
+  }
   // The page the last forward turn during a vertical build asked for, until the build shows it;
-  // -1 when none. Loop task only (turns, ticks, and the early render run inside a tick).
+  // -1 when none. Under buildTurnMutex_ while a build runs.
   int midBuildTurnTarget_ = -1;
+  // Orders a turn during a build (loop task) against the early render and the anchor's page
+  // renumbering (render task, or loop task inside a tick). Held only for a few stores.
+  std::mutex buildTurnMutex_;
   // Background-build accounting, logged when it finishes: ticks, time inside slices, wall time.
   uint32_t verticalTickCount_ = 0;
   uint32_t verticalTickBusyMs_ = 0;
@@ -509,6 +548,16 @@ class EpubReaderActivity final : public ReaderActivity {
   // Written on the render task, read by pageTurn() on the loop() task.
   std::atomic<int> earlyDisplayedPage_{-1};
   bool earlyPageActuallyDisplayed_ = false;
+  uint32_t earlyPageLoanCount_ = 0;  // renderer.frameBufferLoanCount() when the early page was drawn
+  // Anchored relayout after a size change (see render()): the preview page's identity, and the
+  // real index of that page once the full build reaches it.
+  bool anchorPreviewBuild_ = false;
+  std::atomic<bool> anchorPreviewShown_{false};
+  std::atomic<int> anchorRealPage_{-1};
+  int anchorSeedPage_ = -1;  // the estimated index the preview was drawn at
+  uint32_t anchorPreviewStart_ = 0;
+  size_t anchorPreviewGlyphs_ = 0;
+  static void anchorPageThunk(void* ctx, int pageIndex);
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
   // fallbackOffset: the content offset to record when the page has no layout to read one from.
   bool saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride, int8_t furiOverride,
@@ -1040,6 +1089,7 @@ class EpubReaderActivity final : public ReaderActivity {
   }
   void onReaderEnter() override;
   void onReaderExit() override;
+  void onLeaving() override;
   void readerLoop() override;
   bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;

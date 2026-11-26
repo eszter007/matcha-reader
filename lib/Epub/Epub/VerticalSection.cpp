@@ -5,6 +5,7 @@
 #include <FontDecompressor.h>
 #include <FsHelpers.h>
 #include <GaijiText.h>
+#include <HalMemory.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -195,8 +196,17 @@ struct TextExtractor {
   // buffer is about half a second of layout, far too coarse a slice for a menu to open within.
   XML_Parser parser = nullptr;
   uint32_t sliceDeadlineMs = 0;  // 0: no deadline
+  bool (*yieldNow)() = nullptr;  // input waiting: end the slice now. Polled at most every 2 ms.
+  uint32_t lastYieldPollMs = 0;
   void yieldIfSliceOver() {
-    if (sliceDeadlineMs != 0 && parser && static_cast<int32_t>(millis() - sliceDeadlineMs) >= 0) {
+    if (sliceDeadlineMs == 0 || !parser) return;
+    const uint32_t now = millis();
+    bool stop = static_cast<int32_t>(now - sliceDeadlineMs) >= 0;
+    if (!stop && yieldNow && now - lastYieldPollMs >= 2) {
+      lastYieldPollMs = now;
+      stop = yieldNow();
+    }
+    if (stop) {
       sliceDeadlineMs = 0;  // one stop per slice; expat ignores a second call anyway
       XML_StopParser(parser, XML_TRUE);
     }
@@ -1482,7 +1492,14 @@ struct LayoutPageSink final : ParagraphSink {
   const void* cancelCtx = nullptr;
   bool cancelled = false;
   uint64_t lastRefusedAttemptKey = 0;  // see servePageRequest()
-  int fontReleasedForReq_ = -1;        // one font-cache release per starved request; see servePageRequest()
+  // See VerticalSection::setAnchor(). seedTarget is the page index the reader's position was
+  // estimated at; requests made against it move to the real anchor page once that is known.
+  uint32_t anchorOffset = UINT32_MAX;
+  bool anchorPreviewOnly = false;
+  bool anchorReached = false;
+  int seedTarget = -1;
+  void (*anchorPageFn)(void*, int) = nullptr;
+  int fontReleasedForReq_ = -1;  // one font-cache release per starved request; see servePageRequest()
 
   // Reusable read-back slot for mid-build backward turns. It grows through readPage's guarded
   // on-demand reserve; preallocating a second full page here starved the actual layout page.
@@ -1513,7 +1530,82 @@ struct LayoutPageSink final : ParagraphSink {
         viewportWidth(viewportWidth),
         viewportHeight(viewportHeight) {}
 
+  static size_t utf8Count(const std::string& s) {
+    size_t n = 0;
+    for (const char c : s) {
+      if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) n++;
+    }
+    return n;
+  }
+
+  // The page break before the anchor: pages so far are written, the next page starts here.
+  void reachAnchor() {
+    if (!anchorPreviewOnly) {
+      // Written while anchorReached is still false, so none of these pages serves a request.
+      flushText();
+      VerticalPage pendingTail;
+      if (!failed && layout.finalizePendingPage(pendingTail)) writeOne(pendingTail);
+    }
+    anchorReached = true;
+    if (anchorPreviewOnly) return;
+    // The callback moves page requests counted from the estimate onto the real numbering.
+    if (anchorPageFn) anchorPageFn(earlyRenderCtx, static_cast<int>(pageOffsets.size()));
+  }
+
   void onParagraph(std::vector<RubyRun>& runs, const bool continuesPrevious) override {
+    if (failed) return;
+    if (anchorOffset != UINT32_MAX && !anchorReached && !runs.empty()) {
+      const RubyRun& last = runs.back();
+      if (last.visibleTextOffset + utf8Count(last.baseText) <= anchorOffset) {
+        if (anchorPreviewOnly) {
+          runs.clear();
+          return;
+        }
+      } else {
+        // Split at the anchor: the runs before it, the break, then the rest as a continuation.
+        // A ruby run is never split; one holding the anchor goes after the break whole.
+        std::vector<RubyRun> before;
+        size_t i = 0;
+        while (i < runs.size()) {
+          RubyRun& r = runs[i];
+          const uint32_t len = static_cast<uint32_t>(utf8Count(r.baseText));
+          if (r.visibleTextOffset >= anchorOffset) break;
+          if (r.visibleTextOffset + len <= anchorOffset || !r.rubyText.empty()) {
+            if (!r.rubyText.empty() && r.visibleTextOffset + len > anchorOffset) break;
+            before.push_back(std::move(r));
+            ++i;
+            continue;
+          }
+          const uint32_t keep = anchorOffset - r.visibleTextOffset;
+          size_t pos = 0;
+          for (uint32_t cp = 0; pos < r.baseText.size();) {
+            if ((static_cast<unsigned char>(r.baseText[pos]) & 0xC0) != 0x80) {
+              if (cp == keep) break;
+              ++cp;
+            }
+            ++pos;
+          }
+          RubyRun head = r;
+          head.baseText = r.baseText.substr(0, pos);
+          r.baseText.erase(0, pos);
+          r.visibleTextOffset = anchorOffset;
+          r.indentQuarters = 0;
+          before.push_back(std::move(head));
+          break;
+        }
+        runs.erase(runs.begin(), runs.begin() + static_cast<std::ptrdiff_t>(i));
+        const bool splitMidParagraph = !before.empty();
+        if (splitMidParagraph && !anchorPreviewOnly) onParagraphText(before, continuesPrevious);
+        reachAnchor();
+        if (failed) return;
+        onParagraphText(runs, continuesPrevious || splitMidParagraph);
+        return;
+      }
+    }
+    onParagraphText(runs, continuesPrevious);
+  }
+
+  void onParagraphText(std::vector<RubyRun>& runs, const bool continuesPrevious) {
     if (failed) return;
     // (Furigana-glossary harvest happens in TextExtractor's ruby handlers, which also see
     // whole-<ruby>-element boundaries for mono-ruby pairs; rubyHarvest is only OWNED here.)
@@ -1613,6 +1705,11 @@ struct LayoutPageSink final : ParagraphSink {
 
   void onImage(const std::string& src, const uint32_t visibleTextOffset) override {
     if (failed) return;
+    if (anchorOffset != UINT32_MAX && !anchorReached && visibleTextOffset >= anchorOffset) {
+      reachAnchor();  // the reading position is this image page
+      if (failed) return;
+    }
+    if (anchorPreviewOnly && !anchorReached) return;
     // Lay out any buffered text, then FINALIZE the in-progress page before the image page is
     // written. Without this, the image page was written while the half-filled text page stayed
     // pending: the pending page (whose content PRECEDES the image) landed in the cache AFTER
@@ -1687,8 +1784,72 @@ struct LayoutPageSink final : ParagraphSink {
   // the direct field-wise path.
   static constexpr size_t kPageBufCap = 12 * 1024;
 
+#ifdef BOARD_HAS_PSRAM
+  // Pages serialized back to back in PSRAM and written in one SD call when the buffer fills, so
+  // the card sees few large writes instead of one small write per page. Everything that reads
+  // or seeks `out` mid-build calls flushPages() first.
+  static constexpr size_t kPageBatchCap = 64 * 1024;
+  HalMemory::PsramBuffer pageBatch_;
+  size_t pageBatchLen_ = 0;
+  bool pageBatchTried_ = false;
+
+  // False when a write failed; the build is then failed.
+  bool flushPages() {
+    if (pageBatchLen_ == 0) return true;
+    const size_t len = pageBatchLen_;
+    pageBatchLen_ = 0;
+    if (out.write(pageBatch_.get(), len) == len) return true;
+    LOG_ERR("VSC", "Failed to write %u bytes of pages to cache", static_cast<unsigned>(len));
+    failed = true;
+    return false;
+  }
+
+  // Serializes `p` into the batch. False when the batch is unavailable or the page does not fit
+  // even an empty batch; the caller then writes the page directly.
+  bool batchPage(const VerticalPage& p, bool& ok) {
+    if (!pageBatch_ && !pageBatchTried_) {
+      pageBatchTried_ = true;
+      pageBatch_ = HalMemory::allocatePsram(kPageBatchCap);
+    }
+    if (!pageBatch_) return false;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      serialization::BufWriter w(pageBatch_.get() + pageBatchLen_, kPageBatchCap - pageBatchLen_);
+      if (writePage(w, p) && !w.overflow) {
+        pageBatchLen_ += w.len;
+        ok = true;
+        return true;
+      }
+      if (pageBatchLen_ == 0) return false;  // larger than the whole batch
+      if (!flushPages()) {
+        ok = false;
+        return true;
+      }
+    }
+    return false;
+  }
+#else
+  bool flushPages() { return true; }
+#endif
+
+  // Where the next page record starts in the file, counting pages still in the batch.
+  size_t nextPageOffset() const {
+#ifdef BOARD_HAS_PSRAM
+    return out.position() + pageBatchLen_;
+#else
+    return out.position();
+#endif
+  }
+
   void writeOne(const VerticalPage& p) {
     if (failed) return;  // a cancel latched mid-batch: the rest of this batch is discarded too
+    if (anchorPreviewOnly) {
+      // The first page from the anchor is all a preview build makes: draw it and stop.
+      if (!anchorReached) return;
+      if (earlyRenderFn && !p.isImagePage()) renderEarly(p, std::max(0, seedTarget));
+      cancelled = true;
+      failed = true;
+      return;
+    }
     if (pageOffsets.size() == pageOffsets.capacity()) {
       // std::vector's automatic doubling throws/aborts when the heap is fragmented, so grow by a
       // bounded step that still leaves working headroom. Step down through smaller ones rather
@@ -1717,7 +1878,17 @@ struct LayoutPageSink final : ParagraphSink {
         return;
       }
     }
-    pageOffsets.push_back(static_cast<uint32_t>(out.position()));
+    pageOffsets.push_back(static_cast<uint32_t>(nextPageOffset()));
+#ifdef BOARD_HAS_PSRAM
+    bool batchedOk = false;
+    if (batchPage(p, batchedOk)) {
+      if (!batchedOk) return;  // flushPages() failed the build
+      if (checkCancelled()) return;
+      servePageRequest(p, static_cast<int>(pageOffsets.size()) - 1);
+      return;
+    }
+    if (!flushPages()) return;  // the direct write below must land after the batched pages
+#endif
     // TRANSIENT staging buffer: allocated for this one write, freed before layout resumes.
     // Holding it resident across the whole build deepened the layout's low-heap dips by
     // roughly its own size (device evidence: maxAlloc bottoms 14324 without it vs
@@ -1764,6 +1935,7 @@ struct LayoutPageSink final : ParagraphSink {
     if (noticeFlag && noticeFlag->exchange(false, std::memory_order_relaxed) && buildNoticeFn) {
       buildNoticeFn(buildNoticeCtx);
     }
+    if (anchorOffset != UINT32_MAX && !anchorReached) return;  // requests are still estimates
     const int req = pageRequest->load(std::memory_order_relaxed);
     if (req < 0 || req > lastBuilt) return;
     // Serving renders a page mid-build, and parts of that path allocate bare -- under
@@ -1803,6 +1975,7 @@ struct LayoutPageSink final : ParagraphSink {
     // for the whole build and stretched it from 18.5s to 36.4s while re-degrading pagination.
     const uint64_t attemptKey = (static_cast<uint64_t>(req) << 32) | (ESP.getMaxAllocHeap() >> 12);
     if (attemptKey == lastRefusedAttemptKey) return;
+    if (!flushPages()) return;
     const size_t endPos = out.position();
     // Commit pending writes before reading earlier records through the same handle: without
     // the flush, a backward seek can hand back stale/garbage bytes for freshly written pages
@@ -2273,13 +2446,27 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   b.sink.earlyRenderCtx = earlyRenderCtx_;
   // Seed the shared page-request slot with the initial early-render target; page turns
   // recorded while the build runs simply overwrite it (latest wins).
-  buildPageRequest_.store(earlyRenderFn_ ? earlyRenderTargetPage_ : -1, std::memory_order_relaxed);
+  // The full build after an anchor preview keeps the request: a turn pressed while the preview
+  // page was drawn is in it, counted from the same estimate.
+  const bool keepRequest =
+      anchorOffset_ != UINT32_MAX && !anchorPreviewOnly_ && buildPageRequest_.load(std::memory_order_relaxed) >= 0;
+  if (!keepRequest) {
+    buildPageRequest_.store(earlyRenderFn_ ? earlyRenderTargetPage_ : -1, std::memory_order_relaxed);
+  }
   b.sink.pageRequest = &buildPageRequest_;
   b.sink.noticeFlag = &buildNoticePending_;
   b.sink.buildNoticeFn = buildNoticeFn_;
   b.sink.buildNoticeCtx = buildNoticeCtx_;
   b.sink.cancelFn = cancelFn_;
   b.sink.cancelCtx = cancelCtx_;
+  b.sink.anchorOffset = anchorOffset_;
+  b.sink.anchorPreviewOnly = anchorPreviewOnly_;
+  b.sink.seedTarget = earlyRenderFn_ ? earlyRenderTargetPage_ : -1;
+  b.sink.anchorPageFn = anchorPageFn_;
+  // One build only: a later startBuild() without setAnchor() lays out from the start.
+  anchorOffset_ = UINT32_MAX;
+  anchorPreviewOnly_ = false;
+  anchorPageFn_ = nullptr;
 
   // Styled blocks (borders, start offsets, hanging indents, centering, gaps): collect the
   // vertical-relevant selectors. Streams the on-disk CSS cache -- does NOT materialize the
@@ -2389,11 +2576,14 @@ bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
   return true;
 }
 
-VerticalSection::BuildStep VerticalSection::buildSomeMore(const uint32_t maxMillis) {
+VerticalSection::BuildStep VerticalSection::buildSomeMore(const uint32_t maxMillis, bool (*yieldNow)()) {
   if (!build_) return BuildStep::Failed;
   BuildContext& b = *build_;
   const uint32_t sliceStart = millis();
-  const auto sliceOver = [&] { return maxMillis != 0 && millis() - sliceStart >= maxMillis; };
+  const auto sliceOver = [&] {
+    return maxMillis != 0 && (millis() - sliceStart >= maxMillis || (yieldNow && yieldNow()));
+  };
+  b.extractor.yieldNow = maxMillis != 0 ? yieldNow : nullptr;
   b.extractor.sliceDeadlineMs = maxMillis != 0 ? std::max<uint32_t>(1, sliceStart + maxMillis) : 0;
   // The starved-glyph counter is global: between slices the reader draws pages too (a menu, a
   // turn), and inside one the early render does. Only what this slice's layout measured counts.
@@ -2491,7 +2681,13 @@ bool VerticalSection::finishBuild(const bool parseOk) {
 
   b.extractor.flushParagraph();
   b.sink.flushText(/*isFinalFlush=*/true);
+  b.sink.flushPages();  // sets failed on a write error
 
+  if (b.sink.cancelled && b.sink.anchorPreviewOnly) {
+    LOG_DBG("VSC", "Anchor preview done (spine=%d)", spineIndex);
+    abandonBuild();
+    return false;
+  }
   if (b.sink.cancelled) {
     lastBuildCancelled_ = true;
     LOG_INF("VSC", "Speculative build cancelled after %zu pages (spine=%d)", pageOffsets_.size(), spineIndex);
@@ -2511,6 +2707,8 @@ bool VerticalSection::finishBuild(const bool parseOk) {
   lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || b.layout.everDroppedForHeap() || b.layout.everSplitForHeap() ||
                              b.extractor.droppedTextForHeap;
   if (b.extractor.droppedTextForHeap) LOG_ERR("VSC", "Text dropped on low heap; chapter is incomplete");
+  // Set before the draw-between-slices case below, which loses no content.
+  const bool heapDegraded = lastBuildDroppedForHeap_ || b.starvedInLayout > 0;
   if (b.drawnBetweenSlices) {
     // A full page render ran next to the layout's resident working set, and on device the
     // pagination came out different without any starved-glyph trace (342 pages for a chapter that
@@ -2570,8 +2768,12 @@ bool VerticalSection::finishBuild(const bool parseOk) {
   // open hits the version-mismatch path in loadSectionFile and rebuilds the chapter -- with,
   // ideally, a healthier heap -- instead of the truncation being persisted as a valid cache.
   if (lastBuildDroppedForHeap_ && !rebuildingFromStale_) {
-    LOG_ERR("VSC", "Build dropped glyphs on low heap (maxAlloc=%u at start); marking section stale for rebuild",
-            lastBuildStartMaxAlloc_);
+    if (heapDegraded) {
+      LOG_ERR("VSC", "Build degraded on low heap (maxAlloc=%u at start); marking section stale for rebuild",
+              lastBuildStartMaxAlloc_);
+    } else {
+      LOG_INF("VSC", "Pages drawn between build slices; marking section stale for rebuild");
+    }
     if (file.seek(0)) {
       const uint8_t staleVersion = 0;
       serialization::writePod(file, staleVersion);
@@ -2588,7 +2790,11 @@ bool VerticalSection::finishBuild(const bool parseOk) {
     // time, so "did the heap improve" answered no forever and every open rebuilt the chapter --
     // 9.8s before the reader would even respond. Keep the best-effort cache: a few missing glyphs
     // on the densest pages beat re-indexing on every single open.
-    LOG_ERR("VSC", "Stale-rebuild dropped glyphs again; keeping best-effort cache to break the rebuild loop");
+    if (heapDegraded) {
+      LOG_ERR("VSC", "Stale rebuild degraded on low heap again; keeping best-effort cache to break the rebuild loop");
+    } else {
+      LOG_INF("VSC", "Stale rebuild drawn between slices again; keeping cache to break the rebuild loop");
+    }
   }
   file.close();
   build_.reset();
@@ -2885,6 +3091,7 @@ const VerticalPage* VerticalSection::getPage(int pageIndex) const {
     // Mid-build the section file is still open for writing: read the page back through that
     // handle, as the sink's mid-build page serving does, and return the cursor to the end.
     HalFile& out = build_->out;
+    if (!build_->sink.flushPages()) return nullptr;
     const size_t endPos = out.position();
     out.flush();  // pending writes first, or a backward seek reads stale bytes
     if (!out.seek(pageOffsets_[static_cast<size_t>(pageIndex)])) {
