@@ -318,7 +318,7 @@ class SdCardFontSystem {
   // Streams the file from SD (its first 1 MB cached in PSRAM). keepResident instead reads a file of
   // up to 6 MB whole into RAM when the heap allows: the CJK companion, whose glyphs every page faults.
   // `primary`: the family's regular file, which gets the large outline block cache (PSRAM boards).
-  bool openTtfSourceInto(TtfSource& source, const std::string& path, bool keepResident = false, bool primary = true);
+  bool openTtfSourceInto(TtfSource& source, const std::string& path, bool keepResident, bool primary);
   // Open every style file the family ships. False if regular failed to open.
   bool openTtfFamilySources(const SdCardFontFamilyInfo& family, TtfSource* sources);
   // A vector CJK extension (NotoSerifJP.ttf) as the CJK companion: the .cpfont manager cannot

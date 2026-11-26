@@ -1321,7 +1321,7 @@ bool SdCardFontSystem::loadCompanionTtf(const SdCardFontFamilyInfo& family, GfxR
     if (f.style == 0) regular = &f;
   }
   if (!family.filePath(*regular, path, sizeof(path)) ||
-      !openTtfSourceInto(companionTtfSource_, path, /*keepResident=*/true))
+      !openTtfSourceInto(companionTtfSource_, path, /*keepResident=*/true, /*primary=*/true))
     return false;
   companionTtf_ = makeUniqueNoThrow<TtfEpdFont>();
   if (!companionTtf_) {
@@ -1460,12 +1460,16 @@ void SdCardFontSystem::unloadTtf(GfxRenderer& renderer) {
 
 #ifdef BOARD_HAS_PSRAM
 namespace {
-// Outline block caches across every streamed source. The regular file takes up to 2 MB: a CJK page
-// faults ~400 outlines, at most one 2 KB block each, so 2 MB keeps several pages' worth. Bold and
-// italic files are rare in Japanese text and get 256 KB each. Allocation also leaves 3 MB of PSRAM
+// Outline block caches across every streamed source: the regular file's holds several CJK pages'
+// outlines, and bold and italic files, rare in Japanese text, get small ones. 3 MB of PSRAM stays
 // free for images, publisher fonts and the rest of the reader.
-constexpr size_t kBlockCacheBudget = 2816 * 1024;  // 2 MB + 3 x 256 KB
+constexpr size_t kPrimaryBlockSets = 256;
+constexpr size_t kStyleBlockSets = 32;
+constexpr size_t kBlockCacheBudget =
+    StreamBlockCache::bytesFor(kPrimaryBlockSets) + 3 * StreamBlockCache::bytesFor(kStyleBlockSets);
 constexpr size_t kBlockCachePsramFloor = 3 * 1024 * 1024;
+// Sources are opened, read and released with the render lock held, on the render task or the loop
+// task, so this total needs no lock of its own.
 size_t gBlockCacheBytes = 0;
 }  // namespace
 
@@ -1477,7 +1481,8 @@ void SdCardFontSystem::releaseBlockCache(TtfSource& s) {
 }
 
 void SdCardFontSystem::allocateBlockCache(TtfSource& s, const bool primary) {
-  for (const size_t sets : primary ? std::initializer_list<size_t>{256, 64, 32} : std::initializer_list<size_t>{32}) {
+  for (const size_t sets : primary ? std::initializer_list<size_t>{kPrimaryBlockSets, 64, kStyleBlockSets}
+                                   : std::initializer_list<size_t>{kStyleBlockSets}) {
     const size_t bytes = StreamBlockCache::bytesFor(sets);
     if (gBlockCacheBytes + bytes > kBlockCacheBudget) continue;
     if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) < bytes + kBlockCachePsramFloor) continue;

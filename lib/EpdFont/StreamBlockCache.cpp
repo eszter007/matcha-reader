@@ -5,6 +5,9 @@
 void StreamBlockCache::init(uint8_t* storage, const size_t sets) {
   std::lock_guard<std::mutex> lock(mutex_);
   sets_ = 0;
+  data_ = nullptr;
+  tags_ = nullptr;
+  victim_ = nullptr;
   if (storage == nullptr || sets == 0 || (sets & (sets - 1)) != 0) return;
   data_ = storage;
   tags_ = reinterpret_cast<uint32_t*>(storage + sets * WAYS * BLOCK_BYTES);  // BLOCK_BYTES keeps it aligned
@@ -41,10 +44,10 @@ const uint8_t* StreamBlockCache::blockData(const ReadFn fn, void* ctx, const uns
 unsigned long StreamBlockCache::read(const ReadFn fn, void* ctx, const unsigned long fileSize,
                                      const unsigned long offset, unsigned char* out, const unsigned long count) {
   // Large reads (a whole table) gain nothing from block caching and would evict the glyph working set.
-  if (sets_ == 0 || count == 0 || count > 2 * BLOCK_BYTES || offset >= fileSize) {
-    return fn(ctx, offset, out, count);
-  }
+  if (count == 0 || count > 2 * BLOCK_BYTES || offset >= fileSize) return fn(ctx, offset, out, count);
   std::lock_guard<std::mutex> lock(mutex_);
+  // Checked under the lock: init(nullptr, 0) clears the cache before its storage is freed.
+  if (sets_ == 0 || data_ == nullptr) return fn(ctx, offset, out, count);
   const unsigned long end = offset + count > fileSize ? fileSize : offset + count;
   unsigned long pos = offset;
   while (pos < end) {
