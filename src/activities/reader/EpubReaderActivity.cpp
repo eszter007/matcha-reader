@@ -3515,6 +3515,13 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (!stillBuilding) {
       earlyPageActuallyDisplayed_ = false;
       earlyDisplayedPage_.store(-1, std::memory_order_relaxed);
+    } else if (earlyPageActuallyDisplayed_ && verticalSection->currentPage >= verticalSection->pageCount) {
+      // An anchored preview showed a page the full build has not written yet. The screen already
+      // shows it; drawing now would put "out of bounds" in the framebuffer.
+      LOG_DBG("ERS", "Page %d not laid out yet (%u so far); keeping the early page", verticalSection->currentPage,
+              verticalSection->pageCount);
+      showPendingSyncSaveError();
+      return;
     }
     // A page drawn between build slices (the menu over it) is the early render's situation: the
     // build's working set is resident, so the glyph prewarm keeps the build-phase floor.
@@ -3533,6 +3540,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     }
 
     if (verticalSection->currentPage < 0 || verticalSection->currentPage >= verticalSection->pageCount) {
+      LOG_DBG("ERS", "Vertical page out of bounds: %d (max %d, building=%d)", verticalSection->currentPage,
+              verticalSection->pageCount, stillBuilding);
       renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_OUT_OF_BOUNDS), true, EpdFontFamily::BOLD);
       renderStatusBar();
       renderer.displayBuffer();
