@@ -680,7 +680,80 @@ int EpubReaderActivity::bookPercentFor(const ChapterPosition& position) const {
   return static_cast<int>(std::clamp(fraction, 0.0f, 1.0f) * 100.0f + 0.5f);
 }
 
+// Counts one uncounted spine file while the page sits idle, so the status bar's book total becomes
+// exact without opening every chapter. Any input stops the count; the file is counted again later.
+void EpubReaderActivity::stepCharScan() {
+  constexpr unsigned long CHAR_SCAN_IDLE_MS = 3000;
+  constexpr int SAVE_EVERY = 8;
+  // Decompressing a file needs a 32 KB window plus chunk buffers in one block.
+  constexpr size_t CHAR_SCAN_MIN_MAX_ALLOC = 34 * 1024;
+  if (SETTINGS.statusBarCharCount == CrossPointSettings::CHAR_COUNT_HIDE || !epub) return;
+  if (storedCharsLoadFailed) return;
+  if (!storedChars.loaded()) {
+    if (!storedChars.load(*epub)) {
+      storedCharsLoadFailed = true;
+      return;
+    }
+    // The first page was drawn before the stored counts were read: show them.
+    storedCharsChanged.store(true, std::memory_order_relaxed);
+    requestUpdate();
+  }
+  // A laid-out file's own count is the reference and replaces the stored one.
+  {
+    const uint32_t live = verticalSection ? verticalSection->readableChars : section ? section->readableChars : 0;
+    if (live > 0 && storedChars.get(currentSpineIndex) != live) {
+      storedChars.set(currentSpineIndex, live);
+      storedCharsChanged.store(true, std::memory_order_relaxed);
+    }
+  }
+  if (overlay != Overlay::None || lastRenderCompleteMs == 0 || millis() - lastRenderCompleteMs < CHAR_SCAN_IDLE_MS) {
+    return;
+  }
+  if (verticalBuildInProgress_.load(std::memory_order_relaxed) || (section && section->isBuilding()) ||
+      RenderLock::peek() || inputHeld() || charScanErrors > epub->getSpineItemsCount()) {
+    return;
+  }
+  if (ESP.getFreeHeap() <= RENDER_MIN_FREE_HEAP || ESP.getMaxAllocHeap() <= CHAR_SCAN_MIN_MAX_ALLOC) return;
+  const int spine = storedChars.nextUnknown(charScanNext);
+  if (spine < 0) {
+    if (charScanUnsaved > 0) {
+      storedChars.save(*epub);
+      charScanUnsaved = 0;
+      // The book is fully counted: one redraw drops the "~". Single counts wait for the next page.
+      requestUpdate();
+    }
+    return;
+  }
+  bool cancelled = false;
+  uint32_t chars = 0;
+  const auto t0 = millis();
+  HalPowerManager::Lock powerLock;
+  const bool ok = BookCharCounts::count(
+      epub, spine,
+      [](void* ctx) {
+        if (!inputHeld()) return false;
+        *static_cast<bool*>(ctx) = true;
+        return true;
+      },
+      &cancelled, chars);
+  if (ok) {
+    storedChars.set(spine, chars);
+    charScanNext = spine + 1;
+    storedCharsChanged.store(true, std::memory_order_relaxed);
+    LOG_DBG("ERS", "Counted spine %d: %u chars in %lums", spine, static_cast<unsigned>(chars), millis() - t0);
+    if (++charScanUnsaved >= SAVE_EVERY) {
+      storedChars.save(*epub);
+      charScanUnsaved = 0;
+    }
+  } else if (!cancelled) {
+    // Unreadable this session: move on. Not stored, so the next session tries it again.
+    charScanNext = spine + 1;
+    charScanErrors++;
+  }
+}
+
 void EpubReaderActivity::onReaderExit() {
+  if (epub) storedChars.save(*epub);
   bookFonts.unload(renderer);
   saveTextSettingsIfDirty();  // a Text/Page change made with a panel still open
   // The extractor holds a raw pointer to this activity's epub; drop it before
@@ -1157,6 +1230,7 @@ void EpubReaderActivity::readerLoop() {
     }
   }
   stepLookupPrescan();
+  stepCharScan();
 
   // Idle glyph prewarm for the pages after the current one. The scan pass draws nothing (FCM scan
   // mode suppresses pixels), so the displayed framebuffer is untouched; endScanAndPrewarm loads
@@ -5125,7 +5199,8 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   const bool vertical = useVerticalText();
   const bool wantChars = SETTINGS.statusBarCharCount != CrossPointSettings::CHAR_COUNT_HIDE;
   if (chapterSpanSpine == currentSpineIndex && chapterSpanLivePages == livePages && chapterSpanVertical == vertical &&
-      chapterSpanBuildActive == buildActive && chapterSpanChars == wantChars) {
+      chapterSpanBuildActive == buildActive && chapterSpanChars == wantChars &&
+      !storedCharsChanged.exchange(false, std::memory_order_relaxed)) {
     return;
   }
   chapterSpanChars = wantChars;
@@ -5252,15 +5327,20 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
       const size_t cumulative = epub->getCumulativeSpineItemSize(i);
       const uint64_t bytes = cumulative - prevCumulative;
       prevCumulative = cumulative;
-      const uint32_t chars = spineCharsReal[i];
+      uint32_t chars = spineCharsReal[i];
+      bool known = chars > 0;
+      if (!known && storedChars.get(i) != BookCharCounts::UNKNOWN) {
+        chars = storedChars.get(i);
+        known = true;
+      }
       const auto add = [&](Sum& sum) {
-        if (chars > 0) {
+        if (known) {
           sum.chars += chars;
         } else {
           sum.unknownBytes += bytes;
         }
       };
-      if (chars > 0) {
+      if (known) {
         knownChars += chars;
         knownCharBytes += bytes;
       }

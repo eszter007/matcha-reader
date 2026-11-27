@@ -1085,3 +1085,17 @@ Book moves rename the store and its `.deleted` journal (plus recovery sidecars)
 together. The stored source path is informational and is refreshed on the next
 save; the current file path selects the store. Local book deletion cleans up all
 of these sidecars but preserves the independent `My Clippings.txt` export.
+
+## chars.bin
+
+Per book, in the book's cache folder. Each spine file's readable character count for the status bar's Character Count: every codepoint except whitespace and furigana. It does not depend on layout settings.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | u8 | Version (2) |
+| 1 | u16 LE | Spine file count |
+| 3 | u32 LE | Size of the book file in bytes |
+| 7 | u32 LE × count | Character count per spine file; `0xFFFFFFFF` = not counted yet |
+
+The file is ignored, and the book counted again, when the version, the spine count or the book size differs. Counts come from the chapter's layout when it exists, otherwise from an idle pass over the raw XHTML, which does not apply CSS.
+
