@@ -41,6 +41,8 @@ class SettingRowEditor {
   void rebuildLibraryIndex();
   // Call on screen entry: Quick Resume keeps its timeout on while it is the sleep screen.
   void beginQuickResumeSync();
+  // The custom Insights day start: a popup of times in 15-minute steps.
+  void openDayStartPicker();
 
   static std::string valueText(const SettingInfo& setting);
 

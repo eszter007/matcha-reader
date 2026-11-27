@@ -1,12 +1,13 @@
 #include "StatsDay.h"
 
+#include <cstdio>
+
 #include "CrossPointSettings.h"
 
 int32_t statsday::startOffsetSeconds() {
   if (SETTINGS.statsDayStartMode != CrossPointSettings::DAY_START_CUSTOM) return 0;
-  const int hour = SETTINGS.statsDayStartHour < 24 ? SETTINGS.statsDayStartHour : 0;
-  const int minute = SETTINGS.statsDayStartMinute < 60 ? SETTINGS.statsDayStartMinute : 0;
-  return (hour * 60 + minute) * 60;
+  const uint8_t quarter = SETTINGS.statsDayStartQuarter;
+  return quarter < CrossPointSettings::QUARTER_HOURS_PER_DAY ? quarter * 15 * 60 : 0;
 }
 
 void statsday::localDate(const time_t t, tm& out) {
@@ -18,4 +19,8 @@ void statsday::localDate(const time_t t, tm& out) {
   out.tm_hour = 12;  // noon: mktime() normalises the date without crossing a DST gap
   out.tm_isdst = -1;
   mktime(&out);
+}
+
+void statsday::formatQuarter(const uint8_t quarter, char* buf, const size_t size) {
+  snprintf(buf, size, "%02u:%02u", quarter / 4u, (quarter % 4u) * 15u);
 }

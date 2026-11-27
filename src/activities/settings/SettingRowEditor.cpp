@@ -34,6 +34,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/NightLight.h"
+#include "util/StatsDay.h"
 #include "util/TaskWatchdog.h"
 
 SettingRowEditor::EditResult SettingRowEditor::editValue(const SettingInfo& setting) {
@@ -256,6 +257,22 @@ void SettingRowEditor::syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChan
   }
 }
 
+void SettingRowEditor::openDayStartPicker() {
+  // 96 times; the popup keeps them until this page closes.
+  std::vector<std::string> labels;
+  labels.reserve(CrossPointSettings::QUARTER_HOURS_PER_DAY);
+  char time[8];
+  for (uint8_t i = 0; i < CrossPointSettings::QUARTER_HOURS_PER_DAY; i++) {
+    statsday::formatQuarter(i, time, sizeof(time));
+    labels.emplace_back(time);
+  }
+  popup.show(StrId::STR_CUSTOM_TIME, std::move(labels), SETTINGS.statsDayStartQuarter, [this](const int index) {
+    SETTINGS.statsDayStartQuarter = static_cast<uint8_t>(index);
+    host.commitSettingChange(&CrossPointSettings::statsDayStartQuarter);
+  });
+  activity.requestUpdate();
+}
+
 void SettingRowEditor::openSleepTimeoutPicker() {
   activity.startActivityForResult(
       std::make_unique<IntervalSelectionActivity>(
@@ -332,8 +349,8 @@ void SettingRowEditor::drawHelp(const GfxRenderer& renderer, const std::vector<S
 std::string SettingRowEditor::valueText(const SettingInfo& setting) {
   if (setting.action == SettingAction::HomeButton) return tr(STR_CONFIGURE);
   if (setting.action == SettingAction::StatsDayStart) {
-    char text[6];
-    snprintf(text, sizeof(text), "%02u:%02u", SETTINGS.statsDayStartHour, SETTINGS.statsDayStartMinute);
+    char text[8];
+    statsday::formatQuarter(SETTINGS.statsDayStartQuarter, text, sizeof(text));
     return text;
   }
   if (setting.action == SettingAction::UiFont) {
