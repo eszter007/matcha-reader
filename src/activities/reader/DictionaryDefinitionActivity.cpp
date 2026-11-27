@@ -722,8 +722,12 @@ void DictionaryDefinitionActivity::drawDefinitionText(const int x, const int sta
   const Rect area{x, startY, body.width, body.height};
   const int fontId = DefinitionText::wordLookupFontId();
   const uint16_t scale = DefinitionText::wordLookupFontScale();
-  // Again per draw: a font-memory release under heap pressure may have cleared the advances.
-  prepareDefinitionTextFont(entry, definition);
+  // A font-memory release under heap pressure may have cleared the advances since paging.
+  if (renderer.sdAdvancesReady(fontId)) {
+    sdFontSystem.ensureWordLookupFallback(renderer, fontId, DefinitionText::wordLookupFontPointSize());
+  } else {
+    prepareDefinitionTextFont(entry, definition);
+  }
   const int lineHeight = std::max(1, renderer.getLineHeightScaled(fontId, scale));
   const DefinitionText::EntryMetadata metadata{entry.reading, entry.grammar, std::string()};
   const int scroll = currentPage * definitionTextLines;

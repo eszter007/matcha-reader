@@ -194,6 +194,11 @@ SdCardFont* GfxRenderer::sdFontForWarmup(const int fontId) const {
   return it == sdCardFonts_.end() ? nullptr : it->second;
 }
 
+bool GfxRenderer::sdAdvancesReady(const int fontId) const {
+  const auto font = sdFontForWarmup(fontId);
+  return !font || font->hasAdvanceTable();
+}
+
 void GfxRenderer::ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask) const {
   if (const auto font = sdFontForWarmup(fontId)) {
     std::string shaped;

@@ -31,7 +31,7 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
   <img src="docs/images/screenshots/word-lookup-chinese.png" width="260" alt="Word lookup panel over a page of 紅樓夢: 繁華 with pinyin and zhuyin, both scripts and two senses">
 </p>
 
-**Pictures.** Dictionaries that include pictures can show them in the panel, below the text. Convert the dictionary with `--images`. The screenshot below uses a custom test dictionary made from a few entries of a Yomitan dictionary you supply yourself. No dictionary with pictures ships with the firmware. See [Dictionary setup](docs/dictionary-setup.md).
+**Pictures.** Dictionaries that include pictures can show them in the panel, below the text. Convert the dictionary with `--images` and copy its `images` folder to the card too. The screenshot below uses a custom test dictionary made from a few entries of a Yomitan dictionary you supply yourself. No dictionary with pictures ships with the firmware. See [Dictionary setup](docs/dictionary-setup.md).
 
 <p align="center"><img src="docs/images/screenshots/word-lookup-picture.png" width="260" alt="Word lookup panel showing the entry パンダ from a custom test dictionary, with a photo of a giant panda below the text"></p>
 
