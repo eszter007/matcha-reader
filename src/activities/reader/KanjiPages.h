@@ -61,4 +61,44 @@ inline int collect(const std::string& headword, std::array<Page, kMaxPages>& pag
   return count;
 }
 
+// Appends each kanji page to `definition` under its kMarker heading, for a panel that splits one
+// merged definition into pages. Nothing is added when the heap cannot hold every page.
+inline void appendTo(const std::string& headword, std::string& definition) {
+  std::array<Page, kMaxPages> pages;
+  const int count = collect(headword, pages);
+  if (count == 0) return;
+  size_t added = 0;
+  for (int i = 0; i < count; i++) {
+    added += 2 + sizeof(kMarker) + sizeof(kMarkerEnd) + 5 + pages[i].definition.size();
+  }
+  // One reserve for every page: appending page by page would copy the whole definition each time.
+  if (ESP.getMaxAllocHeap() < definition.size() + added + kHeapHeadroom) {
+    LOG_ERR("KANJI", "Skipping kanji pages, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
+    return;
+  }
+  definition.reserve(definition.size() + added);
+  for (int i = 0; i < count; i++) {
+    definition += "\n\n";
+    definition += kMarker;
+    definition += pages[i].character;
+    definition += kMarkerEnd;
+    definition += '\n';
+    definition += pages[i].definition;
+    std::string().swap(pages[i].definition);  // free each page once copied, not all at the end
+  }
+}
+
+// When `piece` opens with a kMarker heading, moves the character into `character`, removes the
+// heading line and returns true.
+inline bool takeHeading(std::string& piece, std::string& character) {
+  if (piece.compare(0, sizeof(kMarker) - 1, kMarker) != 0) return false;
+  const size_t lineEnd = piece.find('\n');
+  const size_t headEnd = lineEnd == std::string::npos ? piece.size() : lineEnd;
+  character = piece.substr(sizeof(kMarker) - 1, headEnd - (sizeof(kMarker) - 1));
+  const size_t dash = character.find(kMarkerEnd);
+  if (dash != std::string::npos) character.erase(dash);
+  piece.erase(0, lineEnd == std::string::npos ? piece.size() : lineEnd + 1);
+  return true;
+}
+
 }  // namespace kanjipages

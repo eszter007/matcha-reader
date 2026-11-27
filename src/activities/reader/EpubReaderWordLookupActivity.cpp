@@ -2115,7 +2115,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       LOG_ERR("WLA", "Skipping grammar merge, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
     }
   }
-  if (pagedDefinition()) appendKanjiEntries(resultHeadword, resultDefinition);
+  if (pagedDefinition()) kanjipages::appendTo(resultHeadword, resultDefinition);
 
   splitDefinitionIntoSections();
   if (grammarFirst) {
@@ -2367,32 +2367,6 @@ void EpubReaderWordLookupActivity::loop() {
 
 // The neighbouring entry page: the next source in the paged view, the next word otherwise.
 
-// The kanji dictionary's page for each Han character of the headword, after the word's own pages.
-void EpubReaderWordLookupActivity::appendKanjiEntries(const std::string& headword, std::string& definition) {
-  std::array<kanjipages::Page, kanjipages::kMaxPages> pages;
-  const int count = kanjipages::collect(headword, pages);
-  if (count == 0) return;
-  size_t added = 0;
-  for (int i = 0; i < count; i++) {
-    added += 2 + sizeof(kanjipages::kMarker) + sizeof(kanjipages::kMarkerEnd) + 5 + pages[i].definition.size();
-  }
-  // One reserve for every page: appending page by page would copy the whole definition each time.
-  if (ESP.getMaxAllocHeap() < definition.size() + added + kanjipages::kHeapHeadroom) {
-    LOG_ERR("WLA", "Skipping kanji pages, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
-    return;
-  }
-  definition.reserve(definition.size() + added);
-  for (int i = 0; i < count; i++) {
-    definition += "\n\n";
-    definition += kanjipages::kMarker;
-    definition += pages[i].character;
-    definition += kanjipages::kMarkerEnd;
-    definition += '\n';
-    definition += pages[i].definition;
-    std::string().swap(pages[i].definition);  // free each page once copied, not all at the end
-  }
-}
-
 // Split the merged definition into one piece per source. DictIndex joins the entries it merges
 // with "\n\n---\n", and the grammar entry is appended under its own "— Grammar: … —" heading;
 // each piece ends with the attribution line its converter wrote ("JMdict | Tatoeba"), which is
@@ -2486,14 +2460,8 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections(const uint8_t app
     std::string head;
     static constexpr char kGrammarHead[] = "\xe2\x80\x94 Grammar: ";
     static constexpr char kArrow[] = "\xe2\x86\x92 ";  // opens an alternative headword's entry
-    if (piece.compare(0, sizeof(kanjipages::kMarker) - 1, kanjipages::kMarker) == 0) {
+    if (kanjipages::takeHeading(piece, head)) {
       // "— Kanji: 学 —": the character is the page's headword, also for its further records.
-      const size_t lineEnd = piece.find('\n');
-      const size_t headEnd = lineEnd == std::string::npos ? piece.size() : lineEnd;
-      head = piece.substr(sizeof(kanjipages::kMarker) - 1, headEnd - (sizeof(kanjipages::kMarker) - 1));
-      const size_t dash = head.find(kanjipages::kMarkerEnd);
-      if (dash != std::string::npos) head.erase(dash);
-      piece.erase(0, lineEnd == std::string::npos ? piece.size() : lineEnd + 1);
       kanjiHead = head;
     } else if (kind == kanjiKind) {
       head = kanjiHead;

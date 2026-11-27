@@ -352,7 +352,6 @@ class EpubReaderWordLookupActivity final : public Activity {
   // appendDict != 0: resultDefinition holds one further entry from that dictionary; its pages go
   // after the existing ones instead of replacing them.
   void splitDefinitionIntoSections(uint8_t appendDict = 0);
-  static void appendKanjiEntries(const std::string& headword, std::string& definition);
   int scrollOffset = 0;  // lines scrolled within current entry
 
   // With word geometry the entry shows one page per source; without it, one text through which
