@@ -8,7 +8,9 @@ class Epub;
 
 // Each spine file's readable character count, kept in <book cache>/chars.bin. The count depends
 // only on the text, so it survives font, size, margin and mode changes. The reader fills it from
-// its own layouts and counts the remaining files while it sits idle.
+// its own layouts and counts the remaining files while it sits idle. The idle count reads the raw
+// XHTML and does not apply CSS: text hidden by display:none is counted until that file is laid out.
+// Loaded, changed and saved on the reader's loop task only.
 class BookCharCounts {
  public:
   static constexpr uint32_t UNKNOWN = UINT32_MAX;
@@ -26,8 +28,7 @@ class BookCharCounts {
 
   // Counts one spine file from the book. False when `cancel` stopped it or the file could not be
   // read: the file then stays unknown, to be counted again later.
-  static bool count(const std::shared_ptr<Epub>& epub, int spine, bool (*cancel)(void*), void* ctx,
-                    uint32_t& out);
+  static bool count(const std::shared_ptr<Epub>& epub, int spine, bool (*cancel)(void*), void* ctx, uint32_t& out);
 
  private:
   std::vector<uint32_t> counts;

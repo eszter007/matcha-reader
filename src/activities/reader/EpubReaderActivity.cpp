@@ -685,7 +685,27 @@ int EpubReaderActivity::bookPercentFor(const ChapterPosition& position) const {
 void EpubReaderActivity::stepCharScan() {
   constexpr unsigned long CHAR_SCAN_IDLE_MS = 3000;
   constexpr int SAVE_EVERY = 8;
-  if (SETTINGS.statusBarCharCount == CrossPointSettings::CHAR_COUNT_HIDE || !epub || !storedChars.loaded()) return;
+  // Decompressing a file needs a 32 KB window plus chunk buffers in one block.
+  constexpr size_t CHAR_SCAN_MIN_MAX_ALLOC = 34 * 1024;
+  if (SETTINGS.statusBarCharCount == CrossPointSettings::CHAR_COUNT_HIDE || !epub) return;
+  if (storedCharsLoadFailed) return;
+  if (!storedChars.loaded()) {
+    if (!storedChars.load(*epub)) {
+      storedCharsLoadFailed = true;
+      return;
+    }
+    // The first page was drawn before the stored counts were read: show them.
+    storedCharsChanged.store(true, std::memory_order_relaxed);
+    requestUpdate();
+  }
+  // A laid-out file's own count is the reference and replaces the stored one.
+  {
+    const uint32_t live = verticalSection ? verticalSection->readableChars : section ? section->readableChars : 0;
+    if (live > 0 && storedChars.get(currentSpineIndex) != live) {
+      storedChars.set(currentSpineIndex, live);
+      storedCharsChanged.store(true, std::memory_order_relaxed);
+    }
+  }
   if (overlay != Overlay::None || lastRenderCompleteMs == 0 || millis() - lastRenderCompleteMs < CHAR_SCAN_IDLE_MS) {
     return;
   }
@@ -693,12 +713,14 @@ void EpubReaderActivity::stepCharScan() {
       RenderLock::peek() || inputHeld() || charScanErrors > epub->getSpineItemsCount()) {
     return;
   }
-  if (ESP.getFreeHeap() <= RENDER_MIN_FREE_HEAP || ESP.getMaxAllocHeap() <= BACKGROUND_BUILD_MIN_MAX_ALLOC) return;
+  if (ESP.getFreeHeap() <= RENDER_MIN_FREE_HEAP || ESP.getMaxAllocHeap() <= CHAR_SCAN_MIN_MAX_ALLOC) return;
   const int spine = storedChars.nextUnknown(charScanNext);
   if (spine < 0) {
     if (charScanUnsaved > 0) {
       storedChars.save(*epub);
       charScanUnsaved = 0;
+      // The book is fully counted: one redraw drops the "~". Single counts wait for the next page.
+      requestUpdate();
     }
     return;
   }
@@ -717,7 +739,7 @@ void EpubReaderActivity::stepCharScan() {
   if (ok) {
     storedChars.set(spine, chars);
     charScanNext = spine + 1;
-    chapterSpanSpine = -1;  // the totals pick the new count up at the next status bar draw
+    storedCharsChanged.store(true, std::memory_order_relaxed);
     LOG_DBG("ERS", "Counted spine %d: %u chars in %lums", spine, static_cast<unsigned>(chars), millis() - t0);
     if (++charScanUnsaved >= SAVE_EVERY) {
       storedChars.save(*epub);
@@ -5177,7 +5199,8 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   const bool vertical = useVerticalText();
   const bool wantChars = SETTINGS.statusBarCharCount != CrossPointSettings::CHAR_COUNT_HIDE;
   if (chapterSpanSpine == currentSpineIndex && chapterSpanLivePages == livePages && chapterSpanVertical == vertical &&
-      chapterSpanBuildActive == buildActive && chapterSpanChars == wantChars) {
+      chapterSpanBuildActive == buildActive && chapterSpanChars == wantChars &&
+      !storedCharsChanged.exchange(false, std::memory_order_relaxed)) {
     return;
   }
   chapterSpanChars = wantChars;
@@ -5282,11 +5305,6 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   if (wantChars) {
     const uint32_t liveChars = verticalSection ? verticalSection->readableChars : section ? section->readableChars : 0;
     if (liveChars > 0) spineCharsReal[currentSpineIndex] = liveChars;
-    // A laid-out file's own count is the reference; it also fills the stored table.
-    if (!storedChars.loaded()) storedChars.load(*epub);
-    for (int i = 0; i < spineCount; i++) {
-      if (spineCharsReal[i] > 0) storedChars.set(i, spineCharsReal[i]);
-    }
   }
   // Without the count of the file on screen there is no position to add the other files to.
   if (wantChars && spineCharsReal[currentSpineIndex] > 0) {

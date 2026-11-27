@@ -6,23 +6,24 @@
 #include <Memory.h>
 #include <VisibleTextStreamer.h>
 
+#include <algorithm>
 #include <cstring>
 #include <new>
 
 namespace {
-constexpr uint8_t kVersion = 1;
-// version (1) + spine count (2), then 4 bytes per spine.
-constexpr size_t kHeaderSize = 3;
+// Bump when the counting rules change (VisibleTextUtils::isReadableCodepoint, the streamer's
+// filters): older counts are then discarded instead of trusted.
+constexpr uint8_t kVersion = 2;
+// version (1) + spine count (2) + book size (4), then 4 bytes per spine.
+constexpr size_t kHeaderSize = 7;
+constexpr int kBlock = 64;
 
 std::string pathFor(const Epub& epub) { return epub.getCachePath() + "/chars.bin"; }
 }  // namespace
 
 bool BookCharCounts::load(const Epub& epub) {
   const int spines = epub.getSpineItemsCount();
-  if (spines <= 0) return false;
-  // 4 bytes per spine for the session; reserve-free: assign() is one allocation.
-  counts.clear();
-  counts.shrink_to_fit();
+  if (spines <= 0 || spines > 0xFFFF) return false;
   if (ESP.getMaxAllocHeap() < static_cast<size_t>(spines) * sizeof(uint32_t) + 4096) {
     LOG_ERR("CHARS", "No heap for %d spine counts", spines);
     return false;
@@ -34,17 +35,18 @@ bool BookCharCounts::load(const Epub& epub) {
   if (!Storage.openFileForRead("CHARS", pathFor(epub), f)) return true;
   uint8_t header[kHeaderSize];
   if (f.read(header, sizeof(header)) != static_cast<int>(sizeof(header)) || header[0] != kVersion) return true;
-  const int stored = header[1] | (header[2] << 8);
-  if (stored != spines) return true;  // another book at this path: count again
-  for (int i = 0; i < spines; i++) {
-    uint8_t b[4];
-    if (f.read(b, sizeof(b)) != static_cast<int>(sizeof(b))) {
+  uint32_t bookSize;
+  memcpy(&bookSize, header + 3, sizeof(bookSize));
+  // A replaced book at the same path keeps its cache folder: its size tells it apart.
+  if ((header[1] | (header[2] << 8)) != spines || bookSize != static_cast<uint32_t>(epub.getBookSize())) return true;
+  uint8_t block[kBlock * 4];
+  for (int i = 0; i < spines; i += kBlock) {
+    const int n = std::min(kBlock, spines - i);
+    if (f.read(block, n * 4) != n * 4) {
       counts.assign(static_cast<size_t>(spines), UNKNOWN);
       return true;
     }
-    uint32_t v;
-    memcpy(&v, b, sizeof(v));
-    counts[static_cast<size_t>(i)] = v;
+    memcpy(&counts[static_cast<size_t>(i)], block, static_cast<size_t>(n) * 4);
   }
   return true;
 }
@@ -73,12 +75,13 @@ void BookCharCounts::save(const Epub& epub) {
   HalFile f;
   if (!Storage.openFileForWrite("CHARS", pathFor(epub), f)) return;
   const uint16_t n = static_cast<uint16_t>(counts.size());
-  const uint8_t header[kHeaderSize] = {kVersion, static_cast<uint8_t>(n & 0xFF), static_cast<uint8_t>(n >> 8)};
+  const uint32_t bookSize = static_cast<uint32_t>(epub.getBookSize());
+  uint8_t header[kHeaderSize] = {kVersion, static_cast<uint8_t>(n & 0xFF), static_cast<uint8_t>(n >> 8)};
+  memcpy(header + 3, &bookSize, sizeof(bookSize));
   bool ok = f.write(header, sizeof(header)) == sizeof(header);
-  for (const uint32_t v : counts) {
-    uint8_t b[4];
-    memcpy(b, &v, sizeof(b));
-    ok = ok && f.write(b, sizeof(b)) == sizeof(b);
+  for (size_t i = 0; ok && i < counts.size(); i += kBlock) {
+    const size_t bytes = std::min<size_t>(kBlock, counts.size() - i) * 4;
+    ok = f.write(reinterpret_cast<const uint8_t*>(&counts[i]), bytes) == bytes;
   }
   if (ok) dirty = false;
 }

@@ -976,10 +976,13 @@ class EpubReaderActivity final : public ReaderActivity {
   // while the status bar shows the character count.
   mutable std::vector<uint32_t> spineCharsReal;
   // Every spine file's character count, kept across sessions and layout settings (chars.bin).
-  mutable BookCharCounts storedChars;
+  BookCharCounts storedChars;
+  // Set by the loop task when storedChars changed; the next status bar draw recomputes the totals.
+  mutable std::atomic<bool> storedCharsChanged{false};
   // Where the idle character count goes on, and the files it could not read this session.
   int charScanNext = 0;
   int charScanErrors = 0;
+  bool storedCharsLoadFailed = false;  // no heap for the table this session: not retried
   int charScanUnsaved = 0;
   void stepCharScan();
   // Characters in the files ahead of the one on screen and in all files, for the ToC chapter and
