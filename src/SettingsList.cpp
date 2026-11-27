@@ -98,9 +98,10 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
                          {StrId::STR_INSIGHTS_THIS_DEVICE, StrId::STR_INSIGHTS_ALL_DEVICES}, "insightsAllDevices",
                          StrId::STR_STATS));
   emit(SettingInfo::Enum(StrId::STR_DAY_START, &CrossPointSettings::statsDayStartMode,
-                         {StrId::STR_MIDNIGHT, StrId::STR_CUSTOM_TIME}, "statsDayStartMode", StrId::STR_STATS));
+                         {StrId::STR_MIDNIGHT, StrId::STR_CUSTOM_TIME}, "statsDayStartMode", StrId::STR_STATS)
+           .withWebHidden());
   // The custom time: edited from its own row in Settings > Insights, category-less and web-hidden so it is
-  // not listed as two bare numbers.
+  // not listed as two bare numbers. The web page has no time field, so the mode is web-hidden too.
   emit(SettingInfo::Value(StrId::STR_CUSTOM_TIME, &CrossPointSettings::statsDayStartHour, {0, 23, 1},
                           "statsDayStartHour")
            .withWebHidden());

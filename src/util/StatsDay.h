@@ -10,8 +10,7 @@ namespace statsday {
 // Seconds after local midnight that a reading day starts (0 for midnight).
 int32_t startOffsetSeconds();
 
-// The local calendar date `t` counts towards. Only the date fields are meaningful: the clock
-// fields are shifted by the day start.
+// The local calendar date `t` counts towards. Only the date and weekday fields are meaningful.
 void localDate(time_t t, tm& out);
 
 // "4:30" or "04:30" as minutes after midnight, or -1 when it is not a valid 24-hour time.

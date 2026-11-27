@@ -11,6 +11,11 @@ int32_t statsday::startOffsetSeconds() {
 
 void statsday::localDate(const time_t t, tm& out) {
   // localtime_r into the caller's tm: the shared static buffer is not safe with the render task.
-  const time_t shifted = t - static_cast<time_t>(startOffsetSeconds());
-  localtime_r(&shifted, &out);
+  localtime_r(&t, &out);
+  // Compared on the local clock, so the day still starts at the set time on a daylight-saving night.
+  if (out.tm_hour * 3600 + out.tm_min * 60 >= startOffsetSeconds()) return;
+  out.tm_mday -= 1;
+  out.tm_hour = 12;  // noon: mktime() normalises the date without crossing a DST gap
+  out.tm_isdst = -1;
+  mktime(&out);
 }
