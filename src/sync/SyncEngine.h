@@ -6,6 +6,7 @@
 #include <string>
 
 class Epub;
+class GfxRenderer;
 struct CrossPointPosition;
 struct SavedProgressPosition;
 
@@ -74,5 +75,12 @@ bool uploadUnlessBehind(const std::string& bookPath, KOReaderProgress progress);
 // book's metadata; the chapter mapper borrows the framebuffer, so the caller holds a
 // FrameBufferLoan with rendering locked. False: never opened here, or the book cannot be read.
 bool savedBookProgress(const std::string& bookPath, KOReaderProgress& out);
+
+// Called before each book is synced: its position in the library and the library's book count.
+using BookProgressFn = void (*)(void* context, uint16_t done, uint16_t total);
+// Uploads the saved position of every EPUB in the library index that was opened on this device,
+// unless the server is further ahead. Stops at the first failed upload. The caller has Wi-Fi up
+// and does not hold the render lock.
+bool syncAllBooks(GfxRenderer& renderer, BookProgressFn onBook, void* context);
 
 }  // namespace syncEngine

@@ -51,6 +51,7 @@ class StatsSyncActivity final : public Activity {
   void runSync();
   // False when a book's progress could not be synced; books never opened here are skipped.
   bool syncAllBooks();
+  static void onBookSynced(void* context, uint16_t done, uint16_t total);
   void ensureLibraryIndex();
   void leave();
 };

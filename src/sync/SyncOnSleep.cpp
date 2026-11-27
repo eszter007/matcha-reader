@@ -111,25 +111,15 @@ bool syncEngine::prepareSleepSync() {
 }
 
 namespace {
-// Spine, page, chapter page count and text offset from progress.bin, in either layout (see ProgressFile).
+// The saved position as the sync reads it: the reader's last-page marker means the chapter start.
 bool readSavedPosition(const std::string& cachePath, CrossPointPosition& out) {
-  HalFile f;
-  if (!Storage.openFileForRead("SYNC", cachePath + "/progress.bin", f)) return false;
-  uint8_t data[13];
-  const int size = f.read(data, sizeof(data));
-  if (size < 4) return false;
-  const auto le32 = [&data](const int at) {
-    return static_cast<uint32_t>(data[at]) | (static_cast<uint32_t>(data[at + 1]) << 8) |
-           (static_cast<uint32_t>(data[at + 2]) << 16) | (static_cast<uint32_t>(data[at + 3]) << 24);
-  };
-  const int page = data[2] | (data[3] << 8);
-  const int count = size >= 6 ? (data[4] | (data[5] << 8)) : 0;
-  out = {data[0] | (data[1] << 8), page == UINT16_MAX ? 0 : page, count > 0 ? count : 1};
+  const ProgressFile::SavedSpot spot = ProgressFile::readSavedSpot(cachePath);
+  if (!spot.valid) return false;
+  out = {spot.spine, spot.page == UINT16_MAX ? 0 : spot.page, spot.pageCount > 0 ? spot.pageCount : 1};
   out.hasResolvedSpineIndex = true;
   out.hasMappedPage = true;
-  const int offsetAt = ProgressFile::isStockLayout(size) ? (size >= 10 ? 6 : -1) : (size >= 13 ? 9 : -1);
-  if (offsetAt >= 0) {
-    out.visibleTextOffset = le32(offsetAt);
+  if (spot.hasOffset) {
+    out.visibleTextOffset = spot.offset;
     out.hasVisibleTextOffset = true;
   }
   return true;

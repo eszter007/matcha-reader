@@ -1,7 +1,6 @@
 #include "StatsSyncActivity.h"
 
 #include <FontCacheManager.h>
-#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <KOReaderCredentialStore.h>
@@ -136,63 +135,33 @@ void StatsSyncActivity::runSync() {
   requestUpdate();
 }
 
-// The book list comes from the library index; rebuilt here, before Wi-Fi takes the heap, when a
-// firmware update or a book transfer left it stale.
+// The book list comes from the library index. Rebuilt here, as the Library screen would, when a
+// firmware update, a book transfer or the metadata setting left it stale.
 void StatsSyncActivity::ensureLibraryIndex() {
+  const bool readMetadata = SETTINGS.libraryUseMetadata != 0;
   if (!library::isLibraryIndexDirty()) {
     auto index = makeUniqueNoThrow<library::LibraryIndexFile>();
-    if (index && index->open(library::libraryIndexPath())) return;
+    if (index && index->open(library::libraryIndexPath()) && index->header().metadataEnabled == readMetadata) return;
+  }
+  {
+    RenderLock lock(*this);
+    GUI.drawPopup(renderer, tr(STR_LIBRARY_REBUILDING));
   }
   library::BuildStats stats;
-  if (!library::buildLibraryIndex("/", stats, SETTINGS.libraryUseMetadata != 0)) {
-    LOG_ERR("STATS", "Library index build failed");
-  }
+  if (!library::buildLibraryIndex("/", stats, readMetadata)) LOG_ERR("STATS", "Library index build failed");
+}
+
+void StatsSyncActivity::onBookSynced(void* context, const uint16_t done, const uint16_t total) {
+  auto* self = static_cast<StatsSyncActivity*>(context);
+  self->bookDone = done;
+  self->bookTotal = total;
+  self->requestUpdateAndWait();
 }
 
 bool StatsSyncActivity::syncAllBooks() {
-  // The index and its record stay off the stack; one book is loaded at a time.
-  struct LibraryReader {
-    library::LibraryIndexFile index;
-    library::ClixRecord record{};
-  };
-  auto reader = makeUniqueNoThrow<LibraryReader>();
-  if (!reader) {
-    LOG_ERR("STATS", "OOM: library index");
-    return false;
-  }
-  if (!reader->index.open(library::libraryIndexPath())) {
-    LOG_ERR("STATS", "Cannot open library index");
-    return false;
-  }
-  bookTotal = reader->index.bookCount();
-  bool allOk = true;
-  std::string path;
-  for (uint16_t i = 0; i < bookTotal; i++) {
-    bookDone = static_cast<uint16_t>(i + 1);
-    if (!reader->index.readRecord(i, reader->record) || !reader->index.readPath(reader->record, path)) continue;
-    if (!FsHelpers::hasEpubExtension(path)) continue;
-    requestUpdateAndWait();
-    KOReaderProgress progress;
-    bool prepared;
-    {
-      RenderLock lock;
-      GfxRenderer::FrameBufferLoan loan(renderer);
-      prepared = syncEngine::savedBookProgress(path, progress);
-    }
-    if (!prepared) continue;
-    bool ok;
-    {
-#if defined(CONFIG_IDF_TARGET_ESP32C3) && CONFIG_IDF_TARGET_ESP32C3
-      // The loan frees the framebuffer to the heap for TLS.
-      RenderLock lock;
-      GfxRenderer::FrameBufferLoan loan(renderer);
-#endif
-      ok = syncEngine::uploadUnlessBehind(path, progress);
-    }
-    if (!ok) allOk = false;
-  }
+  const bool ok = syncEngine::syncAllBooks(renderer, &onBookSynced, this);
   bookTotal = 0;
-  return allOk;
+  return ok;
 }
 
 void StatsSyncActivity::loop() {
