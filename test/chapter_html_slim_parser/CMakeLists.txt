@@ -17,6 +17,7 @@ add_executable(ChapterHtmlSlimParserTest
   ${REPO_ROOT}/lib/Epub/Epub/converters/ImageToFramebufferDecoder.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp
   ${REPO_ROOT}/src/util/InflectionRules.cpp
+  ${REPO_ROOT}/src/util/KoreanInflection.cpp
 )
 
 target_include_directories(ChapterHtmlSlimParserTest PRIVATE
