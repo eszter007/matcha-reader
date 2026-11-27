@@ -331,6 +331,11 @@ void SettingRowEditor::drawHelp(const GfxRenderer& renderer, const std::vector<S
 
 std::string SettingRowEditor::valueText(const SettingInfo& setting) {
   if (setting.action == SettingAction::HomeButton) return tr(STR_CONFIGURE);
+  if (setting.action == SettingAction::StatsDayStart) {
+    char text[6];
+    snprintf(text, sizeof(text), "%02u:%02u", SETTINGS.statsDayStartHour, SETTINGS.statsDayStartMinute);
+    return text;
+  }
   if (setting.action == SettingAction::UiFont) {
     const char* name = sdFontSystem.activeUiFontName();
     return name[0] == '\0' ? tr(STR_DEFAULT_VALUE) : name;

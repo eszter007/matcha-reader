@@ -20,6 +20,7 @@
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
 #include "activities/ActivityManager.h"
+#include "util/StatsDay.h"
 
 namespace ReaderUtils {
 
@@ -86,10 +87,13 @@ inline bool flushReadingStats(unsigned long& sessionStartMs, const bool force = 
   const time_t now = time(nullptr);
   struct tm t = {};
   localtime_r(&now, &t);
+  // The day counts from Settings > Insights > Day Starts At; the time-of-day bucket uses the clock.
+  struct tm day = {};
+  statsday::localDate(now, day);
   ReadingStatsStore::Change update;
-  update.year = static_cast<uint16_t>(t.tm_year + 1900);
-  update.month = static_cast<uint8_t>(t.tm_mon + 1);
-  update.day = static_cast<uint8_t>(t.tm_mday);
+  update.year = static_cast<uint16_t>(day.tm_year + 1900);
+  update.month = static_cast<uint8_t>(day.tm_mon + 1);
+  update.day = static_cast<uint8_t>(day.tm_mday);
   update.minutes = minutes;
   if (update.year >= 2020) update.timeOfDay = ReadingStatsStore::timeOfDay(t.tm_hour);  // an unset clock has no hour
   update.bookPath = bookPath;

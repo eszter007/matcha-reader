@@ -41,12 +41,14 @@
 #include "activities/home/StatsSyncActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
+#include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
 #include "fontIds.h"
 #include "util/NightLight.h"
 #include "util/PluginEvents.h"
+#include "util/StatsDay.h"
 #include "util/TaskWatchdog.h"
 
 namespace fui = freeink::ui;
@@ -321,6 +323,10 @@ void SettingsActivity::rebuildSettings() {
     addAction(SettingsSection::System, StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate);
   }
 
+  // The custom day start sits under its dropdown and shows the time.
+  if (SETTINGS.statsDayStartMode == CrossPointSettings::DAY_START_CUSTOM) {
+    addAction(SettingsSection::Insights, StrId::STR_CUSTOM_TIME, SettingAction::StatsDayStart);
+  }
   addAction(SettingsSection::Insights, StrId::STR_SYNC_STATS, SettingAction::SyncStats);
   addAction(SettingsSection::Connectivity, StrId::STR_WIFI_NETWORKS, SettingAction::Network);
   if (bleturner::status().compiledIn) {
@@ -408,6 +414,27 @@ bool SettingsActivity::handleCustomInput() {
 
 void SettingsActivity::saveSettings() { SETTINGS.saveToFile(); }
 
+// Opens the keyboard on the custom day start. An invalid entry opens it again with the reason.
+void SettingsActivity::editDayStart(const bool invalid) {
+  char current[6];
+  snprintf(current, sizeof(current), "%02u:%02u", SETTINGS.statsDayStartHour, SETTINGS.statsDayStartMinute);
+  startActivityForResult(
+      std::make_unique<KeyboardEntryActivity>(
+          renderer, mappedInput, I18N.get(invalid ? StrId::STR_INVALID_TIME_24H : StrId::STR_DAY_START_TIME_TITLE),
+          current, 5, InputType::Text),
+      [this](const ActivityResult& result) {
+        if (result.isCancelled) return;
+        const int minutes = statsday::parseTime(std::get<KeyboardResult>(result.data).text.c_str());
+        if (minutes < 0) {
+          editDayStart(true);
+          return;
+        }
+        SETTINGS.statsDayStartHour = static_cast<uint8_t>(minutes / 60);
+        SETTINGS.statsDayStartMinute = static_cast<uint8_t>(minutes % 60);
+        commitSettingChange(nullptr);
+      });
+}
+
 void SettingsActivity::commitSettingChange(uint8_t CrossPointSettings::* valuePtr) {
   // A schedule edit takes effect now: the light may switch, and its saved on/off state with it.
   if (subCategory == StrId::STR_CAT_LIGHT_SCHEDULE) nightlight::refresh();
@@ -487,6 +514,9 @@ void SettingsActivity::toggleSelectedSetting() {
       startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
       return;
     }
+    case SettingAction::StatsDayStart:
+      editDayStart(false);
+      break;
     case SettingAction::SyncStats:
       startActivityForResult(
           std::make_unique<StatsSyncActivity>(renderer, mappedInput, StatsSyncActivity::Origin::Settings),

@@ -21,6 +21,7 @@ enum class SettingAction {
   ClockSettings,
   KOReaderSync,
   SyncStats,
+  StatsDayStart,
   OPDSBrowser,
   Network,
   Bluetooth,

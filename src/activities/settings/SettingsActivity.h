@@ -40,6 +40,7 @@ class SettingsActivity final : public UiListActivity, private SettingRowEditor::
   void toggleSelectedSetting();
   void applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr);
   void saveSettings() override;
+  void editDayStart(bool invalid);
   void commitSettingChange(uint8_t CrossPointSettings::* valuePtr) override;
 
   int listCount() const override { return static_cast<int>(settings.size()); }

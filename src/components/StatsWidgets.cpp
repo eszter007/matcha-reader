@@ -15,6 +15,7 @@
 #include "fontIds.h"
 #include "stats/StatsRecords.h"
 #include "util/DateFormat.h"
+#include "util/StatsDay.h"
 
 namespace StatsWidgets {
 
@@ -25,7 +26,7 @@ Today getToday() {
   // time.
   const time_t now = time(nullptr);
   struct tm t = {};
-  localtime_r(&now, &t);
+  statsday::localDate(now, t);
   return {static_cast<uint16_t>(t.tm_year + 1900), static_cast<uint8_t>(t.tm_mon + 1), static_cast<uint8_t>(t.tm_mday),
           (t.tm_wday + 6) % 7};
 }
