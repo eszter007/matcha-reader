@@ -1077,13 +1077,13 @@ def convert_yomitan(zip_path: str, reading_records: bool = True, furigana: dict 
                 records.append((hw_bytes, def_bytes, priority, pos_flags))
 
             if reading_records and reading and reading != headword and not redirect:
-                r_bytes = reading.encode("utf-8")
+                r_bytes = _utf8(reading)
                 if len(r_bytes) < HEADWORD_SIZE and r_bytes not in seen_headwords:
                     r_def = format_definition_yomitan(reading, reading, definitions)
                     if r_def:
 #reading != headword means kana reading of a kanji headword : flag it
 #(see POS_READING above).
-                        records.append((r_bytes, r_def.encode("utf-8"), priority,
+                        records.append((r_bytes, _utf8(r_def), priority,
                                         pos_flags | POS_READING))
 
             entry_count += 1
