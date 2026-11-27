@@ -66,7 +66,7 @@ Vertical text is detected from the book, with right-to-left columns, kinsoku, em
 
 With the Japanese dictionaries installed:
 
-Conjugated words resolve to their dictionary form: 食べませんでした finds 食べる. A name the book gives furigana for is picked whole. Vocabulary, names and grammar each come from their own dictionary (Jitendex and JMdict).
+Conjugated words resolve to their dictionary form: 食べませんでした finds 食べる. A name the book gives furigana for is picked whole. Vocabulary, names and grammar each come from their own dictionary (Jitendex and JMdict). With a kanji dictionary installed (KANJIDIC, Wiktionary 漢字 or any other Yomitan kanji dictionary), a lookup also shows a page for each kanji of the word (convert it with `--name kanji`). Converted with `--pitch` and a pitch-accent dictionary (NHK 2016), the reading shows its pitch as a line over the high syllables. Dictionaries with pictures (デジタル大辞泉) can keep them, converted with `--images`; the panel draws them in the entry.
 
 See [Guide §6.3](USER_GUIDE.md#63-japanese-books).
 
@@ -92,6 +92,8 @@ See [Guide §6.4](USER_GUIDE.md#64-chinese-books).
 ## French, English and other languages
 
 Any StarDict dictionary works, picked by the book's language. A missed lookup is retried with word-form rules, most complete for French, where `parlaient` finds `parler`. See [Guide §6.5](USER_GUIDE.md#65-books-in-other-languages).
+
+Korean has its own rules: particles and verb endings come off before the lookup, so 먹었습니다 finds 먹다. A Yomitan Korean dictionary such as KRDICT converts to StarDict with `--lang ko`. Choose a Korean font for Korean books in Reader Settings → Text Settings.
 
 ## In every book
 
@@ -198,6 +200,7 @@ Install both Chinese zips so dictionary entries can show the other script. Other
 | Japanese | Download `japanese-dictionaries.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card. It holds `dictionaries/jp/` |
 | Mandarin | Download `dictionaries-zh-simplified.zip` or `dictionaries-zh-traditional.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card. Install one, not both |
 | Cantonese | Download `dictionaries-yue.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card |
+| Korean | Convert KRDICT with `--lang ko` into `dictionaries/ko/krdict/` ([setup](docs/dictionary-setup.md#korean)) |
 | Any other | Copy a StarDict dictionary into `dictionaries/<lang>/<name>/`, for example `dictionaries/fr/larousse/` |
 
 Your own dictionaries convert in the [browser tool](https://eszter007.github.io/matcha-reader-tools/). Details are in [docs/dictionary-setup.md](docs/dictionary-setup.md).

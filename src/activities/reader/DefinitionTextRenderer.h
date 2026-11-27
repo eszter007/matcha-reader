@@ -24,12 +24,19 @@ struct Rect;
 namespace DefinitionText {
 
 struct EntryMetadata {
-  std::string reading;
+  std::string reading;  // may end in kPitchSeparator + pitch; use readingText() for the kana
   // Anki furigana syntax from the dictionary's `【reading】｛木[こ]漏[も]れ 日[び]｝`; empty when absent.
   std::string furigana;
   std::string grammar;
   std::string source;
 };
+
+// A reading may carry pitch-accent positions after this separator ("こうこう\x1F0"), from the
+// dictionary's `【reading】｟0｠`. They are drawn as a line over the high morae, never saved.
+constexpr char kPitchSeparator = '\x1F';
+// The reading without its pitch positions, for cards. Same kana with a different pitch is a different
+// entry, so section de-duplication compares the full value on purpose.
+std::string readingText(const std::string& reading);
 
 // Pull the compact dictionary header out of a plain entry so it can be drawn above the senses.
 // The dictionaries use `【reading】` followed by bracketed tags such as `[5-dan] [transitive]`.
@@ -39,7 +46,9 @@ void extractEntryMetadata(std::string& text, const std::string& fallbackHeadword
 // gray arrow notes, and indented example pairs. It is intentionally plain-text so the existing
 // low-allocation wrapper can keep ownership of scrolling and line measurement.
 // `headerGrammar` is the tag list drawn above the senses; a sense repeats only tags it lacks.
-void formatEntryBody(std::string& text, const std::string& omitLeading = {}, const std::string& headerGrammar = {});
+// `nameEntry` numbers each line of a bullet-less names entry; other bullet-less entries keep their lines.
+void formatEntryBody(std::string& text, const std::string& omitLeading = {}, const std::string& headerGrammar = {},
+                     bool nameEntry = false);
 
 // Prewarm each paragraph in the style and fallback font the shared wrapper will use.
 // This keeps the compressed font below its four page-buffer-slot limit.
@@ -108,9 +117,13 @@ struct CharBox {
   uint32_t offset;  // byte offset in the definition text
 };
 
+// A line "\uE000<w>x<h> <file>" is a picture from the dictionary folder's images/ (see
+// tools/dict_convert --images), drawn centred and counted as the lines its height covers. With
+// pageLines set (the caller pages by pageLines lines, the text starting pageLineOffset lines into
+// the first page), a picture that would cross a page break starts on the next page instead.
 WrapResult drawWrapped(const GfxRenderer& renderer, int fontId, const std::string& text, int textX, int startY,
                        int lineHeight, int maxWidth, int maxY, int scrollOffset, uint16_t scale = 256,
-                       std::vector<CharBox>* boxes = nullptr);
+                       std::vector<CharBox>* boxes = nullptr, int pageLines = 0, int pageLineOffset = 0);
 
 // Where a panel last drew its definition with drawWrapped, so a touch can be mapped back to the
 // text. Written by the render task, read by the input loop.
@@ -124,6 +137,8 @@ struct WrapGeometry {
   int maxY = 0;
   int scrollOffset = 0;
   uint16_t scale = 256;
+  int pageLines = 0;
+  int pageLineOffset = 0;
 };
 
 // The CJK characters of `text` on screen, in reading order; full-width punctuation is left out.

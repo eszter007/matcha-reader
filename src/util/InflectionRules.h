@@ -20,6 +20,7 @@ inline constexpr size_t MAX_VARIANTS = 12;
 enum class Language : uint8_t {
   Generic,  // unknown language: the English suffix set, applied to everything
   French,
+  Korean,  // particles and predicate endings, see KoreanInflection.h
 };
 
 // Map an EPUB language tag or dictionary folder prefix ("fr", "fr-FR", "FR") to

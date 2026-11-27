@@ -28,12 +28,15 @@ dictionaries/
     vocab.idx    vocab.dat    vocab.spx    vocab.title    # vocabulary (required)
     names.idx    names.dat    names.spx    names.title    # names (recommended)
     grammar.idx  grammar.dat  grammar.spx  grammar.title  # grammar reference (optional)
+    kanji.idx    kanji.dat    kanji.spx    kanji.title    # kanji, one entry per character (optional)
   zh/                          # Mandarin, simplified and traditional books alike
     vocab.idx    vocab.dat    vocab.spx    vocab.title    # vocabulary (required)
     names.idx    names.dat    names.spx    names.title    # proper nouns (optional)
     grammar.idx  grammar.dat  grammar.spx  grammar.title  # grammar patterns (optional)
+    kanji.idx    kanji.dat    kanji.spx    kanji.title    # hanzi, one entry per character (optional)
   yue/                         # Cantonese
     vocab.idx    vocab.dat    vocab.spx    vocab.title
+    kanji.idx    kanji.dat    kanji.spx    kanji.title    # hanzi, one entry per character (optional)
   en/your_dictionary_name/     # English, StarDict files
   fr/your_dictionary_name/     # French, StarDict files
 ```
@@ -51,6 +54,16 @@ python3 tools/dict_convert/convert_jmdict.py \
 ```
 
 Add `--furigana auto` to attach the reading over each kanji from [JmdictFurigana](https://github.com/Doublevil/JmdictFurigana) (downloaded once into `--output-dir`, about 5 MB), or `--furigana JmdictFurigana.json` for a copy you already have. Saved words then get a Furigana column, and flashcards place each reading beside its kanji. A book's own furigana is used first when the word has it.
+
+**Kanji dictionaries.** A Yomitan kanji dictionary (KANJIDIC, Wiktionary 漢字, JPDB Kanji and others) converts with `--name kanji` into the kanji files, with the script (the browser tool does not make kanji files). A lookup, in a book or in manga, then shows the word's own pages first and after them one page for each of the first four kanji of the word that have an entry. Several kanji dictionaries can be merged into one file by repeating `--input`; each shows as its own page. The same works for hanzi under `zh/` or `yue/`.
+
+**Pitch accent.** Add `--pitch` with a Yomitan pitch-accent dictionary (NHK 2016, 大辞泉) when converting the vocabulary: the lookup panel then draws a line over the high syllables of each reading, with a short stroke where the pitch drops. Repeat `--pitch` to fall back to a second one for words the first lacks.
+
+**Pictures.** Some Yomitan dictionaries hold pictures: デジタル大辞泉, 広辞苑 and 日本国語大辞典, for example. Add `--images` to keep them. The lookup panel then shows each picture in the entry, in four shades of gray, at most 400×320 pixels. A picture that does not fit on the rest of a page starts on the next page. The converter writes the pictures as BMP files to an `images/` folder next to the dictionary files; copy that folder to the card too. This is off by default, because the pictures take a lot of space: デジタル大辞泉 has about 15,000 pictures, 380 MB on top of 154 MB of text. It needs Pillow (`pip install pillow`). Small label icons, such as the 〔名〕 part-of-speech marks, become text with or without `--images`.
+
+**Arabic in 深辞海.** 深辞海 (Japanese–Arabic) converts, but the lookup panel cannot show Arabic yet: the Arabic words appear as `�`, even with an Arabic font on the card. The Japanese parts of each entry display normally.
+
+**Frequency lists.** A Yomitan frequency list (a zip with only `term_meta_bank` or `kanji_meta_bank` files, such as Aozora Bunko or Innocent Corpus) has no definitions. Pass it as `--frequency` to order the entries of a word found in several dictionaries.
 
 The `.title` file holds the name shown in the lookup panel. The converter takes it from the Yomitan dictionary's own title (or `--title`); without one the panel shows a default name such as JMdict.
 
@@ -114,6 +127,17 @@ python3 tools/dict_convert/convert_jmdict.py --lang yue \
 ```
 
 The converter writes the `.spx` sparse index that makes lookups fast itself; only a copy of the script run outside the repository needs `python3 scripts/gen_dict_spx.py` on the folder afterwards. CC-CEDICT is CC BY-SA; the MoE dictionary is CC BY-ND and is shortened for the screen without changing its wording; Tatoeba sentences are CC BY.
+
+## Korean
+
+A Korean book (tagged `ko` or `kor`) reads StarDict dictionaries from `dictionaries/ko/<name>/`, like the other languages below. To use a Yomitan Korean dictionary, such as KRDICT, convert it to StarDict with `--lang ko`:
+
+```bash
+python3 tools/dict_convert/convert_jmdict.py --lang ko --format yomitan \
+  --input krdict-yomitan.zip --output-dir /path/to/sd/dictionaries/ko/krdict/
+```
+
+The reading shows in brackets (`[저ː]`), and the part of speech and level as a tag line (`〔감탄사 · 초급〕`). Words on the page resolve to their dictionary form: particles come off nouns (학교에서 → 학교) and verb endings are undone to the 다 form (먹었습니다 → 먹다, 공부했어요 → 공부하다, 더워요 → 덥다). Korean text needs a Korean font on the card, such as Noto Sans KR, and you must choose it yourself: open a Korean book, then **Reader Settings → Text Settings → Font**. Japanese and Chinese books pick a font from the card on their own; Korean books do not, and show `�` until a Korean font is chosen. When a word has several entries with the same spelling (먹다 "to eat" and 먹다 "to go deaf"), each one starts with ①, ② and so on.
 
 ## Other languages
 

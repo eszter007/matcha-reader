@@ -3144,6 +3144,11 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   // right margin.
   std::string visual;
   const VisualText visualText = resolveVisualText(text, visual, baseDir, fontMap, resolvedFontId, style);
+  // A fallback of another size is drawn scaled to this font's (see drawText); measure it the same way.
+  if (const FallbackScale redirected = redirectScale(fontId, resolvedFontId); !redirected.identity()) {
+    return layoutTextScaled(resolvedFontId, 0, 0, visualText.text, redirected.cjk, redirected.nonCjk, /*draw=*/false,
+                            true, style, letterSpacing, visualText.shaped);
+  }
   if (const FaceScale face = faceScaleFor(resolvedFontId); !face.identity()) {
     return layoutTextScaled(resolvedFontId, 0, 0, visualText.text, face.own, face.fallback, /*draw=*/false, true, style,
                             letterSpacing, visualText.shaped);

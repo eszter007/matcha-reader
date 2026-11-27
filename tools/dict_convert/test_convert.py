@@ -341,5 +341,105 @@ class YomitanMonolingual(unittest.TestCase):
         self.assertEqual(text, "【あい】\n\nあい〖愛〗心")
 
 
+class ImageLabels(unittest.TestCase):
+    def text(self, path, **extra):
+        return conv.flatten_structured_content({"type": "image", "path": path, **extra})
+
+    def test_label_icons_become_text(self):
+        self.assertEqual(self.text("shinsenkoku10/svg/名-rect.svg"), "〔名〕")
+        self.assertEqual(self.text("smk8/文法-red.svg"), "〔文法〕")
+        self.assertEqual(self.text("daijirin2/二-fill.svg"), "②")
+        self.assertEqual(self.text("sankoku8/red_（.svg"), "（")
+
+    def test_pictures_and_codes_are_dropped(self):
+        self.assertEqual(self.text("media/S00001.jpg"), "")
+        self.assertEqual(self.text("meikyo2/B92D.png"), "")
+        self.assertEqual(self.text("sankoku8/svg-accent/アクセント.svg"), "")
+
+    def test_alt_text_wins(self):
+        self.assertEqual(self.text("meikyo2/B92D.png", alt="↔"), "↔")
+
+
+class MarkupCleanup(unittest.TestCase):
+    def test_long_related_list_shortened(self):
+        line = "・関連記事: " + "・".join(str(n) for n in range(15))
+        self.assertEqual(conv._clean_markup(line), "・関連記事: 0・1・2・3・4・5・6・7・8・9・10・11 …（他3件）")
+
+    def test_headword_echo_dropped(self):
+        self.assertEqual(conv._drop_headword_echo("【いぬ】\n\nいぬ〖犬〗\n① dog", "犬"), "【いぬ】\n\n① dog")
+        self.assertEqual(conv._drop_headword_echo("【いぬ】\n\nいぬ〖犬・狗〗\n① dog", "犬"), "【いぬ】\n\n〖犬・狗〗\n① dog")
+        self.assertEqual(conv._drop_headword_echo("【いぬ】\n\nけん〖犬〗\n① dog", "犬"), "【いぬ】\n\nけん〖犬〗\n① dog")
+
+    def test_korean_homographs_merge(self):
+        import tempfile, struct
+        recs = [("먹다".encode(), "【먹따】\n〔동사〕\n먹다 \n귀가 먹다".encode(), 1, 0),
+                ("먹다".encode(), "【먹따】\n〔동사〕\n★★★ 먹다\n1. 먹다".encode(), 2, 0)]
+        with tempfile.TemporaryDirectory() as d:
+            conv.write_stardict(recs, d + "/k", "K")
+            body = open(d + "/k/k.dict", encoding="utf-8").read()
+        self.assertEqual(body, "① [먹따] 〔동사〕\n귀가 먹다\n② [먹따] 〔동사〕 ★★★\n1. 먹다")
+
+    def test_yomitan_cedict_line(self):
+        self.assertEqual(conv._clean_markup("【衬衫】 【襯衫】 [3304] shirt/blouse"), "• shirt\n• blouse")
+        self.assertEqual(conv._clean_markup("【衬衫】 【襯衫】 (襯衫,衬衫)\n1.單上衣"), "\n1.單上衣")
+        self.assertEqual(conv._clean_markup("【中】 【中】 [9] middle"), "• middle")
+
+    def test_table_rows_become_lines(self):
+        node = {"tag": "table", "content": [
+            {"tag": "tr", "content": [{"tag": "th", "content": "類句"}, {"tag": "td", "content": "馬の耳に念仏"}]},
+            {"tag": "tr", "content": {"tag": "td", "content": "豚に真珠"}}]}
+        self.assertEqual(conv.flatten_structured_content(node).strip(), "類句：馬の耳に念仏\n豚に真珠")
+
+    def test_glued_bullet_starts_line(self):
+        self.assertEqual(conv._clean_markup("・違い• 本文\n• gloss"), "・違い\n本文\n• gloss")
+
+    def test_part_numeral_dropped(self):
+        self.assertEqual(conv._clean_markup("一[2]\n[名]\n二\n"), "\n[名]\n\n")
+
+    def test_dingbat_digits_become_circled(self):
+        self.assertEqual(conv._clean_markup("❶ わたし ❿ ➀"), "① わたし ⑩ ①")
+
+    def test_japanese_list_keeps_its_lines(self):
+        node = {"tag": "ul", "content": [{"tag": "li", "content": "駅 ▽最寄りの駅"}, {"tag": "li", "content": "停車場"}]}
+        self.assertEqual(conv._flatten_list(node), "\n・駅 ▽最寄りの駅\n・停車場\n")
+
+    def test_emoji_heading_becomes_square(self):
+        self.assertEqual(conv._clean_markup("📚使い方\n本文🔗"), "■ 使い方\n本文")
+
+    def test_short_title_drops_open_bracket(self):
+        self.assertEqual(conv._short_title("違いがわかる事典 (chigai.site, 2024)"), "違いがわかる事典")
+        self.assertEqual(conv._short_title("JMdict (English)"), "JMdict (English)")
+
+    def test_sentence_translation_list_is_examples(self):
+        node = {"tag": "ul", "content": [{"tag": "li", "content": "犬がほえる"}, {"tag": "li", "content": "A dog barks."}]}
+        self.assertEqual(conv._flatten_list(node), "\n犬がほえる\nA dog barks.\n")
+        glosses = {"tag": "ul", "content": [{"tag": "li", "content": "dog"}, {"tag": "li", "content": "hound"}]}
+        self.assertEqual(conv._flatten_list(glosses), "\n• dog\n• hound\n")
+
+    def test_pitch_keeps_source_line_first(self):
+        rec = [(b"\xe7\x8a\xac", (conv.SOURCE_MARKER + "Wadoku\n【いぬ】\nHund").encode("utf-8"), 0, 0)]
+        out = conv.apply_pitch(rec, {("犬", "いぬ"): [2]})
+        self.assertEqual(out[0][1].decode("utf-8"), conv.SOURCE_MARKER + "Wadoku\n【いぬ】｟2｠\nHund")
+
+    def test_cross_reference_number_dropped(self):
+        self.assertEqual(conv._clean_markup("{百均（ひゃっきん）:81491}"), "百均（ひゃっきん）")
+
+    def test_braced_reading_becomes_parentheses(self):
+        self.assertEqual(conv._clean_markup("莫連{ばくれん}には"), "莫連（ばくれん）には")
+        self.assertEqual(conv._clean_markup("の{ように/ような}"), "の{ように/ような}")
+
+    def test_html_ruby_keeps_base_text(self):
+        self.assertEqual(conv._clean_markup("〈<ruby>目<rt>もく</rt>的<rt>てき</rt></ruby>〉"), "〈目的〉")
+
+    def test_angle_bracket_prose_stays(self):
+        self.assertEqual(conv._clean_markup("<asymmetric digital subscriber line から>"),
+                         "<asymmetric digital subscriber line から>")
+
+    def test_placeholders_and_ads(self):
+        self.assertEqual(conv._clean_markup("〖<unencoded>〗"), "〖〓〗")
+        self.assertEqual(conv._clean_markup("{{w_48707}}arām"), "〓arām")
+        self.assertEqual(conv._clean_markup("a\n(adsbygoogle = window.adsbygoogle || []).push({});\nb"), "a\nb")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,15 +1,21 @@
 #include "DefinitionTextRenderer.h"
 
 #include <Arduino.h>
+#include <Bitmap.h>
+#include <DictIndex.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
 #include <GfxRenderer.h>
+#include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <Utf8.h>
 
 #include <algorithm>
 #include <cassert>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -19,6 +25,10 @@
 namespace DefinitionText {
 
 namespace {
+
+// U+E000, the converter's picture marker.
+constexpr char kPictureMarker[] = "\xee\x80\x80";
+
 // One rendered line is bounded by screen width (~25-40 CJK chars); 512 bytes is generous.
 // Remainders longer than this skip the "fits on one line" fast path -- they could never fit.
 constexpr size_t LINE_BUF_CAP = 512;
@@ -130,6 +140,15 @@ void formatGrammarBody(std::string& text, const std::string& headword) {
     while (line.rfind("\xe3\x80\x80", 0) == 0) line.erase(0, 3);  // Japanese full-width space.
   };
 
+  // Only the Dictionary of Japanese Grammar has [解説]-style sections. Any other grammar
+  // dictionary (Bunpro's 〖 Meaning 〗 headings) keeps its own lines.
+  const bool sectioned = text.find("[\xe8\xa7\xa3\xe8\xaa\xac]") != std::string::npos ||  // [解説]
+                         text.find("[\xe6\x84\x8f\xe5\x91\xb3]") != std::string::npos ||  // [意味]
+                         text.find("[\xe6\x8e\xa5\xe7\xb6\x9a]") != std::string::npos ||  // [接続]
+                         text.find("[\xe4\xbe\x8b\xe6\x96\x87") != std::string::npos;     // [例文
+  static constexpr char kLenticularOpen[] = "\xe3\x80\x96";                               // 〖
+  static constexpr char kLenticularClose[] = "\xe3\x80\x97";                              // 〗
+
   size_t pos = 0;
   while (pos <= text.size()) {
     const size_t end = text.find('\n', pos);
@@ -139,6 +158,19 @@ void formatGrammarBody(std::string& text, const std::string& headword) {
     if (line.empty()) continue;
     if (line == "---") {
       section = Section::None;
+      if (!sectioned && !formatted.empty()) appendLine("");
+      continue;
+    }
+    if (!sectioned) {
+      const size_t closeAt = line.size() >= 6 ? line.size() - 3 : std::string::npos;
+      if (line.rfind(kLenticularOpen, 0) == 0 && closeAt != std::string::npos &&
+          line.compare(closeAt, 3, kLenticularClose) == 0) {
+        std::string heading = line.substr(3, closeAt - 3);
+        trim(heading);
+        appendHeading(heading.c_str());
+      } else {
+        appendLine(line);
+      }
       continue;
     }
     if (line.rfind("文法項目 |", 0) == 0) {
@@ -401,6 +433,55 @@ size_t wrapMetadataLine(const GfxRenderer& renderer, const int fontId, const uin
 
 // Wrap one metadata field to `maxWidth`, drawing the lines inside [clipTop, clipBottom) when
 // `draw` is set. `y` advances past the field either way; the return value is its line count.
+// Pixels kept above a reading that carries a pitch line.
+constexpr int kPitchRoom = 7;
+
+// The pitch pattern of `reading` with its downstep after mora `downstep` (0 = none, heiban): the
+// first mora is low unless the downstep is after it, and the morae up to the downstep are high. A
+// line runs over the high morae and drops at the downstep. Small kana join the mora before them.
+void drawPitchAccent(const GfxRenderer& renderer, const int fontId, const uint16_t scale, const std::string& reading,
+                     const int downstep, const int x, const int top) {
+  // Mora boundaries as byte offsets; kana only, or the pattern means nothing.
+  size_t bounds[33];
+  int morae = 0;
+  bounds[0] = 0;
+  for (size_t i = 0; i < reading.size();) {
+    const auto c = static_cast<unsigned char>(reading[i]);
+    if (c != 0xE3 || i + 2 >= reading.size()) return;
+    const uint32_t cp = ((c & 0x0F) << 12) | ((reading[i + 1] & 0x3F) << 6) | (reading[i + 2] & 0x3F);
+    const bool kana = (cp >= 0x3041 && cp <= 0x309F) || (cp >= 0x30A0 && cp <= 0x30FF);
+    if (!kana) return;
+    static constexpr uint32_t kSmall[] = {0x3041, 0x3043, 0x3045, 0x3047, 0x3049, 0x3083, 0x3085, 0x3087, 0x308E,
+                                          0x30A1, 0x30A3, 0x30A5, 0x30A7, 0x30A9, 0x30E3, 0x30E5, 0x30E7, 0x30EE};
+    const bool small = std::find(std::begin(kSmall), std::end(kSmall), cp) != std::end(kSmall);
+    if (!small || morae == 0) {
+      if (morae == 32) return;
+      morae++;
+    }
+    i += 3;
+    bounds[morae] = i;
+  }
+  if (morae == 0 || downstep < 0 || downstep > morae) return;
+  char prefix[100];
+  const auto xAt = [&](const int mora) {
+    const size_t len = std::min(bounds[mora], sizeof(prefix) - 1);
+    std::memcpy(prefix, reading.data(), len);
+    prefix[len] = '\0';
+    return x + renderer.getTextWidthScaled(fontId, prefix, scale);
+  };
+  const int firstHigh = downstep == 1 ? 0 : 1;
+  const int lastHigh = downstep == 0 ? morae : downstep;  // high morae are [firstHigh, lastHigh)
+  if (firstHigh >= lastHigh) return;
+  // Above the kana with a little air, inset so neighbouring morae do not touch the ends.
+  const int y = top - 1;
+  const int x1 = xAt(firstHigh) + 2;
+  const int x2 = xAt(lastHigh) - 2;
+  const int hook = std::max(8, renderer.getLineHeightScaled(fontId, scale) / 3);
+  renderer.drawLine(x1, y, x2, y, 2, true);
+  if (firstHigh > 0) renderer.drawLine(x1, y, x1, y + hook, 2, true);         // the rise after a low first mora
+  if (downstep > 0) renderer.drawLine(x2 - 1, y, x2 - 1, y + hook, 2, true);  // the drop
+}
+
 int layoutMetadataField(const GfxRenderer& renderer, const std::string& text, const int fontId, const uint16_t scale,
                         const int x, int& y, const int maxWidth, const int clipTop, const int clipBottom,
                         const bool draw) {
@@ -422,11 +503,27 @@ int layoutMetadataField(const GfxRenderer& renderer, const std::string& text, co
 }
 }  // namespace
 
+std::string readingText(const std::string& reading) {
+  const size_t sep = reading.find(kPitchSeparator);
+  return sep == std::string::npos ? reading : reading.substr(0, sep);
+}
+
 void extractEntryMetadata(std::string& text, const std::string& fallbackHeadword, EntryMetadata& metadata) {
   metadata = {};
   bool grammarEntry = false;
   while (!text.empty() && (text.front() == ' ' || text.front() == '\t' || text.front() == '\r' || text.front() == '\n'))
     text.erase(0, 1);
+
+  // A merged dictionary file names each entry's source on a first line led by U+E001.
+  static constexpr char kSourceMarker[] = "\xee\x80\x81";
+  if (text.compare(0, sizeof(kSourceMarker) - 1, kSourceMarker) == 0) {
+    const size_t lineEnd = text.find('\n');
+    metadata.source =
+        text.substr(sizeof(kSourceMarker) - 1,
+                    lineEnd == std::string::npos ? std::string::npos : lineEnd - (sizeof(kSourceMarker) - 1));
+    trim(metadata.source);
+    text.erase(0, lineEnd == std::string::npos ? text.size() : lineEnd + 1);
+  }
 
   static constexpr char kOpen[] = "\xe3\x80\x90";
   static constexpr char kClose[] = "\xe3\x80\x91";
@@ -462,10 +559,24 @@ void extractEntryMetadata(std::string& text, const std::string& fallbackHeadword
         static constexpr char kFuriOpen[] = "\xef\xbd\x9b";   // ｛
         static constexpr char kFuriClose[] = "\xef\xbd\x9d";  // ｝
         const size_t afterClose = close + sizeof(kClose) - 1;
+        size_t tail = afterClose;
         if (firstLine.compare(afterClose, sizeof(kFuriOpen) - 1, kFuriOpen) == 0) {
           const size_t from = afterClose + sizeof(kFuriOpen) - 1;
           const size_t to = firstLine.find(kFuriClose, from);
-          if (to != std::string::npos) metadata.furigana = firstLine.substr(from, to - from);
+          if (to != std::string::npos) {
+            metadata.furigana = firstLine.substr(from, to - from);
+            tail = to + sizeof(kFuriClose) - 1;
+          }
+        }
+        static constexpr char kPitchOpen[] = "\xef\xbd\x9f";   // ｟
+        static constexpr char kPitchClose[] = "\xef\xbd\xa0";  // ｠
+        if (firstLine.compare(tail, sizeof(kPitchOpen) - 1, kPitchOpen) == 0) {
+          const size_t from = tail + sizeof(kPitchOpen) - 1;
+          const size_t to = firstLine.find(kPitchClose, from);
+          if (to != std::string::npos && to > from) {
+            metadata.reading += kPitchSeparator;
+            metadata.reading.append(firstLine, from, to - from);
+          }
         }
         text.erase(0, lineEnd == std::string::npos ? text.size() : lineEnd + 1);
         while (!text.empty() &&
@@ -505,7 +616,8 @@ void extractEntryMetadata(std::string& text, const std::string& fallbackHeadword
   if (!grammarEntry && metadata.reading.empty() && isKanaOnly(fallbackHeadword)) metadata.reading = fallbackHeadword;
 }
 
-void formatEntryBody(std::string& text, const std::string& omitLeading, const std::string& headerGrammar) {
+void formatEntryBody(std::string& text, const std::string& omitLeading, const std::string& headerGrammar,
+                     const bool nameEntry) {
   if (text.empty()) return;
   if (!omitLeading.empty()) {
     formatGrammarBody(text, omitLeading);
@@ -535,7 +647,12 @@ void formatEntryBody(std::string& text, const std::string& omitLeading, const st
   int senseNumber = 1;
   int nameNumber = 1;
   static constexpr char kBullet[] = "\xe2\x80\xa2";
-  const bool isNameDictionary = text.find(kBullet) == std::string::npos;
+  // Without bullets an entry is either a names-slot entry (each line a reading, numbered) or a
+  // dictionary that writes its own layout (①, ㊀, headings), kept line for line.
+  const bool hasBullets = text.find(kBullet) != std::string::npos;
+  const bool isNameDictionary = !hasBullets && nameEntry;
+  const bool keepLayout = !hasBullets && !nameEntry;
+  bool inExample = false;  // keepLayout: the previous line was an example
 
   const auto appendLine = [&formatted](const std::string& line) {
     if (!formatted.empty()) formatted.push_back('\n');
@@ -582,9 +699,41 @@ void formatEntryBody(std::string& text, const std::string& omitLeading, const st
     }
     firstContentLine = false;
 
+    // A picture keeps its own line, unnumbered: drawWrapped() reads the marker at line start.
+    if (line.compare(0, sizeof(kPictureMarker) - 1, kPictureMarker) == 0) {
+      flushGlosses();
+      appendLine(line);
+      continue;
+    }
+
     if (line == "---") {
       flushGlosses();
       if (!formatted.empty() && formatted.back() != '\n') appendLine("");
+      continue;
+    }
+
+    if (keepLayout) {
+      // Example lines keep the example style: ▶ marks them in 研究社, and 中日大辞典 sets each one
+      // as "〔…～…〕translation", the bracket holding the phrase with ～ for the headword.
+      static constexpr char kTriangle[] = "\xe2\x96\xb6";   // ▶
+      static constexpr char kTortoise[] = "\xe3\x80\x94";   // 〔
+      static constexpr char kWaveDash[] = "\xef\xbd\x9e";   // ～
+      static constexpr char kMiddleDot[] = "\xe3\x83\xbb";  // ・ a further example under ▶
+      const bool triangle = line.compare(0, sizeof(kTriangle) - 1, kTriangle) == 0;
+      if (triangle || (inExample && line.compare(0, sizeof(kMiddleDot) - 1, kMiddleDot) == 0)) {
+        std::string example = line.substr(triangle ? sizeof(kTriangle) - 1 : sizeof(kMiddleDot) - 1);
+        trim(example);
+        appendLine("  \xe2\x94\x82 " + example);
+        inExample = true;
+        continue;
+      }
+      inExample = false;
+      if (line.compare(0, sizeof(kTortoise) - 1, kTortoise) == 0 && line.find(kWaveDash) != std::string::npos &&
+          line.find(kWaveDash) < line.find("\xe3\x80\x95")) {
+        appendLine("  \xe2\x94\x82 " + line);
+      } else {
+        appendLine(line);
+      }
       continue;
     }
 
@@ -754,7 +903,9 @@ void prewarmStyledText(GfxRenderer& renderer, const int fontId, const std::strin
 int entryMetadataLineCount(const GfxRenderer& renderer, const Rect& body, const int fontId, const uint16_t scale,
                            const EntryMetadata& metadata) {
   int y = 0;
-  int lines = layoutMetadataField(renderer, metadata.reading, fontId, scale, 0, y, body.width, 0, 0, false);
+  int lines =
+      layoutMetadataField(renderer, readingText(metadata.reading), fontId, scale, 0, y, body.width, 0, 0, false);
+  if (lines == 1 && metadata.reading.find(kPitchSeparator) != std::string::npos) y += kPitchRoom;
   lines +=
       layoutMetadataField(renderer, metadata.grammar, fontId, METADATA_COMPACT_SCALE, 0, y, body.width, 0, 0, false);
   return lines;
@@ -769,7 +920,16 @@ int drawEntryMetadata(const GfxRenderer& renderer, const Rect& body, const int f
   const int clipBottom = body.y + body.height;
   int y = startY;
   if (!metadata.reading.empty()) {
-    layoutMetadataField(renderer, metadata.reading, fontId, scale, body.x, y, body.width, body.y, clipBottom, true);
+    const std::string reading = readingText(metadata.reading);
+    const size_t sep = metadata.reading.find(kPitchSeparator);
+    const int lineTop = y;
+    const bool oneLine = renderer.getTextWidthScaled(fontId, reading.c_str(), scale) <= body.width;
+    if (sep != std::string::npos && oneLine) y += kPitchRoom;  // room for the line over the morae
+    const int textTop = y;
+    layoutMetadataField(renderer, reading, fontId, scale, body.x, y, body.width, body.y, clipBottom, true);
+    if (sep != std::string::npos && oneLine && lineTop >= body.y && textTop < clipBottom) {
+      drawPitchAccent(renderer, fontId, scale, reading, std::atoi(metadata.reading.c_str() + sep + 1), body.x, textTop);
+    }
     y += 3;
   }
   if (!metadata.grammar.empty()) {
@@ -821,10 +981,75 @@ int layoutScriptRuns(const GfxRenderer& renderer, const int fontId, std::string&
   return advance;
 }
 
+// Streams one dictionary picture from the card into the framebuffer; the reader keeps no copy.
+static void drawPicture(const GfxRenderer& renderer, const char* name, const int x, const int y, const int width,
+                        const int height) {
+  const char* idx = DictIndex::vocabIdxPath();
+  const char* slash = idx ? strrchr(idx, '/') : nullptr;
+  if (!slash) return;
+  char path[96];
+  const int written = snprintf(path, sizeof(path), "%.*s/images/%s", static_cast<int>(slash - idx), idx, name);
+  if (written < 0 || static_cast<size_t>(written) >= sizeof(path)) {
+    LOG_ERR("DEF", "Picture path too long: %s", name);
+    return;
+  }
+  HalFile file;
+  if (!Storage.openFileForRead("DEFIMG", path, file)) return;
+  // Heap, not stack: the reader carries a 256-byte palette table.
+  auto bitmap = makeUniqueNoThrow<Bitmap>(file, /*dithering=*/false);
+  if (!bitmap) {
+    LOG_ERR("DEFIMG", "OOM: bitmap reader");
+    return;
+  }
+  if (bitmap->parseHeaders() != BmpReaderError::Ok) {
+    LOG_ERR("DEFIMG", "Bad picture %s", path);
+    return;
+  }
+  bitmap->setEvenLevels(true);  // already reduced to the four panel grays
+  renderer.drawBitmap(*bitmap, x, y, width, height, 0, 0, false, false, /*ditherGrays=*/true);
+}
+
+// Lays out a picture line (the text after the marker is "<w>x<h> <file>") as a block of whole
+// lines, keeping it on one page when the caller pages by pageLines.
+static void placePicture(const GfxRenderer& renderer, const std::string& text, const size_t specStart,
+                         const size_t paraEnd, const int textX, const int lineHeight, const int maxWidth,
+                         const int maxY, const int scrollOffset, const bool draw, const int pageLines,
+                         const int pageLineOffset, int& lineIndex, int& defY, WrapResult& out) {
+  char spec[64];
+  const size_t len = std::min(paraEnd - specStart, sizeof(spec) - 1);
+  memcpy(spec, text.data() + specStart, len);
+  spec[len] = '\0';
+  int width = 0;
+  int height = 0;
+  char name[40];
+  if (sscanf(spec, "%dx%d %39s", &width, &height, name) != 3 || width <= 0 || height <= 0) return;
+  int drawWidth = std::min(width, maxWidth);
+  int drawHeight = height * drawWidth / width;
+  if (pageLines > 0 && drawHeight > pageLines * lineHeight) {
+    drawWidth = drawWidth * pageLines * lineHeight / drawHeight;
+    drawHeight = pageLines * lineHeight;
+  }
+  const int lines = std::max(1, (drawHeight + lineHeight - 1) / lineHeight);
+  if (pageLines > 0) {
+    const int pagePos = (pageLineOffset + lineIndex) % pageLines;
+    if (pagePos != 0 && pagePos + lines > pageLines) {
+      // The rest of this page stays empty; nothing after the picture belongs on it.
+      if (lineIndex >= scrollOffset) defY = maxY;
+      lineIndex += pageLines - pagePos;
+    }
+  }
+  if (lineIndex >= scrollOffset && defY + lines * lineHeight <= maxY) {
+    if (draw) drawPicture(renderer, name, textX + (maxWidth - drawWidth) / 2, defY, drawWidth, drawHeight);
+    defY += lines * lineHeight;
+    out.linesDrawn += lines;
+  }
+  lineIndex += lines;
+}
+
 WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,
                            const int startY, const int lineHeight, const int maxWidth, const int maxY,
                            const int scrollOffset, const uint16_t scale, std::string& lineBuf,
-                           std::vector<CharBox>* boxes) {
+                           std::vector<CharBox>* boxes, const int pageLines, const int pageLineOffset) {
   WrapResult out;
   int defY = startY;
   int lineIndex = 0;
@@ -833,6 +1058,12 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
   while (nlPos <= text.size()) {
     const size_t nextNl = text.find('\n', nlPos);
     const size_t paraEnd = nextNl == std::string::npos ? text.size() : nextNl;
+    if (text.compare(nlPos, sizeof(kPictureMarker) - 1, kPictureMarker) == 0) {
+      placePicture(renderer, text, nlPos + sizeof(kPictureMarker) - 1, paraEnd, textX, lineHeight, maxWidth, maxY,
+                   scrollOffset, boxes == nullptr, pageLines, pageLineOffset, lineIndex, defY, out);
+      nlPos = nextNl == std::string::npos ? text.size() + 1 : nextNl + 1;
+      continue;
+    }
     const bool isBlockHeading = text.compare(nlPos, sizeof(kBlockHeadingPrefix) - 1, kBlockHeadingPrefix) == 0;
     const bool isBoldLine = text.compare(nlPos, sizeof(kBoldLinePrefix) - 1, kBoldLinePrefix) == 0;
     const bool isItalicLine = text.compare(nlPos, sizeof(kItalicLinePrefix) - 1, kItalicLinePrefix) == 0;
@@ -990,8 +1221,9 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
           } else if (charLen == 1) {
             cp = c0;
           }
-          const bool keepPunct = cp == 0x3002 || cp == 0x3001 || cp == 0xFF01 || cp == 0xFF1F || cp == '.' ||
-                                 cp == ',' || cp == '!' || cp == '?';
+          const bool keepPunct = cp == 0x3002 || cp == 0x3001 || cp == 0xFF01 || cp == 0xFF1F || cp == 0xFF0E ||
+                                 cp == 0xFF0C || cp == 0xFF09 || cp == 0x300D || cp == 0x3015 || cp == 0x3011 ||
+                                 cp == '.' || cp == ',' || cp == '!' || cp == '?';
           // keepPunct: the punctuation stays in lineBuf on this line; the post-loop
           // advance uses lineBuf.size(), so pos itself needs no update before break.
           if (!keepPunct) {
@@ -1045,7 +1277,8 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
 
 WrapResult drawWrapped(const GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,
                        const int startY, const int lineHeight, const int maxWidth, const int maxY,
-                       const int scrollOffset, const uint16_t scale, std::vector<CharBox>* boxes) {
+                       const int scrollOffset, const uint16_t scale, std::vector<CharBox>* boxes, const int pageLines,
+                       const int pageLineOffset) {
   // The single allocation of this whole function, guarded: if even one line buffer doesn't
   // fit, drawing text under a heap this starved would abort() inside the renderer anyway --
   // show nothing (header/word still render) rather than crash. -fno-exceptions makes an
@@ -1071,7 +1304,7 @@ WrapResult drawWrapped(const GfxRenderer& renderer, const int fontId, const std:
   std::string lineBuf;
   lineBuf.reserve(LINE_BUF_CAP);
   return DrawWrappedImpl(renderer, fontId, text, textX, startY, lineHeight, maxWidth, maxY, scrollOffset, scale,
-                         lineBuf, boxes);
+                         lineBuf, boxes, pageLines, pageLineOffset);
 }
 
 void collectCjkBoxes(const GfxRenderer& renderer, const WrapGeometry& geometry, const std::string& text,
@@ -1090,7 +1323,7 @@ void collectCjkBoxes(const GfxRenderer& renderer, const WrapGeometry& geometry, 
   }
   out.reserve(count);
   drawWrapped(renderer, geometry.fontId, text, geometry.textX, geometry.startY, geometry.lineHeight, geometry.maxWidth,
-              geometry.maxY, geometry.scrollOffset, geometry.scale, &out);
+              geometry.maxY, geometry.scrollOffset, geometry.scale, &out, geometry.pageLines, geometry.pageLineOffset);
 }
 
 }  // namespace DefinitionText

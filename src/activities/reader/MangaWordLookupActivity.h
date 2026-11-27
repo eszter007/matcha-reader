@@ -9,6 +9,7 @@
 #include "DefinitionTextRenderer.h"
 #include "DictionaryDefinitionActivity.h"
 #include "JapaneseNestedLookup.h"
+#include "KanjiPages.h"
 #include "WordSelectionScan.h"
 #include "activities/Activity.h"
 #include "components/DictionaryPanel.h"
@@ -70,6 +71,9 @@ class MangaWordLookupActivity final : public Activity {
   std::string resultFurigana;  // the dictionary's per-kanji reading (Anki syntax), if any
   std::string resultGrammar;
   int resultMatchLen = 0;
+  // The kanji dictionary's pages for the word, shown after its entry.
+  std::array<kanjipages::Page, kanjipages::kMaxPages> resultKanji;
+  int resultKanjiCount = 0;
 
   // Scan-result persistence (empty path = disabled).
   std::string scanCachePath;

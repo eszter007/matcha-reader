@@ -738,7 +738,20 @@ void SdCardFontSystem::ensureWordLookupFonts(GfxRenderer& renderer, const int pr
 
   const bool wasResident = mgr.hasSize(pointSize);
   const int sdFontId = mgr.loadFamilyExtraSize(*family, renderer, pointSize);
-  if (sdFontId == 0) return;
+  if (sdFontId == 0) {
+    // No cut at the panel's size on the card: draw the resident reader size scaled to it, as the
+    // companion path does. Unmapped, the glyphs reach the panel unscaled through the global
+    // fallback, and the ones not yet loaded measure as zero width, so lines overrun the panel.
+    const int residentId = mgr.getFontId(family->name);
+    const uint8_t residentPt = mgr.currentPointSize();
+    if (residentId == 0 || residentPt == 0) return;
+    // Latin that reaches this family is scaled too, so it matches the panel's size. Clamped so an
+    // odd profile size can never ask for more than double or less than a quarter.
+    const uint16_t scale = static_cast<uint16_t>(std::clamp(pointSize * 256u / residentPt, 64u, 512u));
+    renderer.setFallbackFont(primaryFontId, residentId, scale, scale);
+    rememberLookupMapping(primaryFontId, residentId, /*companion=*/false, /*loaded=*/false);
+    return;
+  }
   renderer.setFallbackFont(primaryFontId, sdFontId);
   if (builtin != nullptr) {
     if (useCompanion) {

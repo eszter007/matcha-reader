@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "InflectionRules.h"
+#include "KoreanInflection.h"
 
 namespace {
 
@@ -267,4 +268,67 @@ TEST(Generic, StillFoldsAccentedCapitals) {
   // Language-independent: the index comparator is ASCII-only for every
   // dictionary, not just French ones.
   EXPECT_TRUE(contains(generic("Über"), "über"));
+}
+
+namespace {
+bool koreanHas(const std::string& word, const std::string& lemma) {
+  std::vector<std::string> out;
+  InflectionRules::variants(Language::Korean, word, out);
+  return std::find(out.begin(), out.end(), lemma) != out.end();
+}
+}  // namespace
+
+TEST(LanguageFromCode, RecognisesKorean) {
+  EXPECT_EQ(InflectionRules::languageFromCode("ko"), Language::Korean);
+  EXPECT_EQ(InflectionRules::languageFromCode("ko-KR"), Language::Korean);
+}
+
+TEST(KoreanVariants, ParticlesAndCopula) {
+  EXPECT_TRUE(koreanHas("학교에서", "학교"));
+  EXPECT_TRUE(koreanHas("사과를", "사과"));
+  EXPECT_TRUE(koreanHas("집으로", "집"));
+  EXPECT_TRUE(koreanHas("학생이에요", "학생"));
+  EXPECT_TRUE(koreanHas("의사예요", "의사"));
+}
+
+TEST(KoreanVariants, RegularEndingsAndTense) {
+  EXPECT_TRUE(koreanHas("먹었습니다", "먹다"));
+  EXPECT_TRUE(koreanHas("먹으면", "먹다"));
+  EXPECT_TRUE(koreanHas("갑니다", "가다"));
+  EXPECT_TRUE(koreanHas("갈게요", "가다"));
+  EXPECT_TRUE(koreanHas("가시겠습니까", "가다"));
+  EXPECT_TRUE(koreanHas("읽으세요", "읽다"));
+}
+
+TEST(KoreanVariants, Contraction) {
+  EXPECT_TRUE(koreanHas("갔어요", "가다"));
+  EXPECT_TRUE(koreanHas("봤어요", "보다"));
+  EXPECT_TRUE(koreanHas("줘", "주다"));
+  EXPECT_TRUE(koreanHas("돼요", "되다"));
+  EXPECT_TRUE(koreanHas("공부했어요", "공부하다"));
+  EXPECT_TRUE(koreanHas("공부했어요", "공부"));
+  EXPECT_TRUE(koreanHas("마셔요", "마시다"));
+  EXPECT_TRUE(koreanHas("써요", "쓰다"));
+}
+
+TEST(KoreanVariants, IrregularStems) {
+  EXPECT_TRUE(koreanHas("몰라요", "모르다"));
+  EXPECT_TRUE(koreanHas("더워요", "덥다"));
+  EXPECT_TRUE(koreanHas("더운", "덥다"));
+  EXPECT_TRUE(koreanHas("들어요", "듣다"));
+  EXPECT_TRUE(koreanHas("걸어요", "걷다"));
+  EXPECT_TRUE(koreanHas("나아요", "낫다"));
+  EXPECT_TRUE(koreanHas("그런", "그렇다"));
+  EXPECT_TRUE(koreanHas("사는", "살다"));
+  EXPECT_TRUE(koreanHas("삽니다", "살다"));
+  EXPECT_TRUE(koreanHas("바빠요", "바쁘다"));
+}
+
+TEST(KoreanVariants, NeverEmitsSurfaceOrDuplicates) {
+  std::vector<std::string> out;
+  InflectionRules::variants(Language::Korean, "가셨어요", out);
+  EXPECT_LE(out.size(), KoreanInflection::MAX_VARIANTS);
+  EXPECT_EQ(std::find(out.begin(), out.end(), "가셨어요"), out.end());
+  for (size_t i = 0; i < out.size(); i++)
+    for (size_t k = i + 1; k < out.size(); k++) EXPECT_NE(out[i], out[k]);
 }

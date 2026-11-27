@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <cstring>
 
-// Footer labels for the three converted-dictionary slots. The converter's title file wins; the
+// Footer labels for the converted-dictionary slots. The converter's title file wins; the
 // Japanese folder keeps the names its users know; any other language gets a generic word.
 namespace dictsource {
 
@@ -16,12 +16,18 @@ inline const char* name(const uint8_t dict) {
   const bool jp = std::strcmp(DictIndex::languageFolder(), "jp") == 0;
   if (dict == DictIndex::DICT_GRAMMAR) return tr(STR_DICT_KIND_GRAMMAR);
   if (dict == DictIndex::DICT_NAMES) return jp ? "JMnedict" : tr(STR_DICT_KIND_NAME);
+  if (dict == DictIndex::DICT_KANJI) return jp ? tr(STR_DICT_KIND_KANJI) : tr(STR_DICT_KIND_HANZI);
   return jp ? "JMdict" : tr(STR_DICTIONARY);
 }
 
 inline StrId kind(const uint8_t dict) {
   if (dict == DictIndex::DICT_GRAMMAR) return StrId::STR_DICT_KIND_GRAMMAR;
   if (dict == DictIndex::DICT_NAMES) return StrId::STR_DICT_KIND_NAME;
+  // Chinese and Cantonese books call the characters hanzi.
+  if (dict == DictIndex::DICT_KANJI) {
+    return std::strcmp(DictIndex::languageFolder(), "jp") == 0 ? StrId::STR_DICT_KIND_KANJI
+                                                               : StrId::STR_DICT_KIND_HANZI;
+  }
   return StrId::STR_DICT_KIND_VOCAB;
 }
 

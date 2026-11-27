@@ -31,6 +31,7 @@
 #include "Epub/Page.h"
 #include "HapticFeedback.h"
 #include "JapaneseNestedLookup.h"
+#include "KanjiPages.h"
 #include "MappedInputManager.h"
 #include "PanelInput.h"
 #include "ReaderUtils.h"
@@ -2114,6 +2115,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       LOG_ERR("WLA", "Skipping grammar merge, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
     }
   }
+  if (pagedDefinition()) appendKanjiEntries(resultHeadword, resultDefinition);
 
   splitDefinitionIntoSections();
   if (grammarFirst) {
@@ -2121,8 +2123,9 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     if (grammar != sectionKind.end()) currentSection = static_cast<int>(grammar - sectionKind.begin());
   }
   if (sectionText.empty())
-    DefinitionText::formatEntryBody(
-        resultDefinition, resultDict == DictIndex::DICT_GRAMMAR ? resultHeadword : std::string(), resultGrammar);
+    DefinitionText::formatEntryBody(resultDefinition,
+                                    resultDict == DictIndex::DICT_GRAMMAR ? resultHeadword : std::string(),
+                                    resultGrammar, resultDict == DictIndex::DICT_NAMES);
   requestUpdate();
 }
 
@@ -2211,7 +2214,8 @@ void EpubReaderWordLookupActivity::appendSelectionEntry(DictEntry&& entry, const
     hasResult = true;
     splitDefinitionIntoSections();
     if (sectionText.empty()) {
-      DefinitionText::formatEntryBody(resultDefinition, std::string(), std::string());
+      DefinitionText::formatEntryBody(resultDefinition, std::string(), std::string(),
+                                      resultDict == DictIndex::DICT_NAMES);
       selectionWords = MAX_SELECTION_WORDS;  // a single scrolling text cannot take further pages
       return;
     }
@@ -2363,6 +2367,32 @@ void EpubReaderWordLookupActivity::loop() {
 
 // The neighbouring entry page: the next source in the paged view, the next word otherwise.
 
+// The kanji dictionary's page for each Han character of the headword, after the word's own pages.
+void EpubReaderWordLookupActivity::appendKanjiEntries(const std::string& headword, std::string& definition) {
+  std::array<kanjipages::Page, kanjipages::kMaxPages> pages;
+  const int count = kanjipages::collect(headword, pages);
+  if (count == 0) return;
+  size_t added = 0;
+  for (int i = 0; i < count; i++) {
+    added += 2 + sizeof(kanjipages::kMarker) + sizeof(kanjipages::kMarkerEnd) + 5 + pages[i].definition.size();
+  }
+  // One reserve for every page: appending page by page would copy the whole definition each time.
+  if (ESP.getMaxAllocHeap() < definition.size() + added + kanjipages::kHeapHeadroom) {
+    LOG_ERR("WLA", "Skipping kanji pages, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
+    return;
+  }
+  definition.reserve(definition.size() + added);
+  for (int i = 0; i < count; i++) {
+    definition += "\n\n";
+    definition += kanjipages::kMarker;
+    definition += pages[i].character;
+    definition += kanjipages::kMarkerEnd;
+    definition += '\n';
+    definition += pages[i].definition;
+    std::string().swap(pages[i].definition);  // free each page once copied, not all at the end
+  }
+}
+
 // Split the merged definition into one piece per source. DictIndex joins the entries it merges
 // with "\n\n---\n", and the grammar entry is appended under its own "— Grammar: … —" heading;
 // each piece ends with the attribution line its converter wrote ("JMdict | Tatoeba"), which is
@@ -2395,6 +2425,11 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections(const uint8_t app
   }
   for (size_t at = resultDefinition.find(kGrammarSep); at != std::string::npos;
        at = resultDefinition.find(kGrammarSep, at + sizeof(kGrammarSep) - 1)) {
+    pieceCount++;
+  }
+  static const std::string kKanjiSep = std::string("\n\n") + kanjipages::kMarker;
+  for (size_t at = resultDefinition.find(kKanjiSep); at != std::string::npos;
+       at = resultDefinition.find(kKanjiSep, at + kKanjiSep.size())) {
     pieceCount++;
   }
   sectionText.reserve(pieceCount);
@@ -2434,12 +2469,15 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections(const uint8_t app
   StrId kind = dict == DictIndex::DICT_NAMES ? StrId::STR_DICT_KIND_NAME : StrId::STR_DICT_KIND_VOCAB;
   std::string grammarHead;      // the pattern named by the grammar heading, once it is seen
   std::string alternativeHead;  // another headword the text can be, from its arrow line on
+  std::string kanjiHead;        // the character of the kanji page being cut
+  const StrId kanjiKind = dictsource::kind(DictIndex::DICT_KANJI);  // Kanji, or Hanzi for Chinese
   // Cut at whichever separator comes first, repeatedly.
   size_t pos = 0;
   while (pos <= resultDefinition.size()) {
     const size_t entryAt = resultDefinition.find(kEntrySep, pos);
     const size_t grammarAt = resultDefinition.find(kGrammarSep, pos);
-    const size_t cut = std::min(entryAt, grammarAt);
+    const size_t kanjiAt = resultDefinition.find(kKanjiSep, pos);
+    const size_t cut = std::min({entryAt, grammarAt, kanjiAt});
     const size_t end = cut == std::string::npos ? resultDefinition.size() : cut;
     std::string piece = resultDefinition.substr(pos, end - pos);
 
@@ -2448,7 +2486,18 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections(const uint8_t app
     std::string head;
     static constexpr char kGrammarHead[] = "\xe2\x80\x94 Grammar: ";
     static constexpr char kArrow[] = "\xe2\x86\x92 ";  // opens an alternative headword's entry
-    if (piece.compare(0, sizeof(kGrammarHead) - 1, kGrammarHead) == 0) {
+    if (piece.compare(0, sizeof(kanjipages::kMarker) - 1, kanjipages::kMarker) == 0) {
+      // "— Kanji: 学 —": the character is the page's headword, also for its further records.
+      const size_t lineEnd = piece.find('\n');
+      const size_t headEnd = lineEnd == std::string::npos ? piece.size() : lineEnd;
+      head = piece.substr(sizeof(kanjipages::kMarker) - 1, headEnd - (sizeof(kanjipages::kMarker) - 1));
+      const size_t dash = head.find(kanjipages::kMarkerEnd);
+      if (dash != std::string::npos) head.erase(dash);
+      piece.erase(0, lineEnd == std::string::npos ? piece.size() : lineEnd + 1);
+      kanjiHead = head;
+    } else if (kind == kanjiKind) {
+      head = kanjiHead;
+    } else if (piece.compare(0, sizeof(kGrammarHead) - 1, kGrammarHead) == 0) {
       const size_t lineEnd = piece.find('\n');
       const size_t headEnd = lineEnd == std::string::npos ? piece.size() : lineEnd;
       head = piece.substr(sizeof(kGrammarHead) - 1, headEnd - (sizeof(kGrammarHead) - 1));
@@ -2495,6 +2544,8 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections(const uint8_t app
         piece.erase(from);
       }
     }
+    if (kind == kanjiKind && label.empty()) label = dictsource::name(DictIndex::DICT_KANJI);
+    if (kind == StrId::STR_DICT_KIND_GRAMMAR && label.empty()) label = dictsource::name(DictIndex::DICT_GRAMMAR);
     // Trim the blank lines the cut leaves behind so a page never opens on empty space.
     const size_t last = piece.find_last_not_of("\n \t");
     piece.erase(last == std::string::npos ? 0 : last + 1);
@@ -2508,7 +2559,7 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections(const uint8_t app
         if (metadata.grammar.empty()) metadata.grammar = resultGrammar;
       }
       DefinitionText::formatEntryBody(piece, kind == StrId::STR_DICT_KIND_GRAMMAR ? head : std::string(),
-                                      metadata.grammar);
+                                      metadata.grammar, kind == StrId::STR_DICT_KIND_NAME);
 
       bool duplicate = false;
       size_t replaceAt = sectionText.size();
@@ -2553,7 +2604,12 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections(const uint8_t app
     }
 
     if (cut == std::string::npos) break;
-    if (cut == grammarAt) {
+    if (cut == kanjiAt) {
+      kind = kanjiKind;  // kanji pages come last, each under its own heading
+      alternativeHead.clear();
+      pos = cut + 2;
+      if (resultDefinition.find('\n', pos) == std::string::npos) break;
+    } else if (cut == grammarAt) {
       kind = StrId::STR_DICT_KIND_GRAMMAR;  // everything from here on is the grammar entry
       // Keep the "— Grammar: <headword> —" heading with the grammar text it introduces.
       pos = cut + 2;  // step over the blank line, not the heading
@@ -2649,12 +2705,12 @@ void EpubReaderWordLookupActivity::appendEntries(const size_t first,
     entry.dictName = std::string(label);
     auto& card = entry.draft.card;
     card.word = headword;
-    card.reading = reading;
+    card.reading = DefinitionText::readingText(reading);
     // The page's own furigana first, then the dictionary's; either must read as the card's reading.
     std::string fromPage = furigana::adaptToHeadword(pageFurigana, headword);
-    if (furigana::matchesReading(fromPage, reading)) {
+    if (furigana::matchesReading(fromPage, card.reading)) {
       card.furigana = std::move(fromPage);
-    } else if (furigana::matchesReading(dictFurigana, reading)) {
+    } else if (furigana::matchesReading(dictFurigana, card.reading)) {
       card.furigana = dictFurigana;
     }
     card.sentence = sentence.empty() ? miningSentence() : std::move(sentence);

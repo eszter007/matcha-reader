@@ -177,9 +177,9 @@ int DictionaryDefinitionActivity::measureEntryPages(const Entry& entry) {
     const int lineHeight = std::max(1, renderer.getLineHeightScaled(fontId, scale));
     const int metadataLines = DefinitionText::entryMetadataLineCount(renderer, area, fontId, scale,
                                                                      {entry.reading, entry.grammar, std::string()});
-    const auto wrap =
-        DefinitionText::drawWrapped(renderer, fontId, text, body.x, body.y, lineHeight, body.width, body.y, 0, scale);
     const int lines = std::max(1, body.height / lineHeight);
+    const auto wrap = DefinitionText::drawWrapped(renderer, fontId, text, body.x, body.y, lineHeight, body.width,
+                                                  body.y, 0, scale, nullptr, lines, metadataLines);
     return std::max(1, (metadataLines + wrap.totalLines + lines - 1) / lines);
   }
   if (entry.html && text.size() <= MAX_STYLED_HTML_BYTES) {
@@ -258,9 +258,9 @@ void DictionaryDefinitionActivity::showEntry(const size_t index, const bool atLa
     const int lineHeight = std::max(1, renderer.getLineHeightScaled(fontId, scale));
     const int metadataLines = DefinitionText::entryMetadataLineCount(renderer, area, fontId, scale,
                                                                      {entry.reading, entry.grammar, std::string()});
-    const auto wrap = DefinitionText::drawWrapped(renderer, fontId, definition, body.x, body.y, lineHeight, body.width,
-                                                  body.y, 0, scale);
     definitionTextLines = std::max(1, body.height / lineHeight);
+    const auto wrap = DefinitionText::drawWrapped(renderer, fontId, definition, body.x, body.y, lineHeight, body.width,
+                                                  body.y, 0, scale, nullptr, definitionTextLines, metadataLines);
     totalPages = std::max(1, (metadataLines + wrap.totalLines + definitionTextLines - 1) / definitionTextLines);
     currentPage = atLastPage ? totalPages - 1 : 0;
     notePages(index, totalPages);
@@ -727,7 +727,10 @@ void DictionaryDefinitionActivity::drawDefinitionText(const int x, const int sta
   geometry.maxY = startY + body.height;
   geometry.scrollOffset = std::max(0, scroll - metadataLines);
   geometry.scale = scale;
+  geometry.pageLines = definitionTextLines;
+  geometry.pageLineOffset = metadataLines;
   DefinitionText::drawWrapped(renderer, fontId, definition, geometry.textX, geometry.startY, lineHeight,
-                              geometry.maxWidth, geometry.maxY, geometry.scrollOffset, scale);
+                              geometry.maxWidth, geometry.maxY, geometry.scrollOffset, scale, nullptr,
+                              geometry.pageLines, geometry.pageLineOffset);
   nestedHost.drawnText = geometry;
 }

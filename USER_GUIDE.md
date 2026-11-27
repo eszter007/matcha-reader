@@ -1573,6 +1573,10 @@ the book. Choosing the same **Vertical Text** layout the global setting gives pu
 Serif JP font on the card looks better and adds rare kanji ([3.8](#38-custom-fonts-sd-card)). Saved words go to
 `sentences-ja.csv` with their kana reading.
 
+**Kanji pages.** With a kanji dictionary installed (a Yomitan kanji dictionary such as KANJIDIC, converted with `--name kanji`, see [dictionary setup](docs/dictionary-setup.md)), a lookup in a book or in manga shows a page for each kanji of the word after the word's own pages, up to four. Each page's footer names the dictionary it came from, so when several dictionaries are merged into one file you can see which one is on screen.
+
+**Pictures.** A dictionary converted with `--images` (デジタル大辞泉, 広辞苑 and others that hold pictures) shows each picture inside the entry, in gray. Without that option, which is off by default, the entry shows text only.
+
 ### 6.4 Chinese Books
 
 Chinese books work like Japanese ones once a dictionary and a font are on the card. The reader tells three kinds
@@ -1721,6 +1725,8 @@ The rules only handle regular forms. Some French verbs look nothing like their i
 *être*, `ont` and `eut` for *avoir*, `vais` for *aller*). No rule can find those. For them the dictionary needs a
 `.syn` file in its folder. Many dictionaries come with one; see [docs/dictionary.md](docs/dictionary.md).
 
+**Korean.** Korean books read `dictionaries/ko/<name>/`. A Yomitan Korean dictionary such as KRDICT converts to StarDict with `--lang ko` ([dictionary setup](docs/dictionary-setup.md#korean)). Particles and verb endings are undone before the lookup: 학교에서 finds 학교, 먹었습니다 finds 먹다, 더워요 finds 덥다. The entry shows the reading in brackets and the part of speech and level on a tag line. Korean books do not pick a font by themselves: choose a Korean font (for example Noto Sans KR) in **Reader Settings → Text Settings → Font**, or the text shows as `�`.
+
 ### 6.6 Manga, Manhua and Comics
 
 Japanese manga, Chinese manhua and comics in other languages all open in the same reader. You set the book's
@@ -1825,12 +1831,15 @@ dictionaries/
     vocab.idx    vocab.dat    vocab.spx      # vocabulary (required)
     names.idx    names.dat    names.spx      # names (recommended)
     grammar.idx  grammar.dat  grammar.spx    # grammar reference (optional)
+    kanji.idx    kanji.dat    kanji.spx    kanji.title    # kanji, one entry per character (optional)
   zh/                          # Mandarin, converted CC-CEDICT (simplified and traditional books alike)
     vocab.idx    vocab.dat    vocab.spx    vocab.title    # vocabulary (required)
     names.idx    names.dat    names.spx    names.title    # proper nouns (optional)
     grammar.idx  grammar.dat  grammar.spx  grammar.title  # grammar patterns (optional)
+    kanji.idx    kanji.dat    kanji.spx    kanji.title    # hanzi, one entry per character (optional)
   yue/                         # Cantonese, converted CC-Canto + CC-CEDICT
     vocab.idx    vocab.dat    vocab.spx    vocab.title
+    kanji.idx    kanji.dat    kanji.spx    kanji.title    # hanzi, one entry per character (optional)
 ```
 
 StarDict files placed straight into `fr/` without a name folder are not picked up for French books.
