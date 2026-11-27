@@ -97,6 +97,13 @@ void forEachBaseSetting(const SettingVisitor visit, void* context) {
   emit(SettingInfo::Enum(StrId::STR_INSIGHTS_DATA, &CrossPointSettings::insightsAllDevices,
                          {StrId::STR_INSIGHTS_THIS_DEVICE, StrId::STR_INSIGHTS_ALL_DEVICES}, "insightsAllDevices",
                          StrId::STR_STATS));
+  emit(SettingInfo::Enum(StrId::STR_DAY_START, &CrossPointSettings::statsDayStartMode,
+                         {StrId::STR_MIDNIGHT, StrId::STR_CUSTOM_TIME}, "statsDayStartMode", StrId::STR_STATS)
+           .withWebHidden());
+  // The custom time: picked from its own row in Settings > Insights, so category-less and web-hidden.
+  emit(SettingInfo::Value(StrId::STR_CUSTOM_TIME, &CrossPointSettings::statsDayStartQuarter,
+                          {0, CrossPointSettings::QUARTER_HOURS_PER_DAY - 1, 1}, "statsDayStartQuarter")
+           .withWebHidden());
 
   // --- Reader ---
   // Built-in font-family entry. Replaced per-call with a registry-aware

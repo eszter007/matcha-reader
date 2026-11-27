@@ -321,6 +321,10 @@ void SettingsActivity::rebuildSettings() {
     addAction(SettingsSection::System, StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate);
   }
 
+  // The custom day start sits under its dropdown and shows the time.
+  if (SETTINGS.statsDayStartMode == CrossPointSettings::DAY_START_CUSTOM) {
+    addAction(SettingsSection::Insights, StrId::STR_CUSTOM_TIME, SettingAction::StatsDayStart);
+  }
   addAction(SettingsSection::Insights, StrId::STR_SYNC_STATS, SettingAction::SyncStats);
   addAction(SettingsSection::Connectivity, StrId::STR_WIFI_NETWORKS, SettingAction::Network);
   if (bleturner::status().compiledIn) {
@@ -487,6 +491,9 @@ void SettingsActivity::toggleSelectedSetting() {
       startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
       return;
     }
+    case SettingAction::StatsDayStart:
+      editor.openDayStartPicker();
+      break;
     case SettingAction::SyncStats:
       startActivityForResult(
           std::make_unique<StatsSyncActivity>(renderer, mappedInput, StatsSyncActivity::Origin::Settings),

@@ -25,6 +25,7 @@
 #include "OverviewParser.h"
 #include "ProgressChangesParser.h"
 #include "util/RemoteProgress.h"
+#include "util/StatsDay.h"
 #include "util/SyncedPosition.h"
 
 namespace {
@@ -60,7 +61,7 @@ bool ready(tm& local) {
     LOG_ERR("STATS", "Clock not trusted; skipping stats sync");
     return false;
   }
-  localtime_r(&now, &local);
+  statsday::localDate(now, local);
   return true;
 }
 
@@ -135,7 +136,9 @@ int utcOffsetMinutes() {
   gmtime_r(&now, &utc);
   const int32_t days = statsSync::daysSince2000(local.tm_year + 1900, local.tm_mon + 1, local.tm_mday) -
                        statsSync::daysSince2000(utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday);
-  return -((days * 24 + local.tm_hour - utc.tm_hour) * 60 + local.tm_min - utc.tm_min);
+  // A later day start moves the server's day boundary with it, as if the zone were that much further west.
+  return -((days * 24 + local.tm_hour - utc.tm_hour) * 60 + local.tm_min - utc.tm_min) +
+         statsday::startOffsetSeconds() / 60;
 }
 
 // The account's numbers as the server's Stats page counts them, every device and every source, for
@@ -247,9 +250,8 @@ constexpr size_t MAX_ACTIVITY_BOOKS = 40;
 // Unix seconds as a local calendar date; year 0 for none.
 BookDay localDate(const int64_t at) {
   if (at <= 0) return {};
-  const time_t t = static_cast<time_t>(at);
   tm local{};
-  localtime_r(&t, &local);
+  statsday::localDate(static_cast<time_t>(at), local);
   return {static_cast<uint16_t>(local.tm_year + 1900), static_cast<uint8_t>(local.tm_mon + 1),
           static_cast<uint8_t>(local.tm_mday), 0};
 }

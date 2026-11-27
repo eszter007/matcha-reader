@@ -328,6 +328,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Insights and the Stats sleep screen: 1 counts every device's reading on the sync account, 0 this
   // device's own. Display only: uploads always send this device's own days.
   uint8_t insightsAllDevices = 1;
+  // When a reading day starts for Insights and the stats sync: midnight, or statsDayStartQuarter.
+  // Minutes read before that time count towards the previous day.
+  enum STATS_DAY_START { DAY_START_MIDNIGHT = 0, DAY_START_CUSTOM = 1 };
+  static constexpr uint8_t QUARTER_HOURS_PER_DAY = 96;
+  uint8_t statsDayStartMode = DAY_START_MIDNIGHT;
+  uint8_t statsDayStartQuarter = 0;  // quarter-hours after midnight: 16 = 04:00
   // Sleep screen cover mode settings
   uint8_t sleepScreenCoverMode = FIT;
   // Sleep screen cover filter
