@@ -164,6 +164,16 @@ void DictionaryDefinitionActivity::formatCounter(char* out, const size_t size) c
   snprintf(out, size, "%s%d/%d", estimate ? "~" : "", before + currentPage + 1, total);
 }
 
+void DictionaryDefinitionActivity::prepareDefinitionTextFont(const Entry& entry, const std::string& text) {
+  const int fontId = DefinitionText::wordLookupFontId();
+  sdFontSystem.ensureWordLookupFallback(renderer, fontId, DefinitionText::wordLookupFontPointSize());
+  // Without an advance entry, an SD glyph that is not resident measures zero wide.
+  const char* segments[] = {text.c_str(), entry.reading.c_str(), entry.grammar.c_str()};
+  for (const char* segment : segments) {
+    if (*segment) renderer.ensureSdCardFontReady(fontId, segment, 0x07);
+  }
+}
+
 // Lays the entry out the way showEntry() does, only to count its pages; nothing is kept.
 int DictionaryDefinitionActivity::measureEntryPages(const Entry& entry) {
   const BodyArea body = bodyArea();
@@ -171,6 +181,7 @@ int DictionaryDefinitionActivity::measureEntryPages(const Entry& entry) {
   std::string text = entry.definition;
   std::replace(text.begin(), text.end(), '\0', '\n');
   if (entry.definitionText) {
+    prepareDefinitionTextFont(entry, text);
     const Rect area{body.x, body.y, body.width, body.height};
     const int fontId = DefinitionText::wordLookupFontId();
     const uint16_t scale = DefinitionText::wordLookupFontScale();
@@ -251,6 +262,7 @@ void DictionaryDefinitionActivity::showEntry(const size_t index, const bool atLa
   nestedHost.drawnText.valid = false;
   if (entry.definitionText) {
     // Paged by whole lines of the shared wrapper: a dry run with no room to draw counts them.
+    prepareDefinitionTextFont(entry, definition);
     const BodyArea body = bodyArea();
     const Rect area{body.x, body.y, body.width, body.height};
     const int fontId = DefinitionText::wordLookupFontId();
@@ -710,7 +722,8 @@ void DictionaryDefinitionActivity::drawDefinitionText(const int x, const int sta
   const Rect area{x, startY, body.width, body.height};
   const int fontId = DefinitionText::wordLookupFontId();
   const uint16_t scale = DefinitionText::wordLookupFontScale();
-  sdFontSystem.ensureWordLookupFallback(renderer, fontId, DefinitionText::wordLookupFontPointSize());
+  // Again per draw: a font-memory release under heap pressure may have cleared the advances.
+  prepareDefinitionTextFont(entry, definition);
   const int lineHeight = std::max(1, renderer.getLineHeightScaled(fontId, scale));
   const DefinitionText::EntryMetadata metadata{entry.reading, entry.grammar, std::string()};
   const int scroll = currentPage * definitionTextLines;

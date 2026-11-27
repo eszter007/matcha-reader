@@ -214,6 +214,9 @@ class DictionaryDefinitionActivity final : public Activity {
   inline static const std::string emptyLabel;
   void notePages(size_t index, int count);
   int measureEntryPages(const Entry& entry);
+  // Loads the word-lookup font and the advance widths of `text` and the entry's metadata, so
+  // counting pages and drawing them measure every character the same way.
+  void prepareDefinitionTextFont(const Entry& entry, const std::string& text);
   void measureNextEntry();
   // "3/7", or "~3/7" while some entry's pages are still unknown. Empty for a single page.
   void formatCounter(char* out, size_t size) const;

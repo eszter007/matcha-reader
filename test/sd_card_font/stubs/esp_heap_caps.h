@@ -7,5 +7,6 @@
 constexpr uint32_t MALLOC_CAP_8BIT = 4;
 constexpr uint32_t MALLOC_CAP_DEFAULT = 1;
 constexpr uint32_t MALLOC_CAP_INTERNAL = 2;
+constexpr uint32_t MALLOC_CAP_SPIRAM = 1024;
 inline size_t heap_caps_get_free_size(uint32_t) { return 0; }
 inline size_t heap_caps_get_largest_free_block(uint32_t) { return 0; }
