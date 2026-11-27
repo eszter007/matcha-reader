@@ -15,6 +15,7 @@
 #include <strings.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -22,7 +23,7 @@
 
 namespace koreader_sync {
 
-int parseIndex(const std::string& xpath, const char* prefix, bool last = false) {
+inline int parseIndex(const std::string& xpath, const char* prefix, bool last = false) {
   const size_t prefixLen = strlen(prefix);
   const size_t pos = last ? xpath.rfind(prefix) : xpath.find(prefix);
   if (pos == std::string::npos) return -1;
@@ -37,7 +38,7 @@ int parseIndex(const std::string& xpath, const char* prefix, bool last = false) 
   return val;
 }
 
-int parseCharOffset(const std::string& xpath) {
+inline int parseCharOffset(const std::string& xpath) {
   const size_t textPos = xpath.rfind("text()");
   const size_t dotPos = (textPos != std::string::npos) ? xpath.find('.', textPos) : xpath.rfind('.');
   if (dotPos == std::string::npos || dotPos + 1 >= xpath.size()) return 0;
@@ -50,7 +51,7 @@ int parseCharOffset(const std::string& xpath) {
 }
 
 // Parse the N from text()[N] in the XPath (1-based; defaults to 1 if absent or 1).
-int parseTextNodeIndex(const std::string& xpath) {
+inline int parseTextNodeIndex(const std::string& xpath) {
   const size_t textPos = xpath.rfind("text()[");
   if (textPos == std::string::npos) return 1;
   const size_t numStart = textPos + 7;  // strlen("text()[")
@@ -64,7 +65,7 @@ int parseTextNodeIndex(const std::string& xpath) {
   return val > 0 ? val : 1;
 }
 
-bool isChapterStartXPath(const std::string& xpath) {
+inline bool isChapterStartXPath(const std::string& xpath) {
   if (xpath.find("/p[") != std::string::npos || xpath.find("/li[") != std::string::npos) {
     return false;
   }
@@ -128,7 +129,7 @@ bool isChapterStartXPath(const std::string& xpath) {
   return parseTextNodeIndex(xpath) <= 1;
 }
 
-bool isBodyTextXPath(const std::string& xpath) {
+inline bool isBodyTextXPath(const std::string& xpath) {
   static constexpr char kBodyFrag[] = "/body/DocFragment[";
   const size_t fragPos = xpath.find(kBodyFrag);
   if (fragPos == std::string::npos) return false;
@@ -152,7 +153,7 @@ static constexpr int MAX_XPATH_DEPTH = 16;
 // into an ordered sequence of steps. Returns step count, 0 on failure.
 // Example input: "/body/DocFragment[1]/body/div[1]/ul/li[4]/text()[1].51"
 // Fills steps with: {div,1}, {ul,1}, {li,4}
-int parseXPathSteps(const std::string& xpath, XPathStep steps[MAX_XPATH_DEPTH]) {
+inline int parseXPathSteps(const std::string& xpath, XPathStep steps[MAX_XPATH_DEPTH]) {
   static const char kBodyFrag[] = "/body/DocFragment[";
   const size_t fragPos = xpath.find(kBodyFrag);
   if (fragPos == std::string::npos) return 0;
@@ -224,6 +225,11 @@ class ParagraphStreamer final : public Print {
   bool revDone = false;
   int revVisChars = 0;
   size_t totalVisChars = 0;
+  // The reader's character count (VisibleTextUtils::isReadableCodepoint), without furigana.
+  uint32_t readableChars = 0;
+  uint8_t rtDepth = 0;
+  uint32_t readableSeq = 0;  // the UTF-8 sequence being decoded for the readable count
+  uint8_t readableSeqLeft = 0;
   size_t targetVisChars = 0;
 
   // --- Legacy reverse mode (paragraph index only, no ancestry) ---
@@ -514,6 +520,31 @@ class ParagraphStreamer final : public Print {
     }
   }
 
+  void countReadable(const uint32_t cp) {
+    if (rtDepth == 0 && VisibleTextUtils::isReadableCodepoint(cp)) readableChars++;
+  }
+
+  // Raw text bytes: counted once their codepoint is complete.
+  void feedReadableByte(const uint8_t c) {
+    if (c < 0x80) {
+      readableSeqLeft = 0;
+      countReadable(c);
+    } else if ((c & 0xC0) == 0x80) {
+      if (readableSeqLeft == 0) return;
+      readableSeq = (readableSeq << 6) | (c & 0x3F);
+      if (--readableSeqLeft == 0) countReadable(readableSeq);
+    } else if ((c & 0xE0) == 0xC0) {
+      readableSeq = c & 0x1F;
+      readableSeqLeft = 1;
+    } else if ((c & 0xF0) == 0xE0) {
+      readableSeq = c & 0x0F;
+      readableSeqLeft = 2;
+    } else {
+      readableSeq = c & 0x07;
+      readableSeqLeft = 3;
+    }
+  }
+
   void onVisibleCodepoint() {
     applyPendingTextNodeBoundary();
     totalVisChars++;
@@ -539,26 +570,32 @@ class ParagraphStreamer final : public Print {
     if (!text) return;
     const unsigned char* ptr = reinterpret_cast<const unsigned char*>(text);
     while (*ptr != 0) {
-      utf8NextCodepoint(&ptr);
+      countReadable(utf8NextCodepoint(&ptr));
       onVisibleCodepoint();
     }
   }
 
   void flushEntityAsLiteral() {
-    for (size_t i = 0; i < entityLen; i++) onVisibleCodepoint();
+    for (size_t i = 0; i < entityLen; i++) {
+      feedReadableByte(static_cast<uint8_t>(entityBuffer[i]));
+      onVisibleCodepoint();
+    }
   }
 
   void finishEntity() {
     entityBuffer[entityLen] = '\0';
     const char* resolved = lookupHtmlEntity(entityBuffer, entityLen);
-    if (resolved)
+    if (resolved) {
       onVisibleText(resolved);
-    else if (entityLen >= 3 && entityBuffer[1] == '#')
+    } else if (entityLen >= 3 && entityBuffer[1] == '#') {
       // Numeric character reference (&#NNN; / &#xHH;): expat -- which builds the page LUT --
       // decodes it to a single codepoint. Count one here too, not the raw "&#NNN" characters.
+      const bool hex = entityBuffer[2] == 'x' || entityBuffer[2] == 'X';
+      countReadable(static_cast<uint32_t>(strtoul(entityBuffer + (hex ? 3 : 2), nullptr, hex ? 16 : 10)));
       onVisibleCodepoint();
-    else
+    } else {
       flushEntityAsLiteral();
+    }
     globalInEntity = false;
     entityLen = 0;
   }
@@ -603,6 +640,7 @@ class ParagraphStreamer final : public Print {
       nonVisibleDepth++;
       return;
     }
+    if (strcasecmp(tagName, "rt") == 0) rtDepth++;
 
     if (stepCount == 0) {
       if (strcasecmp(tagName, "p") == 0) onLegacyP();
@@ -667,6 +705,7 @@ class ParagraphStreamer final : public Print {
       if (htmlDepth > 0) htmlDepth--;
       return;
     }
+    if (rtDepth > 0 && strcasecmp(tagName, "rt") == 0) rtDepth--;
 
     // Legacy mode: each direct child element closing advances the text node index.
     if (stepCount == 0 && revPFound && !revDone && paragraphHtmlDepth >= 0 && htmlDepth == paragraphHtmlDepth + 1) {
@@ -807,6 +846,7 @@ class ParagraphStreamer final : public Print {
   void countCdataByte(const uint8_t c, const bool afterCR) {
     if (!insideBody || nonVisibleDepth > 0) return;
     if (c == '\n' && afterCR) return;
+    feedReadableByte(c);
     if ((c & 0xC0) != 0x80) onVisibleCodepoint();
     prevCR = (c == '\r');
   }
@@ -1004,6 +1044,7 @@ class ParagraphStreamer final : public Print {
         // Second half of a CRLF: the newline was already counted on the preceding CR.
       } else {
         const bool startsCodepoint = (c & 0xC0) != 0x80;
+        feedReadableByte(c);
         if (startsCodepoint) onVisibleCodepoint();
         prevCR = (c == '\r');  // a lone/leading CR is the newline; swallow any '\n' that follows
       }
@@ -1023,6 +1064,7 @@ class ParagraphStreamer final : public Print {
   size_t totalBytes() const { return bytesWritten; }
   bool found() const { return revDone; }
   size_t getTotalVisChars() const { return totalVisChars; }
+  uint32_t getReadableChars() const { return readableChars; }
   size_t getTargetVisChars() const { return targetVisChars; }
   float progress() const {
     return totalVisChars > 0 ? static_cast<float>(targetVisChars) / static_cast<float>(totalVisChars) : 0.0f;

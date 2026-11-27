@@ -680,7 +680,58 @@ int EpubReaderActivity::bookPercentFor(const ChapterPosition& position) const {
   return static_cast<int>(std::clamp(fraction, 0.0f, 1.0f) * 100.0f + 0.5f);
 }
 
+// Counts one uncounted spine file while the page sits idle, so the status bar's book total becomes
+// exact without opening every chapter. Any input stops the count; the file is counted again later.
+void EpubReaderActivity::stepCharScan() {
+  constexpr unsigned long CHAR_SCAN_IDLE_MS = 3000;
+  constexpr int SAVE_EVERY = 8;
+  if (SETTINGS.statusBarCharCount == CrossPointSettings::CHAR_COUNT_HIDE || !epub || !storedChars.loaded()) return;
+  if (overlay != Overlay::None || lastRenderCompleteMs == 0 || millis() - lastRenderCompleteMs < CHAR_SCAN_IDLE_MS) {
+    return;
+  }
+  if (verticalBuildInProgress_.load(std::memory_order_relaxed) || (section && section->isBuilding()) ||
+      RenderLock::peek() || inputHeld() || charScanErrors > epub->getSpineItemsCount()) {
+    return;
+  }
+  if (ESP.getFreeHeap() <= RENDER_MIN_FREE_HEAP || ESP.getMaxAllocHeap() <= BACKGROUND_BUILD_MIN_MAX_ALLOC) return;
+  const int spine = storedChars.nextUnknown(charScanNext);
+  if (spine < 0) {
+    if (charScanUnsaved > 0) {
+      storedChars.save(*epub);
+      charScanUnsaved = 0;
+    }
+    return;
+  }
+  bool cancelled = false;
+  uint32_t chars = 0;
+  const auto t0 = millis();
+  HalPowerManager::Lock powerLock;
+  const bool ok = BookCharCounts::count(
+      epub, spine,
+      [](void* ctx) {
+        if (!inputHeld()) return false;
+        *static_cast<bool*>(ctx) = true;
+        return true;
+      },
+      &cancelled, chars);
+  if (ok) {
+    storedChars.set(spine, chars);
+    charScanNext = spine + 1;
+    chapterSpanSpine = -1;  // the totals pick the new count up at the next status bar draw
+    LOG_DBG("ERS", "Counted spine %d: %u chars in %lums", spine, static_cast<unsigned>(chars), millis() - t0);
+    if (++charScanUnsaved >= SAVE_EVERY) {
+      storedChars.save(*epub);
+      charScanUnsaved = 0;
+    }
+  } else if (!cancelled) {
+    // Unreadable this session: move on. Not stored, so the next session tries it again.
+    charScanNext = spine + 1;
+    charScanErrors++;
+  }
+}
+
 void EpubReaderActivity::onReaderExit() {
+  if (epub) storedChars.save(*epub);
   bookFonts.unload(renderer);
   saveTextSettingsIfDirty();  // a Text/Page change made with a panel still open
   // The extractor holds a raw pointer to this activity's epub; drop it before
@@ -1157,6 +1208,7 @@ void EpubReaderActivity::readerLoop() {
     }
   }
   stepLookupPrescan();
+  stepCharScan();
 
   // Idle glyph prewarm for the pages after the current one. The scan pass draws nothing (FCM scan
   // mode suppresses pixels), so the displayed framebuffer is untouched; endScanAndPrewarm loads
@@ -5230,6 +5282,11 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   if (wantChars) {
     const uint32_t liveChars = verticalSection ? verticalSection->readableChars : section ? section->readableChars : 0;
     if (liveChars > 0) spineCharsReal[currentSpineIndex] = liveChars;
+    // A laid-out file's own count is the reference; it also fills the stored table.
+    if (!storedChars.loaded()) storedChars.load(*epub);
+    for (int i = 0; i < spineCount; i++) {
+      if (spineCharsReal[i] > 0) storedChars.set(i, spineCharsReal[i]);
+    }
   }
   // Without the count of the file on screen there is no position to add the other files to.
   if (wantChars && spineCharsReal[currentSpineIndex] > 0) {
@@ -5252,15 +5309,20 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
       const size_t cumulative = epub->getCumulativeSpineItemSize(i);
       const uint64_t bytes = cumulative - prevCumulative;
       prevCumulative = cumulative;
-      const uint32_t chars = spineCharsReal[i];
+      uint32_t chars = spineCharsReal[i];
+      bool known = chars > 0;
+      if (!known && storedChars.get(i) != BookCharCounts::UNKNOWN) {
+        chars = storedChars.get(i);
+        known = true;
+      }
       const auto add = [&](Sum& sum) {
-        if (chars > 0) {
+        if (known) {
           sum.chars += chars;
         } else {
           sum.unknownBytes += bytes;
         }
       };
-      if (chars > 0) {
+      if (known) {
         knownChars += chars;
         knownCharBytes += bytes;
       }

@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "BookCharCounts.h"
 #include "BookmarkEntry.h"
 #include "ChapterPosition.h"
 #include "ClipSelectionActivity.h"
@@ -974,6 +975,13 @@ class EpubReaderActivity final : public ReaderActivity {
   // Counted characters per spine file from its cached layout, 0 = not known. Filled only
   // while the status bar shows the character count.
   mutable std::vector<uint32_t> spineCharsReal;
+  // Every spine file's character count, kept across sessions and layout settings (chars.bin).
+  mutable BookCharCounts storedChars;
+  // Where the idle character count goes on, and the files it could not read this session.
+  int charScanNext = 0;
+  int charScanErrors = 0;
+  int charScanUnsaved = 0;
+  void stepCharScan();
   // Characters in the files ahead of the one on screen and in all files, for the ToC chapter and
   // for the book. A file with no known count is scaled from its size, which marks it estimated.
   struct CharTotals {
