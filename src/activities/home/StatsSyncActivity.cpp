@@ -4,6 +4,8 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <KOReaderCredentialStore.h>
+#include <LibraryBuilder.h>
+#include <LibraryIndexFile.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <WiFi.h>
@@ -20,17 +22,20 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "stats/StatsSync.h"
+#include "sync/SyncEngine.h"
 
 void StatsSyncActivity::onEnter() {
   Activity::onEnter();
   const bool hasAccount =
       KOREADER_STORE.getServerType() == KOReaderServerType::CROSSPOINT && KOREADER_STORE.hasCredentials();
-  if (!hasAccount && !syncClock) {
+  const bool hasProgressSync = syncsBooks() && KOREADER_STORE.hasCredentials();
+  if (!hasAccount && !syncClock && !hasProgressSync) {
     state = NO_ACCOUNT;
     requestUpdate();
     return;
   }
   state = SYNCING;
+  if (hasProgressSync) ensureLibraryIndex();
   if (WiFi.status() == WL_CONNECTED) {
     requestUpdate();
     return;
@@ -103,18 +108,20 @@ void StatsSyncActivity::runSync() {
   const bool clockOk = !syncClock || ClockSyncActivity::syncAndRecord();
   const bool hasAccount =
       KOREADER_STORE.getServerType() == KOReaderServerType::CROSSPOINT && KOREADER_STORE.hasCredentials();
-  if (!hasAccount) {
+  // Any KOSync account syncs progress; Insights need the CrossPoint server.
+  const bool booksOk = !syncsBooks() || !KOREADER_STORE.hasCredentials() || syncAllBooks();
+  if (!hasAccount && !(syncsBooks() && KOREADER_STORE.hasCredentials())) {
     // The clock is set; say why Insights were skipped.
     state = clockOk ? NO_ACCOUNT : FAILED;
     requestUpdate();
     return;
   }
   // Download first: the upload's TLS sessions would otherwise leave less room for the list.
-  const bool downloaded = statsSync::download();
-  const bool uploaded = statsSync::run("", "");
+  const bool downloaded = !hasAccount || statsSync::download();
+  const bool uploaded = !hasAccount || statsSync::run("", "");
   // A saved download is merged at boot, so it needs the restart even when WiFi was already up.
-  if (downloaded) restartOnExit = true;
-  if (downloaded && uploaded && clockOk) {
+  if (hasAccount && downloaded) restartOnExit = true;
+  if (downloaded && uploaded && clockOk && booksOk) {
     // The restart then returns to where the sync started; "Done" is the only sign it went through.
     state = DONE;
     requestUpdateAndWait();
@@ -122,9 +129,39 @@ void StatsSyncActivity::runSync() {
     leave();
     return;
   }
-  LOG_ERR("STATS", "Refresh incomplete: download %d, upload %d, clock %d", downloaded, uploaded, clockOk);
+  LOG_ERR("STATS", "Refresh incomplete: download %d, upload %d, clock %d, books %d", downloaded, uploaded, clockOk,
+          booksOk);
   state = FAILED;
   requestUpdate();
+}
+
+// The book list comes from the library index. Rebuilt here, as the Library screen would, when a
+// firmware update, a book transfer or the metadata setting left it stale.
+void StatsSyncActivity::ensureLibraryIndex() {
+  const bool readMetadata = SETTINGS.libraryUseMetadata != 0;
+  if (!library::isLibraryIndexDirty()) {
+    auto index = makeUniqueNoThrow<library::LibraryIndexFile>();
+    if (index && index->open(library::libraryIndexPath()) && index->header().metadataEnabled == readMetadata) return;
+  }
+  {
+    RenderLock lock(*this);
+    GUI.drawPopup(renderer, tr(STR_LIBRARY_REBUILDING));
+  }
+  library::BuildStats stats;
+  if (!library::buildLibraryIndex("/", stats, readMetadata)) LOG_ERR("STATS", "Library index build failed");
+}
+
+void StatsSyncActivity::onBookSynced(void* context, const uint16_t done, const uint16_t total) {
+  auto* self = static_cast<StatsSyncActivity*>(context);
+  self->bookDone = done;
+  self->bookTotal = total;
+  self->requestUpdateAndWait();
+}
+
+bool StatsSyncActivity::syncAllBooks() {
+  const bool ok = syncEngine::syncAllBooks(renderer, &onBookSynced, this);
+  bookTotal = 0;
+  return ok;
 }
 
 void StatsSyncActivity::loop() {
@@ -153,7 +190,14 @@ void StatsSyncActivity::render(RenderLock&&) {
                                               : tr(STR_SYNC_STATS));
   switch (state) {
     case SYNCING:
-      renderer.drawCenteredText(UI_12_FONT_ID, midY, tr(STR_SYNCING_STATS));
+      if (bookTotal > 0) {
+        char text[64];
+        I18N.formatCountOf(text, sizeof(text), StrId::STR_LIBRARY_POSITION, bookDone, bookTotal);
+        renderer.drawCenteredText(UI_12_FONT_ID, midY - 20, tr(STR_SYNC_PROGRESS));
+        renderer.drawCenteredText(UI_10_FONT_ID, midY + 10, text);
+      } else {
+        renderer.drawCenteredText(UI_12_FONT_ID, midY, tr(STR_SYNCING_STATS));
+      }
       break;
     case NO_ACCOUNT:
       renderer.drawCenteredText(UI_12_FONT_ID, midY, tr(STR_SET_CREDENTIALS_FIRST), true, EpdFontFamily::BOLD);

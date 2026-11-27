@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "SyncEngine.h"
+#include "activities/reader/ProgressFile.h"
 
 namespace {
 struct SleepBook {
@@ -109,27 +110,64 @@ bool syncEngine::prepareSleepSync() {
   return true;
 }
 
-void syncEngine::syncOnSleep() {
-  if (!sleepBook) return;
-  const SleepBook book = std::move(*sleepBook);
-  sleepBook.reset();
-  KOReaderProgress progress = book.progress;
+namespace {
+// The saved position as the sync reads it: the reader's last-page marker means the chapter start.
+bool readSavedPosition(const std::string& cachePath, CrossPointPosition& out) {
+  const ProgressFile::SavedSpot spot = ProgressFile::readSavedSpot(cachePath);
+  if (!spot.valid) return false;
+  out = {spot.spine, spot.page == UINT16_MAX ? 0 : spot.page, spot.pageCount > 0 ? spot.pageCount : 1};
+  out.hasResolvedSpineIndex = true;
+  out.hasMappedPage = true;
+  if (spot.hasOffset) {
+    out.visibleTextOffset = spot.offset;
+    out.hasVisibleTextOffset = true;
+  }
+  return true;
+}
+}  // namespace
 
-  LOG_INF("SYNC", "Sync on sleep: contacting the server");
-  const Pull remote = pull(book.path, false);
+bool syncEngine::savedBookProgress(const std::string& bookPath, KOReaderProgress& out) {
+  // Metadata only, as the manual sync does: no CSS, and no cache rebuild when it is missing.
+  std::shared_ptr<Epub> epub(new (std::nothrow) Epub(bookPath, "/.crosspoint"));
+  if (!epub) {
+    LOG_ERR("SYNC", "OOM loading %s", bookPath.c_str());
+    return false;
+  }
+  CrossPointPosition position{};
+  if (!readSavedPosition(epub->getCachePath(), position)) return false;
+  epub->setupCacheDir();
+  if (!epub->load(false, true)) {
+    LOG_ERR("SYNC", "Could not load %s", bookPath.c_str());
+    return false;
+  }
+  out = localProgress("", bookPath, epub.get(), position, ProgressMapper::toSavedProgress(epub, position));
+  return true;
+}
+
+bool syncEngine::uploadUnlessBehind(const std::string& bookPath, KOReaderProgress progress) {
+  const Pull remote = pull(bookPath, false);
   if (remote.documentHash.empty() || !remote.extensionsSynced) {
-    LOG_ERR("SYNC", "Sync on sleep: stopped before progress");
-    return;
+    LOG_ERR("SYNC", "Stopped before progress: %s", bookPath.c_str());
+    return false;
   }
   // Never move the server backwards without the user: a further remote position waits for a manual sync.
   const bool upload = remote.result == KOReaderSyncClient::NOT_FOUND ||
                       (remote.result == KOReaderSyncClient::OK && progress.percentage >= remote.remote.percentage);
   if (!upload) {
-    LOG_INF("SYNC", "Sync on sleep: progress not uploaded (result=%d remote=%.4f local=%.4f)", remote.result,
-            remote.remote.percentage, progress.percentage);
-    return;
+    LOG_INF("SYNC", "Progress not uploaded (result=%d remote=%.4f local=%.4f)", remote.result, remote.remote.percentage,
+            progress.percentage);
+    return remote.result == KOReaderSyncClient::OK;
   }
   progress.document = remote.documentHash;
   const KOReaderSyncClient::Error result = push(progress);
-  LOG_INF("SYNC", "Sync on sleep: progress upload result=%d", result);
+  LOG_INF("SYNC", "Progress upload result=%d", result);
+  return result == KOReaderSyncClient::OK;
+}
+
+void syncEngine::syncOnSleep() {
+  if (!sleepBook) return;
+  const SleepBook book = std::move(*sleepBook);
+  sleepBook.reset();
+  LOG_INF("SYNC", "Sync on sleep: contacting the server");
+  uploadUnlessBehind(book.path, book.progress);
 }

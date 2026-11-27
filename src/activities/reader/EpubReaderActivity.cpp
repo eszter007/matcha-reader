@@ -97,51 +97,8 @@
 #include "util/TextProfiles.h"
 
 namespace {
-// What progress.bin holds, in either layout (see ProgressFile): stock CrossPoint has the text offset at
-// [6-9] and no reader choices, the fork has vertical/furigana at [6-7] and the offset at [9-12].
-struct SavedSpot {
-  bool valid = false;
-  uint16_t spine = 0;
-  uint16_t page = 0;
-  uint16_t pageCount = 0;  // 0 when not recorded
-  bool hasOffset = false;
-  uint32_t offset = 0;
-  int8_t vertical = -1;  // -1: the book has no choice of its own
-  int8_t furigana = -1;
-};
-
-SavedSpot readSavedSpot(const std::string& cachePath) {
-  SavedSpot s;
-  HalFile f;
-  uint8_t data[13];
-  if (!Storage.openFileForRead("ERS", cachePath + "/progress.bin", f)) return s;
-  const int size = f.read(data, sizeof(data));
-  if (size < 4) return s;
-  const auto le32 = [&data](const int at) {
-    return static_cast<uint32_t>(data[at]) | (static_cast<uint32_t>(data[at + 1]) << 8) |
-           (static_cast<uint32_t>(data[at + 2]) << 16) | (static_cast<uint32_t>(data[at + 3]) << 24);
-  };
-  s.valid = true;
-  s.spine = static_cast<uint16_t>(data[0] | (data[1] << 8));
-  s.page = static_cast<uint16_t>(data[2] | (data[3] << 8));
-  if (size >= 6) s.pageCount = static_cast<uint16_t>(data[4] | (data[5] << 8));
-  if (ProgressFile::isStockLayout(size)) {
-    if (size >= 10) {
-      s.hasOffset = true;
-      s.offset = le32(6);
-    }
-  } else {
-    if (size >= 8) {
-      s.vertical = static_cast<int8_t>(data[6]);
-      s.furigana = static_cast<int8_t>(data[7]);
-    }
-    if (size >= 13) {
-      s.hasOffset = true;
-      s.offset = le32(9);
-    }
-  }
-  return s;
-}
+using ProgressFile::readSavedSpot;
+using ProgressFile::SavedSpot;
 
 // Whether `remote` lies past the saved spot. Chapter, then the text offset, then the share of the chapter's
 // pages; percentages of the whole book are not compared, since one is weighted by bytes and the other by

@@ -49,10 +49,10 @@ struct KOReaderRichPosition {
 struct KOReaderProgress {
   std::string document;                          // Document hash
   std::string progress;                          // XPath-like progress string
-  float percentage;                              // Progress percentage (0.0 to 1.0)
+  float percentage = 0.0f;                       // Progress percentage (0.0 to 1.0)
   std::string device;                            // Device name
   std::string deviceId;                          // Device ID
-  int64_t timestamp;                             // Unix timestamp of last update
+  int64_t timestamp = 0;                         // Unix timestamp of last update
   std::optional<KOReaderMetadata> metadata;      // Optional document metadata
   std::optional<KOReaderRichPosition> position;  // Optional rich position
 };

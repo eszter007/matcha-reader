@@ -484,7 +484,7 @@ other four only affect the CrossPoint List. The cover grid always shows every bo
   [Syncing Insights Between Devices](#74-syncing-insights-between-devices).
 
 - **Sync Insights**: Joins Wi-Fi and syncs your reading insights with the CrossPoint sync server, the same as **Refresh
-  Insights** in Insights. See [Syncing Insights Between Devices](#74-syncing-insights-between-devices).
+  Insights** in Insights. It also uploads the reading position of every book you opened on this device. See [Syncing Insights Between Devices](#74-syncing-insights-between-devices).
 
 #### 3.6.6 Reader
 
@@ -1937,7 +1937,8 @@ shows the language code, such as `ZH`. Books with no language tag (TXT, XTC and 
 On a touch device, tap a tab or swipe left and right across the page to switch tabs. Tap the arrows next to the
 month to change it.
 
-**Refresh Insights** at the bottom of the page syncs your insights with the CrossPoint sync server; see
+**Refresh Insights** at the bottom of the page syncs your insights with the CrossPoint sync server and uploads the
+reading position of every book you opened on this device; see
 [Syncing Insights Between Devices](#74-syncing-insights-between-devices).
 
 <p align="center"><img src="docs/images/screenshots/insights.png" width="260" alt="Insights with streak, insight cards and calendar"></p>
@@ -1994,6 +1995,11 @@ Books finished before the finish day was saved show their last reading day befor
 With the CrossPoint sync server set up (see [Syncing While Reading](#syncing-while-reading)), select **Refresh Insights**
 at the bottom of Insights or **Settings → Insights → Sync Insights**. The device joins Wi-Fi, sends its insights and fetches
 the reading time saved on the server, shows **Done** and restarts back to where you started.
+
+The same sync uploads the reading position of every EPUB you opened on this device, one book after another; the screen
+shows **Sync Progress** and a count such as "3/12 books". A position the server already has further ahead is never
+overwritten; open that book and choose **Sync Progress** to decide. This part works with any KOSync account, also
+without the CrossPoint sync server, and then only the positions sync.
 
 What comes back is what any CrossPoint reader on your account uploaded:
 
