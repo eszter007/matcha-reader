@@ -133,7 +133,7 @@ A cover grid of every book on the card, with a **Shelves** tab for folders and a
 
 ### Reading insights
 
-Streak, minutes today and this week, your best day, books finished and a calendar, split by language. Each book has its own insights, and finishing one shows a summary. The **Insights** sleep screen shows them on a split-flap board. With the CrossPoint sync server they sync across devices and come back to a reset device. **Refresh Insights** also uploads the reading position of every book you opened on the device. See [Guide §7](USER_GUIDE.md#7-reading-insights) and [§3.7](USER_GUIDE.md#37-sleep-screen).
+Streak, minutes today and this week, your best day, books finished and a calendar, split by language. Each book has its own insights, and finishing one shows a summary. The **Insights** sleep screen shows them on a split-flap board. With the CrossPoint sync server they sync across devices and come back to a reset device. **Refresh Insights** also uploads the reading position of every book you opened on the device. A reading day can start at a time you choose instead of midnight. See [Guide §7](USER_GUIDE.md#7-reading-insights) and [§3.7](USER_GUIDE.md#37-sleep-screen).
 
 <p align="center">
   <img src="docs/images/screenshots/insights.png" width="240" alt="Insights with streak, insight cards and calendar">

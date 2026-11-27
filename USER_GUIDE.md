@@ -483,6 +483,11 @@ other four only affect the CrossPoint List. The cover grid always shows every bo
   own reader and imported time. **This device** shows only what this reader recorded. See
   [Syncing Insights Between Devices](#74-syncing-insights-between-devices).
 
+- **Day Starts At** (Midnight by default): when a reading day begins for Insights, the streak and the stats sync.
+  Choose **Custom Time**, then select the **Custom Time** row below it and type the time in 24-hour format, `HH:MM`,
+  for example `04:00` or `23:59`. Reading before that time counts towards the previous day, so a session that runs
+  past midnight stays on the evening it started.
+
 - **Sync Insights**: Joins Wi-Fi and syncs your reading insights with the CrossPoint sync server, the same as **Refresh
   Insights** in Insights. It also uploads the reading position of every book you opened on this device. See [Syncing Insights Between Devices](#74-syncing-insights-between-devices).
 
