@@ -66,4 +66,13 @@ bool prepareSleepSync();
 // for a manual sync. The caller has WiFi up.
 void syncOnSleep();
 
+// Fetches the server's position for the book, then uploads `progress` unless the server is further
+// ahead. True when the server ends up with this position or a further one.
+bool uploadUnlessBehind(const std::string& bookPath, KOReaderProgress progress);
+
+// The saved position of a book that was opened on this device, as the upload for it. Loads the
+// book's metadata; the chapter mapper borrows the framebuffer, so the caller holds a
+// FrameBufferLoan with rendering locked. False: never opened here, or the book cannot be read.
+bool savedBookProgress(const std::string& bookPath, KOReaderProgress& out);
+
 }  // namespace syncEngine

@@ -1,9 +1,12 @@
 #include "StatsSyncActivity.h"
 
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <KOReaderCredentialStore.h>
+#include <LibraryBuilder.h>
+#include <LibraryIndexFile.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <WiFi.h>
@@ -20,17 +23,20 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "stats/StatsSync.h"
+#include "sync/SyncEngine.h"
 
 void StatsSyncActivity::onEnter() {
   Activity::onEnter();
   const bool hasAccount =
       KOREADER_STORE.getServerType() == KOReaderServerType::CROSSPOINT && KOREADER_STORE.hasCredentials();
-  if (!hasAccount && !syncClock) {
+  const bool hasProgressSync = syncsBooks() && KOREADER_STORE.hasCredentials();
+  if (!hasAccount && !syncClock && !hasProgressSync) {
     state = NO_ACCOUNT;
     requestUpdate();
     return;
   }
   state = SYNCING;
+  if (hasProgressSync) ensureLibraryIndex();
   if (WiFi.status() == WL_CONNECTED) {
     requestUpdate();
     return;
@@ -103,18 +109,20 @@ void StatsSyncActivity::runSync() {
   const bool clockOk = !syncClock || ClockSyncActivity::syncAndRecord();
   const bool hasAccount =
       KOREADER_STORE.getServerType() == KOReaderServerType::CROSSPOINT && KOREADER_STORE.hasCredentials();
-  if (!hasAccount) {
+  // Any KOSync account syncs progress; Insights need the CrossPoint server.
+  const bool booksOk = !syncsBooks() || !KOREADER_STORE.hasCredentials() || syncAllBooks();
+  if (!hasAccount && !(syncsBooks() && KOREADER_STORE.hasCredentials())) {
     // The clock is set; say why Insights were skipped.
     state = clockOk ? NO_ACCOUNT : FAILED;
     requestUpdate();
     return;
   }
   // Download first: the upload's TLS sessions would otherwise leave less room for the list.
-  const bool downloaded = statsSync::download();
-  const bool uploaded = statsSync::run("", "");
+  const bool downloaded = !hasAccount || statsSync::download();
+  const bool uploaded = !hasAccount || statsSync::run("", "");
   // A saved download is merged at boot, so it needs the restart even when WiFi was already up.
-  if (downloaded) restartOnExit = true;
-  if (downloaded && uploaded && clockOk) {
+  if (hasAccount && downloaded) restartOnExit = true;
+  if (downloaded && uploaded && clockOk && booksOk) {
     // The restart then returns to where the sync started; "Done" is the only sign it went through.
     state = DONE;
     requestUpdateAndWait();
@@ -122,9 +130,69 @@ void StatsSyncActivity::runSync() {
     leave();
     return;
   }
-  LOG_ERR("STATS", "Refresh incomplete: download %d, upload %d, clock %d", downloaded, uploaded, clockOk);
+  LOG_ERR("STATS", "Refresh incomplete: download %d, upload %d, clock %d, books %d", downloaded, uploaded, clockOk,
+          booksOk);
   state = FAILED;
   requestUpdate();
+}
+
+// The book list comes from the library index; rebuilt here, before Wi-Fi takes the heap, when a
+// firmware update or a book transfer left it stale.
+void StatsSyncActivity::ensureLibraryIndex() {
+  if (!library::isLibraryIndexDirty()) {
+    auto index = makeUniqueNoThrow<library::LibraryIndexFile>();
+    if (index && index->open(library::libraryIndexPath())) return;
+  }
+  library::BuildStats stats;
+  if (!library::buildLibraryIndex("/", stats, SETTINGS.libraryUseMetadata != 0)) {
+    LOG_ERR("STATS", "Library index build failed");
+  }
+}
+
+bool StatsSyncActivity::syncAllBooks() {
+  // The index and its record stay off the stack; one book is loaded at a time.
+  struct LibraryReader {
+    library::LibraryIndexFile index;
+    library::ClixRecord record{};
+  };
+  auto reader = makeUniqueNoThrow<LibraryReader>();
+  if (!reader) {
+    LOG_ERR("STATS", "OOM: library index");
+    return false;
+  }
+  if (!reader->index.open(library::libraryIndexPath())) {
+    LOG_ERR("STATS", "Cannot open library index");
+    return false;
+  }
+  bookTotal = reader->index.bookCount();
+  bool allOk = true;
+  std::string path;
+  for (uint16_t i = 0; i < bookTotal; i++) {
+    bookDone = static_cast<uint16_t>(i + 1);
+    if (!reader->index.readRecord(i, reader->record) || !reader->index.readPath(reader->record, path)) continue;
+    if (!FsHelpers::hasEpubExtension(path)) continue;
+    requestUpdateAndWait();
+    KOReaderProgress progress;
+    bool prepared;
+    {
+      RenderLock lock;
+      GfxRenderer::FrameBufferLoan loan(renderer);
+      prepared = syncEngine::savedBookProgress(path, progress);
+    }
+    if (!prepared) continue;
+    bool ok;
+    {
+#if defined(CONFIG_IDF_TARGET_ESP32C3) && CONFIG_IDF_TARGET_ESP32C3
+      // The loan frees the framebuffer to the heap for TLS.
+      RenderLock lock;
+      GfxRenderer::FrameBufferLoan loan(renderer);
+#endif
+      ok = syncEngine::uploadUnlessBehind(path, progress);
+    }
+    if (!ok) allOk = false;
+  }
+  bookTotal = 0;
+  return allOk;
 }
 
 void StatsSyncActivity::loop() {
@@ -153,7 +221,14 @@ void StatsSyncActivity::render(RenderLock&&) {
                                               : tr(STR_SYNC_STATS));
   switch (state) {
     case SYNCING:
-      renderer.drawCenteredText(UI_12_FONT_ID, midY, tr(STR_SYNCING_STATS));
+      if (bookTotal > 0) {
+        char text[64];
+        I18N.formatCountOf(text, sizeof(text), StrId::STR_LIBRARY_POSITION, bookDone, bookTotal);
+        renderer.drawCenteredText(UI_12_FONT_ID, midY - 20, tr(STR_SYNC_PROGRESS));
+        renderer.drawCenteredText(UI_10_FONT_ID, midY + 10, text);
+      } else {
+        renderer.drawCenteredText(UI_12_FONT_ID, midY, tr(STR_SYNCING_STATS));
+      }
       break;
     case NO_ACCOUNT:
       renderer.drawCenteredText(UI_12_FONT_ID, midY, tr(STR_SET_CREDENTIALS_FIRST), true, EpdFontFamily::BOLD);
