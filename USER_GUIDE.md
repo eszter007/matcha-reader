@@ -1836,10 +1836,10 @@ dictionaries/
     vocab.idx    vocab.dat    vocab.spx    vocab.title    # vocabulary (required)
     names.idx    names.dat    names.spx    names.title    # proper nouns (optional)
     grammar.idx  grammar.dat  grammar.spx  grammar.title  # grammar patterns (optional)
-    kanji.idx    kanji.dat    kanji.spx    kanji.title    # hanzi, one entry per character (optional)
+    hanzi.idx    hanzi.dat    hanzi.spx    hanzi.title    # hanzi, one entry per character (optional)
   yue/                         # Cantonese, converted CC-Canto + CC-CEDICT
     vocab.idx    vocab.dat    vocab.spx    vocab.title
-    kanji.idx    kanji.dat    kanji.spx    kanji.title    # hanzi, one entry per character (optional)
+    hanzi.idx    hanzi.dat    hanzi.spx    hanzi.title    # hanzi, one entry per character (optional)
 ```
 
 StarDict files placed straight into `fr/` without a name folder are not picked up for French books.

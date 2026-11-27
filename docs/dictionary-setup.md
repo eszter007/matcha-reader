@@ -33,10 +33,10 @@ dictionaries/
     vocab.idx    vocab.dat    vocab.spx    vocab.title    # vocabulary (required)
     names.idx    names.dat    names.spx    names.title    # proper nouns (optional)
     grammar.idx  grammar.dat  grammar.spx  grammar.title  # grammar patterns (optional)
-    kanji.idx    kanji.dat    kanji.spx    kanji.title    # hanzi, one entry per character (optional)
+    hanzi.idx    hanzi.dat    hanzi.spx    hanzi.title    # hanzi, one entry per character (optional)
   yue/                         # Cantonese
     vocab.idx    vocab.dat    vocab.spx    vocab.title
-    kanji.idx    kanji.dat    kanji.spx    kanji.title    # hanzi, one entry per character (optional)
+    hanzi.idx    hanzi.dat    hanzi.spx    hanzi.title    # hanzi, one entry per character (optional)
   en/your_dictionary_name/     # English, StarDict files
   fr/your_dictionary_name/     # French, StarDict files
 ```
@@ -55,7 +55,7 @@ python3 tools/dict_convert/convert_jmdict.py \
 
 Add `--furigana auto` to attach the reading over each kanji from [JmdictFurigana](https://github.com/Doublevil/JmdictFurigana) (downloaded once into `--output-dir`, about 5 MB), or `--furigana JmdictFurigana.json` for a copy you already have. Saved words then get a Furigana column, and flashcards place each reading beside its kanji. A book's own furigana is used first when the word has it.
 
-**Kanji dictionaries.** A Yomitan kanji dictionary (KANJIDIC, Wiktionary 漢字, JPDB Kanji and others) converts with `--name kanji` into the kanji files, with the script (the browser tool does not make kanji files). A lookup, in a book or in manga, then shows the word's own pages first and after them one page for each of the first four kanji of the word that have an entry. Several kanji dictionaries can be merged into one file by repeating `--input`; each shows as its own page. The same works for hanzi under `zh/` or `yue/`.
+**Kanji dictionaries.** A Yomitan kanji dictionary (KANJIDIC, Wiktionary 漢字, JPDB Kanji and others) converts with `--name kanji` into the kanji files, with the script (the browser tool does not make kanji files). A lookup, in a book or in manga, then shows the word's own pages first and after them one page for each of the first four kanji of the word that have an entry. Several kanji dictionaries can be merged into one file by repeating `--input`; each shows as its own page. The same works for hanzi under `zh/` or `yue/`. The files can be named `kanji.*`, `hanzi.*` (`hanzi.idx`, `hanzi.dat`, `hanzi.spx`, `hanzi.title`) or `hanja.*`; convert with `--name kanji`, `--name hanzi` or `--name hanja` to get that name. When a folder has more than one, `kanji.*` is used.
 
 **Pitch accent.** Add `--pitch` with a Yomitan pitch-accent dictionary (NHK 2016, 大辞泉) when converting the vocabulary: the lookup panel then draws a line over the high syllables of each reading, with a short stroke where the pitch drops. Repeat `--pitch` to fall back to a second one for words the first lacks.
 

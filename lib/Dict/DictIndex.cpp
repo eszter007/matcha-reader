@@ -164,7 +164,10 @@ DictFileHandles& handlesFor(const char* idxPath) {
   const char* slash = std::strrchr(idxPath, '/');
   const char* leaf = slash ? slash + 1 : idxPath;
   if (std::strcmp(leaf, "grammar.idx") == 0) return g_grammarHandles;
-  if (std::strcmp(leaf, "kanji.idx") == 0) return g_kanjiHandles;
+  if (std::strcmp(leaf, "kanji.idx") == 0 || std::strcmp(leaf, "hanzi.idx") == 0 ||
+      std::strcmp(leaf, "hanja.idx") == 0) {
+    return g_kanjiHandles;
+  }
   if (std::strcmp(leaf, "names.idx") == 0 || std::strcmp(leaf, "jmnedict.idx") == 0) return g_namesHandles;
   return g_vocabHandles;
 }
@@ -559,6 +562,16 @@ const char* DictIndex::grammarIdxPath() {
 }
 const char* DictIndex::grammarDatPath() { return datFor(grammarIdxPath(), g_grammarDat); }
 const char* DictIndex::kanjiIdxPath() {
+  if (g_kanjiIdxResolved) return g_kanjiIdxResolved;
+  std::string candidate;
+  if (!existsUnderRoot(KANJI_IDX_PATH, candidate)) {
+    for (const char* alias : {HANZI_IDX_PATH, HANJA_IDX_PATH}) {
+      if (!existsUnderRoot(alias, candidate)) continue;
+      if (const char* held = internPath(std::move(candidate))) g_kanjiIdxResolved = held;
+      if (g_kanjiIdxResolved) return g_kanjiIdxResolved;
+      break;
+    }
+  }
   // No older name exists for the kanji files; the same path stands in for one (old must be non-null).
   return resolveIdxPath(g_kanjiIdxResolved, KANJI_IDX_PATH, nullptr, KANJI_IDX_PATH, nullptr);
 }
@@ -606,7 +619,14 @@ const char* DictIndex::slotTitle(const uint8_t dict) {
   g_slotTitleProbed[slot] = true;
   title[0] = '\0';
   static constexpr const char* kLeaf[4] = {"/vocab.title", "/grammar.title", "/names.title", "/kanji.title"};
-  const std::string path = std::string(dictRoot()) + kLeaf[slot];
+  std::string path = std::string(dictRoot()) + kLeaf[slot];
+  if (slot == 3) {
+    // Beside whichever character file was found: kanji, hanzi or hanja.
+    const char* idx = kanjiIdxPath();
+    const char* slash = std::strrchr(idx, '/');
+    const char* dot = std::strrchr(idx, '.');
+    if (slash && dot > slash) path = std::string(dictRoot()) + std::string(slash, dot - slash) + ".title";
+  }
   HalFile f;
   if (!Storage.openFileForRead("DICT", path.c_str(), f)) return title;
   constexpr size_t kCap = sizeof(g_slotTitle[0]);

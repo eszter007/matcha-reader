@@ -62,8 +62,8 @@ class DictIndex {
   static const char* languageFolder();
 
   // Display name of a dictionary slot (DICT_JMDICT, DICT_NAMES, DICT_GRAMMAR or DICT_KANJI), from
-  // the <folder>/vocab.title, names.title, grammar.title or kanji.title the converter wrote. Empty when absent;
-  // the caller then falls back to a name of its own.
+  // the <folder>/vocab.title, names.title, grammar.title or kanji.title (hanzi.title, hanja.title) the converter wrote.
+  // Empty when absent; the caller then falls back to a name of its own.
   static const char* slotTitle(uint8_t dict);
 
   // Preferred filenames. The vocab/names dictionaries also accept the pre-rename legacy
@@ -94,6 +94,9 @@ class DictIndex {
   // One entry per character (KANJIDIC, Wiktionary hanzi), shown after a word's own entries.
   static constexpr const char* KANJI_IDX_PATH = "/dictionaries/jp/kanji.idx";
   static constexpr const char* KANJI_DAT_PATH = "/dictionaries/jp/kanji.dat";
+  // The same slot named for its script; read when kanji.idx is absent.
+  static constexpr const char* HANZI_IDX_PATH = "/dictionaries/jp/hanzi.idx";
+  static constexpr const char* HANJA_IDX_PATH = "/dictionaries/jp/hanja.idx";
 
   // Resolved paths for the vocab/names dictionaries: the preferred filename if it exists on the
   // SD card, else the legacy one. Probed lazily on first use and cached; releaseCaches() clears

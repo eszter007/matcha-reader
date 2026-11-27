@@ -2217,11 +2217,12 @@ def main():
     parser.add_argument(
         "--name",
         default="vocab",
-        choices=["vocab", "names", "grammar", "kanji"],
+        choices=["vocab", "names", "grammar", "kanji", "hanzi", "hanja"],
         help="Which dictionary slot the output files fill (default: vocab -> vocab.idx/"
         "vocab.dat). The device reads vocab (main dictionary), names (name dictionary), "
         "grammar (grammar dictionary), and kanji (one entry per character, shown after a "
-        "word's entries); pass --name names, grammar or kanji to fill those slots directly.",
+        "word's entries; hanzi and hanja are other names for this slot); pass --name names, "
+        "grammar or kanji to fill those slots directly.",
     )
     parser.add_argument(
         "--format",
@@ -2348,7 +2349,7 @@ def main():
         if fmt == "mdict":
             part = convert_mdict(path)
             title = os.path.splitext(os.path.basename(path))[0]
-        elif fmt == "yomitan" and args.name == "kanji":
+        elif fmt == "yomitan" and args.name in ("kanji", "hanzi", "hanja"):
             part, title = convert_yomitan_kanji(path)
         elif fmt == "yomitan":
             part, title = convert_yomitan(path, reading_records=not chinese, furigana=furigana,
