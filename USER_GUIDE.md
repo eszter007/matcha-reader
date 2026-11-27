@@ -970,7 +970,7 @@ For a shortcut, set **Settings → Controls → Front buttons → Menu long pres
 - **Smart Sync** (default for new setups) handles the easy cases on its own. It uploads your position when the server has none or when you are further ahead. It jumps to the server's position when that one is further ahead. If both already match, it confirms and changes nothing. It never asks, also not when you open a book.
 - **Ask Every Time** lets you choose each time: **Apply remote progress** jumps to the server's position, **Upload local progress** sends yours. Setups saved by older firmware keep this choice until you change it.
 
-**Sync Clippings** is off by default. Turn it on only with a CrossPoint sync server that supports clippings. **Sync Progress** then also uploads and downloads this book's clippings. Leave it off for ordinary KOSync servers.
+**Sync Clippings** is off by default. Turn it on only with a CrossPoint sync server that supports clippings. **Sync Progress** then also uploads and downloads this book's clippings. With **Server Type** set to **KoSync** it has no effect, and progress syncs as usual.
 
 With the server type set to **CrossPoint** or **Other**, **Sync Progress** in an EPUB also syncs the book's bookmarks, if the server offers it. Each bookmark's position, text excerpt and name are uploaded, so a bookmark added, renamed or deleted on one device shows on your other devices after they sync. If the server does not offer it, or this step fails, your progress still syncs.
 
@@ -1280,7 +1280,7 @@ Highlights stay in place even after you change the font, spacing or screen orien
 
 Clippings are also added to `My Clippings.txt` in the main folder of the SD card, in the same format Kindle uses. Very long clippings are shortened there. If you move or rename a book, its clippings move with it. Deleting a book deletes its clippings, but `My Clippings.txt` is not changed.
 
-If you use a CrossPoint Sync server, turn on **Sync Clippings** in the KOReader Sync settings. Your clippings then sync together with **Sync Progress**. Leave it off for an ordinary KOSync server.
+If you use a CrossPoint Sync server, turn on **Sync Clippings** in the KOReader Sync settings. Your clippings then sync together with **Sync Progress**. With an ordinary KOSync server (**Server Type: KoSync**) the setting is ignored.
 
 **Vertical text.** Selection works the same way on vertical pages, but it moves one character at a time. A run of Latin letters or digits counts as one character. The side buttons move along a column, and **Left** and **Right** jump between columns. **Left** moves forward, in reading direction. On touch, the handles sit above and below the selection. A vertical selection can't go past the current page.
 ## 6. Language Learning Features

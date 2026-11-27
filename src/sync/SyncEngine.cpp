@@ -11,6 +11,11 @@
 #include "clippings/ClippingSync.h"
 
 namespace {
+// A plain KOSync server has no clippings endpoint; Sync Clippings applies to the other server types.
+bool syncsClippings() {
+  return KOREADER_STORE.getSyncClippings() && KOREADER_STORE.getServerType() != KOReaderServerType::KOSYNC;
+}
+
 std::string documentIdFor(const std::string& bookPath, const DocumentMatchMethod method) {
   return method == DocumentMatchMethod::FILENAME ? KOReaderDocumentId::calculateFromFilename(bookPath)
                                                  : KOReaderDocumentId::calculate(bookPath);
@@ -19,12 +24,13 @@ std::string documentIdFor(const std::string& bookPath, const DocumentMatchMethod
 }  // namespace
 
 bool syncEngine::hasExtensions() {
-  return KOREADER_STORE.getSyncClippings() || KOREADER_STORE.getServerType() != KOReaderServerType::KOSYNC;
+  // Clippings also need a server other than plain KOSync, so the server type alone decides.
+  return KOREADER_STORE.getServerType() != KOReaderServerType::KOSYNC;
 }
 
 bool syncEngine::syncExtensions(const std::string& bookPath, const std::string& documentHash) {
   // Gate before allocating buffers or contacting the server.
-  const bool clippings = KOREADER_STORE.getSyncClippings();
+  const bool clippings = syncsClippings();
   const bool extensions = KOREADER_STORE.getServerType() != KOReaderServerType::KOSYNC;
   if (!clippings && !extensions) return true;
 
