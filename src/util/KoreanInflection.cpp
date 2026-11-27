@@ -148,7 +148,7 @@ constexpr JamoEnding kJamoEndings[] = {
 constexpr const char* kAfterVowel[] = {"요", "서", "도", "야", "야지", "라", "다가", "줘", "주세요", "버리다", ""};
 // clang-format on
 
-void addPredicate(Out& out, Word stem, int depth);
+void addPredicate(Out& out, const Word& stem, int depth);
 
 // The stem whose last syllable + 어/아 contracted into `c` (가+아 → 가, 오+아 → 와, 주+어 → 줘,
 // 되+어 → 돼, 하+여 → 해, 시+어 → 셔, 쓰+어 → 써). Each result replaces the last syllable of
@@ -221,7 +221,7 @@ void addContracted(Out& out, const Word& before, const char32_t c, const int dep
 
 // `stem` is everything before a predicate ending; emits stem+다 and peels tense, honorific and
 // the 하다 verb's noun.
-void addPredicate(Out& out, Word stem, const int depth) {
+void addPredicate(Out& out, const Word& stem, const int depth) {
   if (stem.empty() || out.full() || depth > 3 || !hangul(stem.back())) return;
   Word dict = stem;
   dict.push_back(U'다');
@@ -238,7 +238,7 @@ void addPredicate(Out& out, Word stem, const int depth) {
     addContracted(out, before, withFinal(last, NONE), depth + 1);
   }
   // 공부하 → 공부: the noun of a 하다 verb.
-  if (last == U'하' && !before.empty()) out.add(before);
+  if (last == U'하' && stem.size() > 1) out.add(before);
 }
 
 // The stem before a jamo ending (간 → 가, 산 → 살 by ㄹ dropping, 더운 → 덥, 그런 → 그렇).
@@ -278,7 +278,7 @@ void addVowelForms(Out& out, const Word& w) {
     if (r.empty()) continue;
     const char32_t c = r.back();
     const Word before(r.begin(), r.end() - 1);
-    if ((c == U'어' || c == U'아' || c == U'여') && !before.empty()) {
+    if ((c == U'어' || c == U'아' || c == U'여') && r.size() > 1) {
       addPredicate(out, before, 0);  // 먹어 → 먹, 하여 → 하
       if (hangul(before.back())) {
         Word s = before;
