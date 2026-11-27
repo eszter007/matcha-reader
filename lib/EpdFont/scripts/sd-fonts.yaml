@@ -378,6 +378,28 @@ families:
       regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/TraditionalChinese/NotoSerifCJKtc-Regular.otf"}
       bold:       {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/TraditionalChinese/NotoSerifCJKtc-Bold.otf"}
 
+  # ── Korean ──────────────────────────────────────────────────────────────
+  # Korean cuts of the same Noto CJK family: Hangul syllables and jamo, plus the hanja a Korean
+  # text uses. Auto-hidden from font pickers and used as the companion for a Korean book.
+
+  - name: NotoSansKR
+    description: "Korean sans-serif (Hangul, hanja, Latin)"
+    scripts: [cjk, latin]
+    intervals: latin-ext,hangul,cjk-ext
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Korean/NotoSansCJKkr-Regular.otf"}
+      bold:       {url: "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Korean/NotoSansCJKkr-Bold.otf"}
+
+  - name: NotoSerifKR
+    description: "Korean serif (Hangul, hanja, Latin)"
+    scripts: [cjk, latin]
+    intervals: latin-ext,hangul,cjk-ext
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/Korean/NotoSerifCJKkr-Regular.otf"}
+      bold:       {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/Korean/NotoSerifCJKkr-Bold.otf"}
+
   - name: UDDigiKyokasho
     description: "Japanese textbook font (CJK, Latin)"
     scripts: [cjk, latin]

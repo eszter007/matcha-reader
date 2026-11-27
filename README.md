@@ -31,6 +31,10 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
   <img src="docs/images/screenshots/word-lookup-chinese.png" width="260" alt="Word lookup panel over a page of 紅樓夢: 繁華 with pinyin and zhuyin, both scripts and two senses">
 </p>
 
+**Pictures.** Dictionaries that include pictures can show them in the panel, below the text. Convert the dictionary with `--images` and copy its `images` folder to the card too. The screenshot below uses a custom test dictionary made from a few entries of a Yomitan dictionary you supply yourself. No dictionary with pictures ships with the firmware. See [Dictionary setup](docs/dictionary-setup.md).
+
+<p align="center"><img src="docs/images/screenshots/word-lookup-picture.png" width="260" alt="Word lookup panel showing the entry パンダ from a custom test dictionary, with a photo of a giant panda below the text"></p>
+
 **Sentence mining.** Save a word with its sentence to a CSV per language that Anki imports as is. Choose **Sentence cards** (a word is saved once per sentence) or **Word cards** (a word is saved only once) in Dictionary Settings. Japanese words also get their furigana per kanji, from the book or the dictionary. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
 
 **Vocabulary history.** Optionally keep every word you look up, in any language and in manga, in `Vocabulary.txt` on the SD card. See [Guide §6.1](USER_GUIDE.md#vocabulary-history).
@@ -66,7 +70,7 @@ Vertical text is detected from the book, with right-to-left columns, kinsoku, em
 
 With the Japanese dictionaries installed:
 
-Conjugated words resolve to their dictionary form: 食べませんでした finds 食べる. A name the book gives furigana for is picked whole. Vocabulary, names and grammar each come from their own dictionary (Jitendex and JMdict).
+Conjugated words resolve to their dictionary form: 食べませんでした finds 食べる. A name the book gives furigana for is picked whole. Vocabulary, names and grammar each come from their own dictionary (Jitendex and JMdict). With a kanji dictionary installed (KANJIDIC, Wiktionary 漢字 or any other Yomitan kanji dictionary), a lookup also shows a page for each kanji of the word (convert it with `--name kanji`). Converted with `--pitch` and a pitch-accent dictionary (NHK 2016), the reading shows its pitch as a line over the high syllables. Dictionaries with pictures (デジタル大辞泉) can keep them, converted with `--images`; the panel draws them in the entry.
 
 See [Guide §6.3](USER_GUIDE.md#63-japanese-books).
 
@@ -92,6 +96,8 @@ See [Guide §6.4](USER_GUIDE.md#64-chinese-books).
 ## French, English and other languages
 
 Any StarDict dictionary works, picked by the book's language. A missed lookup is retried with word-form rules, most complete for French, where `parlaient` finds `parler`. See [Guide §6.5](USER_GUIDE.md#65-books-in-other-languages).
+
+Korean has its own rules: particles and verb endings come off before the lookup, so 먹었습니다 finds 먹다. A Yomitan Korean dictionary such as KRDICT converts to StarDict with `--lang ko`. Choose a Korean font for Korean books in Reader Settings → Text Settings.
 
 ## In every book
 
@@ -198,6 +204,7 @@ Install both Chinese zips so dictionary entries can show the other script. Other
 | Japanese | Download `japanese-dictionaries.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card. It holds `dictionaries/jp/` |
 | Mandarin | Download `dictionaries-zh-simplified.zip` or `dictionaries-zh-traditional.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card. Install one, not both |
 | Cantonese | Download `dictionaries-yue.zip` from the [dictionaries release](https://github.com/eszter007/matcha-reader-assets/releases/tag/dictionaries-2.0) and copy its `dictionaries` folder to the root of the card |
+| Korean | Convert KRDICT with `--lang ko` into `dictionaries/ko/krdict/` ([setup](docs/dictionary-setup.md#korean)) |
 | Any other | Copy a StarDict dictionary into `dictionaries/<lang>/<name>/`, for example `dictionaries/fr/larousse/` |
 
 Your own dictionaries convert in the [browser tool](https://eszter007.github.io/matcha-reader-tools/). Details are in [docs/dictionary-setup.md](docs/dictionary-setup.md).

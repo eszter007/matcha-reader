@@ -185,8 +185,8 @@ bool MangaWordLookupActivity::resultEntries(std::vector<DictionaryDefinitionActi
   entry.dictName = std::string(label);
   auto& draft = entry.draft;
   draft.card.word = resultHeadword;
-  draft.card.reading = resultReading;
-  if (furigana::matchesReading(resultFurigana, resultReading)) draft.card.furigana = resultFurigana;
+  draft.card.reading = DefinitionText::readingText(resultReading);
+  if (furigana::matchesReading(resultFurigana, draft.card.reading)) draft.card.furigana = resultFurigana;
   draft.card.sentence = miningSentence();
   draft.card.book = mining_.bookTitle;
   draft.card.author = mining_.bookAuthor;
@@ -196,8 +196,22 @@ bool MangaWordLookupActivity::resultEntries(std::vector<DictionaryDefinitionActi
   draft.language = sentencemining::languageForDictionary("", mining_.bookLanguage);
   if (draft.language.empty()) draft.language = sentencemining::JAPANESE;
   draft.bookPath = mining_.bookPath;
-  out.reserve(1);
+  out.reserve(1 + resultKanjiCount);
   out.push_back(std::move(entry));
+  for (int i = 0; i < resultKanjiCount; i++) {
+    DictionaryDefinitionActivity::Entry page;
+    page.headword = resultKanji[i].character;
+    page.definition = std::move(resultKanji[i].definition);
+    DefinitionText::EntryMetadata metadata;
+    DefinitionText::extractEntryMetadata(page.definition, page.headword, metadata);
+    DefinitionText::formatEntryBody(page.definition, std::string(), metadata.grammar);
+    page.reading = std::move(metadata.reading);
+    page.definitionText = true;
+    page.kind = dictsource::kind(DictIndex::DICT_KANJI);
+    page.dictName = dictsource::name(DictIndex::DICT_KANJI);
+    out.push_back(std::move(page));
+  }
+  resultKanjiCount = 0;  // moved into the panel, like the definition
   return true;
 }
 
@@ -328,6 +342,7 @@ void MangaWordLookupActivity::performLookupImpl() {
   resultFurigana.clear();
   resultGrammar.clear();
   resultDictionaryLabel.clear();
+  resultKanjiCount = 0;
   resultMatchLen = 0;
 
   std::string text = buildLookupText(static_cast<size_t>(cursorIndex));
@@ -501,8 +516,10 @@ void MangaWordLookupActivity::performLookupImpl() {
     }
   }
 
-  DefinitionText::formatEntryBody(
-      resultDefinition, resultDict == DictIndex::DICT_GRAMMAR ? resultHeadword : std::string(), resultGrammar);
+  DefinitionText::formatEntryBody(resultDefinition,
+                                  resultDict == DictIndex::DICT_GRAMMAR ? resultHeadword : std::string(), resultGrammar,
+                                  resultDict == DictIndex::DICT_NAMES);
+  if (hasResult) resultKanjiCount = kanjipages::collect(resultHeadword, resultKanji);
   requestUpdate();
 }
 

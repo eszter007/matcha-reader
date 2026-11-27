@@ -39,7 +39,7 @@ bool lookup(void* /*ctx*/, const char* text, std::vector<DictionaryDefinitionAct
   DefinitionText::extractEntryMetadata(entry.definition, entry.headword, metadata);
   const uint8_t dict = result.entry.sourceDict;
   DefinitionText::formatEntryBody(entry.definition, dict == DictIndex::DICT_GRAMMAR ? entry.headword : std::string(),
-                                  metadata.grammar);
+                                  metadata.grammar, dict == DictIndex::DICT_NAMES);
   entry.reading = std::move(metadata.reading);
   entry.grammar = std::move(metadata.grammar);
   entry.dictName = metadata.source.empty() ? std::string(dictsource::name(dict)) : std::move(metadata.source);

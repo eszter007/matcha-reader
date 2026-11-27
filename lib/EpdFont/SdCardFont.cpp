@@ -106,6 +106,17 @@ constexpr size_t MINI_RETAIN_MIN_FREE_HEAP = 40 * 1024;
 constexpr uint8_t MINI_UNDERUSE_RUNS_BEFORE_FREE = 3;
 // Working headroom left outside the mini bitmap arena's single contiguous block.
 constexpr uint32_t PREWARM_MAX_ALLOC_RESERVE = 4 * 1024;
+// Free heap a bitmap arena must leave behind for the arena's own metadata, the
+// page draw and on-demand overflow glyph loads. A larger arena is refused so the
+// caller retries with fewer glyphs.
+constexpr uint32_t PREWARM_MIN_FREE_AFTER_ARENA = 16 * 1024;
+
+bool arenaLeavesHeadroom(uint32_t arenaBytes) {
+  // With PSRAM the arena comes from PSRAM, so internal free heap does not limit it.
+  if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) >= arenaBytes && arenaBytes > 0) return true;
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  return freeHeap > arenaBytes && freeHeap - arenaBytes >= PREWARM_MIN_FREE_AFTER_ARENA;
+}
 
 // Keep-if-fits buffer reuse: only reallocate when the needed size exceeds the
 // current capacity. Freeing + reallocating slightly different sizes every page
@@ -1699,9 +1710,9 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
 
   // Mini glyph array (reused across pages when it fits)
   if (!ensureArrayCapacity(s.miniGlyphs, s.miniGlyphCapacity, validCount)) {
-    LOG_ERR("SDCF", "Failed to allocate mini glyphs for style %u", styleIdx);
+    LOG_DBG("SDCF", "Failed to allocate mini glyphs (%u) for style %u", validCount, styleIdx);
     freeStyleMiniData(s);
-    return static_cast<int>(cpCount);
+    return PREWARM_ARENA_TOO_LARGE;
   }
   s.miniGlyphCount = validCount;
 
@@ -1785,6 +1796,10 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
         // this a single extra pass, with no recursive growth on the next pass.
         freeStyleMiniData(s);
         file = HalFile{};
+        if (!arenaLeavesHeadroom(totalBitmapSize)) {
+          LOG_DBG("SDCF", "Mini bitmap (%u bytes) would leave too little heap for style %u", totalBitmapSize, styleIdx);
+          return PREWARM_ARENA_TOO_LARGE;
+        }
         bool bitmapReady = ensureArrayCapacity(s.miniBitmap, s.miniBitmapCapacity, totalBitmapSize);
         if (!bitmapReady && hasAdvanceTable()) {
           // Layout advances are rebuildable; release them before falling back to fewer glyphs.
@@ -1806,6 +1821,11 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
         stats_.seekCount += seekCount;
         return prewarmStyle(styleIdx, codepoints, cpCount, metadataOnly, loadKernLig, accumulate);
       }
+    }
+    if (totalBitmapSize > s.miniBitmapCapacity && !arenaLeavesHeadroom(totalBitmapSize)) {
+      LOG_DBG("SDCF", "Mini bitmap (%u bytes) would leave too little heap for style %u", totalBitmapSize, styleIdx);
+      freeStyleMiniData(s);
+      return PREWARM_ARENA_TOO_LARGE;
     }
     if (!ensureArrayCapacity(s.miniBitmap, s.miniBitmapCapacity, totalBitmapSize)) {
       // Not a failure on its own: the only caller answers PREWARM_ARENA_TOO_LARGE

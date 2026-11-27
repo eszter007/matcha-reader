@@ -1,6 +1,7 @@
 add_executable(InflectionRulesTest
   InflectionRulesTest.cpp
   ${REPO_ROOT}/src/util/InflectionRules.cpp
+  ${REPO_ROOT}/src/util/KoreanInflection.cpp
 )
 
 target_include_directories(InflectionRulesTest PRIVATE

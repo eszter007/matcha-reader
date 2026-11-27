@@ -4,6 +4,8 @@
 #include <cctype>
 #include <cstring>
 
+#include "KoreanInflection.h"
+
 namespace InflectionRules {
 namespace {
 
@@ -478,12 +480,18 @@ Language languageFromCode(const char* code) {
   const char third = code[2];
   if (third != '\0' && third != '-' && third != '_' && third != '/') return Language::Generic;
   if (first == 'f' && second == 'r') return Language::French;
+  if (first == 'k' && second == 'o') return Language::Korean;
   return Language::Generic;
 }
 
 void variants(const Language language, const std::string& word, std::vector<std::string>& out) {
   out.clear();
   if (word.empty()) return;
+  // Korean has its own analysis and cap: a conjugated form needs more candidates than a suffix.
+  if (language == Language::Korean) {
+    KoreanInflection::variants(word, out);
+    return;
+  }
   out.reserve(MAX_VARIANTS);
 
   // Each normalisation both emits a candidate and becomes the base the next

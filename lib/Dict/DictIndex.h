@@ -61,9 +61,9 @@ class DictIndex {
   static const char* installedFolderFor(const char* folder);
   static const char* languageFolder();
 
-  // Display name of a dictionary slot (DICT_JMDICT, DICT_NAMES or DICT_GRAMMAR), from the
-  // <folder>/vocab.title, names.title or grammar.title the converter wrote. Empty when absent;
-  // the caller then falls back to a name of its own.
+  // Display name of a dictionary slot (DICT_JMDICT, DICT_NAMES, DICT_GRAMMAR or DICT_KANJI), from
+  // the <folder>/vocab.title, names.title, grammar.title or kanji.title (hanzi.title, hanja.title) the converter wrote.
+  // Empty when absent; the caller then falls back to a name of its own.
   static const char* slotTitle(uint8_t dict);
 
   // Preferred filenames. The vocab/names dictionaries also accept the pre-rename legacy
@@ -91,6 +91,12 @@ class DictIndex {
   static constexpr const char* GRAMMAR_DAT_PATH = "/dictionaries/jp/grammar.dat";
   static constexpr const char* OLD_GRAMMAR_IDX_PATH = "/dict/grammar.idx";
   static constexpr const char* OLD_GRAMMAR_DAT_PATH = "/dict/grammar.dat";
+  // One entry per character (KANJIDIC, Wiktionary hanzi), shown after a word's own entries.
+  static constexpr const char* KANJI_IDX_PATH = "/dictionaries/jp/kanji.idx";
+  static constexpr const char* KANJI_DAT_PATH = "/dictionaries/jp/kanji.dat";
+  // The same slot named for its script; read when kanji.idx is absent.
+  static constexpr const char* HANZI_IDX_PATH = "/dictionaries/jp/hanzi.idx";
+  static constexpr const char* HANJA_IDX_PATH = "/dictionaries/jp/hanja.idx";
 
   // Resolved paths for the vocab/names dictionaries: the preferred filename if it exists on the
   // SD card, else the legacy one. Probed lazily on first use and cached; releaseCaches() clears
@@ -102,6 +108,8 @@ class DictIndex {
   static const char* namesDatPath();
   static const char* grammarIdxPath();
   static const char* grammarDatPath();
+  static const char* kanjiIdxPath();
+  static const char* kanjiDatPath();
 
   // Which dictionaries lookupExact() should consult. Each dict search is ~2 SD reads, so scoping
   // out dictionaries a candidate can't possibly be in is the main lever for Word Lookup speed:
@@ -113,6 +121,12 @@ class DictIndex {
   static constexpr uint8_t DICT_GRAMMAR = 2;
   static constexpr uint8_t DICT_NAMES = 4;
   static constexpr uint8_t DICT_ALL = DICT_JMDICT | DICT_GRAMMAR | DICT_NAMES;
+  // Not in DICT_ALL: a word scan never matches it. Looked up per character with lookupKanji().
+  static constexpr uint8_t DICT_KANJI = 8;
+
+  // The kanji dictionary's entry for one character (UTF-8). False when there is none or no
+  // kanji dictionary is installed.
+  static bool lookupKanji(const char* character, DictEntry& out);
 
   // Look up a headword in the index.  Returns true and fills `out` on hit.
   // Collects all readings from the requested dictionaries into a single definition.

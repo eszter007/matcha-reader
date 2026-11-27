@@ -38,6 +38,16 @@ uint8_t resolveSdCardStyle(const SdCardFont& font, const EpdFontFamily::Style st
   return font.resolveStyle(static_cast<uint8_t>(style));
 }
 
+// True when the advance table has every character of `text`, so it can be measured without
+// loading glyphs.
+bool sdAdvancesCover(const SdCardFont& font, const char* text, const uint8_t styleIdx) {
+  while (const uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text))) {
+    if (utf8IsCombiningMark(cp) || BidiUtils::isTransparentMark(cp)) continue;
+    if (font.getAdvance(cp, styleIdx) == 0) return false;
+  }
+  return true;
+}
+
 uint16_t getSdCardSpaceAdvance(SdCardFont& font, const EpdFontFamily::Style style) {
   const uint8_t resolvedStyle = resolveSdCardStyle(font, style);
   const uint16_t advance = font.getAdvance(' ', resolvedStyle);
@@ -182,6 +192,11 @@ SdCardFont* GfxRenderer::sdFontForWarmup(const int fontId) const {
   if (fb == fallbackFontMap_.end()) return nullptr;
   it = sdCardFonts_.find(fb->second);
   return it == sdCardFonts_.end() ? nullptr : it->second;
+}
+
+bool GfxRenderer::sdAdvancesReady(const int fontId) const {
+  const auto font = sdFontForWarmup(fontId);
+  return !font || font->hasAdvanceTable();
 }
 
 void GfxRenderer::ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask) const {
@@ -1169,10 +1184,6 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
   const VisualText visualText = resolveVisualText(text, visual, baseDir, fontMap, resolvedFontId, style);
   const char* renderedText = visualText.text;
 
-  // Redirected SD fallback or a custom UI font: batch-load before either advance-based or bounds-based measurement.
-  if (resolvedFontId != fontId || fontIt->second.hasGlyphFallback())
-    ensureSdGlyphsResident(resolvedFontId, renderedText, style, true);
-
   if (const FallbackScale redirected = redirectScale(fontId, resolvedFontId); !redirected.identity()) {
     return layoutTextScaled(resolvedFontId, 0, 0, renderedText, redirected.cjk, redirected.nonCjk, /*draw=*/false, true,
                             style, letterSpacing, visualText.shaped);
@@ -1181,6 +1192,10 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
     return layoutTextScaled(resolvedFontId, 0, 0, renderedText, face.own, face.fallback, /*draw=*/false, true, style,
                             letterSpacing, visualText.shaped);
   }
+
+  // Redirected SD fallback or a custom UI font: batch-load before either advance-based or bounds-based measurement.
+  if (resolvedFontId != fontId || fontIt->second.hasGlyphFallback())
+    ensureSdGlyphsResident(resolvedFontId, renderedText, style, true);
   if (fontIt->second.getFallback() || letterSpacing != 0) {
     return getTextAdvanceX(fontId, renderedText, style, letterSpacing);
   }
@@ -1450,9 +1465,12 @@ int GfxRenderer::layoutTextScaled(const int resolvedFontId, const int x, const i
 
   // An SD font keeps only what the page needed in RAM: batch-load this string's glyphs, as
   // drawText() does for a redirected string, or the loop below reads bitmaps that are not there.
-  if (sdCardFonts_.find(resolvedFontId) != sdCardFonts_.end()) {
-    ensureSdGlyphsResident(resolvedFontId, renderedText, style, !draw);
-  }
+  // A measurement whose advances are all in the advance table needs no glyphs.
+  const auto sdIt = sdCardFonts_.find(resolvedFontId);
+  SdCardFont* const sdFont = sdIt != sdCardFonts_.end() ? sdIt->second : nullptr;
+  const uint8_t sdStyle = sdFont ? resolveSdCardStyle(*sdFont, style) : 0;
+  const bool advancesOnly = !draw && !shapedText && sdFont && sdAdvancesCover(*sdFont, renderedText, sdStyle);
+  if (sdFont && !advancesOnly) ensureSdGlyphsResident(resolvedFontId, renderedText, style, !draw);
 
   const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) {
@@ -1513,12 +1531,16 @@ int GfxRenderer::layoutTextScaled(const int resolvedFontId, const int x, const i
       lastBaseX = x + static_cast<int>((pen256 + 128) / 256);
     }
 
-    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    // Measure only: no glyph is read, so the combining-mark fields below stay zero. A character
+    // drawn from the fallback family keeps that glyph's own advance.
+    const uint16_t tableAdvance =
+        advancesOnly && !font.drawsFromFallback(cp, style) ? sdFont->getAdvance(cp, sdStyle) : 0;
+    const EpdGlyph* glyph = tableAdvance != 0 ? nullptr : font.getGlyph(cp, style);
     lastBaseLeft = glyph ? glyph->left : 0;
     lastBaseWidth = glyph ? glyph->width : 0;
     lastBaseTop = glyph ? glyph->top : 0;
     // A shaped glyph carries its own advance and offset.
-    prevAdvanceFP = shaped.advanceOr(glyph ? glyph->advanceX : 0);
+    prevAdvanceFP = shaped.advanceOr(tableAdvance != 0 ? tableAdvance : glyph ? glyph->advanceX : 0);
     int shapedDx = shaped.dx;
     int shapedDy = shaped.dy;
     shaped.reset();
@@ -3144,6 +3166,11 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   // right margin.
   std::string visual;
   const VisualText visualText = resolveVisualText(text, visual, baseDir, fontMap, resolvedFontId, style);
+  // A fallback of another size is drawn scaled to this font's (see drawText); measure it the same way.
+  if (const FallbackScale redirected = redirectScale(fontId, resolvedFontId); !redirected.identity()) {
+    return layoutTextScaled(resolvedFontId, 0, 0, visualText.text, redirected.cjk, redirected.nonCjk, /*draw=*/false,
+                            true, style, letterSpacing, visualText.shaped);
+  }
   if (const FaceScale face = faceScaleFor(resolvedFontId); !face.identity()) {
     return layoutTextScaled(resolvedFontId, 0, 0, visualText.text, face.own, face.fallback, /*draw=*/false, true, style,
                             letterSpacing, visualText.shaped);

@@ -68,6 +68,14 @@ assert RECORD_SIZE == 40, f"Record size mismatch: {RECORD_SIZE}"
 # ── Shared helpers ──────────────────────────────────────────────
 
 
+def _zip_open(z, name):
+    """Opens a zip member without the CRC check: some published Yomitan zips carry a wrong CRC
+    for data that is intact, and zipfile then fails at the end of the member."""
+    f = z.open(name)
+    f._expected_crc = None
+    return f
+
+
 def strip_html(html: str) -> str:
     """Strip HTML tags and decode common entities to plain text."""
     text = re.sub(r"<br\s*/?>", "\n", html, flags=re.IGNORECASE)
@@ -81,6 +89,48 @@ def strip_html(html: str) -> str:
     text = text.replace("&#39;", "'")
     lines = [line.strip() for line in text.split("\n")]
     return "\n".join(line for line in lines if line)
+
+
+_ECHO_RE = re.compile(r"^([\u3041-\u30ff・‐\-ー\d０-９\s]+)〖([^〗]+)〗(.*)$")
+
+
+def _shorten_related(text: str) -> str:
+    """Pixiv's related-article lines list dozens of titles; keep the first twelve."""
+    def short(m):
+        items = m.group(2).split("・")
+        return m.group(1) + "・".join(items[:12]) + (f" …（他{len(items) - 12}件）" if len(items) > 12 else "")
+    return re.sub(r"(?m)^(・?(?:関連記事|子記事|親記事|兄弟記事): ?)(.+)$", short, text)
+
+
+def _drop_headword_echo(text: str, headword: str) -> str:
+    """Monolingual dictionaries open with their own heading, "いぬ〖犬・狗〗", under the reading the
+    panel already shows. Drop it when it says nothing more; keep only the spellings otherwise."""
+    m = re.match(r"【([^】]*)】[^\n]*\n+", text)
+    if not m:
+        return text
+    reading = re.sub(r"[^\u3041-\u30ff]", "", m.group(1))
+    rest = text[m.end():]
+    line, nl, after = rest.partition("\n")
+    e = _ECHO_RE.match(line.strip())
+    if not e or re.sub(r"[^\u3041-\u30ff]", "", e.group(1)) != reading:
+        return text
+    spellings, tail = e.group(2), e.group(3).strip()
+    if spellings == headword and not tail:
+        return text[:m.end()] + after.lstrip("\n")
+    return text[:m.end()] + "〖" + spellings + "〗" + (" " + tail if tail else "") + nl + after
+
+
+def _short_title(title: str) -> str:
+    """The device reads the first 39 bytes of a title. Keep whole characters, and drop a bracket
+    the cut left open: "違いがわかる事典 (chigai.sit" becomes "違いがわかる事典"."""
+    full = title.strip()
+    title = full.encode("utf-8")[:39].decode("utf-8", errors="ignore").strip()
+    if title != full:
+        for open_, close in (("(", ")"), ("（", "）"), ("[", "]"), ("【", "】")):
+            cut = title.rfind(open_)
+            if cut > 0 and close not in title[cut:]:
+                title = title[:cut].strip()
+    return title
 
 
 def write_binary(records: list, output_dir: str, name: str = "vocab", title: str = ""):
@@ -122,8 +172,7 @@ def write_binary(records: list, output_dir: str, name: str = "vocab", title: str
             idx_f.write(struct.pack(RECORD_FORMAT, padded_hw, offset, length, priority, pos_flags))
 
     title_path = os.path.join(output_dir, f"{name}.title")
-    # The device reads the first 39 bytes; keep whole characters within that.
-    title = title.strip().encode("utf-8")[:36].decode("utf-8", errors="ignore").strip()
+    title = _short_title(title)
     if title:
         with open(title_path, "w", encoding="utf-8") as title_f:
             title_f.write(title + "\n")
@@ -219,7 +268,8 @@ def load_furigana(path: str) -> dict:
             if not name:
                 print("ERROR: No .json file found in furigana zip", file=sys.stderr)
                 sys.exit(1)
-            raw = z.read(name)
+            with _zip_open(z, name) as f:
+                raw = f.read()
     else:
         with open(path, "rb") as f:
             raw = f.read()
@@ -396,6 +446,199 @@ def convert_jmdict(json_path: str, furigana: dict = None) -> list:
 # ── Yomitan / Yomichan(.zip) ───────────────────────────────────
 
 
+def _is_example_list(node: dict) -> bool:
+    """A list whose data attributes name it as example sentences (surasura "examples",
+    CantoDict "sentences"): its items print as plain lines, the device's example layout."""
+    data = node.get("data")
+    if not isinstance(data, dict):
+        return False
+    return any(isinstance(v, str) and ("example" in v.lower() or "sentence" in v.lower()) for v in data.values())
+
+
+def _list_style_none(node) -> bool:
+    style = node.get("style") if isinstance(node, dict) else None
+    return isinstance(style, dict) and style.get("listStyleType") == "none"
+
+
+def _flatten_list(node: dict) -> str:
+    """A ul/ol: "• " per item, plain lines for example lists and unmarked items, and no line at
+    all for an item left empty (a dropped web link)."""
+    plain = _is_example_list(node)
+    items = node.get("content", "")
+    items = items if isinstance(items, list) else [items]
+    # Onomatoproject wraps each li in its own array: [[li], [li], ...].
+    items = [x for it in items for x in (it if isinstance(it, list) and all(
+        isinstance(y, dict) and y.get("tag") == "li" for y in it) else [it])]
+    marker = "• " if _is_gloss_list(node, items) else "・"
+    lines = []
+    for item in items:
+        if isinstance(item, dict) and item.get("tag") == "li":
+            text = flatten_structured_content(item.get("content", "")).strip()
+            if not text:
+                continue
+            lines.append(text if plain or _list_style_none(item) else marker + text)
+        else:
+            text = flatten_structured_content(item).strip()
+            if text:
+                lines.append(text)
+    if not plain and _alternates_with_translation([l[len(marker):] if l.startswith(marker) else l for l in lines]):
+        lines = [l[len(marker):] if l.startswith(marker) else l for l in lines]
+    return "\n" + "\n".join(lines) + "\n" if lines else ""
+
+
+def _is_gloss_list(node: dict, items: list) -> bool:
+    """A list of glosses, which the device joins into one numbered sense: Jitendex marks it
+    data-content "glossary"; a list of foreign-language glosses has no Japanese in it. Other lists
+    (類語例解's usage notes) keep their own lines."""
+    data = node.get("data")
+    if isinstance(data, dict) and data.get("content") == "glossary":
+        return True
+    text = flatten_structured_content(items)
+    return not re.search(r"[\u3040-\u30ff\u3400-\u9fff]", text)
+
+
+def _alternates_with_translation(lines: list) -> bool:
+    """Items that pair a Japanese sentence with its Latin-script translation (斎藤's 犬がほえる /
+    A dog barks.) are examples, whatever the list is called."""
+    if len(lines) < 2 or len(lines) % 2:
+        return False
+    jp = re.compile(r"[\u3040-\u30ff\u3400-\u9fff々〜～（「]")
+    latin = re.compile(r"[\"'“‘(\[]?[A-Za-z\u00c0-\u04ff]")
+    return all(jp.match(lines[i]) and latin.match(lines[i + 1]) for i in range(0, len(lines), 2))
+
+
+# Style suffixes in label-icon file names: 名-rect.svg, 季-default.svg, ショ-rect-red.svg.
+_IMAGE_STYLE_SUFFIXES = ("rect", "fill", "default", "red", "redfill", "round", "circle", "box", "black", "white")
+_FILLED_DIGITS = {c: chr(0x2460 + i) for i, c in enumerate("１２３４５６７８９")}
+_FILLED_DIGITS.update({c: chr(0x2460 + i) for i, c in enumerate("一二三四五六七八九")})
+
+
+# Pictures in the panel: the zip being converted (set while its banks are read) and the BMPs made
+# from it, written to <output>/images/ beside the dictionary files.
+_IMAGE_ZIP = None
+_IMAGES: dict = {}
+IMAGES_ENABLED = False  # --images
+IMAGE_MAX_WIDTH = 400
+IMAGE_MAX_HEIGHT = 320
+IMAGE_MARKER = "\ue000"  # a definition line "\ue000<w>x<h> <file>" is a picture (private use)
+# First line of an entry from a merged file: the name of the dictionary it came from.
+SOURCE_MARKER = "\ue001"
+
+
+def _bmp_2bit(img) -> bytes:
+    """A 4-level grayscale picture (Pillow "L" image of 0/85/170/255) as a 2-bit palette BMP, the
+    depth the reader draws straight from the card."""
+    import struct
+
+    w, h = img.size
+    row_bytes = ((w * 2 + 31) // 32) * 4
+    px = img.load()
+    rows = []
+    for y in range(h - 1, -1, -1):  # bottom-up
+        row = bytearray(row_bytes)
+        for x in range(w):
+            level = px[x, y] // 85
+            row[x >> 2] |= level << (6 - 2 * (x & 3))
+        rows.append(bytes(row))
+    palette = b"".join(bytes((v, v, v, 0)) for v in (0, 85, 170, 255))
+    data_offset = 14 + 40 + len(palette)
+    size = data_offset + row_bytes * h
+    header = b"BM" + struct.pack("<IHHI", size, 0, 0, data_offset)
+    info = struct.pack("<IiiHHIIiiII", 40, w, h, 1, 2, 0, row_bytes * h, 2835, 2835, 4, 4)
+    return header + info + palette + b"".join(rows)
+
+
+def _picture_marker(path: str, min_side: int = 0) -> str:
+    """Converts a picture of the zip being read to a BMP and returns its marker line, or "" when
+    Pillow is missing or the image cannot be read."""
+    if _IMAGE_ZIP is None or not IMAGES_ENABLED:
+        return ""
+    try:
+        from PIL import Image
+    except ImportError:
+        return ""
+    import hashlib
+    import io
+
+    name = hashlib.sha1(path.encode("utf-8")).hexdigest()[:16] + ".bmp"
+    cached = _IMAGES.get(name)
+    if cached is None:
+        try:
+            with _zip_open(_IMAGE_ZIP, path) as f:
+                img = Image.open(io.BytesIO(f.read()))
+                img.load()
+        except Exception:
+            return ""
+        if min(img.size) < min_side:
+            return ""  # an inline glyph image (gaiji), not a picture
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGBA")
+            backdrop = Image.new("RGBA", img.size, (255, 255, 255, 255))
+            img = Image.alpha_composite(backdrop, img)
+        img = img.convert("L")
+        img.thumbnail((IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT), Image.LANCZOS)
+        four = Image.new("P", (1, 1))
+        four.putpalette([v for g in (0, 85, 170, 255) for v in (g, g, g)] + [0] * (256 - 4) * 3)
+        indices = img.convert("RGB").quantize(palette=four, dither=Image.Dither.FLOYDSTEINBERG)
+        img = Image.new("L", indices.size)
+        img.putdata([(0, 85, 170, 255)[i] if i < 4 else 255 for i in indices.getdata()])
+        cached = (img.size, _bmp_2bit(img))
+        _IMAGES[name] = cached
+    (w, h), _ = cached
+    return f"\n{IMAGE_MARKER}{w}x{h} {name}\n"
+
+
+def write_images(output_dir: str) -> None:
+    if not _IMAGES:
+        return
+    folder = os.path.join(output_dir, "images")
+    os.makedirs(folder, exist_ok=True)
+    total = 0
+    for name, (_, data) in _IMAGES.items():
+        with open(os.path.join(folder, name), "wb") as f:
+            f.write(data)
+        total += len(data)
+    print(f"  {folder}: {len(_IMAGES)} pictures, {total / 1e6:.1f} MB")
+
+
+def _image_text(node: dict) -> str:
+    """Text for a structured-content image. Label icons are named after their label (名-rect.svg,
+    文法-red.svg, １-fill.svg, red_（.svg) and become that label; other images keep their alt or
+    title text, and pictures without one are dropped."""
+    path = node.get("path", "")
+    path = path if isinstance(path, str) else ""
+    folder, _, fname = path.rpartition("/")
+    stem, dot, ext = fname.rpartition(".")
+    if dot and ext.lower() in ("jpg", "jpeg", "webp", "gif", "bmp"):
+        return _picture_marker(path)  # photos and drawings; their alt text is a caption or credit
+    data = node.get("data") if isinstance(node.get("data"), dict) else {}
+    for value in (node.get("alt"), node.get("title"), data.get("alt")):
+        if isinstance(value, str) and value.strip() and "://" not in value:
+            # 明鏡 describes its accent marks in words ("3分の2"); in "gaiji" they are noise.
+            return "" if data.get("class") == "gaiji" and folder == "gaiji" else value.strip()
+    if folder == "gaiji" and re.match(r"[A-Za-z]{1,3}[^A-Za-z]", stem):
+        return ""  # a gaiji code with a kanji suffix (bs一) is a mark, not text
+    if not dot:
+        return ""
+    if "accent" in folder:
+        return ""  # accent glyphs; pitch comes from the pitch dictionaries
+    if stem.startswith("red_"):
+        return stem[4:]
+    parts = stem.split("-")
+    while len(parts) > 1 and parts[-1].lower() in _IMAGE_STYLE_SUFFIXES:
+        parts.pop()
+    label = "-".join(parts)
+    if not label or all(c in "0123456789ABCDEFabcdefSb" for c in label) or label.isascii():
+        # Gaiji codes (B92D, AC6E, b327) have no text; a larger PNG is a drawing.
+        return _picture_marker(path, min_side=48) if ext.lower() == "png" else ""
+    if "fill" in stem.split("-")[1:] and label in _FILLED_DIGITS:
+        return _FILLED_DIGITS[label]
+    if len(label) <= 6:
+        return f"〔{label}〕"
+    return label
+
+
+
 def flatten_structured_content(content) -> str:
     """Recursively extract display text from Yomitan structured content,
     using the semantic data-content attributes from Jitendex."""
@@ -407,8 +650,8 @@ def flatten_structured_content(content) -> str:
         ctype = content.get("type", "")
         if ctype == "text":
             return content.get("text", "")
-        if ctype == "image":
-            return ""
+        if ctype == "image" or content.get("tag") == "img":
+            return _image_text(content)
         if ctype == "structured-content":
             return flatten_structured_content(content.get("content", ""))
 
@@ -422,6 +665,10 @@ def flatten_structured_content(content) -> str:
 
         if tag == "br":
             return "\n"
+        # A web link cannot be followed on the device (Pixiv's 続きを読む, Nico/Pixiv's site names).
+        href = content.get("href", "")
+        if tag == "a" and isinstance(href, str) and href.startswith(("http://", "https://")):
+            return ""
         # Monolingual dictionaries (大辞林) label parts with data.name. Map them to the layout the
         # device formats: "• " gloss lines, "[pos]" tag lines, and plain lines for examples. 見出部
         # and 語義Gnum repeat what the panel already shows; ━ stands for the headword and draws badly.
@@ -440,10 +687,34 @@ def flatten_structured_content(content) -> str:
             body = re.sub(r"\n+", "\n", text)
             body = body[1:] if body.startswith("\n") else body
             body = body[:-1] if body.endswith("\n") else body
-            body = re.sub(r"^([^\n•\[]{1,3})\n• ", r"• \1 ", body, count=1)
-            return "\n" + body + "\n"
+            body = re.sub(r"^([^\n•\[\x1f]{1,3})\n• ", r"• \1 ", body, count=1)
+            # A 語義G holds one numbered sense (①, ②): a blank line keeps it apart from the next.
+            # \x1f survives the outer divs' newline collapsing; _clean_markup makes it a blank line.
+            return ("\n\x1f\n" if dn == "語義G" else "\n") + body + "\n"
         if tag == "rt":
             return ""
+        # Tables (類句 lists, conjugation grids): one row per line, cells apart.
+        if tag == "summary":
+            return ""  # a "show 5 examples" toggle; the details print in full
+        # A bordered badge ("Definitions", "Examples") heads what follows it.
+        style = content.get("style") if isinstance(content.get("style"), dict) else {}
+        if tag == "span" and style.get("borderStyle") and text.strip() and len(text.strip()) <= 20:
+            return "\n■ " + text.strip() + "\n"
+        if tag == "table":
+            return "\n" + text
+        if tag == "tr":
+            # \x1e marks a header cell: "label：value" beside data, "a · b" in a header row.
+            has_data = "　" in text
+            row = text.strip().rstrip("\x1e　").strip()
+            row = row.replace("\x1e", "：" if has_data else " · ")
+            return row.replace("　", " · ") + "\n"
+        if tag in ("td", "th"):
+            return text.strip() + ("\x1e" if tag == "th" else "　")
+        # A section header block (Pixiv's related-tags-header "関連記事"): a heading line.
+        if tag == "div" and isinstance(content.get("data"), dict) and any(
+                isinstance(v, str) and v.endswith("header") and v != "nav-header" for v in content["data"].values()):
+            heading = re.sub(r"^[•\s]+", "", text.strip())
+            return "\n■ " + heading + "\n" if heading else ""
         if tag == "ruby":
             return text
 
@@ -502,12 +773,95 @@ def flatten_structured_content(content) -> str:
         if tag in ("div", "p", "blockquote", "section"):
             if dc == "extra-info":
                 return text
-            return text
+            return "\n" + text + "\n" if text.strip() else ""
         if tag in ("ol", "ul"):
-            return text
+            return _flatten_list(content)
 
         return text
     return str(content)
+
+
+def _headings_as_notes(text: str) -> str:
+    """Section headings ("■ 関連記事") joined to the list under them as one labelled line, which the
+    device sets as a wrapped block: "関連記事: 高校生・…". A lone heading is a "→ " note. Pixiv's
+    category path ("⋯⋯学ぶ ＞ 学校") goes last as "分類: …": a "→ " line opening an entry would be
+    read as another headword."""
+    out = []
+    path = ""
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if line.startswith("■ "):
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            nxt = lines[j].strip() if j < len(lines) else ""
+            if nxt and not nxt.startswith(("■ ", "• ", "・")):
+                out.append(line[2:] + ": " + nxt)
+                i = j + 1
+                continue
+            out.append("→ " + line[2:])
+        elif line.startswith("⋯⋯"):
+            path = line[2:].strip()
+        else:
+            out.append(lines[i])
+        i += 1
+    if path:
+        out.append("分類: " + path)
+    return "\n".join(out)
+
+
+_HTML_TAG = re.compile(r"</?(ruby|rb|rp|span|font|b|i|u|em|strong|sup|sub|small|big|p|div|br|a)(\s[^<>]*)?/?>", re.I)
+_RT = re.compile(r"<rt>.*?</rt>|<rp>.*?</rp>", re.I | re.S)
+
+
+def _clean_markup(text: str) -> str:
+    """Removes markup some dictionaries leave inside their text: HTML tags (ruby keeps its base
+    text), placeholders for characters the source could not encode, and web junk lines."""
+    if "<" in text:
+        text = _RT.sub("", text)
+        text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+        text = _HTML_TAG.sub("", text)
+        text = text.replace("<unencoded>", "〓")
+    text = re.sub(r"\{\{w_\d+\}\}", "〓", text)
+    text = re.sub(r"\n?\x1f\n?", "\n\n", text)
+    # CC-CEDICT in Yomitan form: "【衬衫】 【襯衫】 [3304] shirt/blouse". The forms repeat the
+    # headword and the rank is noise; each gloss gets its own line. A "gloss" that only lists
+    # the forms again ("(襯衫,衬衫)", 漢語大詞典) is dropped.
+    def _cedict_line(m):
+        glosses = m.group(3).strip()
+        if re.fullmatch(r"[(（][^)）a-zA-Z]*[)）]", glosses):
+            return ""
+        return "\n".join("• " + g.strip() for g in glosses.split("/") if g.strip())
+    text = re.sub(r"(?m)^[【〖]([^】〗]+)[】〗] [【〖]([^】〗]+)[】〗](?: \[\d+\])? (.+)$", _cedict_line, text)
+    # A heading glued to its text by a list bullet ("・違い• 「猫に小判」と…"): the text starts a line.
+    text = re.sub(r"(?<=[^\s•])• ?", "\n", text)
+    text = re.sub(r"(?m)^(\[[^\]\n]*\]|→ [^\n]*)\n\n(?=• )", r"\1\n", text)  # a tag line stays on its sense
+    text = re.sub(r"｛([0-9０-９]+)｝", r"（\1）", text)  # a source's year: 〔特殊語百科辞典｛１９３１｝〕
+    text = _shorten_related(text)
+    text = text.replace("┏", "")  # 研究社 marks the scope of a following [variant] with ┏
+    text = text.replace("►", "▶").replace("━", "〜")  # ━ stands for the headword  # ► is missing from Japanese fonts; ▶ is a JIS symbol
+    # 大辞林 opens each part of an entry with a kanji numeral and its pitch ("一[2]"). The part's
+    # own tag line ([接頭]) already marks the break, and a leading "→ " would name the page.
+    text = re.sub(r"(?m)^[一二三四五六七八九十]{1,2}(?:\[\d+\])?[ \t]*$", "", text)
+    # Dingbat circled digits (❶, ➀) are missing too; ① to ⑩ are in every Japanese font.
+    text = re.sub(r"[\u2776-\u277f\u2780-\u2789\u278a-\u2793]",
+                  lambda m: chr(0x2460 + (ord(m.group()) - 0x2776) % 10), text)
+    # Emoji have no glyph on the device: one leading a heading ("📚使い方") becomes ■.
+    text = re.sub(r"(?m)^[\U0001F000-\U0001FAFF]\ufe0f?\s*", "■ ", text)
+    text = re.sub(r"[\U0001F000-\U0001FAFF]\ufe0f?", "", text)
+    text = re.sub(r"(?m)^.*(adsbygoogle|google\.com/search\?).*$\n?", "", text)
+    # A line that is only a web address (scheme dropped with its link) cannot be followed.
+    text = re.sub(r"(?m)^[ \t]*(https?://)?[\w-]+(\.[\w-]+)+/\S*[ \t]*$\n?", "", text)
+    # Wiktionary maintenance notes ("…並移除{{rfdef}}模板。").
+    text = re.sub(r"[^\n。]*\{\{[\w-]+\}\}[^\n。]*。?", "", text)
+    if "{" in text:
+        # Wadoku cross-references carry an entry number: {百均（ひゃっきん）:81491}.
+        text = re.sub(r"\{([^{}:\n]+):\d+\}", r"\1", text)
+        # 斎藤 marks a reading in braces after the kanji: 莫連{ばくれん}.
+        text = re.sub(r"(?<=[\u3400-\u9fff々])\{([\u3041-\u309f\u30fc]+)\}", r"（\1）", text)
+    return text
 
 
 def format_definition_yomitan(headword: str, reading: str, definitions, furigana: str = "") -> str:
@@ -532,6 +886,13 @@ def format_definition_yomitan(headword: str, reading: str, definitions, furigana
             return " ".join(p for p in pieces if p)
         return ""
 
+    # Plain-string glosses of one entry are one sense (JMdict's older Yomitan build lists
+    # "friendship", "friendly relations", ... separately): one line, not a numbered list.
+    # A multi-line string is a sense or paragraph of its own (MoE builds); those stay apart.
+    if isinstance(definitions, list) and len(definitions) > 1 and \
+            all(isinstance(d, str) and "\n" not in d.strip() for d in definitions):
+        definitions = ["; ".join(dict.fromkeys(d.strip() for d in definitions[:6] if d.strip()))]
+
     if isinstance(definitions, list):
         non_empty = []
         for defn in definitions[:6]:
@@ -545,8 +906,13 @@ def format_definition_yomitan(headword: str, reading: str, definitions, furigana
                 text = str(defn)
             # The device reads a line holding 【】 as the reading and drops it, which in monolingual
             # dictionaries (あい【愛】…) deletes the definition. Only the reading line above keeps them.
-            text = text.strip().replace("【", "〖").replace("】", "〗")
-            if text:
+            text = _clean_markup(text).strip().replace("【", "〖").replace("】", "〗")
+            # A line of only a symbol (the Mongolian dictionary's ◇ before its examples) is a break,
+            # and the reader fonts lack most of these symbols.
+            text = re.sub(r"(?m)^[\s◇◆□■○●☆★※]+$", "", text).strip()
+            text = _headings_as_notes(text)
+            # Separators left behind by dropped web links ("|") are not a definition.
+            if re.search(r"\w", text):
                 non_empty.append(text)
 #Drop pure - duplicate entries(redirect variant repeating the first gloss)
         deduped = []
@@ -554,10 +920,16 @@ def format_definition_yomitan(headword: str, reading: str, definitions, furigana
             if t not in deduped:
                 deduped.append(t)
         non_empty = deduped
+        if not non_empty:
+            return ""  # a reading alone is no entry
 
-        for i, text in enumerate(non_empty):
-            if len(non_empty) > 1:
-                parts.append(f"\n{i+1}. {text}")
+        # A picture-only definition is no sense: it stays unnumbered so the reader sees its marker.
+        senses = [t for t in non_empty if not t.startswith(IMAGE_MARKER)]
+        number = 0
+        for text in non_empty:
+            if len(senses) > 1 and not text.startswith(IMAGE_MARKER):
+                number += 1
+                parts.append(f"\n{number}. {text}")
             else:
                 parts.append(f"\n{text}")
 
@@ -589,7 +961,18 @@ def find_redirect_target(definitions) -> str:
     return search(definitions)
 
 
-def convert_yomitan(zip_path: str, reading_records: bool = True, furigana: dict = None) -> tuple:
+def _with_tag_line(definition: str, tags: str) -> str:
+    """Puts an entry's tags (KRDICT's part of speech and level: 감탄사 초급) on a line of their own
+    after the reading line."""
+    label = "〔" + " · ".join(tags.split()) + "〕"
+    if definition.startswith("【"):
+        head, _, rest = definition.partition("\n")
+        return f"{head}\n{label}\n{rest.lstrip(chr(10))}"
+    return f"{label}\n{definition.lstrip(chr(10))}"
+
+
+def convert_yomitan(zip_path: str, reading_records: bool = True, furigana: dict = None,
+                    show_tags: bool = False) -> tuple:
     """Convert a Yomitan/Yomichan .zip dictionary to index records.
 
     reading_records=False skips the extra record per kana reading. Chinese dictionaries carry
@@ -598,14 +981,16 @@ def convert_yomitan(zip_path: str, reading_records: bool = True, furigana: dict 
     """
     import zipfile
 
+    global _IMAGE_ZIP
     print(f"Loading {zip_path}...")
     title = ""
 
     with zipfile.ZipFile(zip_path, "r") as z:
         names = z.namelist()
+        _IMAGE_ZIP = z
 
         if "index.json" in names:
-            with z.open("index.json") as f:
+            with _zip_open(z, "index.json") as f:
                 meta = json.load(f)
             title = str(meta.get("title", ""))
             print(f"  Dictionary: {title or '(unknown)'}")
@@ -613,7 +998,14 @@ def convert_yomitan(zip_path: str, reading_records: bool = True, furigana: dict 
 
         term_banks = sorted(n for n in names if re.match(r"term_bank_\d+\.json$", n))
         if not term_banks:
-            print("ERROR: No term_bank_N.json files found in zip", file=sys.stderr)
+            if any(re.match(r"kanji_bank_\d+\.json$", n) for n in names):
+                print("ERROR: This is a kanji dictionary (one entry per character). Convert it with "
+                      "--name kanji.", file=sys.stderr)
+            elif any(re.match(r"(term|kanji)_meta_bank_\d+\.json$", n) for n in names):
+                print("ERROR: This is a frequency list with no definitions, not a dictionary. Pass it "
+                      "as --frequency to rank another dictionary's entries.", file=sys.stderr)
+            else:
+                print("ERROR: No term_bank_N.json files found in zip", file=sys.stderr)
             sys.exit(1)
 
         print(f"  Found {len(term_banks)} term bank files")
@@ -623,7 +1015,7 @@ def convert_yomitan(zip_path: str, reading_records: bool = True, furigana: dict 
         all_entries = []
         canonical_defs = {}  # headword → (definition_string, priority)
         for bank_name in term_banks:
-            with z.open(bank_name) as f:
+            with _zip_open(z, bank_name) as f:
                 entries = json.load(f)
             for entry in entries:
                 if not isinstance(entry, list) or len(entry) < 6:
@@ -632,11 +1024,16 @@ def convert_yomitan(zip_path: str, reading_records: bool = True, furigana: dict 
                 if not headword or not isinstance(headword, str):
                     continue
                 reading = entry[1] if len(entry) > 1 else ""
+                # Some Pixiv builds glue the headword in front of the kana reading.
+                if (isinstance(reading, str) and reading != headword and reading.startswith(headword)
+                        and re.fullmatch(r"[\u3040-\u30ffー]+", reading[len(headword):])):
+                    reading = reading[len(headword):]
                 rules = entry[3] if len(entry) > 3 and isinstance(entry[3], str) else ""
                 score = entry[4] if len(entry) > 4 else 0
                 definitions = entry[5] if len(entry) > 5 else []
                 redirect = find_redirect_target(definitions)
-                all_entries.append((headword, reading, score, definitions, redirect, rules))
+                tags = entry[2] if isinstance(entry[2], str) else ""
+                all_entries.append((headword, reading, score, definitions, redirect, rules, tags))
                 if not redirect:
                     anki = furigana.get((headword, reading), "") if furigana else ""
                     definition = format_definition_yomitan(headword, reading, definitions, anki)
@@ -650,7 +1047,7 @@ def convert_yomitan(zip_path: str, reading_records: bool = True, furigana: dict 
         records = []
         entry_count = 0
         furigana_count = 0
-        for headword, reading, score, definitions, redirect, rules in all_entries:
+        for headword, reading, score, definitions, redirect, rules, tags in all_entries:
             if redirect:
                 target = canonical_defs.get(redirect)
                 if not target:
@@ -665,34 +1062,258 @@ def convert_yomitan(zip_path: str, reading_records: bool = True, furigana: dict 
                     furigana_count += 1
                 if not definition:
                     continue
+                if show_tags and tags.strip():
+                    definition = _with_tag_line(definition, tags)
                 priority = max(0, min(255, int(score) + 128)) if isinstance(score, (int, float)) else 100
 
-            def_bytes = definition.encode("utf-8")
+            def_bytes = _utf8(definition)
 #Yomitan spec : empty rules = "word is not inflected" --that IS positive POS data
 #(a non - conjugating word), so stamp POS_OTHER rather than the fail - open 0.
             pos_flags = pos_flags_from_tags(rules.split()) if rules.strip() else POS_OTHER
             seen_headwords = set()
-            hw_bytes = headword.encode("utf-8")
-            if len(hw_bytes) < HEADWORD_SIZE:
+            hw_bytes = _utf8(headword)
+            if hw_bytes and len(hw_bytes) < HEADWORD_SIZE:
                 seen_headwords.add(hw_bytes)
                 records.append((hw_bytes, def_bytes, priority, pos_flags))
 
             if reading_records and reading and reading != headword and not redirect:
-                r_bytes = reading.encode("utf-8")
+                r_bytes = _utf8(reading)
                 if len(r_bytes) < HEADWORD_SIZE and r_bytes not in seen_headwords:
                     r_def = format_definition_yomitan(reading, reading, definitions)
                     if r_def:
 #reading != headword means kana reading of a kanji headword : flag it
 #(see POS_READING above).
-                        records.append((r_bytes, r_def.encode("utf-8"), priority,
+                        records.append((r_bytes, _utf8(r_def), priority,
                                         pos_flags | POS_READING))
 
             entry_count += 1
 
+    _IMAGE_ZIP = None
+    if not records:
+        print("ERROR: No entry has a definition the reader can show (web links only?).", file=sys.stderr)
+        sys.exit(1)
     print(f"Processed {entry_count} Yomitan entries → {len(records)} index records")
     if furigana is not None:
         print(f"Furigana attached to {furigana_count} headwords")
     return records, title
+
+# Stats worth a reader's glance; KANJIDIC carries some 40 textbook index numbers besides these.
+_KANJI_STATS = (("strokes", "Strokes"), ("grade", "Grade"), ("jlpt", "JLPT"), ("freq", "Freq"),
+                ("総画", "総画"), ("画数", "画数"), ("部首", "部首"), ("旧字体", "旧字体"), ("漢字検定", "漢字検定"))
+# Wiktionary section rules: ＝＝＝発音＝＝＝, ーーー字源ーーー.
+_KANJI_HEADING_RE = re.compile(r"^[＝=ー\-]{2,}\s*(.*?)\s*[＝=ー\-]{2,}$")
+
+
+def _kanji_noise(line: str, character: str) -> bool:
+    """Lines that say nothing on the device: the character alone, a bare rule, a web address, or
+    Wiktionary's "見：附录:…" pointer to another wiki page."""
+    bare = line.strip()
+    return (bare == character or re.fullmatch(r"[＝=ー\-]+", bare) is not None or bare.startswith(("http://", "https://"))
+            or re.match(r"見[：:]\s*附[录錄]", bare) is not None)
+
+
+def format_kanji_entry(onyomi: str, kunyomi: str, tags: str, meanings, stats, character: str = "") -> str:
+    """One kanji_bank entry as the device shows it: reading lines, the meanings, and a short line
+    of stats. Short glosses (KANJIDIC's "study", "learning") share one line; longer meaning lines
+    (Wiktionary, TheKanjiMap) keep theirs, and their section rules become "■ heading" lines."""
+    lines = []
+    # The readings go on the device's reading line (【…】, shown under the character): on-readings,
+    # then kun-readings with KANJIDIC's okurigana dot as parentheses (たか.い -> たか(い)).
+    kun = [re.sub(r"\.(.+)$", r"(\1)", k) for k in kunyomi.split()]
+    # Space-separated, so a long list wraps between readings rather than before a comma.
+    readings = [r for r in (" ".join(onyomi.split()), " ".join(kun)) if r]
+    if readings:
+        lines.append("【" + "　".join(readings) + "】")
+    items = [m if isinstance(m, str) else flatten_structured_content(m) for m in (meanings or [])]
+    items = [m.strip().replace("【", "〖").replace("】", "〗") for m in items]
+    items = [m for m in items if not (m and _kanji_noise(m, character))]
+    shown = [m for m in items if m]
+    if shown and all(len(m) <= 30 and "\n" not in m and not _KANJI_HEADING_RE.match(m) for m in shown) and \
+            all(m.isascii() for m in shown):
+        lines.append("• " + "; ".join(shown))
+    else:
+        # Meaning lines stay as written (the device keeps the lines of an entry without bullets),
+        # and the Wiktionary section rules become "→ " notes above their lines.
+        body = []
+        # Empty meanings split groups whose first line names them (mozc: 旧字体, 俗字).
+        grouped = "" in items
+        group_start = grouped
+        for i, m in enumerate(items):
+            heading = _KANJI_HEADING_RE.match(m)
+            if grouped and not m:
+                group_start = True
+                continue
+            after = items[i + 1] if i + 1 < len(items) else ""
+            if group_start and m and len(m) <= 8 and len(after) > 8:
+                body.append("■ " + m)
+                group_start = False
+                continue
+            group_start = False
+            if heading:
+                # ＝ rules head a language, ー rules a section within it.
+                body.append(("■■ " if m.lstrip().startswith(("＝", "=")) else "■ ") + heading.group(1))
+            elif m and body and re.search(r"[:：]\s*$", body[-1]) and not body[-1].startswith("■ "):
+                body[-1] = body[-1].rstrip() + " " + m  # a label line ("漢字分解:") takes the line after it
+            elif m:
+                body.append(m)
+        for line in _join_labels(_join_word_runs(_drop_empty_headings(body))):
+            if line.startswith("■ ") and lines and lines[-1].startswith("→ "):
+                lines[-1] += " · " + line[2:]  # a language heading and its first section: 日語 · 讀音
+                continue
+            if line.startswith("■ "):
+                lines.append("")
+                lines.append("→ " + line[2:])
+            else:
+                lines.append(line)
+    extra = []
+    if isinstance(stats, dict):
+        for key, label in _KANJI_STATS:
+            value = stats.get(key)
+            if value not in (None, ""):
+                extra.append(f"{label} {value}")
+    extra.extend(t for t in tags.split() if t)
+    if extra:
+        lines.append("")
+        lines.append(" · ".join(extra))
+    text = "\n".join(lines)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _drop_empty_headings(lines: list) -> list:
+    """A heading with no text under it before the next heading of its level or higher (Wiktionary's
+    empty 詞源1). "■■ " is a language heading, "■ " a section heading. The kept ones lose a level."""
+    out = []
+    for i, line in enumerate(lines):
+        level = 2 if line.startswith("■■ ") else 1 if line.startswith("■ ") else 0
+        if level:
+            has_text = False
+            for x in lines[i + 1:]:
+                if not x:
+                    continue
+                other = 2 if x.startswith("■■ ") else 1 if x.startswith("■ ") else 0
+                if other >= level:
+                    break
+                if not other:
+                    has_text = True
+                    break
+            if not has_text:
+                continue
+            line = "■ " + line[3:] if level == 2 else line
+        out.append(line)
+    return out
+
+
+def _join_word_runs(lines: list) -> list:
+    """Three or more short word lines in a row (JPDB's example words) share one line: 学校、学園、大学."""
+    out = []
+    run = []
+
+    def flush():
+        if len(run) >= 3:
+            out.append("、".join(run))
+        else:
+            out.extend(run)
+        run.clear()
+
+    for line in lines:
+        if line and len(line) <= 6 and not re.search(r"[\s:：、。,（(]", line):
+            run.append(line)
+        else:
+            flush()
+            out.append(line)
+    flush()
+    return out
+
+
+def _join_labels(lines: list) -> list:
+    """A short label line (Wiktionary's 衍生字, 組詞) joins the line after it: 衍生字：敩, 𢽾."""
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if (line and not line.startswith("■ ") and len(line) <= 4 and not re.search(r"[\s\W]", line) and nxt and
+                not nxt.startswith("■ ")):
+            out.append(line + "：" + nxt)
+            i += 2
+            continue
+        out.append(line)
+        i += 1
+    return out
+
+
+def _utf8(text: str) -> bytes:
+    """UTF-8 without the lone surrogates some dictionaries' JSON escapes carry (TheKanjiMap)."""
+    return text.encode("utf-8", "ignore")
+
+
+def _is_han(ch: str) -> bool:
+    cp = ord(ch)
+    return 0x3400 <= cp <= 0x9FFF or 0xF900 <= cp <= 0xFAFF or 0x20000 <= cp <= 0x3FFFF
+
+
+def convert_yomitan_kanji(zip_path: str) -> tuple:
+    """A Yomitan kanji dictionary (kanji_bank_N.json) to one record per character, for the kanji
+    slot. Returns (records, title)."""
+    import zipfile
+
+    print(f"Loading {zip_path}...")
+    title = ""
+    records = []
+    with zipfile.ZipFile(zip_path, "r") as z:
+        names = z.namelist()
+        if "index.json" in names:
+            with _zip_open(z, "index.json") as f:
+                title = str(json.load(f).get("title", ""))
+        banks = sorted(n for n in names if re.match(r"kanji_bank_\d+\.json$", n))
+        merged = {}  # a character in several entries (KANJIDIC's variants) shows them together
+        if not banks:
+            # Some kanji dictionaries (漢字源, TISMKANJI) are term banks keyed by one character.
+            for bank in sorted(n for n in names if re.match(r"term_bank_\d+\.json$", n)):
+                with _zip_open(z, bank) as f:
+                    for entry in json.load(f):
+                        if not isinstance(entry, list) or len(entry) < 6 or not isinstance(entry[0], str):
+                            continue
+                        char = entry[0]
+                        if len(char) != 1 or not _is_han(char):
+                            continue
+                        text = format_definition_yomitan(char, str(entry[1] or ""), entry[5])
+                        if text and re.search(r"\w", text):
+                            merged.setdefault(char, [])
+                            if text not in merged[char]:
+                                merged[char].append(text)
+            if not merged and any(re.match(r"kanji_meta_bank_\d+\.json$", n) for n in names):
+                print(f"ERROR: {zip_path} is a frequency list, not a kanji dictionary. Pass it with "
+                      "--frequency instead.", file=sys.stderr)
+                sys.exit(1)
+            if not merged:
+                print("ERROR: No kanji_bank_N.json files found in zip, and no term entry is a single "
+                      "character", file=sys.stderr)
+                sys.exit(1)
+        for bank in banks:
+            with _zip_open(z, bank) as f:
+                for entry in json.load(f):
+                    if not isinstance(entry, list) or len(entry) < 5 or not isinstance(entry[0], str):
+                        continue
+                    char = entry[0]
+                    stats = entry[5] if len(entry) > 5 else {}
+                    text = format_kanji_entry(str(entry[1] or ""), str(entry[2] or ""), str(entry[3] or ""),
+                                              entry[4], stats, char)
+                    if text and re.search(r"\w", text):
+                        merged.setdefault(char, [])
+                        if text not in merged[char]:
+                            merged[char].append(text)
+    for char, texts in merged.items():
+        hw = _utf8(char)
+        if hw and len(hw) < HEADWORD_SIZE:
+            records.append((hw, _utf8("\n\n".join(texts)), 100, POS_OTHER))
+    if not records:
+        print("ERROR: No kanji entry has text the reader can show.", file=sys.stderr)
+        sys.exit(1)
+    print(f"Processed {len(records)} kanji entries")
+    return records, title
+
 
 # ── MDict(.mdx) ────────────────────────────────────────────────
 
@@ -891,6 +1512,93 @@ def rank_to_priority(rank: int) -> int:
     return max(UNRANKED_PRIORITY + 1, min(255, 255 - int(round(28 * math.log10(rank)))))
 
 
+def load_yomitan_frequency(path: str) -> dict:
+    """A Yomitan frequency dictionary (term_meta_bank / kanji_meta_bank "freq" rows) to
+    {word: priority}. Its values are ranks: smaller is more common."""
+    import zipfile
+
+    rows = {}
+    with zipfile.ZipFile(path, "r") as z:
+        for name in z.namelist():
+            if not re.match(r"(term|kanji)_meta_bank_\d+\.json$", name):
+                continue
+            with _zip_open(z, name) as f:
+                for row in json.load(f):
+                    if not isinstance(row, list) or len(row) < 3 or row[1] != "freq":
+                        continue
+                    value = row[2]
+                    if isinstance(value, dict):
+                        value = value.get("frequency", value.get("value"))
+                        if isinstance(value, dict):
+                            value = value.get("value")
+                    if isinstance(value, str):
+                        # Some lists write the rank as text: "1", "1/10077", "12,345".
+                        m = re.match(r"\s*([\d,]+)", value)
+                        value = int(m.group(1).replace(",", "")) if m else None
+                    if isinstance(value, (int, float)) and isinstance(row[0], str):
+                        rows[row[0]] = min(value, rows.get(row[0], value))
+    if not rows:
+        print(f"WARNING: no frequency rows found in {path}", file=sys.stderr)
+        return {}
+    ranked = sorted(rows.items(), key=lambda r: r[1])
+    print(f"Frequency list {path}: {len(ranked)} words, ranked by its values")
+    return {word: rank_to_priority(rank) for rank, (word, _) in enumerate(ranked, start=1)}
+
+
+def load_yomitan_pitch(path: str) -> dict:
+    """A Yomitan pitch dictionary (term_meta_bank "pitch" rows, such as NHK 2016) to
+    {(word, reading): [downstep positions]}, with (word, "") also holding the word's first one."""
+    import zipfile
+
+    pitch = {}
+    with zipfile.ZipFile(path, "r") as z:
+        for name in z.namelist():
+            if not re.match(r"term_meta_bank_\d+\.json$", name):
+                continue
+            with _zip_open(z, name) as f:
+                for row in json.load(f):
+                    if not isinstance(row, list) or len(row) < 3 or row[1] != "pitch" or not isinstance(row[2], dict):
+                        continue
+                    reading = row[2].get("reading", "")
+                    positions = [p.get("position") for p in row[2].get("pitches", []) if isinstance(p, dict)]
+                    positions = [p for p in positions if isinstance(p, int)]
+                    if positions and isinstance(row[0], str):
+                        for key in ((row[0], reading), (row[0], "")):
+                            known = pitch.setdefault(key, [])
+                            known.extend(p for p in positions if p not in known)
+    print(f"Pitch accents {path}: {sum(1 for k in pitch if k[1])} readings")
+    return pitch
+
+
+_READING_LINE_RE = re.compile(r"^【([^】]*)】(｛[^｝]*｝)?")
+
+
+def apply_pitch(records: list, pitch: dict) -> list:
+    """Add `｟n｠` after each entry's reading line, from the first matching pitch entry: the device
+    draws a line over the high morae. A kana-only headword (no reading line) gets one too."""
+    if not pitch:
+        return records
+    out = []
+    count = 0
+    for hw, d, p, pos in records:
+        text = d.decode("utf-8")
+        word = hw.decode("utf-8")
+        source = ""
+        if text.startswith(SOURCE_MARKER):
+            cut = text.find("\n") + 1
+            source, text = text[:cut], text[cut:]
+        m = _READING_LINE_RE.match(text)
+        reading = m.group(1) if m else word
+        positions = pitch.get((word, reading)) or (pitch.get((word, "")) if not m else None)
+        if positions:
+            mark = "｟" + str(positions[0]) + "｠"
+            text = text[:m.end()] + mark + text[m.end():] if m else "【" + word + "】" + mark + "\n" + text
+            count += 1
+        out.append((hw, _utf8(source + text), p, pos))
+    print(f"Pitch accent added to {count} entries")
+    return out
+
+
 def load_frequency(path: str, kind: str = "auto") -> dict:
     """Read a word list into {word: priority}.
 
@@ -899,6 +1607,8 @@ def load_frequency(path: str, kind: str = "auto") -> dict:
     is the first Han field of each row; a count is the first number after it. kind=auto ranks by
     count when most rows carry one, else by row order; count/rank force either.
     """
+    if path.endswith(".zip"):
+        return load_yomitan_frequency(path)
     rows = []
     graded = False  # a level band (7-9) seen: the numbers in this file are levels, not counts
     opener = __import__("gzip").open if path.endswith(".gz") else open
@@ -1425,6 +2135,60 @@ def detect_format(path: str, lang: str = "ja") -> str:
 DEFAULT_TITLES = {"cedict": "CC-CEDICT", "moedict": "MoE", "jmdict": "", "tsv": ""}
 
 
+def write_stardict(records: list, output_dir: str, title: str) -> None:
+    """Write records as a StarDict dictionary (.ifo/.idx/.dict, plain text) for the languages the
+    reader looks up word by word, such as Korean. The index is sorted as the reader compares keys:
+    ASCII case-insensitively, byte by byte."""
+    import struct
+
+    os.makedirs(output_dir, exist_ok=True)
+    stem = os.path.join(output_dir, os.path.basename(os.path.normpath(output_dir)))
+    # One entry per headword: homographs (먹다 "eat", 먹다 "go deaf") follow each other, set apart
+    # by a blank line, each opening with its reading and tags on one line ("[먹따] 〔동사〕").
+    merged = {}
+    order = []
+    for hw, d, prio, _ in records:
+        text = d.decode("utf-8")
+        reading = ""
+        m = re.match(r"^【([^】]*)】(｛[^｝]*｝)?(｟[^｠]*｠)?\n*", text)
+        if m:
+            reading, text = "[" + m.group(1) + "]", text[m.end():]
+        lines = text.strip("\n").split("\n")
+        tags = lines.pop(0).strip() if lines and lines[0].startswith("〔") else ""
+        word = hw.decode("utf-8")
+        # The headword line repeats the key; keep only its level stars (★★★ 먹다 -> ★★★).
+        if lines and lines[0].replace("★", "").strip() == word:
+            stars = lines.pop(0).replace(word, "").strip()
+            tags = (tags + " " + stars).strip()
+        head = " ".join(x for x in (reading, tags) if x)
+        block = "\n".join(([head] if head else []) + lines).strip()
+        if hw not in merged:
+            merged[hw] = ([], prio)
+            order.append(hw)
+        merged[hw][0].append(block)
+    def numbered(blocks):
+        # The reader's StarDict view drops blank lines, so homographs are numbered to stay apart.
+        if len(blocks) < 2:
+            return blocks
+        return [chr(0x2460 + i) + " " + b if i < 20 else b for i, b in enumerate(blocks)]
+
+    entries = [(hw, "\n".join(numbered(merged[hw][0])).encode("utf-8"), merged[hw][1]) for hw in order]
+    key = lambda e: bytes(b + 32 if 65 <= b <= 90 else b for b in e[0])
+    entries.sort(key=lambda e: (key(e), -e[2]))
+    with open(stem + ".dict", "wb") as dict_file, open(stem + ".idx", "wb") as idx_file:
+        offset = 0
+        for hw, body, _ in entries:
+            dict_file.write(body)
+            idx_file.write(hw + b"\0" + struct.pack(">II", offset, len(body)))
+            offset += len(body)
+    idx_size = os.path.getsize(stem + ".idx")
+    with open(stem + ".ifo", "w", encoding="utf-8") as ifo:
+        ifo.write("StarDict's dict ifo file\nversion=2.4.2\n")
+        ifo.write(f"bookname={title or os.path.basename(stem)}\nwordcount={len(entries)}\n")
+        ifo.write(f"idxfilesize={idx_size}\nsametypesequence=m\n")
+    print(f"  {stem}.ifo/.idx/.dict: {len(entries)} entries")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Convert dictionary files to CrossPoint binary index.\n\n"
@@ -1443,19 +2207,22 @@ def main():
     parser.add_argument(
         "--lang",
         default="ja",
-        choices=["ja", "zh", "yue"],
+        choices=["ja", "zh", "yue", "ko"],
         help="Language of the dictionary: ja (default), zh, or yue for a Cantonese set (CC-Canto "
         "merged with CC-CEDICT, installed under /dictionaries/yue/). Chinese and Cantonese skip the "
-        "reading records (pinyin never appears in page text) and name the dictionary for the footer.",
+        "reading records (pinyin never appears in page text) and name the dictionary for the footer. "
+        "ko writes a StarDict dictionary into --output-dir (put it in /dictionaries/ko/<name>/): "
+        "Korean is looked up word by word, with particles and endings undone on the device.",
     )
     parser.add_argument(
         "--name",
         default="vocab",
-        choices=["vocab", "names", "grammar"],
+        choices=["vocab", "names", "grammar", "kanji", "hanzi", "hanja"],
         help="Which dictionary slot the output files fill (default: vocab -> vocab.idx/"
-        "vocab.dat). The device reads vocab (main dictionary), names (name dictionary), and "
-        "grammar (grammar dictionary); pass --name names or --name grammar to fill those "
-        "slots directly, no manual renaming needed.",
+        "vocab.dat). The device reads vocab (main dictionary), names (name dictionary), "
+        "grammar (grammar dictionary), and kanji (one entry per character, shown after a "
+        "word's entries; hanzi and hanja are other names for this slot); pass --name names, "
+        "grammar or kanji to fill those slots directly.",
     )
     parser.add_argument(
         "--format",
@@ -1520,13 +2287,29 @@ def main():
         help="How to read --frequency: by the count column, by row order, or auto (default).",
     )
     parser.add_argument(
+        "--pitch",
+        action="append",
+        help="Japanese: a Yomitan pitch-accent dictionary (NHK 2016, 大辞泉): the lookup panel draws "
+        "a line over the high syllables of each reading. Repeat for a fallback.",
+    )
+    parser.add_argument(
+        "--images",
+        action="store_true",
+        help="Yomitan: keep the pictures some dictionaries carry (デジタル大辞泉, 広辞苑, 日本国語大辞典) as "
+        "grayscale BMPs in <output-dir>/images/, shown in the lookup panel. Copy that folder beside the "
+        "dictionary files. Needs Pillow (pip install pillow). Off by default: a large dictionary can "
+        "hold thousands of pictures (デジタル大辞泉: about 15,000, 380 MB).",
+    )
+    parser.add_argument(
         "--furigana",
         help="Japanese: JmdictFurigana .json (or .json.zip) to add per-kanji furigana to each kanji "
         "headword's reading line, or 'auto' to download the latest release into --output-dir.",
     )
     args = parser.parse_args()
+    global IMAGES_ENABLED
+    IMAGES_ENABLED = args.images
 
-    chinese = args.lang in ("zh", "yue")
+    chinese = args.lang in ("zh", "yue", "ko")  # no reading records: the reading is not page text
     if not args.input:
         if chinese:
             print("Error: --lang zh needs --input (a CC-CEDICT file, MoE JSON, Yomitan zip or .mdx).",
@@ -1566,8 +2349,11 @@ def main():
         if fmt == "mdict":
             part = convert_mdict(path)
             title = os.path.splitext(os.path.basename(path))[0]
+        elif fmt == "yomitan" and args.name in ("kanji", "hanzi", "hanja"):
+            part, title = convert_yomitan_kanji(path)
         elif fmt == "yomitan":
-            part, title = convert_yomitan(path, reading_records=not chinese, furigana=furigana)
+            part, title = convert_yomitan(path, reading_records=not chinese, furigana=furigana,
+                                           show_tags=args.lang == "ko")
         elif fmt == "cedict":
             part, names = convert_cedict(path, zhuyin=args.zhuyin, split_names=args.split_names, levels=levels,
                                          jyutping=jyutping, sentence_pairs=sentence_pairs, twins=twins,
@@ -1583,6 +2369,12 @@ def main():
             title = os.path.splitext(os.path.basename(path))[0]
         else:
             part = convert_jmdict(path, furigana=furigana)
+        if fmt == "yomitan" and args.lang == "ja" and args.name == "vocab":
+            part = [(r[0], _shorten_related(_drop_headword_echo(r[1].decode("utf-8"), r[0].decode("utf-8")))
+                     .encode("utf-8")) + tuple(r[2:]) for r in part]
+        if title and len(args.input) > 1 and args.lang != "ko":
+            label = (SOURCE_MARKER + _short_title(title) + "\n").encode("utf-8")
+            part = [(r[0], label + r[1]) + tuple(r[2:]) for r in part]
         records.extend(part)
         if title:
             titles.append(title)
@@ -1596,11 +2388,22 @@ def main():
         records = apply_frequency(records, priorities, twins, shares)
         name_records = apply_frequency(name_records, priorities, twins, shares)
 
+    if args.pitch and not chinese:
+        pitch = {}
+        for path in args.pitch:
+            for key, value in load_yomitan_pitch(path).items():
+                pitch.setdefault(key, value)
+        records = apply_pitch(records, pitch)
+
     title = args.title or ""
     if not title and titles:
         joined = " + ".join(dict.fromkeys(titles))
-        title = joined if len(joined.encode("utf-8")) <= 36 else titles[0]
+        title = joined if len(joined.encode("utf-8")) <= 39 else titles[0]
+    if args.lang == "ko":
+        write_stardict(records, args.output_dir, title)
+        return
     write_binary(records, args.output_dir, args.name, title)
+    write_images(args.output_dir)
     if name_records:
         if args.name != "vocab":
             print("Note: --split-names only applies when writing the vocab slot; names kept in the output.")
