@@ -63,7 +63,11 @@ Result read(const GfxRenderer& renderer, const MappedInputManager& input, Nested
   const auto step = ReaderUtils::lookupPanelStep(input);
   if (step != ReaderUtils::PanelStep::None) return event(Event::Skip, step == ReaderUtils::PanelStep::Next ? 1 : -1);
   int delta = 0;
-  switch (ReaderUtils::lookupPressAny(input, delta)) {
+  const auto press = ReaderUtils::lookupPressAny(input, delta);
+  // The book's Reversed page turn swaps the shared buttons here too, as detectPageTurn() does in
+  // the reader; the explicit page bindings above keep their direction there as well.
+  if (pageTurnReversed) delta = -delta;
+  switch (press) {
     case ReaderUtils::LookupPress::Press:
       return event(Event::ReadOn, delta);
     case ReaderUtils::LookupPress::Hold:
