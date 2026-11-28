@@ -893,7 +893,8 @@ void CoverLibraryActivity::loadSeriesBooks(const std::string& seriesName) {
   });
   std::vector<ShelfBook> sorted;
   sorted.reserve(shelfBooks.size());
-  for (const size_t i : order) sorted.push_back(std::move(shelfBooks[i]));
+  std::transform(order.begin(), order.end(), std::back_inserter(sorted),
+                 [this](const size_t i) { return std::move(shelfBooks[i]); });
   shelfBooks = std::move(sorted);
 
   shelfBookProgress.resize(shelfBooks.size(), BookProgress{PROGRESS_PENDING});
