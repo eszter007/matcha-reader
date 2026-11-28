@@ -79,8 +79,10 @@ class UITheme {
   // the drop shadow, and the progress badge. Shared with the Home cover grid so a book looks the
   // same in both. `thumbPath` is already resolved for this box's height; progressPercent < 0
   // draws no badge.
+  // badgeText, when given, replaces the progress badge; stackIcon puts Tabler's filled stack-2 icon
+  // before it and drops the shadow (a series stack shows its book count).
   static void drawBookCover(GfxRenderer& renderer, Rect box, const std::string& thumbPath, const std::string& title,
-                            int progressPercent);
+                            int progressPercent, const char* badgeText = nullptr, bool stackIcon = false);
 
   // The one focus treatment across every screen: a solid black ring just inside `box`. Black,
   // because a dithered grey ring was too faint to find at a glance on the panel. An outline

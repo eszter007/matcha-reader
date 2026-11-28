@@ -91,6 +91,9 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc, const size_t maxBooks) {
       LOG_DBG("RBS", "Dropping unresolvable cover path %s", book.coverBmpPath.c_str());
       book.coverBmpPath.clear();
     }
+    book.seriesChecked = obj["seriesChk"] | false;
+    book.series = obj["series"] | "";
+    book.seriesIndex = obj["seriesIdx"] | -1.0f;
     recentBooks.push_back(std::move(book));
   }
 
@@ -197,6 +200,13 @@ bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, con
       record["title"] = book.title;
       record["author"] = book.author;
       record["coverBmpPath"] = book.coverBmpPath;
+      if (book.seriesChecked) {
+        record["seriesChk"] = true;
+        if (!book.series.empty()) {
+          record["series"] = book.series;
+          if (book.seriesIndex >= 0) record["seriesIdx"] = book.seriesIndex;
+        }
+      }
       serializeJson(record, output);
     }
 
