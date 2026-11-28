@@ -248,6 +248,8 @@ Matcha has two Library screens. Choose one in **Settings → Library → Library
 * **Matcha Covers** (the default) shows a grid of book covers. The README describes it.
 * **CrossPoint List** shows a list of titles and authors. The rest of this section is about the list.
 
+In **Matcha Covers**, books from the same series show as one stack on the **Books** tab. The front cover is the volume with the lowest series number, and the badge shows how many books the stack has. Tap the stack or press **Confirm** to see its books in series order, and press **Back** to return. A series with only one book on the card shows as a normal cover. Series come from the book's metadata (calibre or EPUB 3 series, or a manga's series). The Library reads it in the background while you are not pressing buttons, so new books join their stack after a short time.
+
 The list keeps an index of up to 4,096 books on the SD card, so you can find a book without remembering its folder. It has four tabs. An arrow next to a sorted tab shows the sort direction.
 
 * **Recent** shows the ten books you opened most recently first, then the rest of your books by file date. Turn on

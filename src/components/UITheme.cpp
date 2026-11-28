@@ -21,6 +21,7 @@
 #include "RecentBooksStore.h"
 #include "components/CoverGridHomeUi.h"
 #include "components/icons/cover.h"
+#include "components/icons/stackIcon.h"
 #include "components/themes/BaseTheme.h"
 #include "components/themes/lyra/Lyra3CoversTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
@@ -378,7 +379,8 @@ int UITheme::drawCoverThumb(GfxRenderer& renderer, const std::string& coverThumb
 }
 
 void UITheme::drawBookCover(GfxRenderer& renderer, const Rect box, const std::string& thumbPath,
-                            const std::string& title, const int progressPercent) {
+                            const std::string& title, const int progressPercent, const char* badgeText,
+                            const bool stackIcon) {
   const int coverX = box.x;
   const int coverY = box.y;
   const int coverWidth = box.width;
@@ -394,10 +396,12 @@ void UITheme::drawBookCover(GfxRenderer& renderer, const Rect box, const std::st
 
   renderer.drawRect(coverX, coverY, coverWidth, coverHeight, true);
   // Drop shadow: two px down the right edge and along the bottom, so a cover reads as a book
-  // standing on a shelf.
-  constexpr int SHADOW = 2;
-  renderer.fillRect(coverX + coverWidth, coverY + SHADOW, SHADOW, coverHeight, true);
-  renderer.fillRect(coverX + SHADOW, coverY + coverHeight, coverWidth, SHADOW, true);
+  // standing on a shelf. A stack's sheets already show depth, so its front cover has none.
+  if (!stackIcon) {
+    constexpr int SHADOW = 2;
+    renderer.fillRect(coverX + coverWidth, coverY + SHADOW, SHADOW, coverHeight, true);
+    renderer.fillRect(coverX + SHADOW, coverY + coverHeight, coverWidth, SHADOW, true);
+  }
 
   if (!hasCover) {
     const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
@@ -417,9 +421,11 @@ void UITheme::drawBookCover(GfxRenderer& renderer, const Rect box, const std::st
   // Progress badge, top-right, white on black: "New" for unstarted books, "Read" for finished
   // ones, else the percentage. A negative percent means the caller has not read it yet -- draw
   // nothing rather than a wrong badge.
-  if (progressPercent < 0) return;
+  if (progressPercent < 0 && !badgeText) return;
   char badgeBuf[32];  // a translated "Read" runs to nine two-byte letters
-  if (progressPercent <= 0) {
+  if (badgeText) {
+    snprintf(badgeBuf, sizeof(badgeBuf), "%s", badgeText);
+  } else if (progressPercent <= 0) {
     snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_NEW));
   } else if (progressPercent >= 100) {
     snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_READ));
@@ -428,7 +434,9 @@ void UITheme::drawBookCover(GfxRenderer& renderer, const Rect box, const std::st
   }
   const int badgeTextW = renderer.getTextWidth(SMALL_FONT_ID, badgeBuf);
   const int badgeH = renderer.getLineHeight(SMALL_FONT_ID) + 4;
-  const int badgeW = badgeTextW + 12;
+  const int iconSize = stackIcon ? STACK_ICON_SIZE : 0;
+  const int iconGap = stackIcon ? 3 : 0;
+  const int badgeW = badgeTextW + 12 + iconSize + iconGap;
   const int badgeX = coverX + coverWidth - badgeW;
   const int badgeY = coverY;
   // Black fill with a rounded bottom-left corner; pixels outside the arc stay untouched so the
@@ -449,7 +457,20 @@ void UITheme::drawBookCover(GfxRenderer& renderer, const Rect box, const std::st
   // White border on the two exposed edges (left + bottom); top/right sit on the cover edge.
   renderer.drawLine(badgeX, badgeY, badgeX, arcCy, false);
   renderer.drawLine(arcCx, badgeY + badgeH - 1, badgeX + badgeW - 1, badgeY + badgeH - 1, false);
-  renderer.drawText(SMALL_FONT_ID, badgeX + 6, badgeY + 2, badgeBuf, false);
+  if (stackIcon) {
+    // White ink on the black badge, so not drawIcon(), which only plots black.
+    const int ox = badgeX + 6;
+    const int oy = badgeY + (badgeH - STACK_ICON_SIZE) / 2;
+    constexpr int rowBytes = (STACK_ICON_SIZE + 7) / 8;
+    for (int row = 0; row < STACK_ICON_SIZE; row++) {
+      for (int col = 0; col < STACK_ICON_SIZE; col++) {
+        if (((StackIcon[row * rowBytes + (col >> 3)] >> (7 - (col & 7))) & 1) == 0) {
+          renderer.drawPixel(ox + col, oy + row, false);
+        }
+      }
+    }
+  }
+  renderer.drawText(SMALL_FONT_ID, badgeX + 6 + iconSize + iconGap, badgeY + 2, badgeBuf, false);
 }
 
 void UITheme::drawCoverShadow(const GfxRenderer& renderer, const int coverX, const int coverY, const int coverWidth,

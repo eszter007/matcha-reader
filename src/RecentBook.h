@@ -10,6 +10,11 @@ struct RecentBook {
   std::string title;
   std::string author;
   std::string coverBmpPath;
+  // Series from the book's own metadata, read by the Library's idle scan. seriesChecked stays
+  // false until a read succeeded, so a failed read is retried on the next visit.
+  std::string series;
+  float seriesIndex = -1.0f;  // volume number in the series; negative when the book gives none
+  bool seriesChecked = false;
 
   bool operator==(const RecentBook& other) const { return path == other.path; }
 };

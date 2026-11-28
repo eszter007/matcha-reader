@@ -75,6 +75,18 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
   };
   std::vector<BookProgress> bookProgress;
 
+  // Books tab cells, in recentBooks order. A series with two or more books on the card is one
+  // stacked cell standing for all of them; bookIdx is then its lowest-numbered volume.
+  struct GridItem {
+    int bookIdx = 0;
+    uint16_t seriesCount = 1;
+    // The next two volumes, whose covers show on the sheets behind the front one; -1 for none.
+    int behindIdx[2] = {-1, -1};
+    bool isStack() const { return seriesCount > 1; }
+  };
+  std::vector<GridItem> gridItems;
+  void buildGridItems();
+
   // Shelves tab
   struct ShelfInfo {
     std::string folderPath;
@@ -96,6 +108,10 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
   std::vector<ShelfBook> shelfBooks;
   std::vector<BookProgress> shelfBookProgress;
   int openShelfIndex = -1;
+  // Series opened from a stack in the Books tab; shown in the same detail view as a shelf.
+  std::string openSeriesName;
+  bool detailOpen() const { return openShelfIndex >= 0 || !openSeriesName.empty(); }
+  void closeDetail();
   int shelfContentIndex = 0;
   int shelfScrollRow = 0;
 
@@ -154,6 +170,8 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
   [[nodiscard]] int shelfRowAtPoint(int x, int y, int contentTop, int contentHeight) const;
   void loadShelves();
   void loadShelfBooks(const std::string& folderPath);
+  void loadSeriesBooks(const std::string& seriesName);
+  void openSeries(const std::string& seriesName);
   // The furthest of this device's progress and the progress elsewhere (remoteProgress).
   int readProgressPercent(const std::string& bookPath) const;
   int readLocalProgressPercent(const std::string& bookPath) const;
@@ -167,13 +185,23 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
 
   // Shared cell/row painters, used by both the full renders above and the partial fast path.
   void drawGridCell(int cellX, int cellY, int cellWidth, int cellHeight, const std::string& coverBmpPath,
-                    const std::string& title, int progressPercent, bool selected, bool drawTitle = true);
+                    const std::string& title, int progressPercent, bool selected, bool drawTitle = true,
+                    const GridItem* stack = nullptr);
+  // The two volumes behind a series stack's front cover, inside the cover box.
+  static constexpr int STACK_STEP = 3;
+  // White gap around each volume of a stack, so the layers stay apart on dark covers.
+  static constexpr int STACK_GAP = 2;
+  static constexpr int STACK_INSET = 2 * STACK_STEP;
+  static int stackCoverHeight(const int coverWidth, const int coverHeight) {
+    return (coverWidth - STACK_INSET) * coverHeight / coverWidth;
+  }
+  void drawStackEdges(int coverX, int coverY, int coverWidth, int coverHeight, const GridItem& item);
   void drawShelfRow(int shelfIdx, int itemY, bool selected);
 
   // Grid selection indicator: a 2px border ring just OUTSIDE the cover box, entirely within the
   // cell's padding margin. Because it never overlaps the cover, moving the selection is two of
   // these calls (erase old with on=false, draw new) -- no cover re-decode, a few ms total.
-  void drawGridSelectionBorder(int cellX, int cellY, int cellWidth, int cellHeight, bool on);
+  void drawGridSelectionBorder(int cellX, int cellY, int cellWidth, int cellHeight, bool on, bool shadow = true);
 
   // Selection-only fast path: when the previous full render is still in the framebuffer and ONLY
   // the selection moved within the same scroll window, repaint the two affected cells/rows over
@@ -188,6 +216,7 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
   struct RenderedState {
     bool valid = false;
     int openShelf = -1;
+    std::string openSeries;
     int tab = -1;
     int contentIndex = -1;
     int scrollRow = -1;
@@ -203,6 +232,7 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
   void rememberRendered() {
     lastRendered.valid = true;
     lastRendered.openShelf = openShelfIndex;
+    lastRendered.openSeries = openSeriesName;
     lastRendered.tab = selectedTab;
     lastRendered.contentIndex = contentIndex;
     lastRendered.scrollRow = scrollRow;
@@ -224,7 +254,10 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
     std::string activeDirPath;
     std::array<char, 500> nameBuf{};
     std::vector<RecentBook> results;
-    size_t thumbIndex = 0;  // cover-thumb pass cursor over the live catalog
+    size_t thumbIndex = 0;   // cover-thumb pass cursor over the live catalog
+    size_t seriesIndex = 0;  // series-metadata pass cursor, after the cover pass
+    bool coverPassSaved = false;
+    uint16_t seriesUnsaved = 0;  // series results not yet in library_cache.json
   };
   LibraryScanState scan_;
 
@@ -273,6 +306,7 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
   void prewarmBookText();
   void startLibraryScan();
   bool stepLibraryScan();  // one slice; returns true when the whole pass is done
+  bool stepSeriesScan();   // one book of the series pass; returns true when it is done
   bool applyLibraryScan();
   void finishLibraryScan();
   uint32_t lastInputMs = 0;  // idle gate for the heavy thumb/indexing slices

@@ -174,8 +174,51 @@ int CoverLibraryActivity::gridIndexAtPoint(const int x, const int y, const int c
 }
 
 int CoverLibraryActivity::getContentItemCount() const {
-  if (selectedTab == 0) return static_cast<int>(recentBooks.size());
+  if (selectedTab == 0) return static_cast<int>(gridItems.size());
   return static_cast<int>(shelves.size());
+}
+
+void CoverLibraryActivity::buildGridItems() {
+  gridItems.clear();
+  gridItems.reserve(recentBooks.size());
+  for (int i = 0; i < static_cast<int>(recentBooks.size()); i++) {
+    const RecentBook& book = recentBooks[i];
+    if (!book.series.empty()) {
+      const auto stack = std::find_if(gridItems.begin(), gridItems.end(), [this, &book](const GridItem& item) {
+        return recentBooks[item.bookIdx].series == book.series;
+      });
+      if (stack != gridItems.end()) {
+        stack->seriesCount++;
+        // The stack shows its first volume; a book without a number never replaces one with it.
+        const float shown = recentBooks[stack->bookIdx].seriesIndex;
+        if (book.seriesIndex >= 0 && (shown < 0 || book.seriesIndex < shown)) stack->bookIdx = i;
+        continue;
+      }
+    }
+    gridItems.push_back(GridItem{i, 1});
+  }
+
+  // Each stack's next two volumes by series number, after the front one.
+  for (auto& item : gridItems) {
+    if (!item.isStack()) continue;
+    const RecentBook& front = recentBooks[item.bookIdx];
+    for (int i = 0; i < static_cast<int>(recentBooks.size()); i++) {
+      const RecentBook& book = recentBooks[i];
+      if (i == item.bookIdx || book.series != front.series) continue;
+      const auto before = [this](const int a, const int b) {
+        const float x = recentBooks[a].seriesIndex;
+        const float y = recentBooks[b].seriesIndex;
+        if ((x >= 0) != (y >= 0)) return x >= 0;
+        return x < y;
+      };
+      if (item.behindIdx[0] < 0 || before(i, item.behindIdx[0])) {
+        item.behindIdx[1] = item.behindIdx[0];
+        item.behindIdx[0] = i;
+      } else if (item.behindIdx[1] < 0 || before(i, item.behindIdx[1])) {
+        item.behindIdx[1] = i;
+      }
+    }
+  }
 }
 
 namespace {
@@ -194,6 +237,7 @@ void CoverLibraryActivity::loadRecentBooks() {
   } else {
     recentBooks = RECENT_BOOKS.getBooks();
   }
+  buildGridItems();
 }
 
 namespace {
@@ -546,8 +590,71 @@ bool CoverLibraryActivity::stepLibraryScan() {
     return false;
   }
 
+  // The series pass reads an OPF per book; let the last cover decode finish first so the two
+  // never compete for heap, and save the cover results before the long pass starts.
+  if (coverWorker_.busy()) return false;
+  if (!scan_.coverPassSaved) {
+    finishLibraryScan();
+    scan_.coverPassSaved = true;
+  }
+  if (!stepSeriesScan()) return false;
   scan_.active = false;
   return true;
+}
+
+bool CoverLibraryActivity::stepSeriesScan() {
+  std::string path;
+  {
+    RenderLock lock{RenderLock::Try{}};
+    if (!lock.held()) return false;
+    while (scan_.seriesIndex < recentBooks.size() && recentBooks[scan_.seriesIndex].seriesChecked) {
+      scan_.seriesIndex++;
+    }
+    if (scan_.seriesIndex >= recentBooks.size()) return true;
+    path = recentBooks[scan_.seriesIndex].path;
+  }
+
+  // Only EPUBs and manga folders name a series; every other book is settled without a read.
+  bool read = true;
+  std::string series;
+  float seriesIndex = -1.0f;
+  if (FsHelpers::hasEpubExtension(path)) {
+    Epub epub(path, "/.crosspoint");
+    Epub::SyncMetadata meta;
+    read = epub.loadSyncMetadata(meta);
+    series = std::move(meta.series);
+    if (meta.seriesIndex) seriesIndex = *meta.seriesIndex;
+  } else if (manga::MangaBook::isMangaFolder(path)) {
+    manga::MangaBook manga(path);
+    read = manga.loadMeta();
+    series = manga.getSeries();
+    if (const auto index = manga.getSeriesIndex()) seriesIndex = *index;
+  }
+  scan_.seriesIndex++;
+  // Not marked as checked: the read is tried again on the next Library visit.
+  if (!read) return false;
+  if (seriesIndex < 0) seriesIndex = -1.0f;
+
+  RenderLock lock{RenderLock::Try{}};
+  if (!lock.held()) {
+    scan_.seriesIndex--;
+    return false;
+  }
+  const auto live = std::find_if(recentBooks.begin(), recentBooks.end(),
+                                 [&path](const RecentBook& item) { return item.path == path; });
+  if (live == recentBooks.end()) return false;
+  live->seriesChecked = true;
+  scan_.seriesUnsaved++;
+  if (series.empty()) return false;
+  live->series = std::move(series);
+  live->seriesIndex = seriesIndex;
+  buildGridItems();
+  // Stacks just formed can shorten the grid under the cursor.
+  contentIndex = std::min(contentIndex, static_cast<int>(gridItems.size()));
+  lastRendered.valid = false;
+  lock.unlock();
+  requestUpdate();
+  return false;
 }
 
 void CoverLibraryActivity::scanDirectoryEntry() {
@@ -633,6 +740,7 @@ bool CoverLibraryActivity::applyLibraryScan() {
   }
 
   recentBooks = std::move(scan_.results);
+  buildGridItems();
   if (changed) {
     markAllProgressPending();
     if (shelvesLoaded) loadShelves();
@@ -750,6 +858,66 @@ void CoverLibraryActivity::loadShelfBooks(const std::string& folderPath) {
   shelfBookProgress.resize(shelfBooks.size(), BookProgress{PROGRESS_PENDING});
 }
 
+void CoverLibraryActivity::loadSeriesBooks(const std::string& seriesName) {
+  lastRendered.valid = false;
+  shelfBooks.clear();
+  shelfBookProgress.clear();
+
+  std::vector<float> numbers;
+  for (const auto& book : recentBooks) {
+    if (book.series != seriesName) continue;
+    std::string label = book.title;
+    if (book.seriesIndex >= 0) {
+      char prefix[16];
+      const int whole = static_cast<int>(book.seriesIndex);
+      if (static_cast<float>(whole) == book.seriesIndex) {
+        snprintf(prefix, sizeof(prefix), "#%d ", whole);
+      } else {
+        snprintf(prefix, sizeof(prefix), "#%.1f ", static_cast<double>(book.seriesIndex));
+      }
+      label.insert(0, prefix);
+    }
+    shelfBooks.push_back(ShelfBook{book.path, std::move(label), book.coverBmpPath});
+    numbers.push_back(book.seriesIndex);
+  }
+
+  // Series order; books without a number go last, by title.
+  std::vector<size_t> order(shelfBooks.size());
+  for (size_t i = 0; i < order.size(); i++) order[i] = i;
+  std::stable_sort(order.begin(), order.end(), [&](const size_t a, const size_t b) {
+    const bool aNumbered = numbers[a] >= 0;
+    const bool bNumbered = numbers[b] >= 0;
+    if (aNumbered != bNumbered) return aNumbered;
+    if (aNumbered && numbers[a] != numbers[b]) return numbers[a] < numbers[b];
+    return shelfBooks[a].title < shelfBooks[b].title;
+  });
+  std::vector<ShelfBook> sorted;
+  sorted.reserve(shelfBooks.size());
+  for (const size_t i : order) sorted.push_back(std::move(shelfBooks[i]));
+  shelfBooks = std::move(sorted);
+
+  shelfBookProgress.resize(shelfBooks.size(), BookProgress{PROGRESS_PENDING});
+}
+
+void CoverLibraryActivity::openSeries(const std::string& seriesName) {
+  LOG_DBG("RBA", "Opening series: %s", seriesName.c_str());
+  openShelfIndex = -1;
+  openSeriesName = seriesName;
+  shelfConfirmPressSeen = false;
+  shelfContentIndex = 0;
+  shelfScrollRow = 0;
+  loadSeriesBooks(seriesName);
+  requestUpdate();
+}
+
+void CoverLibraryActivity::closeDetail() {
+  openShelfIndex = -1;
+  openSeriesName.clear();
+  tabFocus = -1;
+  shelfBooks.clear();
+  shelfBookProgress.clear();
+}
+
 int CoverLibraryActivity::readProgressPercent(const std::string& bookPath) const {
   const int percent = readLocalProgressPercent(bookPath);
   return std::max(percent, remoteBooks.percent(bookPath));
@@ -802,6 +970,7 @@ void CoverLibraryActivity::onEnter() {
   scrollRow = 0;
   shelvesScroll = 0;
   openShelfIndex = -1;
+  openSeriesName.clear();
   // Button boards open on the Books/Shelves tab, drawn focused, so Down lands on the first book.
   // Starting hidden left index 0 invisible and the first Up wrapped to the last cover.
   selectorVisible = !mappedInput.hasTouch();
@@ -813,6 +982,8 @@ void CoverLibraryActivity::onExit() {
   // sees the held lock, drops any partial thumbnail and exits before activity state is cleared.
   coverWorker_.stop();
   Activity::onExit();
+  // A series pass cut short keeps what it read, so the next visit does not read it again.
+  if (scan_.seriesUnsaved > 0) RecentBooksStore::saveBooksToPath(recentBooks, LIBRARY_CACHE_JSON);
   scan_ = LibraryScanState{};
   libraryIndex_.clear();
   recentBooks.clear();
@@ -820,12 +991,14 @@ void CoverLibraryActivity::onExit() {
   shelves.clear();
   shelfBooks.clear();
   shelfBookProgress.clear();
+  gridItems.clear();
+  openSeriesName.clear();
 }
 
-int CoverLibraryActivity::ringTopTabCount() const { return openShelfIndex >= 0 ? 0 : LibraryTabs::count(); }
+int CoverLibraryActivity::ringTopTabCount() const { return detailOpen() ? 0 : LibraryTabs::count(); }
 
 bool CoverLibraryActivity::ringHasContent() const {
-  return openShelfIndex >= 0 ? !shelfBooks.empty() : getContentItemCount() > 0;
+  return detailOpen() ? !shelfBooks.empty() : getContentItemCount() > 0;
 }
 
 void CoverLibraryActivity::ringSelectTopTab(const int index) {
@@ -847,7 +1020,7 @@ void CoverLibraryActivity::ringSelectTopTab(const int index) {
 
 TabRing::Focus CoverLibraryActivity::ringFocus() const {
   if (tabFocus >= 0) return TabRing::Focus::BottomBar;
-  if (openShelfIndex >= 0) return TabRing::Focus::Content;
+  if (detailOpen()) return TabRing::Focus::Content;
   return contentIndex == 0 ? TabRing::Focus::TopTabs : TabRing::Focus::Content;
 }
 
@@ -855,7 +1028,7 @@ void CoverLibraryActivity::ringSetFocus(const TabRing::Focus focus, const bool a
   tabFocus = focus == TabRing::Focus::BottomBar ? HomeTabBar::slotOf(HomeTab::Library) : -1;
   selectorVisible = true;
   if (focus == TabRing::Focus::BottomBar) return;
-  if (openShelfIndex >= 0) {
+  if (detailOpen()) {
     shelfContentIndex = atEnd && !shelfBooks.empty() ? static_cast<int>(shelfBooks.size()) - 1 : 0;
     return;
   }
@@ -892,12 +1065,9 @@ void CoverLibraryActivity::loop() {
   const int contentHeight =
       renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
 
-  if (openShelfIndex >= 0) {
+  if (detailOpen()) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      openShelfIndex = -1;
-      tabFocus = -1;
-      shelfBooks.clear();
-      shelfBookProgress.clear();
+      closeDetail();
       requestUpdate();
       return;
     }
@@ -1021,6 +1191,13 @@ void CoverLibraryActivity::loop() {
       return;
     }
   }
+  // A series stack opens on the press too, into the same view as a shelf.
+  if (tabFocus < 0 && selectedTab == 0 && contentIndex > 0 && contentIndex <= static_cast<int>(gridItems.size()) &&
+      gridItems[contentIndex - 1].isStack() && mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    selectorVisible = true;
+    openSeries(recentBooks[gridItems[contentIndex - 1].bookIdx].series);
+    return;
+  }
 
   if (longPressFired) {
     if (!mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
@@ -1029,8 +1206,9 @@ void CoverLibraryActivity::loop() {
     return;
   }
 
-  if (tabFocus < 0 && selectedTab == 0 && contentIndex > 0) {
-    const int itemIdx = contentIndex - 1;
+  if (tabFocus < 0 && selectedTab == 0 && contentIndex > 0 && contentIndex <= static_cast<int>(gridItems.size()) &&
+      !gridItems[contentIndex - 1].isStack()) {
+    const int itemIdx = gridItems[contentIndex - 1].bookIdx;
     if (itemIdx < static_cast<int>(recentBooks.size())) {
       // Fires while still held, so the gesture completes without waiting for release.
       // wasLongPressed(), not isPressed() + getHeldTime(): it also arms suppression of the release
@@ -1137,12 +1315,13 @@ void CoverLibraryActivity::loop() {
     if (mappedInput.wasScreenLongPress(gx, gy)) {
       const int hit = hitAtPoint(gx, gy);
       hideSelector();
-      // Stats are for books; a shelf has none.
-      if (hit >= 0 && selectedTab == 0 && hit < static_cast<int>(recentBooks.size())) {
+      // Stats are for books; a shelf or a series stack has none.
+      if (hit >= 0 && selectedTab == 0 && hit < static_cast<int>(gridItems.size()) && !gridItems[hit].isStack()) {
         haptic_feedback::touchAction(/*longPress=*/true);
         contentIndex = hit + 1;
-        showBookActions(recentBooks[hit].path, recentBooks[hit].title,
-                        hit < static_cast<int>(bookProgress.size()) ? bookProgress[hit].percent : -1);
+        const int bookIdx = gridItems[hit].bookIdx;
+        showBookActions(recentBooks[bookIdx].path, recentBooks[bookIdx].title,
+                        bookIdx < static_cast<int>(bookProgress.size()) ? bookProgress[bookIdx].percent : -1);
       }
       return;
     }
@@ -1180,9 +1359,14 @@ void CoverLibraryActivity::loop() {
         haptic_feedback::touchAction();
         contentIndex = hit + 1;
         if (selectedTab == 0) {
-          if (hit < static_cast<int>(recentBooks.size())) {
-            LOG_DBG("RBA", "Tapped recent book: %s", recentBooks[hit].path.c_str());
-            onSelectBook(recentBooks[hit].path);
+          if (hit < static_cast<int>(gridItems.size())) {
+            const RecentBook& book = recentBooks[gridItems[hit].bookIdx];
+            if (gridItems[hit].isStack()) {
+              openSeries(book.series);
+            } else {
+              LOG_DBG("RBA", "Tapped recent book: %s", book.path.c_str());
+              onSelectBook(book.path);
+            }
           }
         } else if (hit < static_cast<int>(shelves.size())) {
           LOG_DBG("RBA", "Tapped shelf: %s", shelves[hit].folderPath.c_str());
@@ -1273,7 +1457,11 @@ void CoverLibraryActivity::loop() {
     const uint32_t idleBeforeWorkMs = scan_.walkDone ? THUMB_IDLE_MS : 700;
     if (millis() - lastInputMs > idleBeforeWorkMs && !RenderLock::peek()) {
       const bool done = stepLibraryScan();
-      if (done) finishLibraryScan();
+      // The cover results were saved before the series pass; only new series data is left.
+      if (done && scan_.seriesUnsaved > 0) {
+        finishLibraryScan();
+        scan_.seriesUnsaved = 0;
+      }
     }
   } else if (millis() - lastInputMs > 700 && !mappedInput.anyButtonDownRaw()) {
     warmOnePendingProgress();
@@ -1289,18 +1477,19 @@ void CoverLibraryActivity::showBookActions(const std::string& path, const std::s
   const std::string openShelfFolder = openShelfIndex >= 0 && openShelfIndex < static_cast<int>(shelves.size())
                                           ? shelves[openShelfIndex].folderPath
                                           : std::string();
+  const std::string seriesName = openSeriesName;
   BookActionsMenu::show(optionPopup, *this, renderer, mappedInput, path, title, percent,
-                        [this, openShelfFolder, path](const bool deleted) {
+                        [this, openShelfFolder, seriesName, path](const bool deleted) {
                           // Either way the frame underneath is stale; a delete also drops a book
                           // out of the lists the grid is drawn from.
                           lastRendered.valid = false;
                           if (deleted) {
-                            loadRecentBooks();
                             // The scan cache still lists the book, and a running scan may already
                             // have collected it; drop it from both so it does not come back.
                             const auto samePath = [&path](const RecentBook& book) { return book.path == path; };
                             std::erase_if(recentBooks, samePath);
                             std::erase_if(scan_.results, samePath);
+                            buildGridItems();
                             RecentBooksStore::saveBooksToPath(recentBooks, LIBRARY_CACHE_JSON);
                             shelvesLoaded = false;
                             contentIndex = 0;
@@ -1311,8 +1500,12 @@ void CoverLibraryActivity::showBookActions(const std::string& path, const std::s
                           // An open shelf draws from its own list, filtered out of recentBooks, so
                           // it is rebuilt too -- otherwise a deleted book stayed on the shelf
                           // pointing at a file that no longer exists.
-                          if (!openShelfFolder.empty()) {
-                            loadShelfBooks(openShelfFolder);
+                          if (!openShelfFolder.empty() || !seriesName.empty()) {
+                            if (seriesName.empty()) {
+                              loadShelfBooks(openShelfFolder);
+                            } else {
+                              loadSeriesBooks(seriesName);
+                            }
                             const int count = static_cast<int>(shelfBooks.size());
                             if (shelfContentIndex >= count) shelfContentIndex = count > 0 ? count - 1 : 0;
                           }
@@ -1321,8 +1514,30 @@ void CoverLibraryActivity::showBookActions(const std::string& path, const std::s
   requestUpdate();
 }
 
+void CoverLibraryActivity::drawStackEdges(const int coverX, const int coverY, const int coverWidth,
+                                          const int coverHeight, const GridItem& item) {
+  // The next two volumes, each STACK_STEP further right and proportionally higher, drawn back to
+  // front with their own covers. The front cover is drawn last, in the bottom-left corner.
+  const int w = coverWidth - STACK_INSET;
+  const int h = stackCoverHeight(coverWidth, coverHeight);
+  const int rise = (coverHeight - h) / 2;
+  for (int step = 2; step >= 1; step--) {
+    const int x = coverX + step * STACK_STEP;
+    const int y = coverY + (coverHeight - h) - step * rise;
+    const int bookIdx = item.behindIdx[step - 1];
+    // Image and a hairline only: a drop shadow on every layer turned the edges into stripes.
+    renderer.fillRect(x - STACK_GAP, y - STACK_GAP, w + 2 * STACK_GAP, h + 2 * STACK_GAP, false);
+    if (bookIdx >= 0 && !recentBooks[bookIdx].coverBmpPath.empty()) {
+      UITheme::drawCoverThumbFilled(renderer,
+                                    UITheme::getCoverThumbPath(recentBooks[bookIdx].coverBmpPath, coverHeight), x, y, w,
+                                    h, /*allowRawDecode=*/false);
+    }
+    renderer.drawRect(x, y, w, h, true);
+  }
+}
+
 void CoverLibraryActivity::drawGridSelectionBorder(const int cellX, const int cellY, const int cellWidth,
-                                                   const int cellHeight, const bool on) {
+                                                   const int cellHeight, const bool on, const bool shadow) {
   (void)cellHeight;
   const int coverWidth = cellWidth - 2 * COVER_PADDING;
   const int coverHeight = coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM;
@@ -1335,13 +1550,14 @@ void CoverLibraryActivity::drawGridSelectionBorder(const int cellX, const int ce
                          Rect{coverX - COVER_PADDING, coverY - COVER_PADDING, coverWidth + 2 * COVER_PADDING,
                               coverHeight + 2 * COVER_PADDING},
                          on);
-  // The drop shadow lives in that same padding, so erasing the ring erases it too.
-  if (!on) UITheme::drawCoverShadow(renderer, coverX, coverY, coverWidth, coverHeight);
+  // The drop shadow lives in that same padding, so erasing the ring erases it too. Stacks have none.
+  if (!on && shadow) UITheme::drawCoverShadow(renderer, coverX, coverY, coverWidth, coverHeight);
 }
 
 void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const int cellWidth, const int cellHeight,
                                         const std::string& coverBmpPath, const std::string& title,
-                                        const int progressPercent, const bool selected, const bool drawTitle) {
+                                        const int progressPercent, const bool selected, const bool drawTitle,
+                                        const GridItem* stack) {
   const int coverWidth = cellWidth - 2 * COVER_PADDING;
   const int coverHeight = coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM;
   // Request the thumb at the size it is drawn at: a theme-sized thumb (300px, 400px in
@@ -1354,12 +1570,25 @@ void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const 
   if (selected) {
     drawGridSelectionBorder(cellX, cellY, cellWidth, cellHeight, true);
   }
+  const int stackCount = stack ? stack->seriesCount : 0;
+  if (stack) drawStackEdges(coverX, coverY, coverWidth, coverHeight, *stack);
 
   const std::string coverPath =
       coverBmpPath.empty() ? std::string() : UITheme::getCoverThumbPath(coverBmpPath, thumbHeight);
   // Cover art, fallback, shadow and badge all come from the shared painter, so a book looks the
-  // same here and on the Home cover grid.
-  UITheme::drawBookCover(renderer, Rect{coverX, coverY, coverWidth, coverHeight}, coverPath, title, progressPercent);
+  // same here and on the Home cover grid. A stack's badge is its book count.
+  char countBuf[8];
+  if (stackCount > 0) snprintf(countBuf, sizeof(countBuf), "%d", stackCount);
+  // A stack's front cover keeps the cover aspect, so the thumbnail fills it without a blank strip.
+  const int frontWidth = stackCount > 0 ? coverWidth - STACK_INSET : coverWidth;
+  const int frontHeight = stackCount > 0 ? stackCoverHeight(coverWidth, coverHeight) : coverHeight;
+  // Cover drawing leaves white pixels untouched, so clear the box over the volumes behind it.
+  // The gap reaches up and right only: left and below are the cell's own padding.
+  const int frontY = coverY + coverHeight - frontHeight;
+  if (stack) renderer.fillRect(coverX, frontY - STACK_GAP, frontWidth + STACK_GAP, frontHeight + STACK_GAP, false);
+  UITheme::drawBookCover(renderer, Rect{coverX, coverY + coverHeight - frontHeight, frontWidth, frontHeight}, coverPath,
+                         title, progressPercent, stackCount > 0 ? countBuf : nullptr,
+                         /*stackIcon=*/stackCount > 0);
 
   // Title below the cover, single line, ellipsis-truncated. The peek row skips this: its
   // title band lies under the button hints, so measuring/truncating it would be wasted work.
@@ -1399,7 +1628,7 @@ void CoverLibraryActivity::renderBooksTab(int contentTop, int contentHeight) {
   const int cellHeight = getCellHeight(cellWidth);
   const int rowStride = cellHeight + GRID_ROW_GAP;
   const int visibleRows = getVisibleRows(cellHeight, contentHeight);
-  const int bookCount = static_cast<int>(recentBooks.size());
+  const int bookCount = static_cast<int>(gridItems.size());
   const int totalRows = (bookCount + GRID_COLS - 1) / GRID_COLS;
   const int selectedItem = contentIndex - 1;
 
@@ -1424,14 +1653,24 @@ void CoverLibraryActivity::renderBooksTab(int contentTop, int contentHeight) {
   // Fill the visible window's progress badges synchronously (max 9 books, ~2 small reads each)
   // so the first paint is already correct -- the deferred background pass caused a SECOND full
   // e-ink refresh right after opening, which read as sluggishness.
-  fillPageProgressNow(bookProgress, &recentBooks, nullptr, firstIdx, lastIdx);
+  for (int idx = firstIdx; idx <= lastIdx; idx++) {
+    if (gridItems[idx].isStack()) continue;
+    const int bookIdx = gridItems[idx].bookIdx;
+    fillPageProgressNow(bookProgress, &recentBooks, nullptr, bookIdx, bookIdx);
+  }
+
+  // A stack is labelled with its series name.
+  const auto cellLabel = [this](const GridItem& item) -> const std::string& {
+    const RecentBook& book = recentBooks[item.bookIdx];
+    return item.isStack() ? book.series : book.title;
+  };
 
   // Prewarm titles for the full rows only (the peek row's titles are never drawn).
   if (renderer.getFontCacheManager()) {
     std::string prewarmBuf;
     prewarmBuf.reserve(256);
     for (int idx = firstIdx; idx <= titledLastIdx; idx++) {
-      prewarmBuf += recentBooks[idx].title;
+      prewarmBuf += cellLabel(gridItems[idx]);
       prewarmBuf += ' ';
     }
     renderer.prewarmText(SMALL_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::REGULAR);
@@ -1443,9 +1682,11 @@ void CoverLibraryActivity::renderBooksTab(int contentTop, int contentHeight) {
     const int row = local / GRID_COLS;
     const int cellX = metrics.contentSidePadding + col * cellWidth;
     const int cellY = contentTop + row * rowStride;
-    const int pct = idx < static_cast<int>(bookProgress.size()) ? bookProgress[idx].percent : -1;
-    drawGridCell(cellX, cellY, cellWidth, cellHeight, recentBooks[idx].coverBmpPath, recentBooks[idx].title, pct,
-                 contentCursorShown() && idx == selectedItem, /*drawTitle=*/idx <= titledLastIdx);
+    const GridItem& item = gridItems[idx];
+    const int pct = item.bookIdx < static_cast<int>(bookProgress.size()) ? bookProgress[item.bookIdx].percent : -1;
+    drawGridCell(cellX, cellY, cellWidth, cellHeight, recentBooks[item.bookIdx].coverBmpPath, cellLabel(item), pct,
+                 contentCursorShown() && idx == selectedItem, /*drawTitle=*/idx <= titledLastIdx,
+                 item.isStack() ? &item : nullptr);
   }
 
   // Release the page slots claimed by the prewarm above -- see the matching comment in
@@ -1638,7 +1879,10 @@ bool CoverLibraryActivity::tryPartialSelectionRedraw() {
   // This path only ever moves a selection border. With the cursor hidden there is no border to
   // move, and taking it after a touch would paint one back onto a screen that must not show it.
   if (!selectorVisible) return false;
-  if (openShelfIndex != lastRendered.openShelf || selectedTab != lastRendered.tab) return false;
+  if (openShelfIndex != lastRendered.openShelf || openSeriesName != lastRendered.openSeries ||
+      selectedTab != lastRendered.tab) {
+    return false;
+  }
   // A cursor entering or leaving the bottom bar repaints the bar too, which this path does not.
   if (tabFocus != lastRendered.tabFocus) return false;
 
@@ -1647,7 +1891,7 @@ bool CoverLibraryActivity::tryPartialSelectionRedraw() {
   const auto pageHeight = renderer.getScreenHeight();
   auto* fcm = renderer.getFontCacheManager();
 
-  if (openShelfIndex >= 0) {
+  if (detailOpen()) {
     // Shelf-books grid: pure cell-to-cell move within the rendered scroll window.
     const int oldIdx = lastRendered.shelfContentIndex;
     const int newIdx = shelfContentIndex;
@@ -1689,7 +1933,7 @@ bool CoverLibraryActivity::tryPartialSelectionRedraw() {
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
 
   if (selectedTab == 0) {
-    if (newIdx > static_cast<int>(recentBooks.size()) || oldIdx > static_cast<int>(recentBooks.size())) return false;
+    if (newIdx > static_cast<int>(gridItems.size()) || oldIdx > static_cast<int>(gridItems.size())) return false;
     const int gridWidth = pageWidth - 2 * metrics.contentSidePadding;
     const int cellWidth = gridWidth / GRID_COLS;
     const int cellHeight = getCellHeight(cellWidth);
@@ -1706,7 +1950,7 @@ bool CoverLibraryActivity::tryPartialSelectionRedraw() {
       const int col = idx % GRID_COLS;
       const int cellX = metrics.contentSidePadding + col * cellWidth;
       const int cellY = contentTop + (row - scrollRow) * rowStride;
-      drawGridSelectionBorder(cellX, cellY, cellWidth, cellHeight, idx == newIdx - 1);
+      drawGridSelectionBorder(cellX, cellY, cellWidth, cellHeight, idx == newIdx - 1, !gridItems[idx].isStack());
     }
     return true;
   }
@@ -1749,7 +1993,8 @@ void CoverLibraryActivity::render(RenderLock&&) {
   // and re-reading every visible cover off the SD card for each step.
   if (lastRendered.valid && HomeTabBar::enabled() && lastRendered.tabFocus >= 0 && tabFocus >= 0 &&
       lastRendered.tabFocus != tabFocus && lastRendered.openShelf == openShelfIndex &&
-      lastRendered.tab == selectedTab && lastRendered.contentIndex == contentIndex) {
+      lastRendered.openSeries == openSeriesName && lastRendered.tab == selectedTab &&
+      lastRendered.contentIndex == contentIndex) {
     HomeTabBar::draw(renderer, HomeTab::Library, tabFocus);
     lastRendered.tabFocus = tabFocus;
     renderer.displayBuffer();
@@ -1768,9 +2013,10 @@ void CoverLibraryActivity::render(RenderLock&&) {
   const auto pageHeight = renderer.getScreenHeight();
   const auto& metrics = UITheme::getInstance().getMetrics();
 
-  if (openShelfIndex >= 0 && openShelfIndex < static_cast<int>(shelves.size())) {
+  const bool shelfOpen = openShelfIndex >= 0 && openShelfIndex < static_cast<int>(shelves.size());
+  if (shelfOpen || !openSeriesName.empty()) {
     GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight},
-                   shelves[openShelfIndex].folderName.c_str());
+                   shelfOpen ? shelves[openShelfIndex].folderName.c_str() : openSeriesName.c_str());
 
     const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
     const int contentHeight = pageHeight - contentTop - HomeTabBar::bottomInset() - metrics.verticalSpacing;
