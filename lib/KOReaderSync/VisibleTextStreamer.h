@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 // The visible-text counting side of KOSync position mapping: the XPath parse helpers and the
 // streamer that walks a chapter's bytes to turn a KOReader XPath into a visible-codepoint offset.
 //
@@ -86,10 +88,7 @@ inline bool isChapterStartXPath(const std::string& xpath) {
     if (docFragEnd + 2 >= xpath.size()) {
       return false;
     }
-    for (size_t i = docFragEnd + 2; i < xpath.size(); i++) {
-      if (xpath[i] != '0') return false;
-    }
-    return true;
+    return std::all_of(xpath.begin() + docFragEnd + 2, xpath.end(), [](char c) { return c == '0'; });
   }
 
   static constexpr char kDocBody[] = "]/body";
@@ -123,9 +122,7 @@ inline bool isChapterStartXPath(const std::string& xpath) {
     return false;
   }
 
-  for (size_t i = dotPos + 1; i < xpath.size(); i++) {
-    if (xpath[i] != '0') return false;
-  }
+  if (!std::all_of(xpath.begin() + dotPos + 1, xpath.end(), [](char c) { return c == '0'; })) return false;
   return parseTextNodeIndex(xpath) <= 1;
 }
 
@@ -167,9 +164,7 @@ inline int parseXPathSteps(const std::string& xpath, XPathStep steps[MAX_XPATH_D
   if (stepsEnd == std::string::npos) {
     stepsEnd = xpath.rfind('.');
     if (stepsEnd == std::string::npos || stepsEnd <= pos || stepsEnd + 1 >= xpath.size()) return 0;
-    for (size_t i = stepsEnd + 1; i < xpath.size(); i++) {
-      if (xpath[i] < '0' || xpath[i] > '9') return 0;
-    }
+    if (!std::all_of(xpath.begin() + stepsEnd + 1, xpath.end(), [](char c) { return c >= '0' && c <= '9'; })) return 0;
   }
   if (stepsEnd <= pos) return 0;
 
